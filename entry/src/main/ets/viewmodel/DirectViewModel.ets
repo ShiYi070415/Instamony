@@ -185,6 +185,33 @@ export class DirectViewModel {
       }
       // 翻页游标探针：让网页自己滚一屏，看它给 min_uq_seq_id 填什么（见 probePagingCursor）。
       await vm.probePagingCursor();
+      /*
+       * **历史游标扫描**：`min_uq_seq_id` 到底吃什么值。
+       *
+       * 线索来自 MQTT setup 的响应：`iris_inactive_subscription_uq_seq_id` 是个**很小的数**
+       * （542073），和我们试过的 19 位 id / 132 字符游标完全不是一个量级 —— 也许这个变量要的就是
+       * 这种"小的序 id"（比它更老的先给）。这里拿几个候选依次试，只看**回来的条数和最老那条的时间**：
+       * 窗口真的往前挪了，就说明找对形态了。
+       */
+      const cursors: Array<string> = ['542073', '542000', '500000', '100000', '1'];
+      for (let ci: number = 0; ci < cursors.length; ci++) {
+        const swept: DirectThreadView | null =
+          await NativeDirect.thread(one.id, cursors[ci], one.key);
+        if (swept === null) {
+          hilog.warn(DOMAIN, TAG, 'cursor sweep %{public}s → null (%{public}s)',
+            cursors[ci], NativeDirect.lastDetail());
+          continue;
+        }
+        let oldestTs: number = -1;
+        let oldestId: string = '-';
+        if (swept.messages.length > 0) {
+          oldestTs = swept.messages[0].tsMs;
+          oldestId = swept.messages[0].id;
+        }
+        hilog.info(DOMAIN, TAG,
+          'cursor sweep %{public}s → msgs=%{public}d oldestTs=%{public}d oldestId=%{public}s',
+          cursors[ci], swept.messages.length, oldestTs, oldestId);
+      }
     }
     catch (error) {
       hilog.warn(DOMAIN, TAG, 'selftest threw: %{public}s', (error as Error).message);
