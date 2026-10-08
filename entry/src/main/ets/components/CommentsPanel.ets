@@ -378,6 +378,23 @@ export struct CommentsPanel {
    */
   onLoadReplies: (parentIndex: number) => void = (parentIndex: number): void => {
   };
+  /**
+   * 点赞数的显示（需求："评论面板的点赞数量超过 1 千后以千为单位"）。
+   *
+   * 1 000 → `1k`；1 200 → `1.2k`；12 345 → `12k`（四舍五入到整数千，去掉没意义的 `.0`）。
+   * 不到 1 千就原样显示。
+   */
+  private static formatLikes(value: number): string {
+    if (value < 1000) {
+      return `${value}`;
+    }
+    const thousands: number = Math.round(value / 100) / 10;
+    const text: string = thousands >= 10
+      ? `${Math.round(thousands)}`
+      : `${thousands}`;
+    return `${text}k`;
+  }
+
   /** 给**某条回复**点赞（宿主实现，见 pages/Index.likeReply）。 */
   onLikeReply: (parentIndex: number, replyIndex: number) => void =
     (parentIndex: number, replyIndex: number): void => {
@@ -409,8 +426,16 @@ export struct CommentsPanel {
 
   /** 译文（还没翻出来先用原文占着）。 */
   private translatedBody(text: string): string {
+    // 读一下"译文到货"计数，让调用它的 build 登记成依赖（理由同 FeedList.translatedCaption）。
+    const tick: number = this.translationEpoch;
+    if (tick < 0) {
+      return text;
+    }
     return this.translations.get(text) ?? text;
   }
+
+  /** 译文到货计数（每翻好一条 +1，见 translatedBody / toggleTranslation）。 */
+  @State private translationEpoch: number = 0;
 
   /** 点「翻译 / 显示原文」：先切状态（立刻有反应），译文第一次再补网络。 */
   private toggleTranslation(text: string, show: boolean): void {
@@ -438,6 +463,8 @@ export struct CommentsPanel {
       }
       this.translations.set(text, translated);
       this.translatedBodies = this.translatedBodies.concat([]);
+      // 同样要防"内容比较不重绘"：见 FeedList.translatedCaption 的说明（@State 数组换引用没用）。
+      this.translationEpoch = this.translationEpoch + 1;
     });
   }
 
@@ -670,7 +697,7 @@ export struct CommentsPanel {
             .fontWeight(FontWeight.Bold)
             .fontColor([liked ? $r('app.color.like_active') : $r('app.color.comment_muted')])
           if (likes > 0) {
-            Text(`${likes}`)
+            Text(CommentsPanel.formatLikes(likes))
               .fontSize(11)
               .fontWeight(FontWeight.Bold)
               .fontColor($r('app.color.comment_muted'))

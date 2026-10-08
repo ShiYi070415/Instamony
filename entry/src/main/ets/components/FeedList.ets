@@ -872,8 +872,24 @@ export struct FeedList {
 
   /** 译文（还没翻出来时先用原文占着，翻完会随 @State 换成译文）。 */
   private translatedCaption(post: MediaPost): string {
+    /*
+     * **读一下"译文到货"计数**：不然译文回来了界面也不会重绘。
+     *
+     * 原来靠 `translatedCaptionKeys = keys.concat([])` 换个新数组来触发重绘 —— 但 ArkUI 对
+     * @State 数组是做**内容比较**的，内容一模一样就不重绘；于是第一次点「翻译」时状态变了、
+     * 译文也到了，正文却还是原文，得再点一次（状态再变一回）才换过来 —— 用户报的
+     * "第一次点没反应，点一下显示原文再点翻译才行"就是这个。
+     * 这里显式读一下 `translationEpoch`，让调用它的 build 把它登记成依赖（见 toggleTranslation）。
+     */
+    const tick: number = this.translationEpoch;
+    if (tick < 0) {
+      return post.caption;
+    }
     return this.captionTranslations.get(FeedMapper.keyOf(post)) ?? post.caption;
   }
+
+  /** 译文到货的计数（每翻好一条 +1，见 toggleTranslation 与 translatedCaption）。 */
+  @State private translationEpoch: number = 0;
 
   /**
    * 点「翻译 / 显示原文」。
@@ -903,8 +919,8 @@ export struct FeedList {
         return;
       }
       this.captionTranslations.set(key, text);
-      // 触发重绘：数组换个新引用（Map 内部改动不会被观察到）。
-      this.translatedCaptionKeys = this.translatedCaptionKeys.concat([]);
+      // 触发重绘：把"译文到货"计数 +1（内容比较那套换引用是没用的，见 translatedCaption 的说明）。
+      this.translationEpoch = this.translationEpoch + 1;
     });
   }
 
