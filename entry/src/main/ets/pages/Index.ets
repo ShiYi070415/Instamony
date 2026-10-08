@@ -128,6 +128,7 @@ import { PROFILE_TAB_POSTS, PROFILE_TAB_REELS, PROFILE_TAB_TAGGED, ProfileViewMo
 import { DirectViewModel } from '../viewmodel/DirectViewModel';
 import { DirectThreadViewModel } from '../viewmodel/DirectThreadViewModel';
 import { NativeDirect } from '../core/NativeDirect';
+import { DmRealtime } from '../core/DmRealtime';
 import { SearchViewModel } from '../viewmodel/SearchViewModel';
 import { ReelsViewModel } from '../viewmodel/ReelsViewModel';
 import { ProfileReelsViewModel } from '../viewmodel/ProfileReelsViewModel';
@@ -2042,6 +2043,9 @@ struct Index {
         if (this.probeTicks < 4) {
           this.probeTicks = this.probeTicks + 1;
           NativeDirect.mqttSetupProbe().catch((): void => {
+          });
+          // 实时通道第一步：TLS 能不能连上 IG 的 iris broker（见 core/DmRealtime）。
+          DmRealtime.probeTls().catch((): void => {
           });
         }
         ApiRegistry.getInstance().capture('').then((ok: boolean): void => {
