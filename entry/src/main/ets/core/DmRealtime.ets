@@ -38,6 +38,9 @@ export class DmRealtime {
         secureOptions: {},
         timeout: CONNECT_TIMEOUT_MS
       };
+      // **必须先 bind**：真机上不 bind 直接 connect 会报 `No bind socket`（TLSSocket 内部要拿
+      // 已绑定的本地套接字）。0.0.0.0 + 端口 0 = 让系统自己挑本地地址/端口。
+      await tcp.bind({ address: '0.0.0.0', port: 0 });
       await tcp.connect(options);
       hilog.info(DOMAIN, TAG, 'tls connect ok host=%{public}s port=%{public}d —— 可以进下一步（MQTT CONNECT）',
         MQTT_HOST, MQTT_PORT);
