@@ -258,6 +258,13 @@ export class DirectMapper {
       hilog.warn(DOMAIN, TAG, 'no messages array: %{public}s', DirectMapper.arrays(raw));
       return null;
     }
+    /*
+     * 诊断：**原始响应里到底给了几条**。
+     *
+     * `edges=4` → 问题在请求（服务端就只回了这一点）；`edges=20 但下面 msgs=4` → 问题在解析。
+     * 会话"只显示 4~5 条"就是这个二分法要先分清的事。
+     */
+    hilog.info(DOMAIN, TAG, 'graphql raw edges=%{public}d', items.length);
     const users: Array<Object> | null = DirectMapper.findArrayBy(root, 0,
       (one: Record<string, Object>): boolean => {
         const inner: Record<string, Object> | null = JsonRead.recordOf(one, 'node');
