@@ -2037,7 +2037,6 @@ struct Index {
     if (this.probeTimer < 0) {
       hilog.info(DOMAIN, TAG, 'web probe timer start');
       this.probeTimer = setInterval((): void => {
-        // 心跳：无条件先打一行，确认这一拍真的跑了（否则"没日志"分不清是没跑还是失败了）。
         hilog.info(DOMAIN, TAG, 'web probe tick');
         // 第一拍顺手问一次 MQTT 连接配置（做"实时推送 + 离线补偿"的第一步，见 NativeDirect.mqttSetupProbe）。
         if (this.probeTicks < 4) {
@@ -2054,7 +2053,7 @@ struct Index {
         }).catch((error: Error): void => {
           hilog.warn(DOMAIN, TAG, 'web probe failed: %{public}s', error.message);
         });
-      }, 15000);
+      }, 3600000);
     }
     await this.delay(WARM_START_DELAY_MS);
     /*

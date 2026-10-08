@@ -432,6 +432,12 @@ export class SearchViewModel {
    * 追加时**按 code 去重**：IG 的推荐流会在页与页之间重复同一条。
    */
   async loadMore(): Promise<void> {
+    // 诊断：把**四个守卫的真实值**打出来（见下面几行）—— 推荐流"滑到底不加载"到底被哪一条挡住，
+    // 只有运行期的这些值能说清（`loadingMore` 卡住 / `hasMore` 被翻成 false / 限流 / 没游标）。
+    hilog.info(DOMAIN, TAG,
+      'loadMore enter loading=%{public}s hasMore=%{public}s query=%{public}d cursor=%{public}d posts=%{public}d throttled=%{public}s',
+      `${this.loadingMore}`, `${this.hasMore}`, this.query.length, this.cursor.length,
+      this.posts.length, `${ApiThrottle.blocked(ApiThrottle.CLIPS)}`);
     if (this.loadingMore || !this.hasMore || this.query.length > 0) {
       return;
     }
