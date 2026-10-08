@@ -1,0 +1,61 @@
+{
+  "app": {
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "C:\\Users\\ShiYi\\.ohos\\config\\default_Instarmony_xdBfzhVo_HdK1AuBYDE0AvxUW8aPPEsEcPxKsIhgmog=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001B4CED8E14E4FDA305EA657C0085EE7AEF31989174C7BF593BB3981CBC5F4093FE69B84472DF9360",
+          "profile": "C:\\Users\\ShiYi\\.ohos\\config\\default_Instarmony_xdBfzhVo_HdK1AuBYDE0AvxUW8aPPEsEcPxKsIhgmog=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "C:\\Users\\ShiYi\\.ohos\\config\\default_Instarmony_xdBfzhVo_HdK1AuBYDE0AvxUW8aPPEsEcPxKsIhgmog=.p12",
+          "storePassword": "0000001B6D79761210538295C0B21F679A900502B9A93629120F661F75264FCECA45E9CD1AD0A7DA04C6C1"
+        }
+      }
+    ],
+    "products": [
+      {
+        "name": "default",
+        "signingConfig": "default",
+        "targetSdkVersion": "26.0.0",
+        // 目标 API 26、**兼容 API 20**（HarmonyOS 6.0.0）：包要能装在 20 起的机器上，
+        // 所以 26 才有的接口（uiMaterial / systemMaterial）与 23 才有的 HDS 系统材质
+        // 全部按运行设备能力降级 —— 判定见 core/PlatformCap，降级点见 MaterialSurface
+        // （SurfaceModifier / SelectSurfaceModifier）、ImmersiveLight（titleScrollEffectType）、
+        // Index（标题栏样式助手）、CreatePost、DirectPage、MediaPrefetch。
+        "compatibleSdkVersion": "6.0.0(20)",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        }
+      }
+    ],
+    "buildModeSet": [
+      {
+        "name": "debug",
+      },
+      {
+        "name": "release"
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    }
+  ]
+}

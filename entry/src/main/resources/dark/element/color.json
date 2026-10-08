@@ -1,0 +1,92 @@
+{
+  "color": [
+    {
+      "name": "start_window_background",
+      "value": "#000000"
+    },
+    {
+      "name": "page_background",
+      "value": "#000000"
+    },
+    {
+      "name": "card_background",
+      "value": "#121212"
+    },
+    {
+      "name": "field_background",
+      "value": "#1A1A1A"
+    },
+    {
+      "name": "grid_letterbox",
+      "value": "#000000"
+    },
+    {
+      "name": "primary_text",
+      "value": "#F1F1F1"
+    },
+    {
+      "name": "secondary_text",
+      "value": "#A8A8A8"
+    },
+    {
+      "name": "divider",
+      "value": "#262626"
+    },
+    {
+      "name": "segment_thumb",
+      "value": "#99454545"
+    },
+    {
+      "name": "accent",
+      "value": "#0095F6"
+    },
+    {
+      "name": "like_active",
+      "value": "#FF3040"
+    },
+    {
+      "name": "on_accent",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "overlay_scrim",
+      "value": "#E6000000"
+    },
+    {
+      "name": "switch_track_on",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "switch_knob",
+      "value": "#000000"
+    },
+    {
+      "name": "dropdown_selected_bg",
+      "value": "#29FFFFFF"
+    },
+    {
+      "name": "dropdown_selected_text",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "settings_gradient_top",
+      "value": "#0C0E18"
+    },
+    {
+      "name": "settings_gradient_bottom",
+      "value": "#1E1633"
+    },
+    {
+      "name": "sheet_handle",
+      "value": "#66FFFFFF"
+    },
+    {
+      "name": "comment_muted",
+      "value": "#A8A8A8"
+    },
+    {
+      "name": "comments_scrim",
+      "value": "#66000000"
+    }
+  ]
+}

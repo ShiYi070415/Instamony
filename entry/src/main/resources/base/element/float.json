@@ -1,0 +1,32 @@
+{
+  "float": [
+    {
+      "name": "page_text_font_size",
+      "value": "24fp"
+    },
+    {
+      "name": "title_font_size",
+      "value": "20fp"
+    },
+    {
+      "name": "body_font_size",
+      "value": "15fp"
+    },
+    {
+      "name": "caption_font_size",
+      "value": "13fp"
+    },
+    {
+      "name": "gutter",
+      "value": "16vp"
+    },
+    {
+      "name": "field_height",
+      "value": "44vp"
+    },
+    {
+      "name": "corner_radius",
+      "value": "10vp"
+    }
+  ]
+}

@@ -1,0 +1,76 @@
+{
+  "module": {
+    "name": "entry",
+    "type": "entry",
+    "description": "$string:module_desc",
+    "mainElement": "EntryAbility",
+    "deviceTypes": [
+      "phone", "tablet"
+    ],
+    "deliveryWithInstall": true,
+    "installationFree": false,
+    "pages": "$profile:main_pages",
+    "requestPermissions": [
+      {
+        "name": "ohos.permission.INTERNET"
+      },
+      // 查当前网络是 Wi-Fi 还是蜂窝：预下载（下一条视频预缓冲、后面几页接口、封面预取）
+      // 只在 Wi-Fi/不计费网络下做，蜂窝网下一律不预下载（见 core/NetworkState）。
+      // 官方文档明确 getDefaultNetSync 需要这个权限（normal 级、系统授权，装上即生效）。
+      {
+        "name": "ohos.permission.GET_NETWORK_INFO"
+      }
+    ],
+    // 应用级开启沉浸光感（官方文档「开启沉浸光感」）：
+    //   name 固定为 ohos.arkui.UIMaterial.state，value = enable 表示**全局开启**，
+    //   disable 表示全局禁用（组件级也压不住），default/不配表示按组件默认。
+    //   该配置**只在 entry 类型的 module 中生效**，本模块正是 entry。
+    // 开在应用级是为了"全局自适应"：支持沉浸光感的组件（Navigation / 底部 TabBar /
+    // 各类弹窗 / Slider / Toggle / Select 等）批量生效，不用一个个去写 systemMaterial；
+    //   具体某个组件要什么档次的材质，再由组件级接口覆盖（组件级优先级更高）。
+    // 副作用提醒：开启后指定弹窗类与 Slider/Toggle/Select 的材质是**全页面**生效的，
+    //   其余组件只在 Navigation/NavDestination 标题栏或 barPosition=End 的底部 TabBar 中生效。
+    "metadata": [
+      {
+        "name": "ohos.arkui.UIMaterial.state",
+        "value": "enable"
+      }
+    ],
+    "abilities": [
+      {
+        "name": "EntryAbility",
+        "srcEntry": "./ets/entryability/EntryAbility.ets",
+        "description": "$string:EntryAbility_desc",
+        "icon": "$media:layered_image",
+        "label": "$string:EntryAbility_label",
+        "startWindowIcon": "$media:splash_icon",
+        "startWindowBackground": "$color:start_window_background",
+        "exported": true,
+        "skills": [
+          {
+            "entities": [
+              "entity.system.home"
+            ],
+            "actions": [
+              "ohos.want.action.home"
+            ]
+          }
+        ]
+      }
+    ],
+    "extensionAbilities": [
+      {
+        "name": "EntryBackupAbility",
+        "srcEntry": "./ets/entrybackupability/EntryBackupAbility.ets",
+        "type": "backup",
+        "exported": false,
+        "metadata": [
+          {
+            "name": "ohos.extension.backup",
+            "resource": "$profile:backup_config"
+          }
+        ],
+      }
+    ]
+  }
+}

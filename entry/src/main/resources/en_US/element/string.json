@@ -1,0 +1,616 @@
+{
+  "string": [
+    {
+      "name": "app_name",
+      "value": "Instamony"
+    },
+    {
+      "name": "app_title",
+      "value": "Instamony"
+    },
+    {
+      "name": "module_desc",
+      "value": "Instamony entry module"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Instamony entry module"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Instamony"
+    },
+    {
+      "name": "login_title",
+      "value": "Sign in to browse"
+    },
+    {
+      "name": "login_body",
+      "value": "Choose a sign-in method. Credentials go to the server only and are never stored in this app."
+    },
+    {
+      "name": "login_web",
+      "value": "Sign in on the web"
+    },
+    {
+      "name": "login_web_hint",
+      "value": "Sign-in happens on Instagram’s own web page; Instamony only reuses that session to read page content."
+    },
+    {
+      "name": "login_account",
+      "value": "Account"
+    },
+    {
+      "name": "login_web_sign_in",
+      "value": "Web sign in"
+    },
+    {
+      "name": "login_sign_in",
+      "value": "Sign in"
+    },
+    {
+      "name": "login_recheck",
+      "value": "I’m signed in — recheck"
+    },
+    {
+      "name": "session_none",
+      "value": "Not signed in"
+    },
+    {
+      "name": "session_label_prefix",
+      "value": "Session: "
+    },
+    {
+      "name": "sign_out",
+      "value": "Sign out"
+    },
+    {
+      "name": "tab_home",
+      "value": "Home"
+    },
+    {
+      "name": "tab_reels",
+      "value": "Reels"
+    },
+    {
+      "name": "tab_direct",
+      "value": "Direct"
+    },
+    {
+      "name": "tab_search",
+      "value": "Search"
+    },
+    {
+      "name": "tab_profile",
+      "value": "Profile"
+    },
+    {
+      "name": "tab_placeholder_hint",
+      "value": "This tab is not wired up yet"
+    },
+    {
+      "name": "status_ready",
+      "value": "Ready"
+    },
+    {
+      "name": "status_failed",
+      "value": "Failed to load"
+    },
+    {
+      "name": "status_unparsable",
+      "value": "Could not parse the page"
+    },
+    {
+      "name": "status_sign_in_required",
+      "value": "Sign in required"
+    },
+    {
+      "name": "status_page_not_ready",
+      "value": "Page not ready yet"
+    },
+    {
+      "name": "web_close",
+      "value": "Close web view"
+    },
+    {
+      "name": "video_play_failed",
+      "value": "Video playback failed."
+    },
+    {
+      "name": "repost_unsupported",
+      "value": "The web version has no repost entry, so the post page was opened."
+    },
+    {
+      "name": "repost_done",
+      "value": "Reposted."
+    },
+    {
+      "name": "unrepost_done",
+      "value": "Repost removed."
+    },
+    {
+      "name": "unfollow_done",
+      "value": "Unfollowed."
+    },
+    {
+      "name": "feature_pending",
+      "value": "This is not wired up yet."
+    },
+    {
+      "name": "save_failed",
+      "value": "Could not save that post."
+    },
+    {
+      "name": "posted_ago_now",
+      "value": "Just now"
+    },
+    {
+      "name": "posted_ago_minutes",
+      "value": "%dm ago"
+    },
+    {
+      "name": "posted_ago_hours",
+      "value": "%dh ago"
+    },
+    {
+      "name": "posted_ago_days",
+      "value": "%dd ago"
+    },
+    {
+      "name": "posted_ago_weeks",
+      "value": "%dw ago"
+    },
+    {
+      "name": "posted_ago_months",
+      "value": "%dmo ago"
+    },
+    {
+      "name": "posted_ago_years",
+      "value": "%dy ago"
+    },
+    {
+      "name": "notify_today",
+      "value": "Today"
+    },
+    {
+      "name": "notify_suggested",
+      "value": "Suggested for you"
+    },
+    {
+      "name": "notify_follow",
+      "value": "Follow"
+    },
+    {
+      "name": "notify_follow_back",
+      "value": "Follow back"
+    },
+    {
+      "name": "notify_earlier",
+      "value": "Earlier"
+    },
+    {
+      "name": "notify_empty",
+      "value": "Could not read notifications from the page."
+    },
+    {
+      "name": "action_follow",
+      "value": "Follow"
+    },
+    {
+      "name": "action_following",
+      "value": "Following"
+    },
+    {
+      "name": "action_more",
+      "value": "More"
+    },
+    {
+      "name": "action_reload",
+      "value": "Reload"
+    },
+    {
+      "name": "action_create",
+      "value": "Create"
+    },
+    {
+      "name": "action_download",
+      "value": "Download"
+    },
+    {
+      "name": "action_settings",
+      "value": "Settings"
+    },
+    {
+      "name": "action_mute",
+      "value": "Mute"
+    },
+    {
+      "name": "action_share_to",
+      "value": "Share to"
+    },
+    {
+      "name": "comments_close",
+      "value": "Close"
+    },
+    {
+      "name": "comments_title",
+      "value": "Comments"
+    },
+    {
+      "name": "comments_hint",
+      "value": "Add a comment…"
+    },
+    {
+      "name": "comments_empty",
+      "value": "No comments yet"
+    },
+    {
+      "name": "comments_failed",
+      "value": "Could not load comments"
+    },
+    {
+      "name": "comments_photo",
+      "value": "Photo comment"
+    },
+    {
+      "name": "comments_send",
+      "value": "Send"
+    },
+    {
+      "name": "comments_end",
+      "value": "No more comments"
+    },
+    {
+      "name": "comments_reply",
+      "value": "Reply"
+    },
+    {
+      "name": "comments_hide_replies",
+      "value": "Hide replies"
+    },
+    {
+      "name": "comments_replies_loading",
+      "value": "Loading replies…"
+    },
+    {
+      "name": "comments_view_replies",
+      "value": "View %d more replies"
+    },
+    {
+      "name": "comment_pending",
+      "value": "Posting comments is not wired up yet — this is the input box"
+    },
+    {
+      "name": "reels_page_title",
+      "value": "Reels"
+    },
+    {
+      "name": "post_page_title",
+      "value": "Post"
+    },
+    {
+      "name": "create_post_title",
+      "value": "New post"
+    },
+    {
+      "name": "create_post_hint",
+      "value": "Say something…"
+    },
+    {
+      "name": "search_hint",
+      "value": "Search"
+    },
+    {
+      "name": "search_empty",
+      "value": "Type an account name to search"
+    },
+    {
+      "name": "search_action",
+      "value": "Search"
+    },
+    {
+      "name": "count_thousands",
+      "value": "%sK"
+    },
+    {
+      "name": "profile_stat_posts",
+      "value": "Posts"
+    },
+    {
+      "name": "profile_stat_followers",
+      "value": "Followers"
+    },
+    {
+      "name": "profile_stat_following",
+      "value": "Following"
+    },
+    {
+      "name": "profile_loading_more",
+      "value": "Loading…"
+    },
+    {
+      "name": "profile_end",
+      "value": "No more"
+    },
+    {
+      "name": "profile_empty",
+      "value": "No posts yet"
+    },
+    {
+      "name": "direct_empty",
+      "value": "No messages yet"
+    },
+    {
+      "name": "direct_kind_media",
+      "value": "[Photo/video]"
+    },
+    {
+      "name": "direct_kind_voice",
+      "value": "[Voice message]"
+    },
+    {
+      "name": "direct_kind_other",
+      "value": "[Message]"
+    },
+    {
+      "name": "direct_thread_hint",
+      "value": "Message…"
+    },
+    {
+      "name": "direct_thread_empty",
+      "value": "No messages yet — say hi"
+    },
+    {
+      "name": "direct_thread_older",
+      "value": "See older messages"
+    },
+    {
+      "name": "settings_group_appearance",
+      "value": "Appearance"
+    },
+    {
+      "name": "settings_group_bar",
+      "value": "Tab bar"
+    },
+    {
+      "name": "settings_bar_native_animation",
+      "value": "Native tab bar animation"
+    },
+    {
+      "name": "settings_bar_native_animation_hint",
+      "value": "When off, the tab bar only fades."
+    },
+    {
+      "name": "settings_material_level",
+      "value": "Immersive material"
+    },
+    {
+      "name": "settings_material_hint",
+      "value": "Higher levels look better but use more power. Low-power devices fall back automatically; pick Adaptive if unsure."
+    },
+    {
+      "name": "settings_material_adaptive",
+      "value": "Adaptive"
+    },
+    {
+      "name": "settings_material_gentle",
+      "value": "Gentle"
+    },
+    {
+      "name": "settings_material_smooth",
+      "value": "Smooth"
+    },
+    {
+      "name": "settings_material_exquisite",
+      "value": "Exquisite"
+    },
+    {
+      "name": "settings_material_thickness",
+      "value": "Material thickness"
+    },
+    {
+      "name": "settings_thickness_ultra_thin",
+      "value": "Ultra thin"
+    },
+    {
+      "name": "settings_thickness_thin",
+      "value": "Thin"
+    },
+    {
+      "name": "settings_thickness_regular",
+      "value": "Regular"
+    },
+    {
+      "name": "settings_thickness_thick",
+      "value": "Thick"
+    },
+    {
+      "name": "settings_thickness_ultra_thick",
+      "value": "Ultra thick"
+    },
+    {
+      "name": "settings_unsupported_hint",
+      "value": "This system version does not support the floating tab bar or immersive material; those options are hidden and the bar falls back to a simple blur."
+    },
+    {
+      "name": "probe_title",
+      "value": "Probe"
+    },
+    {
+      "name": "probe_hint",
+      "value": "Browse in the web view first, then refresh."
+    },
+    {
+      "name": "probe_refresh",
+      "value": "Refresh"
+    },
+    {
+      "name": "probe_dom",
+      "value": "DOM"
+    },
+    {
+      "name": "probe_copy",
+      "value": "Copy"
+    },
+    {
+      "name": "probe_save",
+      "value": "Save"
+    },
+    {
+      "name": "probe_clear",
+      "value": "Clear"
+    },
+    {
+      "name": "probe_close",
+      "value": "Close"
+    },
+    {
+      "name": "probe_open_direct",
+      "value": "Direct"
+    },
+    {
+      "name": "probe_open_profile",
+      "value": "Profile"
+    },
+    {
+      "name": "probe_open_reels",
+      "value": "Reels"
+    },
+    {
+      "name": "probe_open_search",
+      "value": "Search"
+    },
+    {
+      "name": "probe_open_hint",
+      "value": "Open the web view to capture APIs (covers the panel):"
+    },
+    {
+      "name": "probe_open_post",
+      "value": "Post page (first photo post)"
+    },
+    {
+      "name": "probe_comments_first",
+      "value": "Comments (first post)"
+    },
+    {
+      "name": "probe_comments_embed",
+      "value": "Embedded comments"
+    },
+    {
+      "name": "probe_capture",
+      "value": "Store feed templates"
+    },
+    {
+      "name": "probe_replay_stored",
+      "value": "Replay stored templates"
+    },
+    {
+      "name": "probe_profile_templates",
+      "value": "Store profile tab templates"
+    },
+    {
+      "name": "probe_search_templates",
+      "value": "Store search page templates"
+    },
+    {
+      "name": "probe_digest",
+      "value": "API digest"
+    },
+    {
+      "name": "probe_direct_selftest",
+      "value": "DM send self-test"
+    },
+    {
+      "name": "reels_loading",
+      "value": "Loading video…"
+    },
+    {
+      "name": "engage_not_rendered",
+      "value": "Repost content is not available"
+    },
+    {
+      "name": "feed_empty",
+      "value": "Nothing here yet"
+    },
+    {
+      "name": "feed_load",
+      "value": "Load"
+    },
+    {
+      "name": "feed_no_more",
+      "value": "No more posts"
+    },
+    {
+      "name": "feed_none_read",
+      "value": "Could not read posts from the page"
+    },
+    {
+      "name": "feed_none_visible",
+      "value": "No posts visible on the page"
+    },
+    {
+      "name": "follow_done",
+      "value": "Followed."
+    },
+    {
+      "name": "follow_failed",
+      "value": "Could not follow"
+    },
+    {
+      "name": "like_failed",
+      "value": "Could not like"
+    },
+    {
+      "name": "login_hint",
+      "value": "Sign in to Instagram"
+    },
+    {
+      "name": "login_open_web",
+      "value": "Open web sign-in"
+    },
+    {
+      "name": "media_saved",
+      "value": "Saved"
+    },
+    {
+      "name": "media_save_failed",
+      "value": "Could not save"
+    },
+    {
+      "name": "notifications",
+      "value": "Notifications"
+    },
+    {
+      "name": "notify_greet",
+      "value": "Message %s"
+    },
+    {
+      "name": "notify_greet_suggest",
+      "value": "Say hi to %s"
+    },
+    {
+      "name": "notify_loading",
+      "value": "Loading notifications…"
+    },
+    {
+      "name": "notify_message",
+      "value": "Message"
+    },
+    {
+      "name": "notify_message_hint",
+      "value": "Message…"
+    },
+    {
+      "name": "notify_month",
+      "value": "Month %d"
+    },
+    {
+      "name": "direct_call",
+      "value": "Call"
+    },
+    {
+      "name": "direct_video_call",
+      "value": "Video call"
+    }
+  ]
+}

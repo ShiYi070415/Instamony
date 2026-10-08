@@ -1,0 +1,211 @@
+/*
+ * The only Instagram WebView in Instarmony.
+ *
+ * It is always mounted. When native content is on screen it stays underneath
+ * with opacity 0.01, which keeps Instagram hydrated and preserves cookies/SPA
+ * state instead of reloading on every tab change. When login or a web detail is
+ * open, the same WebView is revealed with a native top bar above it.
+ */
+
+import { webview } from '@kit.ArkWeb';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+import { AppConfig } from '../config/AppConfig';
+import { InstagramPageBridge, InstagramBridgeProxy } from '../bridge/PageBridge';
+import { NETWORK_WATCHER, SESSION_WATCHER } from '../bridge/WebScripts';
+import { AppLifecycle } from '../core/AppLifecycle';
+import { InstagramCookieJar, InstagramCookieSnapshot } from '../core/InstagramCookieJar';
+
+const TAG: string = 'InstagramWebHost';
+const DOMAIN: number = 0xFF00;
+/** 页面加载完成后延迟再核对一次：Instagram 的会话 Cookie 有时晚于 onPageEnd 落罐。 */
+const SESSION_RECHECK_MS: number = 1200;
+
+@Component
+export struct InstagramWebHost {
+  @Prop visible: boolean = false;
+  onPageReady: () => void = (): void => {
+  };
+  onSessionChanged: (signedIn: boolean) => void = (signedIn: boolean): void => {
+  };
+  private bridge: InstagramPageBridge = InstagramPageBridge.getInstance();
+  private proxy: InstagramBridgeProxy = InstagramPageBridge.getInstance().pageProxy();
+
+  /**
+   * 登录态的权威判据：ArkWeb 的 Cookie 罐。
+   *
+   * 不看页面 DOM、也不看 `document.cookie`——会话 Cookie 是 HttpOnly，只有原生罐
+   * 能读到。拿到会话后立刻落盘，下次启动不必重新登录。
+   */
+  private async detectSession(): Promise<void> {
+    const snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
+    hilog.info(DOMAIN, TAG, 'cookie jar entries=%{public}d signedIn=%{public}s names=%{public}s',
+      snapshot.count, snapshot.signedIn ? '1' : '0', snapshot.names);
+    if (snapshot.signedIn) {
+      await InstagramCookieJar.save();
+    }
+    this.onSessionChanged(snapshot.signedIn);
+  }
+
+  private scheduleSessionCheck(): void {
+    this.detectSession();
+    setTimeout((): void => {
+      this.detectSession();
+    }, SESSION_RECHECK_MS);
+  }
+
+  /**
+   * 预加载"接下来很可能要访问"的页面（官方 Web 预测能力）。
+   *
+   * 官方说明：`prefetchPage()` 会**提前下载该页面所需的主资源与子资源**，避免真正导航时阻塞渲染，
+   * 但**不执行页面的 JavaScript**；它是 `WebviewController` 的实例方法，需要一个已经关联好
+   * Web 组件的控制器 —— 所以放在 onPageEnd（此时组件已就绪）里调用。
+   *
+   * 为什么是这三页：私信 / 搜索 / Reels 的原生页在**没有接口模板**时都要让隐藏网页整页导航过去
+   * （冷启动那条路），预加载能把这一步的等待抹掉。只预加载、不改变任何现有行为，失败也不管。
+   */
+  private prefetchLikelyPages(url: string): void {
+    if (url.indexOf('instagram.com') < 0) {
+      return;
+    }
+    const targets: Array<string> = [
+      AppConfig.INSTAGRAM_DIRECT_URL,
+      AppConfig.INSTAGRAM_SEARCH_URL,
+      AppConfig.INSTAGRAM_REELS_URL
+    ];
+    for (let index: number = 0; index < targets.length; index++) {
+      try {
+        this.bridge.controller.prefetchPage(targets[index]);
+        hilog.info(DOMAIN, TAG, 'prefetchPage %{public}s', targets[index]);
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'prefetchPage failed: %{public}s', (error as Error).message);
+      }
+    }
+  }
+
+  aboutToAppear(): void {
+    AppLifecycle.onVisibilityChanged((foreground: boolean): void => {
+      this.applyVisibility(foreground);
+    });
+  }
+
+  /**
+   * 前后台切换时挂起 / 恢复网页。
+   *
+   * 原生视图在前台时这个 WebView 是以 opacity 0.01 常驻的：网页自己的定时器
+   * （SESSION_WATCHER 里每秒轮询一次）、网络与媒体播放都会继续跑。进后台时把它们
+   * 一起停掉，回前台再放开，避免不可见页面持续耗电。
+   *
+   * pauseAllTimers / resumeAllTimers 是全局静态接口，停的是 JS 定时器；onInactive /
+   * onActive 让引擎顺带停掉动画之类「可以安全暂停」的东西（不含 JS，见 SDK 说明）。
+   */
+  private applyVisibility(foreground: boolean): void {
+    try {
+      if (foreground) {
+        webview.WebviewController.resumeAllTimers();
+        this.bridge.controller.onActive();
+      } else {
+        webview.WebviewController.pauseAllTimers();
+        this.bridge.controller.stopAllMedia();
+        this.bridge.controller.onInactive();
+      }
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'visibility switch failed');
+    }
+  }
+
+  aboutToDisappear(): void {
+    try {
+      InstagramCookieJar.save();
+    } catch (error) {
+    }
+  }
+
+  build() {
+    Web({
+      src: AppConfig.INSTAGRAM_HOME_URL,
+      controller: this.bridge.controller,
+      incognitoMode: false
+    })
+      .width('100%')
+      .height('100%')
+      .opacity(this.visible ? 1 : 0.01)
+      .zIndex(this.visible ? 20 : 0)
+      .hitTestBehavior(this.visible ? HitTestMode.Default : HitTestMode.None)
+      .javaScriptAccess(true)
+      .domStorageAccess(true)
+      .databaseAccess(true)
+      .fileAccess(false)
+      .mixedMode(MixedMode.Compatible)
+      .cacheMode(CacheMode.Default)
+      .overviewModeAccess(true)
+      .mediaPlayGestureAccess(false)
+      .darkMode(WebDarkMode.Auto)
+      .textZoomRatio(100)
+      .javaScriptProxy({
+        object: this.proxy,
+        name: 'ogNative',
+        methodList: ['onBridgeResult', 'onRouteChange', 'onSessionState', 'onApiDetail', 'onReplayReady',
+          'onCommentTemplate', 'onEngageTemplate'],
+        controller: this.bridge.controller
+      })
+      .onControllerAttached(() => {
+        try {
+          this.bridge.controller.setCustomUserAgent(AppConfig.WEB_USER_AGENT);
+        } catch (error) {
+          hilog.warn(0x0000, TAG, 'custom user agent rejected');
+        }
+        // 引擎已经起来了，这时读 Cookie 罐才是安全的（见 Index.aboutToAppear 的说明）。
+        this.detectSession();
+      })
+      .runJavaScriptOnDocumentStart([
+        { script: SESSION_WATCHER, scriptRules: ['*'] },
+        { script: NETWORK_WATCHER, scriptRules: ['*'] }
+      ])
+      .onPageBegin(() => {
+        this.bridge.markUnready();
+      })
+      .onPageEnd((event) => {
+        this.bridge.markReady();
+        this.onPageReady();
+        if (event !== undefined && event.url.length > 0) {
+          this.bridge.publishRoute(event.url);
+        }
+        this.scheduleSessionCheck();
+        // 首页这一趟加载完，就把"接下来很可能要去"的页面**预加载**掉（见 prefetchLikelyPages）。
+        this.prefetchLikelyPages(event !== undefined ? event.url : '');
+      })
+      .onLoadIntercept((event) => {
+        try {
+          const url: string = event.data.getRequestUrl();
+          if (url.indexOf('instagram.com') >= 0) {
+            this.bridge.publishRoute(url);
+          }
+        } catch (error) {
+        }
+        return false;
+      })
+      .onWindowNew((event: OnWindowNewEvent) => {
+        try {
+          const target: string = event.targetUrl;
+          event.handler.setWebController(null);
+          if (target.length > 0) {
+            this.bridge.loadUrl(target);
+          }
+        } catch (error) {
+          hilog.warn(0x0000, TAG, 'new window hand-off failed');
+        }
+      })
+      .onRenderExited(() => {
+        this.bridge.markUnready();
+        this.bridge.reload();
+      })
+      .onErrorReceive((event) => {
+        try {
+          if (event.request.isMainFrame()) {
+            this.bridge.markUnready();
+          }
+        } catch (error) {
+        }
+      })
+  }
+}

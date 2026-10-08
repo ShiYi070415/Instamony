@@ -1,0 +1,982 @@
+/*
+ * 私信（Direct）收件箱的模型。
+ *
+ * 字段名与页面脚本（WebScripts.directInboxScript）一一对应：脚本在页面里把几百 KB 的响应
+ * 抽成十几个字段再回传，原生这边只做映射，不再碰原始 JSON。
+ *
+ * 收件箱那条**原生 HTTP**（core/NativeDirect，回放原生存下来的 GraphQL 模板）的响应形状和
+ * 脚本读的是同一棵树，所以沿用同一个 inboxFromJson。会话详情走的是另一条路（REST
+ * `/api/v1/direct_v2/threads/{id}/`），形状完全不同，映射见 threadFromJson。
+ */
+
+import { hilog } from '@kit.PerformanceAnalysisKit';
+import { JsonRead } from '../core/JsonRead';
+
+const DOMAIN: number = 0xFF00;
+const TAG: string = 'DirectMapper';
+
+/** 一条私信会话（收件箱里的一行）。 */
+export class DirectThread {
+  /** thread_id：打开网页里的那条会话要用它。 */
+  readonly id: string;
+  /** thread_key：同一条会话的另一个标识（备份用，目前只记日志）。 */
+  readonly key: string;
+  /** 显示名：1:1 用对方的用户名，群聊用 thread_title。 */
+  readonly title: string;
+  readonly avatarUrl: string;
+  readonly isGroup: boolean;
+  /** 对方**名字**（ull_name；标题栏第一行用它，用户名留给第二行）。 */
+  readonly unread: boolean;
+  readonly muted: boolean;
+  readonly pinned: boolean;
+  /** 最近活动时间（毫秒）。 */
+  readonly tsMs: number;
+  /** 账号名（`username`，标题栏第二行用它；名字 `title` 是第一行）。 */
+  readonly username: string;
+  /** 最近一条消息的文字（没有文字时为空）。 */
+  readonly text: string;
+  /** 最近一条消息的类型（text / media / voice_media ...），文字为空时用它给个中文占位。 */
+  readonly kind: string;
+
+  constructor(id: string, key: string, title: string, avatarUrl: string, isGroup: boolean,
+              unread: boolean, muted: boolean, pinned: boolean, tsMs: number,
+              text: string, kind: string, username: string = '') {
+    this.id = id;
+    this.key = key;
+    this.title = title;
+    this.avatarUrl = avatarUrl;
+    this.isGroup = isGroup;
+    this.unread = unread;
+    this.muted = muted;
+    this.pinned = pinned;
+    this.tsMs = tsMs;
+    this.text = text;
+    this.kind = kind;
+    this.username = username;
+  }
+
+  /** 打开这条会话的网页地址。 */
+  threadUrl(): string {
+    return `https://www.instagram.com/direct/t/${this.id}/`;
+  }
+}
+
+/** 一页会话 + 游标。 */
+export class DirectInboxPage {
+  readonly threads: Array<DirectThread>;
+  readonly endCursor: string;
+  readonly hasMore: boolean;
+
+  constructor(threads: Array<DirectThread>, endCursor: string, hasMore: boolean) {
+    this.threads = threads;
+    this.endCursor = endCursor;
+    this.hasMore = hasMore;
+  }
+}
+
+/**
+ * 会话里的一条消息。
+ *
+ * 字段跟着 IG 的 `direct_v2` REST 形状走（`/api/v1/direct_v2/threads/{id}/` 的 `thread.items[]`）：
+ * 每条有 `item_id` / `user_id`（谁发的）/ `timestamp`（微秒！）/ `item_type` / `text`。
+ */
+export class DirectMessage {
+  readonly id: string;
+  readonly userId: string;
+  /** 是不是**我**发的（右侧气泡）。判据是 user_id == 自己，见 DirectMapper。 */
+  readonly mine: boolean;
+  readonly tsMs: number;
+  readonly kind: string;
+  readonly text: string;
+  /**
+   * 这条消息带的**图片**（可直接 `Image()` 的地址；纯文本消息给空串）。
+   *
+   * 从哪来：直接发的媒体（`media.image_versions2`）、转发的帖子（`media_share.…`）、
+   * reel 分享、链接卡片（`link.link_context.link_image_url`）—— 依次找第一个图片候选
+   * （见 DirectMapper.mediaUrlOf）。
+   */
+  readonly mediaUrl: string;
+  /** 这条媒体是不是视频（缩略图上要盖一颗播放标记）。 */
+  readonly isVideo: boolean;
+
+  constructor(id: string, userId: string, mine: boolean, tsMs: number, kind: string,
+              text: string, mediaUrl: string = '', isVideo: boolean = false) {
+    this.id = id;
+    this.userId = userId;
+    this.mine = mine;
+    this.tsMs = tsMs;
+    this.kind = kind;
+    this.text = text;
+    this.mediaUrl = mediaUrl;
+    this.isVideo = isVideo;
+  }
+}
+
+/** 一条会话的消息页（照 REST 那条的形状给）。 */
+export class DirectThreadView {
+  readonly id: string;
+  readonly title: string;
+  /** 参与者（自己以外的那几个）：用户名 + 头像，标题栏/气泡上要用。 */
+  readonly withUsername: string;
+  readonly withAvatar: string;
+  readonly withId: string;
+  /** 群聊（标题栏只显示群名，不显示"用户名 + id"那一列）。 */
+  readonly isGroup: boolean;
+  /** 对方的**名字**（full_name）：标题栏第一行用它，用户名留给第二行。 */
+  readonly withFullName: string;
+  /** 消息按**时间正序**（老的在前，界面上往下排）。 */
+  readonly messages: Array<DirectMessage>;
+  /** 还有更老的消息（`has_older`）+ 取更老那批的游标（`oldest_cursor`）。 */
+  readonly hasOlder: boolean;
+  readonly oldestCursor: string;
+
+  constructor(id: string, title: string, withUsername: string, withAvatar: string, withId: string,
+              messages: Array<DirectMessage>, hasOlder: boolean, oldestCursor: string,
+              isGroup: boolean = false, withFullName: string = '') {
+    this.withFullName = withFullName;
+    this.id = id;
+    this.title = title;
+    this.withUsername = withUsername;
+    this.withAvatar = withAvatar;
+    this.withId = withId;
+    this.isGroup = isGroup;
+    this.messages = messages;
+    this.hasOlder = hasOlder;
+    this.oldestCursor = oldestCursor;
+  }
+}
+
+/** 脚本回传的一条（字段名要短，见 WebScripts 里的说明）。 */
+interface DirectThreadDto {
+  id?: string;
+  key?: string;
+  title?: string;
+  avatar?: string;
+  group?: boolean;
+  unread?: boolean;
+  muted?: boolean;
+  pinned?: boolean;
+  ts?: number;
+  text?: string;
+  kind?: string;
+  items?: number;
+}
+
+/** 脚本回传的整包。 */
+interface DirectInboxDto {
+  state?: string;
+  items?: Array<DirectThreadDto>;
+  cursor?: string;
+  more?: boolean;
+  count?: number;
+}
+
+/** small JSON → 模型。state 不是 ok 就返回 null，由视图模型决定怎么提示。 */
+export class DirectMapper {
+  static inboxFromJson(raw: string): DirectInboxPage | null {
+    /*
+     * **必须用 parseWithBigIds**（不能用下面那种 `JSON.parse(raw) as DirectInboxDto` 的 DTO 直转）：
+     * `id` 在网页那棵树里有时是**数字**，19 位的 thread_id 一过 double 就被舍入，
+     * 再转成字符串就成了 `340282366841710301281158034919` 这种 30 位错 id ——
+     * 点开会话请求 `/api/v1/direct_v2/threads/<错 id>` 被 IG 当未登录回 404
+     * （用户报的"打开会话显示 404"，见 JsonRead.parseWithBigIds 的说明）。
+     * 这里先把长数字补引号，再按字段名读，id 就原样拿到精确值。
+     */
+    const root: Record<string, Object> = JsonRead.parseWithBigIds(raw);
+    if (JsonRead.strOf(root, 'state') !== 'ok') {
+      return null;
+    }
+    const items: Array<Object> = JsonRead.arrayOf(root, 'items');
+    const threads: Array<DirectThread> = [];
+    for (let index: number = 0; index < items.length; index++) {
+      const item: Record<string, Object> | null = JsonRead.asRecord(items[index]);
+      if (item === null) {
+        continue;
+      }
+      const id: string = JsonRead.strOf(item, 'id');
+      if (id.length === 0) {
+        continue;
+      }
+      threads.push(new DirectThread(
+        id,
+        JsonRead.strOf(item, 'key'),
+        JsonRead.strOf(item, 'title'),
+        JsonRead.strOf(item, 'avatar'),
+        JsonRead.boolOf(item, 'group'),
+        JsonRead.boolOf(item, 'unread'),
+        JsonRead.boolOf(item, 'muted'),
+        JsonRead.boolOf(item, 'pinned'),
+        JsonRead.numOf(item, 'ts'),
+        JsonRead.strOf(item, 'text'),
+        JsonRead.strOf(item, 'kind')));
+    }
+    return new DirectInboxPage(threads, JsonRead.strOf(root, 'cursor'), JsonRead.boolOf(root, 'more'));
+  }
+
+  /**
+   * `/api/v1/direct_v2/inbox/` 的响应 → 一页会话（**翻页**用，见 NativeDirect.inboxRest）。
+   *
+   * 为什么不复用上面的 `inboxFromJson`：那条读的是网页 GraphQL 的形状
+   * （`data.*.threads_by_folder.edges[]`），REST 这条是 `{inbox:{threads:[…],next_max_id}}`，
+   * 字段也全是另一套（`items` 而不是 `slide_messages`、时间戳是微秒、游标叫 `next_max_id`）。
+   */
+  /**
+   * **GraphQL** 版的会话响应 → 一条会话（"抓模板 + 原生 HTTP 回放"那条路用）。
+   *
+   * 为什么不复用 `threadFromJson`：那条读的是 REST 的平面形状（`{status,thread:{…}}`），
+   * 而 GraphQL 是 Relay 树（`data.*.thread.items.edges[].node{}`），键名与层级都不同。
+   * 所以这里**按结构找**（和 NativeStories 找托盘数组同一招）：
+   *   · 消息数组 = 数组元素带 `timestamp` 或 `item_id` 的那个；
+   *   · 参与者数组 = 数组元素带 `username` 的那个。
+   * 找到之后就沿用 REST 那条一模一样的字段读法（`mediaUrlOf` / `hasVideoMedia` / 微秒→毫秒），
+   * 保证两条路出来的界面完全一致。
+   */
+  static threadFromGraphql(raw: string, ownId: string): DirectThreadView | null {
+    const root: Record<string, Object> = JsonRead.parseWithBigIds(raw);
+    if (Object.keys(root).length === 0) {
+      hilog.warn(DOMAIN, TAG, 'threadFromGraphql: unparsable len=%{public}d head=%{public}s',
+        raw.length, raw.substring(0, 120));
+      return null;
+    }
+    /*
+     * 判据要**连 `node` 一起看**：Relay 的连接是 `edges:[{cursor,node:{…}}]`，数组元素本身
+     * （那条边）没有 `item_id`/`timestamp`，只有它包着的 `node` 有 —— 只看元素会一条都找不到
+     * （真机上就是这么失败的：87KB 的会话响应，解析器却"没找到消息数组"）。
+     *
+     * 而且 IGD 那条查询的字段名是 `timestamp_ms` / `message_id` / `content_type`，
+     * 不是 REST 的 `timestamp` / `item_id` / `item_type` —— 三种都要认（见下面读字段那段）。
+     */
+    const items: Array<Object> | null = DirectMapper.findArrayBy(root, 0,
+      (one: Record<string, Object>): boolean => {
+        const inner: Record<string, Object> | null = JsonRead.recordOf(one, 'node');
+        const at: Record<string, Object> = inner !== null ? inner : one;
+        return JsonRead.has(at, 'timestamp') || JsonRead.has(at, 'item_id')
+          || JsonRead.has(at, 'timestamp_ms') || JsonRead.has(at, 'message_id')
+          || JsonRead.has(at, 'content_type');
+      });
+    if (items === null) {
+      hilog.warn(DOMAIN, TAG, 'no messages array: %{public}s', DirectMapper.arrays(raw));
+      return null;
+    }
+    const users: Array<Object> | null = DirectMapper.findArrayBy(root, 0,
+      (one: Record<string, Object>): boolean => {
+        const inner: Record<string, Object> | null = JsonRead.recordOf(one, 'node');
+        const at: Record<string, Object> = inner !== null ? inner : one;
+        return JsonRead.strOf(at, 'username').length > 0;
+      });
+    const userList: Array<Object> = users === null ? [] : users;
+    // 自己：优先响应里的 viewer_id，其次本地存的自己 id。
+    let me: string = ownId;
+    const viewerKeys: Array<string> = ['viewer_id', 'viewerId'];
+    for (let at: number = 0; at < viewerKeys.length && me === ownId; at++) {
+      const found: string = DirectMapper.findString(root, 0, viewerKeys[at]);
+      if (found.length > 0) {
+        me = found;
+      }
+    }
+    /*
+     * **自己的 id 还要一份 "fbid 形态"**。
+     *
+     * 真机实测（自检日志）：`viewer_id` 是 11 位那种（`12345678901`），而消息里的
+     * `sender_fbid` 是 17 位那种（`12345678901234567`）—— 拿它对 `viewer_id` 永远不相等，
+     * 于是**自己发的消息也会被画成对方发的**（全排到左边）。
+     * 会话节点里 `viewer.interop_messaging_user_fbid` 正是本人的 fbid 形态，用它。
+     */
+    const viewerFbid: string = DirectMapper.findString(root, 0, 'interop_messaging_user_fbid');
+    if (viewerFbid.length > 0) {
+      me = viewerFbid;
+    }
+    let withUsername: string = '';
+    let withAvatar: string = '';
+    let withId: string = '';
+    let withFullName: string = '';
+    for (let index: number = 0; index < userList.length; index++) {
+      const raw: Record<string, Object> | null = JsonRead.asRecord(userList[index]);
+      if (raw === null) {
+        continue;
+      }
+      // 用户数组也可能是边（元素包着 node），脱一层再读。
+      const wrapped: Record<string, Object> | null = JsonRead.recordOf(raw, 'node');
+      const user: Record<string, Object> = wrapped !== null ? wrapped : raw;
+      const pk: string = JsonRead.strOf(user, 'pk');
+      if (me.length > 0 && pk === me) {
+        continue;
+      }
+      const name: string = JsonRead.strOf(user, 'username');
+      const pic: string = DirectMapper.pictureOf(user);
+      if (withUsername.length === 0 && name.length > 0) {
+        withUsername = name;
+      }
+      if (withFullName.length === 0) {
+        withFullName = JsonRead.strOf(user, 'full_name');
+      }
+      if (withId.length === 0) {
+        withId = pk;
+      }
+      if (pic.length > 0) {
+        withId = pk;
+        withUsername = name;
+        withAvatar = pic;
+        break;
+      }
+    }
+    const messages: Array<DirectMessage> = [];
+    const senders: Array<string> = [];
+    for (let index: number = 0; index < items.length; index++) {
+      const node: Record<string, Object> | null = JsonRead.asRecord(items[index]);
+      if (node === null) {
+        continue;
+      }
+      // Relay 的边包一层 node，别的形状可能直接是消息本体：两种都认。
+      const inner: Record<string, Object> | null = JsonRead.recordOf(node, 'node');
+      const item: Record<string, Object> = inner !== null ? inner : node;
+      /*
+       * **IGD 那条查询（IGDThreadDetailQuery）的字段名和 REST 那条完全不同**（真机 shape 摘要
+       * 里抄下来的）：文字在 **`text_body`**（不是 `content`，`content` 对图片消息是**对象**）、
+       * 类型在 `content_type`、发送者在 `sender_fbid`、时间在 `timestamp_ms`（毫秒）、
+       * 消息 id 在 `message_id`/`id`。这里几种命名都认，两条路（REST / GraphQL）共用一段映射。
+       */
+      let kind: string = JsonRead.strOf(item, 'item_type');
+      if (kind.length === 0) {
+        kind = JsonRead.strOf(item, 'content_type');
+      }
+      let text: string = JsonRead.strOf(item, 'text');
+      if (text.length === 0) {
+        text = JsonRead.strOf(item, 'text_body');
+      }
+      let mediaUrl: string = DirectMapper.mediaUrlOf(item);
+      // `content` 两种形态都见过：**对象**（图片/分享消息，里面有媒体地址）或一段 JSON 字符串。
+      const packedObj: Record<string, Object> | null = JsonRead.recordOf(item, 'content');
+      if (packedObj !== null) {
+        if (mediaUrl.length === 0) {
+          mediaUrl = DirectMapper.packedUrl(packedObj);
+        }
+        if (text.length === 0) {
+          text = DirectMapper.findString(packedObj, 0, 'text');
+        }
+        if (kind.length === 0) {
+          kind = DirectMapper.findString(packedObj, 0, 'content_type');
+        }
+      } else {
+        const packedRaw: string = JsonRead.strOf(item, 'content');
+        if (packedRaw.length > 0 && packedRaw.charAt(0) === '{') {
+          const packed: Record<string, Object> = JsonRead.parse(packedRaw);
+          if (Object.keys(packed).length > 0) {
+            if (mediaUrl.length === 0) {
+              mediaUrl = DirectMapper.packedUrl(packed);
+            }
+            if (text.length === 0) {
+              text = DirectMapper.findString(packed, 0, 'text');
+            }
+            if (kind.length === 0) {
+              kind = DirectMapper.findString(packed, 0, 'content_type');
+            }
+          }
+        } else if (text.length === 0 && packedRaw.length > 0) {
+          // 纯文本消息：`content` 就是那句话。
+          text = packedRaw;
+        }
+      }
+      if (text.length === 0 && mediaUrl.length === 0) {
+        continue;
+      }
+      let userId: string = JsonRead.strOf(item, 'user_id');
+      if (userId.length === 0) {
+        userId = JsonRead.strOf(item, 'sender_fbid');
+      }
+      if (userId.length === 0) {
+        // 有的形状把发送者包成一个对象（诊断日志里见过 `sender`）。
+        const sender: Record<string, Object> | null = JsonRead.recordOf(item, 'sender');
+        if (sender !== null) {
+          userId = JsonRead.strOf(sender, 'pk');
+          if (userId.length === 0) {
+            userId = JsonRead.strOf(sender, 'id');
+          }
+        }
+      }
+      if (senders.indexOf(userId) < 0) {
+        senders.push(userId);
+      }
+      let stamp: number = JsonRead.numOf(item, 'timestamp');
+      if (stamp <= 0) {
+        stamp = JsonRead.numOf(item, 'timestamp_ms');
+      }
+      // GraphQL 这条给的是**微秒**（> 1e14）；已经是毫秒（~1e12）的就别动。
+      const tsMs: number = stamp > 1e14 ? Math.round(stamp / 1000) : Math.round(stamp);
+      let id: string = JsonRead.strOf(item, 'item_id');
+      if (id.length === 0) {
+        id = JsonRead.strOf(item, 'message_id');
+      }
+      if (id.length === 0) {
+        id = JsonRead.strOf(item, 'id');
+      }
+      messages.push(new DirectMessage(id, userId, me.length > 0 && userId === me, tsMs, kind,
+        text, mediaUrl, DirectMapper.hasVideoMedia(item)));
+    }
+    if (messages.length === 0) {
+      // 找到数组了但一条都没能用 —— 把第一条的原样键名和几个字段打出来（诊断用）。
+      let keys: string = '-';
+      let content: string = '-';
+      let type: string = '-';
+      if (items.length > 0) {
+        const first: Record<string, Object> | null = JsonRead.asRecord(items[0]);
+        if (first !== null) {
+          const inner: Record<string, Object> | null = JsonRead.recordOf(first, 'node');
+          const at: Record<string, Object> = inner !== null ? inner : first;
+          keys = Object.keys(at).slice(0, 22).join(',');
+          content = JsonRead.strOf(at, 'content').substring(0, 100);
+          type = JsonRead.strOf(at, 'content_type');
+        }
+      }
+      hilog.warn(DOMAIN, TAG, 'items n=%{public}d no usable; keys=%{public}s type=%{public}s content=%{public}s',
+        items.length, keys, type, content);
+      return null;
+    }
+    /*
+     * 诊断：**"我发的"是靠 `sender_fbid === viewer_id` 判的**，而这两个 id 在 IGD 里不一定是
+     * 同一种形式（一个是 pk、一个是 fbid 的情况见过）。打一行就能看出气泡会不会全排到左边。
+     */
+    hilog.info(DOMAIN, TAG, 'threadFromGraphql me=%{public}s msgs=%{public}d senders=%{public}s',
+      me, messages.length, senders.slice(0, 4).join(','));
+    // GraphQL 是"新在前"，界面要的是老的在前（和 REST 那条一致）。
+    const ordered: Array<DirectMessage> = [];
+    for (let index: number = messages.length - 1; index >= 0; index--) {
+      ordered.push(messages[index]);
+    }
+    /*
+     * 翻页游标：IGD 的变量叫 `min_uq_seq_id`（"比这个序号更老的"），所以**首选最老那条消息的 id**
+     * （测试会话里消息 id 就是那个序号）；拿不到才退回 page_info 的游标（那串 132 字符的
+     * end_cursor 喂给 min_uq_seq_id 不一定认）。
+     */
+    let cursor: string = '';
+    /*
+     * **优先取最老那条消息的 `id`**（= IG 的 uq_seq_id）：翻页变量 `min_uq_seq_id` 吃的是
+     * "比这个序号更老"，而 `page_info.end_cursor` 是一串 132 字符的不透明游标
+     * （实测 `AQHTYxzHCg-e-2IQLTGdN8n5tIphsRiZ…`），喂进去服务端直接忽略、把同一页又回一次 ——
+     * 真机日志就是 `loadOlder: +0`。
+     * 注意要从**原始节点**读 `id`（不是 DirectMessage.id：那个优先取的是 `message_id`，
+     * 往往是 `mid.$…` 这种字符串，不是序号）。
+     */
+    if (items.length > 0) {
+      const oldestEdge: Record<string, Object> | null = JsonRead.asRecord(items[items.length - 1]);
+      if (oldestEdge !== null) {
+        const inner: Record<string, Object> | null = JsonRead.recordOf(oldestEdge, 'node');
+        const oldest: Record<string, Object> = inner !== null ? inner : oldestEdge;
+        const seq: string = JsonRead.strOf(oldest, 'id');
+        if (seq.length > 0) {
+          cursor = seq;
+        }
+      }
+    }
+    if (cursor.length === 0 && ordered.length > 0 && /^\d{10,}$/.test(ordered[0].id)) {
+      cursor = ordered[0].id;
+    }
+    if (cursor.length === 0) {
+      cursor = DirectMapper.findString(root, 0, 'oldest_cursor');
+    }
+    if (cursor.length === 0) {
+      cursor = DirectMapper.findString(root, 0, 'end_cursor');
+    }
+    const hasOlder: boolean = DirectMapper.findBool(root, 0, 'has_older')
+      || DirectMapper.findBool(root, 0, 'has_next_page')
+      || DirectMapper.findBool(root, 0, 'has_previous_page')
+      /*
+       * **只要拿到游标就允许往前翻**。
+       *
+       * IGD 那条查询的 `page_info` 常常两个 has_* 都是 false，而且一页并不总是满 20 条
+       * （真机上见过 17/18/19 条，但确实还有更老的）—— 按"满一页"判会让界面**永远不触发加载**
+       * （用户报的"只能下滑、不触发加载"）。
+       * 代价可控：翻页真没多出消息时，DirectThreadViewModel.loadOlder 会把 hasOlder 置回 false，
+       * 不会无限重复同一页（那条去重+停止的逻辑就是为此加的）。
+       */
+      || cursor.length > 0;
+    let threadId: string = DirectMapper.findString(root, 0, 'thread_id');
+    if (threadId.length === 0) {
+      threadId = DirectMapper.findString(root, 0, 'thread_fbid');
+    }
+    const title: string = withFullName.length > 0 ? withFullName : withUsername;
+    return new DirectThreadView(threadId, title, withUsername, withAvatar, withId, ordered,
+      hasOlder, cursor, userList.length > 2, withFullName);
+  }
+
+  /**
+   * **结构摘要**（诊断用）：把响应的形状按路径列出来（数组标出长度、对象列出前几个键名）。
+   *
+   * 写解析器时唯一的依据就是它 —— 真机上 87KB 的会话响应，光看前 200 字节根本看不出消息
+   * 数组挂在哪一层、元素长什么样。上限 80 行，避免把日志刷爆。
+   */
+  static describe(raw: string): string {
+    const root: Record<string, Object> = JsonRead.parseWithBigIds(raw);
+    const lines: Array<string> = [];
+    DirectMapper.walkShape(root, '', 0, lines);
+    return lines.join('\n');
+  }
+
+  private static walkShape(host: Record<string, Object>, path: string, depth: number,
+                           out: Array<string>): void {
+    if (depth > 5 || out.length > 80) {
+      return;
+    }
+    const keys: Array<string> = Object.keys(host);
+    for (let index: number = 0; index < keys.length; index++) {
+      const key: string = keys[index];
+      const at: string = path.length > 0 ? `${path}.${key}` : key;
+      const value: Object = host[key];
+      if (Array.isArray(value)) {
+        const list: Array<Object> = value as Array<Object>;
+        out.push(`${at}[] n=${list.length}`);
+        if (list.length > 0 && out.length <= 80) {
+          const first: Record<string, Object> | null = JsonRead.asRecord(list[0]);
+          if (first !== null) {
+            DirectMapper.walkShape(first, `${at}[0]`, depth + 1, out);
+          }
+        }
+      } else if (value !== null && typeof value === 'object') {
+        const child: Record<string, Object> | null = JsonRead.asRecord(value);
+        if (child !== null) {
+          out.push(`${at} {${Object.keys(child).slice(0, 14).join(',')}}`);
+          DirectMapper.walkShape(child, at, depth + 1, out);
+        }
+      }
+    }
+  }
+
+  /**
+   * 从一段**打包成 JSON 的 `content`** 里抠出媒体地址（图片/视频消息就是这么给的）。
+   *
+   * 字段名按见过的几种依次试；都没有就去扫第一个 http(s) 开头的字符串值（够用了 ——
+   * 这条只影响气泡里画不画图，抠不到也只是没有图）。
+   */
+  private static packedUrl(packed: Record<string, Object>): string {
+    const keys: Array<string> = ['media_url', 'url', 'video_url', 'preview_url', 'image_url'];
+    for (let index: number = 0; index < keys.length; index++) {
+      const url: string = DirectMapper.findString(packed, 0, keys[index]);
+      if (url.length > 0) {
+        return url;
+      }
+    }
+    return '';
+  }
+
+  /**
+   * **数组清单**（诊断用）：把响应里所有数组的路径和长度列出来（`a.b[] n=3` 一行一个）。
+   *
+   * 消息数组找不到时，这一行就能看出它到底挂在哪儿、叫什么名字。
+   */
+  static arrays(raw: string): string {
+    const root: Record<string, Object> = JsonRead.parseWithBigIds(raw);
+    const out: Array<string> = [];
+    DirectMapper.walkArrays(root, '', 0, out);
+    return out.length > 0 ? out.join(' ') : '(none)';
+  }
+
+  private static walkArrays(host: Record<string, Object>, path: string, depth: number,
+                             out: Array<string>): void {
+    if (depth > 6 || out.length > 30) {
+      return;
+    }
+    const keys: Array<string> = Object.keys(host);
+    for (let index: number = 0; index < keys.length; index++) {
+      const key: string = keys[index];
+      const at: string = path.length > 0 ? `${path}.${key}` : key;
+      const value: Object = host[key];
+      if (Array.isArray(value)) {
+        const list: Array<Object> = value as Array<Object>;
+        let firstKeys: string = '';
+        if (list.length > 0) {
+          const first: Record<string, Object> | null = JsonRead.asRecord(list[0]);
+          if (first !== null) {
+            firstKeys = `[0]{${Object.keys(first).slice(0, 8).join(',')}}`;
+          }
+        }
+        out.push(`${at}[] n=${list.length}${firstKeys}`);
+      } else if (value !== null && typeof value === 'object') {
+        const child: Record<string, Object> | null = JsonRead.asRecord(value);
+        if (child !== null) {
+          DirectMapper.walkArrays(child, at, depth + 1, out);
+        }
+      }
+    }
+  }
+
+  /** 在对象树里找**第一个满足判据的数组**（广度优先，深度封顶）。 */
+  private static findArrayBy(host: Record<string, Object>, depth: number,
+                             test: (one: Record<string, Object>) => boolean): Array<Object> | null {
+    if (depth > 6) {
+      return null;
+    }
+    const keys: Array<string> = Object.keys(host);
+    for (let index: number = 0; index < keys.length; index++) {
+      const list: Array<Object> = JsonRead.arrayOf(host, keys[index]);
+      if (list.length > 0) {
+        const first: Record<string, Object> | null = JsonRead.asRecord(list[0]);
+        if (first !== null && test(first)) {
+          return list;
+        }
+      }
+    }
+    for (let index: number = 0; index < keys.length; index++) {
+      const child: Record<string, Object> | null = JsonRead.recordOf(host, keys[index]);
+      if (child !== null) {
+        const hit: Array<Object> | null = DirectMapper.findArrayBy(child, depth + 1, test);
+        if (hit !== null) {
+          return hit;
+        }
+      }
+    }
+    return null;
+  }
+
+  /** 在对象树里找某个键的字符串值（广度优先）。 */
+  private static findString(host: Record<string, Object>, depth: number, key: string): string {
+    if (depth > 6) {
+      return '';
+    }
+    const value: string = JsonRead.strOf(host, key);
+    if (value.length > 0) {
+      return value;
+    }
+    const keys: Array<string> = Object.keys(host);
+    for (let index: number = 0; index < keys.length; index++) {
+      const child: Record<string, Object> | null = JsonRead.recordOf(host, keys[index]);
+      if (child !== null) {
+        const hit: string = DirectMapper.findString(child, depth + 1, key);
+        if (hit.length > 0) {
+          return hit;
+        }
+      }
+    }
+    return '';
+  }
+
+  /** 在对象树里找某个布尔键（广度优先）。 */
+  private static findBool(host: Record<string, Object>, depth: number, key: string): boolean {
+    if (depth > 6) {
+      return false;
+    }
+    if (JsonRead.has(host, key)) {
+      return JsonRead.boolOf(host, key);
+    }
+    const keys: Array<string> = Object.keys(host);
+    for (let index: number = 0; index < keys.length; index++) {
+      const child: Record<string, Object> | null = JsonRead.recordOf(host, keys[index]);
+      if (child !== null && DirectMapper.findBool(child, depth + 1, key)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static inboxFromRestJson(raw: string): DirectInboxPage | null {
+    /*
+     * 用 `parseWithBigIds`：REST 里 `thread_id` 是 19~20 位数字，普通 JSON.parse 先把它舍入成
+     * double，再转字符串就成了一串错 id —— 点开会话请求 `/threads/<错 id>` 直接 404
+     * （用户报的"打开会话显示 404"，见 JsonRead.parseWithBigIds 的说明）。
+     */
+    const root: Record<string, Object> = JsonRead.parseWithBigIds(raw);
+    if (Object.keys(root).length === 0) {
+      return null;
+    }
+    const box: Record<string, Object> | null = JsonRead.recordOf(root, 'inbox');
+    if (box === null) {
+      return null;
+    }
+    const list: Array<Object> = JsonRead.arrayOf(box, 'threads');
+    const threads: Array<DirectThread> = [];
+    for (let index: number = 0; index < list.length; index++) {
+      const th: Record<string, Object> | null = JsonRead.asRecord(list[index]);
+      if (th === null) {
+        continue;
+      }
+      const id: string = JsonRead.strOf(th, 'thread_id');
+      if (id.length === 0) {
+        continue;
+      }
+      const users: Array<Object> = JsonRead.arrayOf(th, 'users');
+      let username: string = '';
+      let fullName: string = '';
+      let avatar: string = '';
+      for (let at: number = 0; at < users.length; at++) {
+        const u: Record<string, Object> | null = JsonRead.asRecord(users[at]);
+        if (u === null) {
+          continue;
+        }
+        const pic: string = DirectMapper.pictureOf(u);
+        if (username.length === 0) {
+          username = JsonRead.strOf(u, 'username');
+        }
+        if (fullName.length === 0) {
+          fullName = JsonRead.strOf(u, 'full_name');
+        }
+        if (avatar.length === 0 && pic.length > 0) {
+          avatar = pic;
+        }
+      }
+      const groupTitle: string = JsonRead.strOf(th, 'thread_title');
+      const isGroup: boolean = JsonRead.boolOf(th, 'is_group');
+      let title: string = isGroup
+        ? (groupTitle.length > 0 ? groupTitle : (fullName.length > 0 ? fullName : username))
+        : (fullName.length > 0 ? fullName : (username.length > 0 ? username : groupTitle));
+      if (title === 'Empty' && username.length > 0) {
+        title = username;
+      }
+      // 最近一条消息的文字（REST 的 items 是"新在前"）。
+      const items: Array<Object> = JsonRead.arrayOf(th, 'items');
+      let text: string = '';
+      let kind: string = '';
+      if (items.length > 0) {
+        const first: Record<string, Object> | null = JsonRead.asRecord(items[0]);
+        if (first !== null) {
+          text = JsonRead.strOf(first, 'text');
+          kind = JsonRead.strOf(first, 'item_type');
+        }
+      }
+      // `last_activity_at` 是**微秒**（GraphQL 那条给的是毫秒）。
+      const micros: number = JsonRead.numOf(th, 'last_activity_at');
+      const ts: number = micros > 0 ? Math.round(micros / 1000) : 0;
+      threads.push(new DirectThread(id, '', title, isGroup ? '' : avatar, isGroup,
+        JsonRead.strOf(th, 'read_state') === '0', JsonRead.boolOf(th, 'muted'),
+        JsonRead.boolOf(th, 'is_pin'), ts, text, kind, username));
+    }
+    const next: string = JsonRead.strOf(box, 'next_max_id');
+    const older: boolean = JsonRead.boolOf(box, 'has_older') || next.length > 0;
+    return new DirectInboxPage(threads, next, older);
+  }
+
+  /**
+   * `/api/v1/direct_v2/threads/{id}/` 的响应 → 一条会话（原生 HTTP 那条路用）。
+   *
+   * 形状（REST 那条，和 GraphQL 那套完全不同）：
+   *   `{status:"ok", thread:{thread_id, thread_title, users:[{pk,username,profile_pic_url}],
+   *     items:[{item_id,user_id,timestamp,item_type,text}], has_older, oldest_cursor, viewer_id}}`
+   *
+   * 三个真机上必须处理的点：
+   *   1. `timestamp` 是**微秒**（网页那边给的是毫秒），要 /1000 —— 不处理就会显示成 5 万年后的日期；
+   *   2. `items` 是**新在前**的老序（和列表相反），这里翻正序给界面；
+   *   3. 判断"是不是我发的"要用 `viewer_id`（响应里就有）；拿不到才退回本地存的自己 id。
+   */
+  static threadFromJson(raw: string, ownId: string): DirectThreadView | null {
+    // 同 inboxFromRestJson：`thread_id` / `pk` 是 19~20 位，必须走 parseWithBigIds 才不丢精度。
+    const root: Record<string, Object> = JsonRead.parseWithBigIds(raw);
+    if (Object.keys(root).length === 0) {
+      return null;
+    }
+    const status: string = JsonRead.strOf(root, 'status');
+    if (status.length > 0 && status !== 'ok') {
+      return null;
+    }
+    const thread: Record<string, Object> | null = JsonRead.recordOf(root, 'thread');
+    if (thread === null) {
+      return null;
+    }
+    const id: string = JsonRead.strOf(thread, 'thread_id');
+    if (id.length === 0) {
+      return null;
+    }
+    const viewerId: string = JsonRead.strOf(thread, 'viewer_id');
+    const me: string = viewerId.length > 0 ? viewerId : ownId;
+    // 参与者：自己以外的那几个（1:1 就是对方；群聊取第一个当标题里的名字）。
+    const users: Array<Object> = JsonRead.arrayOf(thread, 'users');
+    let withUsername: string = '';
+    let withAvatar: string = '';
+    let withId: string = '';
+    let fallbackName: string = '';
+    let fullName: string = '';
+    let fallbackId: string = '';
+    for (let index: number = 0; index < users.length; index++) {
+      const user: Record<string, Object> | null = JsonRead.asRecord(users[index]);
+      if (user === null) {
+        continue;
+      }
+      const pk: string = JsonRead.strOf(user, 'pk');
+      if (me.length > 0 && pk === me) {
+        continue;
+      }
+      const name: string = JsonRead.strOf(user, 'username');
+      const pic: string = DirectMapper.pictureOf(user);
+      /*
+       * 用户名 / 名字**独立于头像**收集（这一条是"标题栏第二行退成数字 id"的修复）：
+       * 原来只把 username/full_name 放在"挑中头像"的分支里赋值，挑中的那个用户对象恰好
+       * 没有 profile_pic_url 时，标题栏就拿不到用户名、一路退到数字 id（真机现象：
+       * 第一行 XingLi、第二行一串数字）。名字/用户名跟头像是两件事，各收各的。
+       */
+      if (name.length > 0 && withUsername.length === 0) {
+        withUsername = name;
+      }
+      const fn: string = JsonRead.strOf(user, 'full_name');
+      if (fn.length > 0 && fullName.length === 0) {
+        fullName = fn;
+      }
+      if (fallbackId.length === 0) {
+        fallbackId = pk;
+        fallbackName = name;
+      }
+      /*
+       * 取**第一个真有头像**的那个当"对方"：真机上 `users[]` 里偶尔有几个条目没有
+       * `profile_pic_url`（或只给了 `hd_profile_pic_url_info`），按位置盲取第一个就会
+       * 得到"有名字没头像"的标题栏（用户看到的是一块空白头像）。
+       */
+      if (pic.length > 0) {
+        withId = pk;
+        withUsername = name;
+        fullName = JsonRead.strOf(user, 'full_name');
+        withAvatar = pic;
+        break;
+      }
+    }
+    if (withId.length === 0) {
+      withId = fallbackId;
+      withUsername = fallbackName;
+    }
+    let title: string = JsonRead.strOf(thread, 'thread_title');
+    if (title.length === 0 || title === 'Empty') {
+      title = withUsername;
+    }
+    const items: Array<Object> = JsonRead.arrayOf(thread, 'items');
+    const messages: Array<DirectMessage> = [];
+    for (let index: number = 0; index < items.length; index++) {
+      const item: Record<string, Object> | null = JsonRead.asRecord(items[index]);
+      if (item === null) {
+        continue;
+      }
+      const kind: string = JsonRead.strOf(item, 'item_type');
+      const text: string = JsonRead.strOf(item, 'text');
+      const mediaUrl: string = DirectMapper.mediaUrlOf(item);
+      const isVideo: boolean = DirectMapper.hasVideoMedia(item);
+      // 既没文字也没画面的是系统条目（时间戳、加人、已读…）：画出来就是一堆空行，跳过。
+      if (text.length === 0 && mediaUrl.length === 0) {
+        continue;
+      }
+      const userId: string = JsonRead.strOf(item, 'user_id');
+      const micros: number = JsonRead.numOf(item, 'timestamp');
+      messages.push(new DirectMessage(JsonRead.strOf(item, 'item_id'), userId,
+        me.length > 0 && userId === me, micros > 0 ? Math.round(micros / 1000) : 0,
+        kind, text, mediaUrl, isVideo));
+    }
+    // items 是"新在前"，界面上按时间正序排（老的在上）。
+    messages.sort((a: DirectMessage, b: DirectMessage): number => a.tsMs - b.tsMs);
+    return new DirectThreadView(id, title, withUsername, withAvatar, withId, messages,
+      JsonRead.boolOf(thread, 'has_older'), JsonRead.strOf(thread, 'oldest_cursor'),
+      JsonRead.boolOf(thread, 'is_group'), fullName);
+  }
+
+  /**
+   * 一个用户节点的头像（REST 那条路的几种形状依次试；都没有给空串）。
+   *
+   * 顺序：`profile_pic_url` → `hd_profile_pic_url_info.url` → `profile_pic_url_info.url`
+   * （不同时期的响应给的不一样，缺一个就会出现"有名字没头像"的标题栏）。
+   */
+  private static pictureOf(user: Record<string, Object>): string {
+    const direct: string = JsonRead.strOf(user, 'profile_pic_url');
+    if (direct.length > 0) {
+      return direct;
+    }
+    const holders: Array<string> = ['hd_profile_pic_url_info', 'profile_pic_url_info'];
+    for (let index: number = 0; index < holders.length; index++) {
+      const host: Record<string, Object> | null = JsonRead.recordOf(user, holders[index]);
+      if (host !== null) {
+        const url: string = JsonRead.strOf(host, 'url');
+        if (url.length > 0) {
+          return url;
+        }
+      }
+    }
+    return '';
+  }
+
+  /**
+   * 一条消息里**图片候选**的最佳地址（拿不到给空串）。
+   *
+   * IG 把图片放在 `image_versions2.candidates[]`（第一项是最大那张；气泡里够用了，
+   * 不折腾档位）。视频消息同样有这个字段 —— 那是它的**封面帧** ✓。
+   */
+  private static imageUrlOf(host: Record<string, Object> | null): string {
+    if (host === null) {
+      return '';
+    }
+    const versions: Record<string, Object> | null = JsonRead.recordOf(host, 'image_versions2');
+    if (versions === null) {
+      return '';
+    }
+    const candidates: Array<Object> = JsonRead.arrayOf(versions, 'candidates');
+    for (let index: number = 0; index < candidates.length; index++) {
+      const candidate: Record<string, Object> | null = JsonRead.asRecord(candidates[index]);
+      if (candidate === null) {
+        continue;
+      }
+      const url: string = JsonRead.strOf(candidate, 'url');
+      if (url.length > 0) {
+        return url;
+      }
+    }
+    return '';
+  }
+
+  /**
+   * 一条消息的图片地址（依次试几种形状；都没有给空串）。
+   *
+   * 私信里带画面的消息有好几种来源，形状各不相同（真机响应里都见过）：
+   *   `media`        —— 直接发出去的照片/视频；
+   *   `media_share`  —— 转发一条帖子；
+   *   `clip`         —— 分享一条 reel（里面再套一层 `clip`）；
+   *   `reel_share`   —— 分享一条动态；
+   *   `link`         —— 链接卡片（缩略图在 `link_context.link_image_url`）。
+   */
+  private static mediaUrlOf(item: Record<string, Object>): string {
+    const direct: string = DirectMapper.imageUrlOf(JsonRead.recordOf(item, 'media'));
+    if (direct.length > 0) {
+      return direct;
+    }
+    const share: string = DirectMapper.imageUrlOf(JsonRead.recordOf(item, 'media_share'));
+    if (share.length > 0) {
+      return share;
+    }
+    const clip: Record<string, Object> | null = JsonRead.recordOf(item, 'clip');
+    if (clip !== null) {
+      const inner: string = DirectMapper.imageUrlOf(JsonRead.recordOf(clip, 'clip'));
+      if (inner.length > 0) {
+        return inner;
+      }
+      const flat: string = DirectMapper.imageUrlOf(clip);
+      if (flat.length > 0) {
+        return flat;
+      }
+    }
+    const reel: Record<string, Object> | null = JsonRead.recordOf(item, 'reel_share');
+    if (reel !== null) {
+      const inner: string = DirectMapper.imageUrlOf(JsonRead.recordOf(reel, 'media'));
+      if (inner.length > 0) {
+        return inner;
+      }
+    }
+    const link: Record<string, Object> | null = JsonRead.recordOf(item, 'link');
+    if (link !== null) {
+      const context: Record<string, Object> | null = JsonRead.recordOf(link, 'link_context');
+      if (context !== null) {
+        const thumb: string = JsonRead.strOf(context, 'link_image_url');
+        if (thumb.length > 0) {
+          return thumb;
+        }
+      }
+    }
+    return '';
+  }
+
+  /** 这条消息的媒体里有没有视频（缩略图上盖一颗播放标记用）。 */
+  private static hasVideoMedia(item: Record<string, Object>): boolean {
+    const holders: Array<string> = ['media', 'media_share'];
+    for (let index: number = 0; index < holders.length; index++) {
+      const host: Record<string, Object> | null = JsonRead.recordOf(item, holders[index]);
+      if (host === null) {
+        continue;
+      }
+      if (JsonRead.arrayOf(host, 'video_versions').length > 0) {
+        return true;
+      }
+      if (JsonRead.strOf(host, 'media_type') === '2') {
+        return true;
+      }
+    }
+    return false;
+  }
+}

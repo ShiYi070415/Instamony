@@ -1,0 +1,644 @@
+{
+  "string": [
+    {
+      "name": "app_name",
+      "value": "Instamony"
+    },
+    {
+      "name": "app_title",
+      "value": "Instamony"
+    },
+    {
+      "name": "module_desc",
+      "value": "Instamony 主模块"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Instamony 主模块"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Instamony"
+    },
+    {
+      "name": "login_title",
+      "value": "登录以浏览"
+    },
+    {
+      "name": "login_body",
+      "value": "选择一种登录方式。凭据只提交给服务端，不会保存在本应用。"
+    },
+    {
+      "name": "login_web",
+      "value": "在网页中登录"
+    },
+    {
+      "name": "login_web_hint",
+      "value": "登录会在 Instagram 官方网页中完成，Instamony 只复用网页会话读取页面内容。"
+    },
+    {
+      "name": "login_account",
+      "value": "账号"
+    },
+    {
+      "name": "login_web_sign_in",
+      "value": "网页登录"
+    },
+    {
+      "name": "login_sign_in",
+      "value": "登录"
+    },
+    {
+      "name": "login_recheck",
+      "value": "我已登录，重新检查"
+    },
+    {
+      "name": "session_none",
+      "value": "未登录"
+    },
+    {
+      "name": "session_label_prefix",
+      "value": "会话："
+    },
+    {
+      "name": "sign_out",
+      "value": "退出登录"
+    },
+    {
+      "name": "tab_home",
+      "value": "首页"
+    },
+    {
+      "name": "tab_reels",
+      "value": "Reels"
+    },
+    {
+      "name": "tab_direct",
+      "value": "私信"
+    },
+    {
+      "name": "tab_search",
+      "value": "搜索"
+    },
+    {
+      "name": "tab_profile",
+      "value": "我的"
+    },
+    {
+      "name": "tab_placeholder_hint",
+      "value": "这一页还没接上"
+    },
+    {
+      "name": "status_ready",
+      "value": "已就绪"
+    },
+    {
+      "name": "status_failed",
+      "value": "读取失败"
+    },
+    {
+      "name": "status_unparsable",
+      "value": "读不出内容"
+    },
+    {
+      "name": "status_sign_in_required",
+      "value": "需要先登录"
+    },
+    {
+      "name": "status_page_not_ready",
+      "value": "页面还没准备好"
+    },
+    {
+      "name": "web_close",
+      "value": "关闭网页"
+    },
+    {
+      "name": "video_play_failed",
+      "value": "视频播放失败。"
+    },
+    {
+      "name": "repost_unsupported",
+      "value": "网页版没有转发入口，已为你打开帖子页。"
+    },
+    {
+      "name": "repost_done",
+      "value": "已转发。"
+    },
+    {
+      "name": "unrepost_done",
+      "value": "已取消转发。"
+    },
+    {
+      "name": "unfollow_done",
+      "value": "已取消关注。"
+    },
+    {
+      "name": "feature_pending",
+      "value": "这个功能还没接上。"
+    },
+    {
+      "name": "save_failed",
+      "value": "没能收藏这条帖子。"
+    },
+    {
+      "name": "posted_ago_now",
+      "value": "刚刚"
+    },
+    {
+      "name": "posted_ago_minutes",
+      "value": "%d分钟前"
+    },
+    {
+      "name": "posted_ago_hours",
+      "value": "%d小时前"
+    },
+    {
+      "name": "posted_ago_days",
+      "value": "%d天前"
+    },
+    {
+      "name": "posted_ago_weeks",
+      "value": "%d周前"
+    },
+    {
+      "name": "posted_ago_months",
+      "value": "%d个月前"
+    },
+    {
+      "name": "posted_ago_years",
+      "value": "%d年前"
+    },
+    {
+      "name": "notify_today",
+      "value": "今天"
+    },
+    {
+      "name": "notify_suggested",
+      "value": "推荐关注"
+    },
+    {
+      "name": "notify_follow",
+      "value": "关注"
+    },
+    {
+      "name": "notify_follow_back",
+      "value": "回关"
+    },
+    {
+      "name": "notify_earlier",
+      "value": "更早"
+    },
+    {
+      "name": "notify_empty",
+      "value": "没能从网页里读到通知。"
+    },
+    {
+      "name": "action_follow",
+      "value": "关注"
+    },
+    {
+      "name": "action_following",
+      "value": "已关注"
+    },
+    {
+      "name": "action_more",
+      "value": "更多"
+    },
+    {
+      "name": "action_reload",
+      "value": "重新加载"
+    },
+    {
+      "name": "action_create",
+      "value": "发布"
+    },
+    {
+      "name": "action_download",
+      "value": "下载"
+    },
+    {
+      "name": "action_settings",
+      "value": "设定"
+    },
+    {
+      "name": "action_mute",
+      "value": "静音"
+    },
+    {
+      "name": "action_share_to",
+      "value": "分享到"
+    },
+    {
+      "name": "comments_close",
+      "value": "收起"
+    },
+    {
+      "name": "comments_title",
+      "value": "评论"
+    },
+    {
+      "name": "comments_hint",
+      "value": "添加评论…"
+    },
+    {
+      "name": "comments_empty",
+      "value": "还没有评论"
+    },
+    {
+      "name": "comments_failed",
+      "value": "评论读取失败"
+    },
+    {
+      "name": "comments_photo",
+      "value": "照片评论"
+    },
+    {
+      "name": "comments_send",
+      "value": "发送"
+    },
+    {
+      "name": "comments_end",
+      "value": "没有更多评论"
+    },
+    {
+      "name": "comments_reply",
+      "value": "回复"
+    },
+    {
+      "name": "comments_hide_replies",
+      "value": "隐藏回复"
+    },
+    {
+      "name": "comments_replies_loading",
+      "value": "正在加载回复…"
+    },
+    {
+      "name": "comments_view_replies",
+      "value": "查看另外 %d 条回复"
+    },
+    {
+      "name": "comment_pending",
+      "value": "发评论还没接上 —— 这是输入框"
+    },
+    {
+      "name": "story_load_failed",
+      "value": "这条快拍没取到（请看日志）"
+    },
+    {
+      "name": "story_action_pending",
+      "value": "快拍互动还没接上 —— 这是按钮"
+    },
+    {
+      "name": "story_message_hint",
+      "value": "发消息"
+    },
+    {
+      "name": "translate_action",
+      "value": "翻译"
+    },
+    {
+      "name": "translate_show_original",
+      "value": "显示原文"
+    },
+    {
+      "name": "translate_failed",
+      "value": "翻译失败，请稍后再试"
+    },
+    {
+      "name": "reels_page_title",
+      "value": "Reels"
+    },
+    {
+      "name": "post_page_title",
+      "value": "帖子"
+    },
+    {
+      "name": "create_post_title",
+      "value": "新帖子"
+    },
+    {
+      "name": "create_post_hint",
+      "value": "写点什么…"
+    },
+    {
+      "name": "search_hint",
+      "value": "搜索"
+    },
+    {
+      "name": "search_empty",
+      "value": "输入账号名开始搜索"
+    },
+    {
+      "name": "search_action",
+      "value": "搜索"
+    },
+    {
+      "name": "count_thousands",
+      "value": "%s万"
+    },
+    {
+      "name": "profile_stat_posts",
+      "value": "帖子"
+    },
+    {
+      "name": "profile_stat_followers",
+      "value": "粉丝"
+    },
+    {
+      "name": "profile_stat_following",
+      "value": "关注"
+    },
+    {
+      "name": "profile_loading_more",
+      "value": "正在加载…"
+    },
+    {
+      "name": "profile_end",
+      "value": "没有更多了"
+    },
+    {
+      "name": "profile_empty",
+      "value": "还没有帖子"
+    },
+    {
+      "name": "direct_empty",
+      "value": "还没有消息"
+    },
+    {
+      "name": "direct_kind_media",
+      "value": "[照片/视频]"
+    },
+    {
+      "name": "direct_kind_voice",
+      "value": "[语音]"
+    },
+    {
+      "name": "direct_kind_other",
+      "value": "[消息]"
+    },
+    {
+      "name": "direct_thread_hint",
+      "value": "发消息…"
+    },
+    {
+      "name": "direct_thread_empty",
+      "value": "还没有消息，打个招呼吧"
+    },
+    {
+      "name": "direct_open_web",
+      "value": "在网页中打开"
+    },
+    {
+      "name": "direct_thread_older",
+      "value": "查看更多消息"
+    },
+    {
+      "name": "settings_group_appearance",
+      "value": "外观"
+    },
+    {
+      "name": "settings_group_bar",
+      "value": "底栏"
+    },
+    {
+      "name": "settings_bar_native_animation",
+      "value": "底栏原生动效"
+    },
+    {
+      "name": "settings_bar_native_animation_hint",
+      "value": "关闭后底栏只用简单的淡入淡出。"
+    },
+    {
+      "name": "settings_material_level",
+      "value": "沉浸光感"
+    },
+    {
+      "name": "settings_material_hint",
+      "value": "档位越高视觉效果越精致，同时也更耗电。低算力设备会自动降级；不确定就选「自适应」，由系统按设备能力决定。"
+    },
+    {
+      "name": "settings_material_adaptive",
+      "value": "自适应"
+    },
+    {
+      "name": "settings_material_gentle",
+      "value": "轻柔"
+    },
+    {
+      "name": "settings_material_smooth",
+      "value": "顺滑"
+    },
+    {
+      "name": "settings_material_exquisite",
+      "value": "精致"
+    },
+    {
+      "name": "settings_material_thickness",
+      "value": "材质厚度"
+    },
+    {
+      "name": "settings_thickness_ultra_thin",
+      "value": "极薄"
+    },
+    {
+      "name": "settings_thickness_thin",
+      "value": "薄"
+    },
+    {
+      "name": "settings_thickness_regular",
+      "value": "常规"
+    },
+    {
+      "name": "settings_thickness_thick",
+      "value": "厚"
+    },
+    {
+      "name": "settings_thickness_ultra_thick",
+      "value": "极厚"
+    },
+    {
+      "name": "settings_unsupported_hint",
+      "value": "当前系统版本不支持悬浮底栏与沉浸光感，相关选项已隐藏；底栏与按钮会使用简化的模糊样式。"
+    },
+    {
+      "name": "probe_title",
+      "value": "探针"
+    },
+    {
+      "name": "probe_hint",
+      "value": "先在网页里正常浏览，再回来刷新。"
+    },
+    {
+      "name": "probe_refresh",
+      "value": "刷新"
+    },
+    {
+      "name": "probe_dom",
+      "value": "网页结构"
+    },
+    {
+      "name": "probe_copy",
+      "value": "复制"
+    },
+    {
+      "name": "probe_save",
+      "value": "存沙箱"
+    },
+    {
+      "name": "probe_clear",
+      "value": "清空"
+    },
+    {
+      "name": "probe_close",
+      "value": "关闭"
+    },
+    {
+      "name": "probe_open_direct",
+      "value": "私信"
+    },
+    {
+      "name": "probe_open_profile",
+      "value": "我的"
+    },
+    {
+      "name": "probe_open_reels",
+      "value": "Reels"
+    },
+    {
+      "name": "probe_open_search",
+      "value": "搜索"
+    },
+    {
+      "name": "probe_open_hint",
+      "value": "打开网页抓接口（会盖住面板）："
+    },
+    {
+      "name": "probe_open_post",
+      "value": "帖子页（首条图片帖）"
+    },
+    {
+      "name": "probe_comments_first",
+      "value": "评论（首条帖子）"
+    },
+    {
+      "name": "probe_comments_embed",
+      "value": "读内嵌评论"
+    },
+    {
+      "name": "probe_capture",
+      "value": "存信息流模板"
+    },
+    {
+      "name": "probe_replay_stored",
+      "value": "回放存的模板"
+    },
+    {
+      "name": "probe_profile_templates",
+      "value": "存个人页四页模板"
+    },
+    {
+      "name": "probe_search_templates",
+      "value": "存搜索页模板"
+    },
+    {
+      "name": "probe_digest",
+      "value": "接口摘要"
+    },
+    {
+      "name": "probe_direct_selftest",
+      "value": "私信发送自检"
+    },
+    {
+      "name": "reels_loading",
+      "value": "正在加载视频…"
+    },
+    {
+      "name": "engage_not_rendered",
+      "value": "转发内容读不出来"
+    },
+    {
+      "name": "feed_empty",
+      "value": "还没有内容"
+    },
+    {
+      "name": "feed_load",
+      "value": "加载"
+    },
+    {
+      "name": "feed_no_more",
+      "value": "没有更多了"
+    },
+    {
+      "name": "feed_none_read",
+      "value": "没能从网页里读到帖子"
+    },
+    {
+      "name": "feed_none_visible",
+      "value": "页面上没有可见的帖子"
+    },
+    {
+      "name": "follow_done",
+      "value": "已关注。"
+    },
+    {
+      "name": "follow_failed",
+      "value": "关注失败"
+    },
+    {
+      "name": "like_failed",
+      "value": "点赞失败"
+    },
+    {
+      "name": "login_hint",
+      "value": "登录 Instagram"
+    },
+    {
+      "name": "login_open_web",
+      "value": "打开网页登录"
+    },
+    {
+      "name": "media_saved",
+      "value": "已保存"
+    },
+    {
+      "name": "media_save_failed",
+      "value": "保存失败"
+    },
+    {
+      "name": "notifications",
+      "value": "通知"
+    },
+    {
+      "name": "notify_greet",
+      "value": "给 %s 发消息"
+    },
+    {
+      "name": "notify_greet_suggest",
+      "value": "和 %s 打个招呼"
+    },
+    {
+      "name": "notify_loading",
+      "value": "正在加载通知…"
+    },
+    {
+      "name": "notify_message",
+      "value": "发消息"
+    },
+    {
+      "name": "notify_message_hint",
+      "value": "发消息…"
+    },
+    {
+      "name": "notify_month",
+      "value": "%d月"
+    },
+    {
+      "name": "direct_call",
+      "value": "电话"
+    },
+    {
+      "name": "direct_video_call",
+      "value": "视频"
+    }
+  ]
+}
