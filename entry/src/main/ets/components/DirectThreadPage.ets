@@ -9,10 +9,17 @@
  */
 
 import { display } from '@kit.ArkUI';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+import { ApiRegistry } from '../bridge/ApiRegistry';
 import { DirectMessage, DirectThreadView } from '../model/Direct';
 import { DirectThreadViewModel } from '../viewmodel/DirectThreadViewModel';
 import { CommentInputBar, COMMENT_INPUT_BOTTOM_VP } from './CommentInputBar';
 import { ScrollDelta } from '../core/ScrollReport';
+
+const DOMAIN: number = 0xFF00;
+const TAG: string = 'DirectThreadPage';
+/** 临时探针的间隔（毫秒）：把页面刚抓到的请求名打出来，见 aboutToAppear 里的说明。 */
+const PROBE_MS: number = 8000;
 
 /**
  * 顶部留白（vp）：把列表推到 HDS 标题栏**毛玻璃蒙层**下面。
@@ -102,11 +109,35 @@ export struct DirectThreadPage {
     this.vm.startPolling((): void => {
       this.scrollToNewest();
     });
+    /*
+     * **临时探针**：每 8 秒把"页面刚抓到的请求名"打出来。
+     *
+     * `capture('')` 把网页钩子里的请求倒进模板表，`recentNames` 只列最近更新过的 —— 这样我在
+     * **可见网页里用真手指上滑**时，页面发出的那条分页请求会立刻出现在日志里（详见上面那个
+     * "在网页中打开"的调试入口）。打通后删掉。
+     */
+    this.probeTimer = setInterval((): void => {
+      this.registry.capture('').then((): void => {
+        hilog.info(DOMAIN, TAG, 'dm probe recent=%{public}s',
+          this.registry.recentNames(15000).join('|'));
+      }).catch((): void => {
+      });
+    }, PROBE_MS);
   }
+
+  private readonly registry: ApiRegistry = ApiRegistry.getInstance();
 
   aboutToDisappear(): void {
     this.vm.stopPolling();
+    // 临时探针定时器（见 aboutToAppear 末尾）。
+    if (this.probeTimer >= 0) {
+      clearInterval(this.probeTimer);
+      this.probeTimer = -1;
+    }
   }
+
+  /** 临时探针定时器句柄（打通私信翻页后连同 PROBE_MS 一起删掉）。 */
+  private probeTimer: number = -1;
 
   private syncFromVm(): void {
     this.view = this.vm.viewNow();
@@ -298,6 +329,27 @@ export struct DirectThreadPage {
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .padding({ left: SIDE_PADDING, right: SIDE_PADDING, bottom: 4 })
         }
+
+        /*
+         * **临时调试入口**：把这条会话在**可见网页**里打开。
+         *
+         * 用途只有一个：网页的消息容器认**真实触摸**，只有它在屏幕上、我用真手指滑动时，页面
+         * 才会去加载更老的消息 —— 那时我们的网络钩子就能抓到"翻历史到底用哪条请求"。
+         * （隐藏网页里试过 scrollTop / wheel / scrollIntoView / 合成 touch 事件，页面都不动。）
+         * 打通之后这个入口和下面那个探针定时器一起删掉。
+         */
+        Row() {
+          Text($r('app.string.direct_open_web'))
+            .fontSize(12)
+            .fontColor($r('app.color.accent'))
+            .padding({ left: 12, right: 12, top: 4, bottom: 4 })
+            .onClick((): void => {
+              this.onOpenWeb();
+            })
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.End)
+        .padding({ right: SIDE_PADDING, bottom: 4 })
 
         // **顶部下拉刷新 = 取更老那批**（需求："上滑触顶需要继续上滑触发 refresh 才能加载"）。
         // 「查看更多消息」那颗按钮和"触顶自动加载"都按需求删掉了，只留这一个入口。

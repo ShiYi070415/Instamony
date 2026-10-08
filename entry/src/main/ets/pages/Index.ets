@@ -1922,6 +1922,8 @@ struct Index {
    * 后台预热队列**跑过了没有**（它只在启动时排一次，见 preloadTabs 的第二阶段）。
    */
   private warmStarted: boolean = false;
+  /** 临时探针定时器（见 warmOtherTabs，打通私信翻页后删）。 */
+  private probeTimer: number = -1;
   /**
    * 会话详情自检（诊断用）：启动预热跑完顺手读一次私信会话并把结果打进日志。
    *
@@ -2023,6 +2025,24 @@ struct Index {
       return;
     }
     this.warmStarted = true;
+    /*
+     * **临时探针**（打通私信翻页后删）：挂在首页预热里，所以它**始终在跑** —— 不像挂在会话页里
+     * 那样会被网页浮层卸载掉。每 15 秒把网页钩子里的请求倒进模板表并列出最近更新过的名字：
+     * 我在可见网页里划几下之后，下一拍就能看到"网页翻历史用的是哪条请求"。
+     */
+    if (this.probeTimer < 0) {
+      hilog.info(DOMAIN, TAG, 'web probe timer start');
+      this.probeTimer = setInterval((): void => {
+        // 心跳：无条件先打一行，确认这一拍真的跑了（否则"没日志"分不清是没跑还是失败了）。
+        hilog.info(DOMAIN, TAG, 'web probe tick');
+        ApiRegistry.getInstance().capture('').then((ok: boolean): void => {
+          hilog.info(DOMAIN, TAG, 'web probe recent ok=%{public}s %{public}s', `${ok}`,
+            ApiRegistry.getInstance().recentNames(60000).join('|'));
+        }).catch((error: Error): void => {
+          hilog.warn(DOMAIN, TAG, 'web probe failed: %{public}s', error.message);
+        });
+      }, 15000);
+    }
     await this.delay(WARM_START_DELAY_MS);
     // 1) 通知页（原生一条链：news/inbox → show_many → ayml）。
     //    预热这一轮传 warmOnly：模板缺失时**不**导航隐藏网页去抓 ayml（见 loadNotifications）。
@@ -3547,6 +3567,19 @@ struct Index {
 
   /** 关掉网页回到原生视图：用罐里的最新会话决定下一步，而不是沿用旧状态。 */
   private async closeWeb(): Promise<void> {
+    /*
+     * **临时探针**：关掉网页浮层时，把网页刚抓到的请求名打出来。
+     *
+     * 为什么放这儿：私信翻页要抓的是"网页自己翻历史时发的那条请求"，而网页的消息容器只认
+     * 真实触摸 —— 我在可见网页里滑完、关掉浮层，这一下 `capture('')` 就把页面钩子里的请求
+     * 倒进模板表，`recentNames` 再列出最近更新过的。之前把探针放在会话页里，打开网页浮层时
+     * 那个页面被卸载、定时器跟着没了，所以一直打不出来。打通翻页后删掉这一段。
+     */
+    ApiRegistry.getInstance().capture('').then((): void => {
+      hilog.info(DOMAIN, TAG, 'web probe recent=%{public}s',
+        ApiRegistry.getInstance().recentNames(60000).join('|'));
+    }).catch((): void => {
+    });
     this.webVisible = false;
     this.selectedTab = AppTab.Home;
     const signedBefore: boolean = this.signedIn;

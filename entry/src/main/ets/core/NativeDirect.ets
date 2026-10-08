@@ -43,6 +43,15 @@ const BOX_KEY: string = 'threads_by_folder';
 /** 一次读多少条消息（和手机端一致）。 */
 const THREAD_LIMIT: number = 20;
 /**
+ * 会话首屏一次取多少条（覆盖模板里那个 relay 的 `…MessagePageCount…` 变量，原值 20）。
+ *
+ * 为什么这么做：真实翻页变量 `min_uq_seq_id` 实测喂什么都不认（喂 `mid.$…` / 132 字符的
+ * `end_cursor` / 19 位 `offline_threading_id` 分别得到"同一页"或 `get_slide_thread_nullable:null`），
+ * 而网页自己那条查询的 `min_uq_seq_id` **始终是 null** —— 说明这条查询不负责翻历史。
+ * 那就把"一页"要满：一次多拿几十上百条，用户上拉就能看到更多历史。
+ */
+const BIG_PAGE_COUNT: number = 100;
+/**
  * IG 网页版的 app id。
  *
  * `direct_v2` 那条私有 REST 校验它；缺了会回 `login_required` 或 403（看着像"没登录"，
@@ -737,6 +746,20 @@ export class NativeDirect {
       const key: string = keys[k];
       const lower: string = key.toLowerCase();
       const value: Object = vars[key];
+      /*
+       * **首屏一次多取一些**：模板里那个 relay 变量
+       * `__relay_internal__pv__IGDInitialMessagePageCountrelayprovider` 就是"取多少条"，
+       * 原值是 20。翻页变量（`min_uq_seq_id`）实测喂什么都不认（IG 只回最新一页 / 回 null），
+       * 那就干脆把这一页要满 —— 用户上拉能看到的历史立刻变多。
+       */
+      if (lower.indexOf('pagecount') >= 0) {
+        const current: number = typeof value === 'number' ? (value as number) : 0;
+        if (current < BIG_PAGE_COUNT) {
+          vars[key] = BIG_PAGE_COUNT;
+          changed = true;
+        }
+        continue;
+      }
       /*
        * **游标键在原模板里往往是 `null`**（`min_uq_seq_id` 首屏就是 null）—— 这一支必须放在
        * 字符串/数字判断**之前**：`typeof null === 'object'`，会从下面两个分支漏过去，
