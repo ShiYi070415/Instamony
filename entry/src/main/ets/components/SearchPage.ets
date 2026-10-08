@@ -659,17 +659,31 @@ export struct SearchPage {
     .edgeEffect(EdgeEffect.Spring)
     .contentEndOffset(SEARCH_BOTTOM_OFFSET)
     .clip(false)
-    // 还剩这么多条没露出来就先去拉下一页（提前量，别等真的滑到底）。
+    /*
+     * 还剩这么多条没露出来就先去拉下一页（提前量，别等真的滑到底）。
+     *
+     * ⚠️ 原来是"`last + LOAD_MORE_AHEAD >= total` 就拉"，真机上会**一次把推荐流拉到底**
+     * （隐藏时瀑布流视口是 0，这个条件永远成立）—— 于是加过一道闸，但闸加过头了：
+     * 现在 `onScrollIndex` 只报"可见区间"，滑到底时 last 不再变化、这一回调也就不再触发，
+     * 结果就是"19 个格子之后再怎么滑都不加载、连转圈都没有"（用户报的）。
+     * 所以改成**触底由 onReachEnd 兜底**（见下面那一段），这里只保留"提前量"这一层。
+     */
     .onScrollIndex((first: number, last: number): void => {
       const total: number = this.postSource.totalCount();
       if (!this.hasMore || this.loadingMore || total === 0) {
         return;
       }
       if (last + LOAD_MORE_AHEAD >= total) {
-        // **页面可见时才翻页**（见 SearchViewModel.active）：隐藏时瀑布流视口是 0，
-        // "接近底部"永远成立，直接调 loadMore 会把整条推荐流一路拉到底（真机实测踩过）。
+        // **页面可见时才翻页**（见 SearchViewModel.active）：隐藏时视口为 0，会把整条流拉到底。
         this.vm.requestMoreFromScroll();
       }
+    })
+    // 触底兜底：滑到底（或接近底）一定再要一页 —— 光靠 onScrollIndex 的提前量会漏掉"到底那一下"。
+    .onReachEnd((): void => {
+      if (!this.hasMore || this.loadingMore) {
+        return;
+      }
+      this.vm.requestMoreFromScroll();
     })
     // 滚动 → 底栏下沉/隐藏 + 搜索框收放（见 scrollSink）。
     .onDidScroll((scrollOffset: number, scrollState: ScrollState): void => {
