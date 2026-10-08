@@ -58,9 +58,15 @@ const TEMPLATE_KEY: string = 'templates_v1';
  * doc_id + variables，实测隔夜还能用；给 24 小时，失败了自然退回网页那条路。
  */
 const NATIVE_TEMPLATE_TTL_MS: number = 86400000;
-/** 落盘时最多存几份模板、单份请求体上限（preferences 不该被一个大 JSON 占满）。 */
-const PERSIST_MAX_ITEMS: number = 24;
-const PERSIST_MAX_BODY: number = 20000;
+/**
+ * 落盘时最多存几份模板、单份请求体上限。
+ *
+ * 需求："**所有**抓到的模板都存进 app，下次直接调用，加载失败才重抓" ——
+ * 所以从 24 / 20000 放宽到 120 / 60000：网页 `__ogReplay` 里通常几十条请求，
+ * 这样一次抓取基本能全留下来（preferences 存的是 URLSearchParams 文本，几十 KB×100 量级仍很小）。
+ */
+const PERSIST_MAX_ITEMS: number = 120;
+const PERSIST_MAX_BODY: number = 60000;
 /**
  * **预置模板**的文件名（在 resources/rawfile 下，随包发布）。
  *
@@ -99,8 +105,8 @@ const LOG_NAMES: number = 12;
  */
 const TEMPLATE_TTL_MS: number = 600000;
 /** 倒模板时最多拿几条、请求体最多带多少字符（带体过桥是少数几次，别拖太多）。 */
-const TEMPLATE_MAX_ITEMS: number = 8;
-const TEMPLATE_MAX_BODY: number = 8000;
+const TEMPLATE_MAX_ITEMS: number = 120;
+const TEMPLATE_MAX_BODY: number = 60000;
 /**
  * 浏览器/ fetch 禁止脚本设置、或者必须由浏览器自己填的请求头。
  *
