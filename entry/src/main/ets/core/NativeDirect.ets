@@ -485,6 +485,55 @@ export class NativeDirect {
     return empty;
   }
 
+  /**
+   * **REST 读一条会话**（旧实现，重新作为一条正式的路）。
+   *
+   * `GET /api/v1/direct_v2/threads/{id}/?limit=20&visual_message_return_type=unseen[&cursor=]`
+   * —— 翻页游标就是响应里的 `thread.oldest_cursor`（`DirectMapper.threadFromJson` 读的就是它）。
+   *
+   * 和之前失败的那次比，只有一处不同、也是关键的一处：**请求头改用刚抓到的会话模板那套**
+   * （网页自己那次请求的头，带 `x-ig-www-claim` / `x-asd-id` / `x-instagram-ajax` 这些会话级令牌），
+   * 只在上面盖一个安卓 UA —— 这正是"发消息"从 404/`useragent mismatch` 变成 `item_ack 200` 的原因。
+   * 旧实现是拿自己拼的头（cookie + 安卓 app id + www-claim:0），IG 一律回
+   * `404 + class="no-js not-logged-in"` 的 HTML。
+   */
+  private static async threadViaRest(id: string,
+                                     olderCursor: string): Promise<DirectThreadView | null> {
+    let headers: Record<string, string> = {};
+    const op: string = NativeDirect.threadOp();
+    if (op.length > 0) {
+      headers = await NativeFeed.headersFor(op);
+    }
+    if (Object.keys(headers).length === 0) {
+      headers = await NativeDirect.restHeaders();
+    }
+    if (Object.keys(headers).length === 0) {
+      NativeDirect.detail = 'no-session';
+      return null;
+    }
+    NativeDirect.putHeader(headers, 'user-agent', ANDROID_UA);
+    const cursor: string = olderCursor.length > 0
+      ? `&cursor=${encodeURIComponent(olderCursor)}` : '';
+    const url: string = `https://www.instagram.com/api/v1/direct_v2/threads/${encodeURIComponent(id)}/`
+      + `?limit=${THREAD_LIMIT}&visual_message_return_type=unseen${cursor}`;
+    const text: string = await NativeDirect.send(url, http.RequestMethod.GET, headers, '');
+    if (text.length === 0) {
+      return null;
+    }
+    const view: DirectThreadView | null =
+      DirectMapper.threadFromJson(text, NativeProfile.ownIdCached());
+    if (view === null) {
+      hilog.info(DOMAIN, TAG, 'threadViaRest parse failed body=%{public}s',
+        text.substring(0, 300));
+      NativeDirect.detail = 'rest-parse';
+      return null;
+    }
+    hilog.info(DOMAIN, TAG,
+      'threadViaRest ok id=%{public}s msgs=%{public}d older=%{public}s cursor=%{public}d',
+      id, view.messages.length, `${view.hasOlder}`, view.oldestCursor.length);
+    return view;
+  }
+
   /** 用**指定**的模板回放一次并解析；失败给 null（detail 里写原因）。 */
   private static async replayThread(op: string, threadId: string,
                                     olderCursor: string): Promise<DirectThreadView | null> {
@@ -836,6 +885,11 @@ export class NativeDirect {
       await NativeDirect.threadViaTemplate(id, olderCursor, altId);
     if (viaTemplate !== null && viaTemplate.messages.length > 0) {
       return viaTemplate;
+    }
+    // ② REST（旧实现）：模板回放拿不到（尤其翻页）时走这条，见 threadViaRest。
+    const viaRest: DirectThreadView | null = await NativeDirect.threadViaRest(id, olderCursor);
+    if (viaRest !== null) {
+      return viaRest;
     }
     // ② REST 兜底。
     const headers: Record<string, string> = await NativeDirect.restHeaders();
