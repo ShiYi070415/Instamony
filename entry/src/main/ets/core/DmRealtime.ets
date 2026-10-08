@@ -15,6 +15,8 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { socket } from '@kit.NetworkKit';
+import { BusinessError } from '@kit.BasicServicesKit';
+import { InstagramCookieJar, InstagramCookieSnapshot } from './InstagramCookieJar';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'DmRealtime';
@@ -25,6 +27,125 @@ const MQTT_PORT: number = 443;
 const CONNECT_TIMEOUT_MS: number = 12000;
 
 export class DmRealtime {
+  /**
+   * **第二步：发 MQTT CONNECT，读 CONNACK 的返回码。**
+   *
+   * 这一步要回答的问题只有一个：**IG 认不认我们这套身份**。CONNACK 的返回码里
+   * `0` = 通过、`4` = 用户名/密码不对、`5` = 没授权 —— 拿到它就知道后面能不能做。
+   *
+   * CONNECT 报文（MQTT 3.1.1）：固定头 `0x10 + 剩余长度`；可变头 `00 04 M Q T T` + 协议级别 4 +
+   * 连接标志 `0xC2`（clean session + 用户名 + 密码）+ keepalive 60；载荷依次是 clientId、用户名、密码。
+   * 用户名用会话里的用户 id，密码用 `sessionid` Cookie —— 这是 IG 那套 iris 通道常见的凭据形态，
+   * 不对的话返回码会直接告诉我们。
+   */
+  static async probeConnect(): Promise<void> {
+    let tcp: socket.TLSSocket | null = null;
+    try {
+      const jar: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
+      if (!jar.signedIn) {
+        hilog.warn(DOMAIN, TAG, 'mqtt: not signed in');
+        return;
+      }
+      const userId: string = DmRealtime.cookieValue(jar.cookie, 'ds_user_id');
+      const session: string = DmRealtime.cookieValue(jar.cookie, 'sessionid');
+      const clientId: string = `ig${userId}`;
+      const packet: Uint8Array = DmRealtime.connectPacket(clientId, userId, session);
+      tcp = socket.constructTLSSocketInstance();
+      // 把 close/error 也听上：broker 若直接关连接（很可能就是"身份不认"），只有这两个事件能说清。
+      tcp.on('close', (): void => {
+        hilog.warn(DOMAIN, TAG, 'mqtt socket closed by peer');
+      });
+      tcp.on('error', (err: BusinessError): void => {
+        hilog.warn(DOMAIN, TAG, 'mqtt socket error: %{public}s', err.message ?? 'unknown');
+      });
+      tcp.on('message', (info: socket.SocketMessageInfo): void => {
+        const bytes: Uint8Array = new Uint8Array(info.message);
+        const head: string = Array.from(bytes).slice(0, 12).join(',');
+        // CONNACK：0x20 0x02 <sessionPresent> <returnCode>
+        const rc: number = bytes.length >= 4 ? bytes[3] : -1;
+        hilog.info(DOMAIN, TAG,
+          'mqtt connack head=[%{public}s] rc=%{public}d len=%{public}d (0=通过 4=用户名密码错 5=未授权)',
+          head, rc, bytes.length);
+      });
+      const options: socket.TLSConnectOptions = {
+        address: { address: MQTT_HOST, port: MQTT_PORT },
+        secureOptions: {},
+        timeout: CONNECT_TIMEOUT_MS
+      };
+      await tcp.bind({ address: '0.0.0.0', port: 0 });
+      await tcp.connect(options);
+      await tcp.send(packet.buffer as ArrayBuffer);
+      hilog.info(DOMAIN, TAG, 'mqtt connect sent clientId=%{public}s user=%{public}s passLen=%{public}d',
+        clientId, userId, session.length);
+      await DmRealtime.sleep(6000);
+      hilog.info(DOMAIN, TAG, 'mqtt probe done');
+      try {
+        tcp.close();
+      } catch (error) {
+      }
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'mqtt probe failed: %{public}s', (error as Error).message ?? 'unknown');
+      if (tcp !== null) {
+        try {
+          tcp.close();
+        } catch (inner) {
+        }
+      }
+    }
+  }
+
+  /** 组一条 CONNECT 报文（见 probeConnect 的说明）。 */
+  private static connectPacket(clientId: string, user: string, pass: string): Uint8Array {
+    const body: Array<number> = [];
+    const pushString = (text: string): void => {
+      body.push((text.length >> 8) & 0xFF, text.length & 0xFF);
+      for (let index: number = 0; index < text.length; index++) {
+        body.push(text.charCodeAt(index) & 0xFF);
+      }
+    };
+    // Facebook 家的 broker 走的是 MQTT **3.1**（协议名 `MQIsdp`、级别 3），不是 3.1.1 的 `MQTT`/4 ——
+    // 3.1.1 那版发过去对方一声不吭（真机实测：既没有 CONNACK，也不关连接）。
+    body.push(0x00, 0x06, 0x4D, 0x51, 0x49, 0x73, 0x64, 0x70); // "MQIsdp"
+    body.push(0x03);                                // 协议级别 3（MQTT 3.1）
+    body.push(0xC2);                                // clean session + username + password
+    body.push(0x00, 0x3C);                          // keepalive 60s
+    pushString(clientId);
+    pushString(user);
+    pushString(pass);
+    const out: Array<number> = [0x10];
+    // 剩余长度：MQTT 的 varint（这里报文都在 127 字节上下，两字节分支够用，但仍按规范写全）
+    let left: number = body.length;
+    do {
+      let digit: number = left % 128;
+      left = Math.floor(left / 128);
+      if (left > 0) {
+        digit = digit | 0x80;
+      }
+      out.push(digit);
+    } while (left > 0);
+    for (let index: number = 0; index < body.length; index++) {
+      out.push(body[index]);
+    }
+    return new Uint8Array(out);
+  }
+
+  private static cookieValue(cookie: string, name: string): string {
+    const parts: Array<string> = cookie.split(';');
+    for (let index: number = 0; index < parts.length; index++) {
+      const pair: string = parts[index].trim();
+      if (pair.startsWith(`${name}=`)) {
+        return pair.substring(name.length + 1).trim();
+      }
+    }
+    return '';
+  }
+
+  private static sleep(ms: number): Promise<void> {
+    return new Promise<void>((resolve: () => void): void => {
+      setTimeout(resolve, ms);
+    });
+  }
+
   /**
    * 连一次 broker 并把结论打进日志（连上就立刻断开 —— 这一步只验证可达性）。
    */

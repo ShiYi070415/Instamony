@@ -2044,8 +2044,8 @@ struct Index {
           this.probeTicks = this.probeTicks + 1;
           NativeDirect.mqttSetupProbe().catch((): void => {
           });
-          // 实时通道第一步：TLS 能不能连上 IG 的 iris broker（见 core/DmRealtime）。
-          DmRealtime.probeTls().catch((): void => {
+          // 实时通道：先 TLS，再发 MQTT CONNECT 看 IG 认不认这套身份（见 core/DmRealtime）。
+          DmRealtime.probeConnect().catch((): void => {
           });
         }
         ApiRegistry.getInstance().capture('').then((ok: boolean): void => {
