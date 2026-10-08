@@ -837,20 +837,6 @@ export class NativeDirect {
       const lower: string = key.toLowerCase();
       const value: Object = vars[key];
       /*
-       * **首屏一次多取一些**：模板里那个 relay 变量
-       * `__relay_internal__pv__IGDInitialMessagePageCountrelayprovider` 就是"取多少条"，
-       * 原值是 20。翻页变量（`min_uq_seq_id`）实测喂什么都不认（IG 只回最新一页 / 回 null），
-       * 那就干脆把这一页要满 —— 用户上拉能看到的历史立刻变多。
-       */
-      if (lower.indexOf('pagecount') >= 0) {
-        const current: number = typeof value === 'number' ? (value as number) : 0;
-        if (current < BIG_PAGE_COUNT) {
-          vars[key] = BIG_PAGE_COUNT;
-          changed = true;
-        }
-        continue;
-      }
-      /*
        * **游标键在原模板里往往是 `null`**（`min_uq_seq_id` 首屏就是 null）—— 这一支必须放在
        * 字符串/数字判断**之前**：`typeof null === 'object'`，会从下面两个分支漏过去，
        * 结果就是日志里那句 `cursor:none`（游标根本没换，服务端回同一页）。
