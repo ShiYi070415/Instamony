@@ -127,6 +127,7 @@ import { StoryCache } from '../core/StoryCache';
 import { PROFILE_TAB_POSTS, PROFILE_TAB_REELS, PROFILE_TAB_TAGGED, ProfileViewModel } from '../viewmodel/ProfileViewModel';
 import { DirectViewModel } from '../viewmodel/DirectViewModel';
 import { DirectThreadViewModel } from '../viewmodel/DirectThreadViewModel';
+import { NativeDirect } from '../core/NativeDirect';
 import { SearchViewModel } from '../viewmodel/SearchViewModel';
 import { ReelsViewModel } from '../viewmodel/ReelsViewModel';
 import { ProfileReelsViewModel } from '../viewmodel/ProfileReelsViewModel';
@@ -1924,6 +1925,8 @@ struct Index {
   private warmStarted: boolean = false;
   /** 临时探针定时器（见 warmOtherTabs，打通私信翻页后删）。 */
   private probeTimer: number = -1;
+  /** 探针已跑过的拍数（第 0 拍顺带问一次 MQTT 配置）。 */
+  private probeTicks: number = 0;
   /**
    * 会话详情自检（诊断用）：启动预热跑完顺手读一次私信会话并把结果打进日志。
    *
@@ -2035,6 +2038,12 @@ struct Index {
       this.probeTimer = setInterval((): void => {
         // 心跳：无条件先打一行，确认这一拍真的跑了（否则"没日志"分不清是没跑还是失败了）。
         hilog.info(DOMAIN, TAG, 'web probe tick');
+        // 第一拍顺手问一次 MQTT 连接配置（做"实时推送 + 离线补偿"的第一步，见 NativeDirect.mqttSetupProbe）。
+        if (this.probeTicks < 4) {
+          this.probeTicks = this.probeTicks + 1;
+          NativeDirect.mqttSetupProbe().catch((): void => {
+          });
+        }
         ApiRegistry.getInstance().capture('').then((ok: boolean): void => {
           hilog.info(DOMAIN, TAG, 'web probe recent ok=%{public}s %{public}s', `${ok}`,
             ApiRegistry.getInstance().recentNames(60000).join('|'));

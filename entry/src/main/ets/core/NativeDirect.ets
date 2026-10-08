@@ -534,6 +534,47 @@ export class NativeDirect {
     return view;
   }
 
+  /**
+   * **MQTT 连接配置探针**：回放 `IGDMqttSetupStandaloneQuery` 并把响应开头打出来。
+   *
+   * 要做"实时推送 + 离线补偿"，第一步是拿到 broker 的地址/端口和认证参数 —— 这些全在
+   * `IGDMqttSetupStandaloneQuery` 的**响应**里（模板表只存请求，所以必须真发一次看回来什么）。
+   */
+  static async mqttSetupProbe(): Promise<void> {
+    const registry: ApiRegistry = ApiRegistry.getInstance();
+    const names: Array<string> = registry.storedNames();
+    let op: string = '';
+    for (let index: number = 0; index < names.length; index++) {
+      if (names[index].toLowerCase().indexOf('mqtt') >= 0) {
+        op = names[index];
+        break;
+      }
+    }
+    if (op.length === 0) {
+      hilog.warn(DOMAIN, TAG, 'mqtt probe: no mqtt template stored=%{public}s',
+        registry.storedSummary());
+      return;
+    }
+    const tpl: ApiTemplate | null = registry.storedForNative(op);
+    if (tpl === null) {
+      hilog.warn(DOMAIN, TAG, 'mqtt probe: no cfg for %{public}s', op);
+      return;
+    }
+    let headers: Record<string, string> = await NativeFeed.headersFor(op);
+    if (Object.keys(headers).length === 0) {
+      headers = await NativeFeed.sessionOrBrowserHeaders();
+    }
+    if (Object.keys(headers).length === 0) {
+      hilog.warn(DOMAIN, TAG, 'mqtt probe: no session');
+      return;
+    }
+    const url: string = tpl.url.startsWith('http') ? tpl.url : `${SITE}${tpl.url}`;
+    const text: string = await NativeDirect.send(url, http.RequestMethod.POST, headers,
+      tpl.body ?? '');
+    hilog.info(DOMAIN, TAG, 'mqtt probe op=%{public}s len=%{public}d body=%{public}s',
+      op, text.length, text.substring(0, 700).replace(/[\r\n]+/g, ' '));
+  }
+
   /** 用**指定**的模板回放一次并解析；失败给 null（detail 里写原因）。 */
   private static async replayThread(op: string, threadId: string,
                                     olderCursor: string): Promise<DirectThreadView | null> {
