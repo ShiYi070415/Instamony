@@ -737,6 +737,19 @@ export class NativeDirect {
       const key: string = keys[k];
       const lower: string = key.toLowerCase();
       const value: Object = vars[key];
+      /*
+       * **游标键在原模板里往往是 `null`**（`min_uq_seq_id` 首屏就是 null）—— 这一支必须放在
+       * 字符串/数字判断**之前**：`typeof null === 'object'`，会从下面两个分支漏过去，
+       * 结果就是日志里那句 `cursor:none`（游标根本没换，服务端回同一页）。
+       */
+      if (olderCursor.length > 0
+        && (lower.indexOf('cursor') >= 0 || lower === 'after' || lower.indexOf('seq') >= 0)
+        && (value === null || value === undefined)) {
+        vars[key] = olderCursor;
+        changed = true;
+        cursorHit = true;
+        continue;
+      }
       if (typeof value === 'string') {
         const text: string = value as string;
         if (!replacedId && text.length >= 16 && /^\d+$/.test(text)) {

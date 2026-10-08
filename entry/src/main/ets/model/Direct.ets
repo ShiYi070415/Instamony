@@ -462,9 +462,20 @@ export class DirectMapper {
       if (oldestEdge !== null) {
         const inner: Record<string, Object> | null = JsonRead.recordOf(oldestEdge, 'node');
         const oldest: Record<string, Object> = inner !== null ? inner : oldestEdge;
-        const seq: string = JsonRead.strOf(oldest, 'id');
+        /*
+         * **`offline_threading_id` 才是那个"序号"**：它是按时间递增的大整数（19 位），
+         * 语义上正好对应 `min_uq_seq_id`（"比这个序号更老的"）。
+         * 而 `id` / `message_id` 在这条响应里是 `mid.$…` 这种字符串（喂进去被 IG 忽略），
+         * `page_info.end_cursor` 是 132 字符的不透明游标（同样被忽略）。
+         */
+        const seq: string = JsonRead.strOf(oldest, 'offline_threading_id');
         if (seq.length > 0) {
           cursor = seq;
+        } else {
+          const mid: string = JsonRead.strOf(oldest, 'id');
+          if (mid.length > 0) {
+            cursor = mid;
+          }
         }
       }
     }

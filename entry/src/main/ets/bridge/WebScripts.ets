@@ -2422,20 +2422,38 @@ export function directThreadProbeScript(threadId: string): string {
  */
 export function directScrollUpScript(): string {
   return '(function(){try{' +
-    'var best=null,bestGap=0;var all=document.querySelectorAll("div");' +
+    // 把所有"内容比可见高"的容器都找出来，从大到小依次滚到顶 —— 之前只挑最大的那个，
+    // 结果改的是外层壳（scrollTop 一直是 0），真正的消息容器纹丝不动。
+    'var cs=[];var all=document.querySelectorAll("div");' +
     'for(var i=0;i<all.length;i++){var e=all[i];' +
-    'var gap=e.scrollHeight-e.clientHeight;' +
-    'if(gap>bestGap&&e.clientHeight>200){bestGap=gap;best=e;}}' +
-    'if(!best)return JSON.stringify({state:"no-scroll"});' +
-    'var before=best.scrollTop;' +
-    // 两个方向都试：真机上这个容器 scrollTop 本来就是 0（已在顶端），往负数滚等于没动；
-    // 反过来滚到另一端才可能触发"加载更老"。
-    'var target=(before<=0)?(best.scrollHeight-best.clientHeight):0;' +
-    'best.scrollTop=target;' +
-    'try{best.dispatchEvent(new Event("scroll",{bubbles:true}));}catch(e){}' +
-    'try{best.dispatchEvent(new WheelEvent("wheel",{bubbles:true,deltaY:(target>before?600:-600)}));}catch(e){}' +
-    'return JSON.stringify({state:"ok",before:before,after:best.scrollTop,gap:bestGap});' +
-    '}catch(e){return JSON.stringify({state:"error",message:String(e).slice(0,120)});}})()';
+    'if(e.scrollHeight-e.clientHeight>50){cs.push(e);}}' +
+    'cs.sort(function(a,b){return b.scrollHeight-a.scrollHeight});' +
+    'var info=[];' +
+    'for(var c=0;c<cs.length&&c<5;c++){var el=cs[c];var before=el.scrollTop;' +
+    'el.scrollTop=0;' +
+    'try{el.dispatchEvent(new Event("scroll",{bubbles:true}));}catch(e){}' +
+    'try{el.dispatchEvent(new WheelEvent("wheel",{bubbles:true,deltaY:-800}));}catch(e){}' +
+    // 顶部哨兵进视野：IG 这套虚拟列表多半靠 IntersectionObserver 判"该加载更老了"。
+    'try{if(el.firstElementChild){el.firstElementChild.scrollIntoView({block:"start"});}}catch(e){}' +
+    'info.push(before+">"+el.scrollTop+"/"+el.scrollHeight);' +
+    /*
+     * **合成一次真实触摸拖拽**（touchstart → touchmove×N → touchend）。
+     *
+     * 前面试过的 scrollTop / wheel / scrollIntoView 都没让页面去加载更老的消息：IG 这套消息流
+     * 认的是**触摸手势**（Bloks 自己处理 pointer/touch），所以这里按手指的样子发一串事件。
+     */
+    'try{' +
+    'var r=el.getBoundingClientRect();' +
+    'var x=Math.round(r.left+r.width/2);var y0=Math.round(r.top+r.height*0.25);' +
+    'var mk=function(type,y){var t=new Touch({identifier:1,target:el,clientX:x,clientY:y});' +
+    'return new TouchEvent(type,{bubbles:true,cancelable:true,touches:[t],targetTouches:[t],changedTouches:[t]});};' +
+    'el.dispatchEvent(mk("touchstart",y0));' +
+    'for(var s=1;s<=6;s++){el.dispatchEvent(mk("touchmove",y0+s*90));}' +
+    'el.dispatchEvent(mk("touchend",y0+540));' +
+    'info.push("touch-ok");' +
+    '}catch(e){info.push("touch-err:"+String(e).slice(0,60));}' +
+    'return JSON.stringify({state:"ok",n:cs.length,info:info.join(" ")});' +
+    '}catch(e){return JSON.stringify({state:"error",message:String(e).slice(0,140)});}})()';
 }
 
 /**
