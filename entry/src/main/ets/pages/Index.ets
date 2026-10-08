@@ -2044,9 +2044,9 @@ struct Index {
           this.probeTicks = this.probeTicks + 1;
           NativeDirect.mqttSetupProbe().catch((): void => {
           });
-          // 实时通道：先 TLS，再发 MQTT CONNECT 看 IG 认不认这套身份（见 core/DmRealtime）。
-          DmRealtime.probeConnect().catch((): void => {
-          });
+          // 实时通道探针（core/DmRealtime）暂时摘掉：三次握手尝试都到此为止，见该文件的说明。
+          // 要继续时把下面两行换回 DmRealtime.probeConnect() / probeWs() 即可。
+          // DmRealtime.probeWs().catch((): void => { });
         }
         ApiRegistry.getInstance().capture('').then((ok: boolean): void => {
           hilog.info(DOMAIN, TAG, 'web probe recent ok=%{public}s %{public}s', `${ok}`,

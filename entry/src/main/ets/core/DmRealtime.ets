@@ -14,7 +14,7 @@
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { socket } from '@kit.NetworkKit';
+import { socket, webSocket } from '@kit.NetworkKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { InstagramCookieJar, InstagramCookieSnapshot } from './InstagramCookieJar';
 
@@ -27,6 +27,75 @@ const MQTT_PORT: number = 443;
 const CONNECT_TIMEOUT_MS: number = 12000;
 
 export class DmRealtime {
+  /**
+   * **第三步：走 WebSocket（`wss://edge-mqtt.facebook.com/`，子协议 `mqtt`）再发一次 CONNECT。**
+   *
+   * 为什么试这条：裸 TLS 上发标准 MQTT CONNECT（3.1.1 和 3.1 都试过）对方**一声不吭** ——
+   * 连接开着、没有 CONNACK、也不关连接，典型的"协议层面对不上"。Facebook 家这套推送（iris）
+   * 常见做法是 MQTT over WebSocket：先用 HTTP Upgrade 升到 wss，再把 MQTT 包塞进二进制帧。
+   * 升不上去的话，日志里会有明确的握手原因，据此决定要不要去还原 iris 的自定义握手。
+   */
+  static async probeWs(): Promise<void> {
+    try {
+      const jar: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
+      if (!jar.signedIn) {
+        hilog.warn(DOMAIN, TAG, 'ws: not signed in');
+        return;
+      }
+      const userId: string = DmRealtime.cookieValue(jar.cookie, 'ds_user_id');
+      const session: string = DmRealtime.cookieValue(jar.cookie, 'sessionid');
+      const ws: webSocket.WebSocket = webSocket.createWebSocket();
+      let opened: boolean = false;
+      ws.on('open', (err: BusinessError): void => {
+        opened = true;
+        hilog.info(DOMAIN, TAG, 'ws open —— 握手成功（子协议 mqtt）');
+        const packet: Uint8Array = DmRealtime.connectPacket(`ig${userId}`, userId, session);
+        ws.send(packet.buffer as ArrayBuffer).then((): void => {
+          hilog.info(DOMAIN, TAG, 'ws mqtt connect sent len=%{public}d', packet.length);
+        }).catch((error: Error): void => {
+          hilog.warn(DOMAIN, TAG, 'ws send failed: %{public}s', error.message);
+        });
+      });
+      ws.on('message', (err: BusinessError, value: string | ArrayBuffer): void => {
+        if (typeof value === 'string') {
+          hilog.info(DOMAIN, TAG, 'ws text msg len=%{public}d head=%{public}s',
+            value.length, value.substring(0, 120));
+          return;
+        }
+        const bytes: Uint8Array = new Uint8Array(value as ArrayBuffer);
+        const rc: number = bytes.length >= 4 ? bytes[3] : -1;
+        hilog.info(DOMAIN, TAG, 'ws binary msg len=%{public}d first=[%{public}s] connackRc=%{public}d',
+          bytes.length, Array.from(bytes).slice(0, 10).join(','), rc);
+      });
+      ws.on('close', (err: BusinessError, value: webSocket.CloseResult): void => {
+        hilog.warn(DOMAIN, TAG, 'ws closed code=%{public}d reason=%{public}s',
+          value.code, value.reason);
+      });
+      ws.on('error', (err: BusinessError): void => {
+        hilog.warn(DOMAIN, TAG, 'ws error: %{public}s', err.message ?? 'unknown');
+      });
+      const options: webSocket.WebSocketRequestOptions = {
+        header: { 'Sec-WebSocket-Protocol': 'mqtt' }
+      };
+      ws.connect('wss://edge-mqtt.facebook.com/', options, (err: BusinessError): void => {
+        if (err !== undefined && err !== null && err.code !== 0) {
+          hilog.warn(DOMAIN, TAG, 'ws connect callback err=%{public}d %{public}s',
+            err.code, err.message ?? '');
+        } else {
+          hilog.info(DOMAIN, TAG, 'ws connect callback ok opened=%{public}s', `${opened}`);
+        }
+      });
+      await DmRealtime.sleep(8000);
+      hilog.info(DOMAIN, TAG, 'ws probe done opened=%{public}s', `${opened}`);
+      try {
+        ws.close();
+      } catch (error) {
+      }
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'ws probe failed: %{public}s', (error as Error).message ?? 'unknown');
+    }
+  }
+
   /**
    * **第二步：发 MQTT CONNECT，读 CONNACK 的返回码。**
    *
