@@ -121,7 +121,7 @@ import { CommentInputBar } from '../components/CommentInputBar';
 import { ProfileHeader, ProfilePost, ProfileStreamPage } from '../model/Profile';
 import { DirectThread } from '../model/Direct';
 import { SearchUser, SearchPost } from '../model/Search';
-import { EMPTY_REEL, StoryHeroRect, StoryReel, StoryTrayItem } from '../model/Story';
+import { EMPTY_REEL, StoryHeroRect, StoryReel, StoryTray, StoryTrayItem } from '../model/Story';
 import { NativeStories } from '../core/NativeStories';
 import { StoryCache } from '../core/StoryCache';
 import { PROFILE_TAB_POSTS, PROFILE_TAB_REELS, PROFILE_TAB_TAGGED, ProfileViewModel } from '../viewmodel/ProfileViewModel';
@@ -2057,6 +2057,26 @@ struct Index {
       }, 15000);
     }
     await this.delay(WARM_START_DELAY_MS);
+    /*
+     * 0) **限时快拍托盘**（需求："快拍功能在启动 app 时预加载，和 feeds 流一样"）。
+     *
+     * 以前托盘是等它自己挂载后才去取数（首屏能看到"空一拍再长出来"），这里跟着 feeds 的预热链
+     * 一起把它拉回来，并且顺手把**前几位用户的 story 内容**预建好（StoryCache.ensure）——
+     * 这样用户启动后第一次点开头像也是秒开，和 feeds 首屏贴子已经预热是同一套做法。
+     */
+    await this.warmStep('stories', (): boolean => this.storyQueue.length > 0,
+      (): Promise<void> => {
+        return NativeStories.tray().then((tray: StoryTray | null): void => {
+          if (tray !== null && tray.items.length > 0) {
+            this.storyQueue = tray.items;
+            StoryCache.reset(tray.items, 0);
+            StoryCache.ensure(tray.items, 0);
+            hilog.info(DOMAIN, TAG, 'warm stories n=%{public}d cached=%{public}d',
+              tray.items.length, StoryCache.size());
+          }
+        }).catch((): void => {
+        });
+      });
     // 1) 通知页（原生一条链：news/inbox → show_many → ayml）。
     //    预热这一轮传 warmOnly：模板缺失时**不**导航隐藏网页去抓 ayml（见 loadNotifications）。
     await this.warmStep('notify', (): boolean => this.notifications.length > 0,
