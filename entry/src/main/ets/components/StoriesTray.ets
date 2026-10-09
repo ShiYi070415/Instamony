@@ -73,6 +73,15 @@ export struct StoriesTray {
   @State private items: Array<StoryTrayItem> = [];
   /** 正在"点开"的那一项（那一项的外环换成转圈）。 */
   @State private pendingUser: string = '';
+  /** 转圈那个定时器的句柄（见 onTap 与 aboutToDisappear）。 */
+  private pendingTimer: number = -1;
+
+  aboutToDisappear(): void {
+    if (this.pendingTimer >= 0) {
+      clearTimeout(this.pendingTimer);
+      this.pendingTimer = -1;
+    }
+  }
   @State private loaded: boolean = false;
   /**
    * 每一项头像在当前这一帧的位置（vp）。
@@ -202,7 +211,13 @@ export struct StoriesTray {
        * 点一次就照常往上报；真重复点也没事：宿主那边浮层一开就把托盘盖住了。
        */
       this.pendingUser = one.userId;
-      setTimeout((): void => {
+      /*
+       * 转圈只是视觉反馈（PENDING_MS 后自己灭）。**句柄存起来、销毁时清掉** —— 审计发现这个
+       * `setTimeout` 没有句柄、也没有 `aboutToDisappear`：托盘在转圈期间被销毁（切 tab/浮层盖住后
+       * 重建）时，这个回调仍会去写已卸载组件的 `@State`。
+       */
+      this.pendingTimer = setTimeout((): void => {
+        this.pendingTimer = -1;
         if (this.pendingUser === one.userId) {
           this.pendingUser = '';
         }
