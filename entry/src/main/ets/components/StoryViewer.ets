@@ -1072,6 +1072,17 @@ export struct StoryViewer {
    * （需求："最后一个 story 的最后一页点击右侧收起 stories 页"）。
    */
   private next(): void {
+    /*
+     * **重入保护**（审计发现：连点两次右半屏会跳两位用户）。
+     *
+     * 换用户那条路是"先翻出去、等新数据回来再弹回来"的异步过程（`beginUserSwitch` +
+     * `onNextUser` → 宿主取数 → `onReelChanged`）。`waiting` 只是把状态立起来，本身并**不**阻止
+     * 第二次点击再走一遍这段 —— 于是一个连点就会让宿主连续接两位，界面直接跳过一个人的 story。
+     * 正在切用户/正在收起时一律忽略。
+     */
+    if (this.waiting || this.switching || this.closing) {
+      return;
+    }
     // 数据还没到（空 reel）：什么都不做，等 @Watch 把数据换上来。
     if (this.reel.items.length === 0) {
       return;
@@ -1098,6 +1109,10 @@ export struct StoryViewer {
    * **是第一条且就是第一位用户 → 什么都不做**（需求："在第一个 story 的第一页禁用点击左侧"）。
    */
   private prev(): void {
+    // 同 next()：切用户/收起过程中连点会连跳，一律忽略（见 next 里的说明）。
+    if (this.waiting || this.switching || this.closing) {
+      return;
+    }
     // 数据还没到：不做任何事。
     if (this.reel.items.length === 0) {
       return;
