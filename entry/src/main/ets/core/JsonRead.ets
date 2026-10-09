@@ -33,8 +33,18 @@ export class JsonRead {
    */
   static parseWithBigIds(text: string): Record<string, Object> {
     try {
+      /*
+       * 键名用**白名单**（审计 E2）。
+       *
+       * 原来最后那个裸 `id` 会连带匹配 `media_id`（`"media_id":123…` 里的 `id"` 尾巴）——
+       * 把媒体 id 也改成字符串，属于"顺手改了不该改的东西"。这里换成实际会读的那几个键：
+       *   · 会话/用户：`thread_id`、`thread_v2_id`、`thread_fbid`、`thread_key`、`pk`、`user_id`、`strong_id__`
+       *   · 消息：`message_id`、`sender_fbid`、`offline_threading_id`（**翻页游标就靠它**，必须精确）
+       * 并且要求数字前没有引号（`"?` 那一段只在原本就有引号时命中，不会重复补）。
+       */
       const fixed: string = text.replace(
-        /("(?:thread_id|thread_v2_id|pk|user_id|strong_id__|id)"\s*:\s*)(\d{16,})/g, '$1"$2"');
+        /("(?:thread_id|thread_v2_id|thread_fbid|thread_key|pk|user_id|strong_id__|message_id|sender_fbid|offline_threading_id)"\s*:\s*)(\d{16,})/g,
+        '$1"$2"');
       return JSON.parse(fixed) as Record<string, Object>;
     } catch (error) {
       // 兜底：万一替换后的文本反而解析不了，就按普通解析再来一次。

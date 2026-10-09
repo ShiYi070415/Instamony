@@ -1342,17 +1342,26 @@ export class NativeDirect {
       const short: string = apiAt >= 0 ? url.substring(apiAt, apiAt + 56) : url.substring(0, 56);
       hilog.info(DOMAIN, TAG, 'rest %{public}s %{public}s code=%{public}d json=%{public}s len=%{public}d',
         method === http.RequestMethod.POST ? 'POST' : 'GET', short, code, `${json}`, text.length);
+      /*
+       * **限流判定要放在状态码判断之前**（审计 E3）。
+       *
+       * IG 的限流响应是 `200 + JSON`（体里带提示文案），原来先过 `code !== 200 || !json` 这一关：
+       * 状态码/JSON 都正常时才会走到限流判断，看起来没漏；但**只要限流的响应不是标准 JSON**
+       * （见过带前缀/HTML 的），就会被上面的分支当成 `http-xxx/non-json` 返回 —— 限流这件事
+       * 既没被记录、detail 也被覆盖掉，调用方只看到"空"，于是候选循环继续猛打。
+       * 先判限流：一旦命中就立刻标记冷却并返回明确原因。
+       */
+      if (ApiThrottle.looksLimited(text)) {
+        ApiThrottle.note(ApiThrottle.DIRECT);
+        hilog.warn(DOMAIN, TAG, 'direct rate limited → back off %{public}min (http=%{public}d)',
+          ApiThrottle.remainingMinutes(ApiThrottle.DIRECT), code);
+        NativeDirect.detail = 'rate-limited';
+        return '';
+      }
       if (code !== 200 || !json) {
         hilog.warn(DOMAIN, TAG, 'rest body: %{public}s',
           text.substring(0, 200).replace(/[\r\n]+/g, ' '));
         NativeDirect.detail = `http-${code}${json ? '' : '/non-json'}`;
-        return '';
-      }
-      if (ApiThrottle.looksLimited(text)) {
-        ApiThrottle.note(ApiThrottle.DIRECT);
-        hilog.warn(DOMAIN, TAG, 'direct rate limited → back off %{public}min',
-          ApiThrottle.remainingMinutes(ApiThrottle.DIRECT));
-        NativeDirect.detail = 'rate-limited';
         return '';
       }
       NativeDirect.detail = '-';
