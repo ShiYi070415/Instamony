@@ -482,12 +482,50 @@ struct ReelOverlay {
     this.likeBusy = true;
     // 兜底解锁：宿主那发请求可能拖很久（原生那条失败会退到"驱动网页"，实测几十秒），
     // 不放开的话这颗心就再也点不动了（真机日志里就撞到过 `busy=true` 一直不放）。
-    setTimeout((): void => {
-      this.likeBusy = false;
-    }, ACTION_BUSY_MAX_MS);
+    //
+    // 句柄存起来（审计项 A3）：原来是裸 `setTimeout` —— 上一次的兜底会在下一次请求**中途**把
+    // `busy` 放开（用户可以在请求还没回来时再点一次），组件销毁后也仍会写 `@State`。
+    this.armBusyTimer();
     commitReelLike(this.reel, target, this.onLike).then((): void => {
+      this.disarmBusyTimer();
       this.likeBusy = false;
     });
+  }
+
+  /**
+   * 三处动作按钮（赞/转发/收藏）共用的"兜底解锁"定时器（审计项 A3）。
+   *
+   * `arm` 会先取消上一次：同一时刻只允许一个兜底在飞，避免它把后一次请求的 busy 提前放开。
+   */
+  private armBusyTimer(): void {
+    this.disarmBusyTimer();
+    this.busyTimer = setTimeout((): void => {
+      this.busyTimer = -1;
+      this.likeBusy = false;
+      this.repostBusy = false;
+      this.saveBusy = false;
+      hilog.info(DOMAIN, TAG, 'action busy timeout, unlocked');
+    }, ACTION_BUSY_MAX_MS);
+  }
+
+  private disarmBusyTimer(): void {
+    if (this.busyTimer >= 0) {
+      clearTimeout(this.busyTimer);
+      this.busyTimer = -1;
+    }
+  }
+
+  /** 三处动作按钮的兜底解锁定时器句柄（见 armBusyTimer）。 */
+  private busyTimer: number = -1;
+
+  /**
+   * 组件销毁时解开兜底定时器（审计项 A3）。
+   *
+   * 这三颗按钮（赞/转发/收藏）的 busy 状态在 `ReelOverlay` 里，句柄也在它这儿 —— 页面退出后
+   * 定时器仍会去写已卸载组件的 `@State`，所以在这里清。
+   */
+  aboutToDisappear(): void {
+    this.disarmBusyTimer();
   }
 
   /** 点转发（同样走 HTTP，见宿主 pages/Index.repostReel）。 */
@@ -508,9 +546,8 @@ struct ReelOverlay {
     const before: number = this.reel.repostCount;
     this.repostBusy = true;
     // 兜底解锁（同 tapLike）：宿主那发转发可能要退到网页驱动，几十秒不回来是常事。
-    setTimeout((): void => {
-      this.repostBusy = false;
-    }, ACTION_BUSY_MAX_MS);
+    // 句柄与取消都交给 armBusyTimer（审计项 A3）。
+    this.armBusyTimer();
     this.reel.reposted = next;
     this.reel.repostCount = next ? before + 1 : (before > 0 ? before - 1 : 0);
     this.onRepost(this.reel, next).then((ok: boolean): void => {
@@ -547,9 +584,8 @@ struct ReelOverlay {
     }
     this.saveBusy = true;
     // 兜底解锁（同 tapLike）：宿主那发请求可能拖很久，不放开这颗按钮就再也点不动了。
-    setTimeout((): void => {
-      this.saveBusy = false;
-    }, ACTION_BUSY_MAX_MS);
+    // 句柄与取消都交给 armBusyTimer（审计项 A3）。
+    this.armBusyTimer();
     this.saved = target;
     this.onSave(this.reel, target).then((ok: boolean): void => {
       this.saveBusy = false;
