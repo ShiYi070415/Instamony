@@ -67,8 +67,19 @@ const SEG_GAP: number = 3;
 const CARD_SIDE_VP: number = 16;
 /** 卡片圆角（vp）。 */
 const CARD_RADIUS_VP: number = 18;
-/** 媒体区高宽比（竖版 story；实际高度还会被可用高度夹一次）。 */
-const MEDIA_RATIO: number = 16 / 9;
+/**
+ * 媒体区高宽比（w/h）：**9:16 竖版**，也就是"宽 / 高"。
+ *
+ * ⚠️ 这里原来是 `16 / 9`（横版）—— 和它自己的注释（"竖版 story"）正好相反，
+ * 于是**打开动画的那一段**（reel 还没到、`currentItem()` 拿不到宽高，见 mediaAspect 的兜底分支）
+ * 卡片先按横版画：`mediaH = cardW / 1.78` ≈ 188vp 的一个"矮宽块"；
+ * 数据一到，真实宽高是竖版 720×1280 → `mediaH` 变成 594vp —— 用户看到的就是
+ * "点开先显示 16:9，然后变成 9:16"（需求：**打开动画就该是 9:16**）。
+ *
+ * 竖版 story 占绝大多数，所以兜底用它：真数据到了（也是 9:16）**尺寸一模一样，不会跳**；
+ * 少数本来就是横版/方形的 story，仍旧按各自的真实比例画（见 mediaAspect）。
+ */
+const MEDIA_RATIO: number = 9 / 16;
 /** 进度条离媒体区顶（vp）—— 需求："和媒体顶部保持 5vp 距离"。 */
 const PROGRESS_TOP_VP: number = 5;
 /** 进度条左右内缩（vp）。 */
@@ -625,6 +636,15 @@ export struct StoryViewer {
   /** 第一帧之后放大到全屏（在根 Stack 的 onAppear 里叫，那时布局已经量过一遍）。 */
   private expand(): void {
     this.pageAlpha = 1;
+    /*
+     * **把"展开动画起点那一刻的媒体区形状"记一行**（需求：打开动画就该是 9:16）。
+     *
+     * 这一发很关键：它发生在 reel 还没到（或刚到）的时候，`currentItem()` 往往是 null，
+     * 于是走的是 `MEDIA_RATIO` 兜底 —— 兜底写错（曾经是 16/9 横版）时，卡片会先画成矮宽块、
+     * 数据到了再跳成竖版（用户报的"先 16:9 再 9:16"）。有这行日志，一眼能看出展开那一刻
+     * 用的到底是哪个比例、以及它和这一条真实比例（`item` 那两列）差多少。
+     */
+    this.logMedia('open-start');
     this.gen = this.gen + 1;
     const gen: number = this.gen;
     animateTo({
@@ -1395,7 +1415,7 @@ export struct StoryViewer {
    *
    * 黑边这类问题光看代码说不清（同一个 story 时好时坏），有这几行就能对上：`aspect` 是不是
    * 这一条真实的比例、`area` 是不是按它算出来的高度、`size` 是不是 0（0 = 没解析到宽高、退回了
-   * 9:16 兜底）。
+   * `MEDIA_RATIO` 兜底 —— 见那个常量的说明，它必须是竖版 9:16）。
    */
   private logMedia(tag: string): void {
     const item: StoryItem | null = this.currentItem();
