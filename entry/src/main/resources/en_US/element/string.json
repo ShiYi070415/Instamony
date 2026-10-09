@@ -611,6 +611,38 @@
     {
       "name": "direct_video_call",
       "value": "Video call"
+    },
+    {
+      "name": "save_rate_limited",
+      "value": "Instagram is rate limiting. Try again in about %d minutes"
+    },
+    {
+      "name": "story_load_failed",
+      "value": "Couldn't load this story (see logs)"
+    },
+    {
+      "name": "story_action_pending",
+      "value": "Story actions aren't wired up yet — this is just a button"
+    },
+    {
+      "name": "story_message_hint",
+      "value": "Send message"
+    },
+    {
+      "name": "translate_action",
+      "value": "Translate"
+    },
+    {
+      "name": "translate_show_original",
+      "value": "See original"
+    },
+    {
+      "name": "translate_failed",
+      "value": "Translation failed, try again later"
+    },
+    {
+      "name": "direct_open_web",
+      "value": "Open in web view"
     }
   ]
 }

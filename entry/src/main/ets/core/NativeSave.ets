@@ -91,13 +91,20 @@ export class NativeSave {
    *          有模板且发出去了就给 SaveResult（成功与否看 `ok`）。
    */
   static async byTemplate(mediaId: string, save: boolean): Promise<SaveResult | null> {
+    NativeSave.detail = '-';
     const id: string = NativeSave.mediaIdOf(mediaId);
     if (id.length === 0) {
       return null;
     }
+    // 冷却期内**直接退**（见 core/ApiThrottle）：写接口被限流时再打只会把窗口拉长。
+    const cooled: string = NativeSave.cooling();
+    if (cooled.length > 0) {
+      NativeSave.note(cooled);
+      return null;
+    }
     const tpl: ApiTemplate | null = NativeSave.templateFor(save);
     if (tpl === null) {
-      NativeSave.detail = 'no-template';
+      NativeSave.note('no-template');
       return null;
     }
     const url: string = NativeSave.patchUrl(tpl.url, id);
@@ -108,20 +115,22 @@ export class NativeSave {
         'template bail: no media id in tpl=%{public}s len=%{public}d parts=%{public}d vars=%{public}d head=%{public}s',
         tpl.name, tpl.body.length, tpl.body.split('&').length,
         NativeSave.countVariables(tpl.body), tpl.body.substring(0, 160));
-      NativeSave.detail = 'template-no-media-id';
+      NativeSave.note('template-no-media-id');
       return null;
     }
     // 头用模板里那份 + 现取的 Cookie/csrftoken（见 NativeFeed.headersFor）。
     const headers: Record<string, string> = await NativeFeed.headersFor(tpl.name);
     if (Object.keys(headers).length === 0) {
       hilog.info(DOMAIN, TAG, 'template bail: no session for tpl=%{public}s', tpl.name);
-      NativeSave.detail = 'template-no-session';
+      NativeSave.note('template-no-session');
       return null;
     }
     const text: string = await NativeSave.postText(url, headers, body, 'template');
     const ok: boolean = NativeSave.looksSaved(text);
     NativeSave.via = `template:${save ? 'save' : 'unsave'}`;
-    NativeSave.detail = ok ? '-' : (text.length === 0 ? NativeSave.detail : 'template-fail');
+    if (!ok && text.length > 0) {
+      NativeSave.note('template-fail');
+    }
     hilog.info(DOMAIN, TAG, 'template save ok=%{public}s tpl=%{public}s id=%{public}s detail=%{public}s',
       `${ok}`, tpl.name, id, NativeSave.detail);
     return new SaveResult(ok, save, ok ? '' : NativeSave.detail);
@@ -336,9 +345,21 @@ export class NativeSave {
    * @param save    true = 收藏，false = 取消收藏。
    */
   static async setSaved(mediaId: string, save: boolean): Promise<SaveResult> {
+    NativeSave.detail = '-';
     const id: string = NativeSave.mediaIdOf(mediaId);
     if (id.length === 0) {
       return new SaveResult(false, save, 'no-media-id');
+    }
+    /*
+     * 冷却期内不发（审计 E5/E6）：以前这里会**照样打三发**（App 主机 → App 主机网页身份
+     * → 网页主机），三发都撞在同一把限流锁上，只会把 12 分钟的窗口越拖越长；
+     * 调用方看到的原因还是最后一发的 `http-404`，和"被限流"完全分不清。
+     */
+    const cooled: string = NativeSave.cooling();
+    if (cooled.length > 0) {
+      hilog.warn(DOMAIN, TAG, 'setSaved skipped: save family throttled %{public}dmin left',
+        ApiThrottle.remainingMinutes(ApiThrottle.SAVE));
+      return new SaveResult(false, save, cooled);
     }
     const headers: Record<string, string> = await RestSession.headers();
     if (Object.keys(headers).length === 0) {
@@ -363,11 +384,18 @@ export class NativeSave {
       return new SaveResult(true, save, '');
     }
     // ② 同一个 App 主机、但用网页会话（IG 把这条收回网页实现时用）。
+    //    第一发要是**当场认出了限流**，后面两发就别打了（同一把锁，打也是白挨）。
+    if (NativeSave.cooling().length > 0) {
+      return new SaveResult(false, save, NativeSave.detail);
+    }
     if (await NativeSave.post(appUrl, headers, body, 'app-host-web')) {
       NativeSave.via = `app-web:${action}`;
       return new SaveResult(true, save, '');
     }
     // ③ 网页主机 + App 身份（今天实测是 404，留着以防 IG 挪回去）。
+    if (NativeSave.cooling().length > 0) {
+      return new SaveResult(false, save, NativeSave.detail);
+    }
     const webUrl: string = `https://www.instagram.com/api/v1/media/${encodeURIComponent(id)}/${action}/`;
     if (await NativeSave.post(webUrl, appHeaders, body, 'web-host-app')) {
       NativeSave.via = `web-app:${action}`;
@@ -384,8 +412,36 @@ export class NativeSave {
     return cut > 0 ? text.substring(0, cut) : text;
   }
 
-  /** 上一次失败的细节（诊断）。 */
+  /**
+   * 上一次失败的细节（诊断）。
+   *
+   * **每次入口（byTemplate / setSaved）先清成 `'-'`**，并且写入走 `note()`（先到先得）：
+   * 一条收藏要依次试"模板 → App 主机 → 网页主机"几个候选，每个候选内部又会写自己的原因；
+   * 直接赋值会让**最后一个**候选那句信息量最低的 `http-404` 盖掉前面更有用的
+   * `template-no-media-id` / `rate-limited`（审计 E6：真机日志上看到的就是这个假象）。
+   * 而且它是 static：不重置的话，上一次调用的原因会**串**到这一次。
+   */
   private static detail: string = '-';
+
+  /** 记下一次失败的细节：**先到先得**（已经有具体原因就不再覆盖）。 */
+  private static note(detail: string): void {
+    if (NativeSave.detail !== '-') {
+      return;
+    }
+    NativeSave.detail = detail;
+  }
+
+  /**
+   * 这个家族还在限流冷却里吗（见 core/ApiThrottle）。
+   *
+   * @returns 空串 = 可以发；非空 = 给调用方当失败原因的那句话。
+   */
+  private static cooling(): string {
+    if (!ApiThrottle.blocked(ApiThrottle.SAVE)) {
+      return '';
+    }
+    return `throttled-${ApiThrottle.remainingMinutes(ApiThrottle.SAVE)}min`;
+  }
 
   /** 发一次写请求（POST，表单体）；成功 = HTTP 200 + 响应里有 `"status":"ok"`。 */
   private static async post(url: string, headers: Record<string, string>, body: string,
@@ -432,16 +488,16 @@ export class NativeSave {
       // 被限流：认出来就退避（见 core/ApiThrottle）。
       if (ApiThrottle.looksLimited(text)) {
         ApiThrottle.note(ApiThrottle.SAVE);
-        NativeSave.detail = 'rate-limited';
+        NativeSave.note('rate-limited');
         return '';
       }
       if (response.responseCode === 200) {
         return text;
       }
-      NativeSave.detail = `http-${response.responseCode}`;
+      NativeSave.note(`http-${response.responseCode}`);
       return '';
     } catch (error) {
-      NativeSave.detail = `throw:${(error as Error).message ?? 'request-threw'}`.substring(0, 60);
+      NativeSave.note(`throw:${(error as Error).message ?? 'request-threw'}`.substring(0, 60));
       return '';
     } finally {
       try {

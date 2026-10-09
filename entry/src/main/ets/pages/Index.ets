@@ -1653,6 +1653,21 @@ struct Index {
         NativeSave.lastVia(), id, `${save}`);
       return true;
     }
+    /*
+     * 被 IG 限流（见 core/ApiThrottle）：**连网页那条路也一起停**（审计 E5/E6）。
+     *
+     * 为什么不能"原生不行就退回网页"：网页驱动是"把隐藏的 Web 导航到这条帖子、再点那颗书签"，
+     * 它发出去的是**同一个账号的写请求** —— 撞的正是这把限流锁。原来这里会接着跑：
+     * 界面上转半天、日志里一串失败，最后只给一句"没能收藏这条帖子"，用户完全不知道
+     * 是"现在不能点"还是"这个功能坏了"。如实说 + 不再打，就是这一段的全部内容。
+     */
+    const throttleLeft: number = ApiThrottle.remainingMinutes(ApiThrottle.SAVE);
+    if (ApiThrottle.blocked(ApiThrottle.SAVE)) {
+      hilog.warn(DOMAIN, TAG, 'save skipped: save family throttled %{public}dmin left id=%{public}s',
+        throttleLeft, id);
+      this.toast($r('app.string.save_rate_limited', throttleLeft));
+      return false;
+    }
     hilog.info(DOMAIN, TAG, 'save native failed (%{public}s) id=%{public}s → web',
       direct.detail, id);
     // ③ 网页驱动（顺手抓模板，下次走 ①）。

@@ -639,6 +639,10 @@
     {
       "name": "direct_video_call",
       "value": "视频"
+    },
+    {
+      "name": "save_rate_limited",
+      "value": "IG 正在限流，约 %d 分钟后可再试"
     }
   ]
 }
