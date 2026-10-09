@@ -2025,18 +2025,34 @@ export struct FeedList {
   private toggleFollow(post: MediaPost, index: number, on: boolean): void {
     // **id 为空也照样处理**：HTTP 直发需要 id，但还有网页驱动那条退路（见 Index.followAuthor），
     // 所以不能因为解析不到 pk 就让按钮"点了没反应"（按钮本身现在恒定渲染，见 profileRow）。
-    if (index < 0 || index >= this.uiList.length) {
-      return;
-    }
-    const ui: PostUi = this.uiList[index];
-    if (ui.following === on) {
-      return;
-    }
+    /*
+     * **按 key 取当前那一条的 ui，不用闭包里的 index**（审计 D3）。
+     *
+     * 关注按钮的 `onTap` 捕获的是**构建时**的 index，而 `ForEach` 的键值没变时 item builder 不会
+     * 重跑（本文件 1866 行自述过这一点）。刷新/插帖之后，那个旧 index 指向的已经是别人 ——
+     * 表现就是"点 A 关注，B 变成已关注"。`toggleSaved` 早就改成按 key 取了，这里对齐它。
+     */
     const key: string = FeedMapper.keyOf(post);
+    const current: PostUi | undefined = this.uiByKey.get(key);
+    if (current !== undefined) {
+      if (current.following === on) {
+        return;
+      }
+    } else if (index < 0 || index >= this.uiList.length) {
+      return;
+    } else if (this.uiList[index].following === on) {
+      return;
+    }
     if (this.followBusy.has(key)) {
       return;
     }
     this.followBusy.add(key);
+    // 真正要改的那一条：按 key 取（见上面 D3 的说明），拿不到就别动。
+    const ui: PostUi | undefined = this.uiByKey.get(key);
+    if (ui === undefined) {
+      this.followBusy.delete(key);
+      return;
+    }
     const before: boolean = ui.following;
     ui.following = on;
     FollowState.remember(post.ownerId, post.ownerUsername, on);
