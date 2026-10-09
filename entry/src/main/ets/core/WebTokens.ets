@@ -57,7 +57,15 @@ export class WebTokens {
   private static csr: string = '';
   private static s: string = '';
   private static ready: boolean = false;
-  private static reading: boolean = false;
+  /**
+   * 正在读令牌的那一发。并发的调用方**等它**（而不是轮询，见 ensure）。
+   *
+   * 为什么不是 `reading: boolean` + 忙等（审计 E10）：原来是"每 100ms 看一眼 reading，
+   * 最多看 30 次"—— 最坏情况白等 3 秒（读取失败时也一样，等待者要等满 3 秒才知道失败），
+   * 期间还在反复唤醒线程。挂一个 Promise 下来，等待者拿到的是**这次读的真实结果**，
+   * 一有结果立刻返回。
+   */
+  private static inflight: Promise<boolean> | null = null;
 
   /**
    * 确保这一轮页面加载的令牌已经读到（已读过就直接返回 true）。
@@ -68,14 +76,25 @@ export class WebTokens {
     if (WebTokens.ready && !force) {
       return true;
     }
-    if (WebTokens.reading) {
+    const running: Promise<boolean> | null = WebTokens.inflight;
+    if (running !== null) {
       // 并发调用（比如同时点赞两条）：等第一次读完就行，不重复过桥。
-      for (let i: number = 0; i < 30 && WebTokens.reading; i++) {
-        await WebTokens.delay(100);
-      }
-      return WebTokens.ready;
+      return running;
     }
-    WebTokens.reading = true;
+    const job: Promise<boolean> = WebTokens.readTokens();
+    WebTokens.inflight = job;
+    try {
+      return await job;
+    } finally {
+      // 只有"还是我挂上去的那一发"才清（后到的 force 调用可能已经换了新的）。
+      if (WebTokens.inflight === job) {
+        WebTokens.inflight = null;
+      }
+    }
+  }
+
+  /** 真正读一次页面令牌；同一时刻只允许一发（由 ensure 保证）。 */
+  private static async readTokens(): Promise<boolean> {
     try {
       const raw: string = await InstagramPageBridge.getInstance()
         .runBridge(PAGE_TOKENS_SCRIPT, TOKEN_TIMEOUT_MS, 'page-tokens');
@@ -97,8 +116,6 @@ export class WebTokens {
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'read page tokens failed: %{public}s', (error as Error).message);
       return false;
-    } finally {
-      WebTokens.reading = false;
     }
   }
 
@@ -217,13 +234,5 @@ export class WebTokens {
     } catch (error) {
       return raw;
     }
-  }
-
-  private static delay(ms: number): Promise<string> {
-    return new Promise<string>((resolve: (value: string) => void): void => {
-      setTimeout((): void => {
-        resolve('done');
-      }, ms);
-    });
   }
 }

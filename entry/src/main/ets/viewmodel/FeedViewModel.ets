@@ -501,7 +501,7 @@ export class FeedViewModel {
     this.sawEnd = false;
     this.wantFirstPage = true;
     this.setStatus(FeedStatus.Idle);
-    this.noteDebug(`cache=${mapped.length}(${Math.round(cached.ageMs / 1000)}s)`);
+    this.noteDebug(`cache=${mapped.length}(${Math.round(cached.ageMs / 1000)}s)`, true);
     // 缓存这批也把封面小图解出来（见 core/PosterCache）：一进来首屏就是"小图先到、真图补上"。
     PosterCache.warm(mapped);
     hilog.info(DOMAIN, TAG, 'hydrated from cache n=%{public}d age=%{public}dms',
@@ -953,7 +953,7 @@ export class FeedViewModel {
         // 供 hilog 与探针查看 —— 这两个字段名不确定，靠它确认。
         const extra: string = payload.debug ?? '';
         this.noteDebug(`api=${(payload.items ?? []).length}${cursor.length > 0 ? '/cur' : ''}`
-          + (extra.length > 0 ? ` ${extra}` : ''));
+          + (extra.length > 0 ? ` ${extra}` : ''), true);
         return payload;
       }
       this.debug = `api:${payload.state}`;
@@ -1045,7 +1045,7 @@ export class FeedViewModel {
     try {
       const raw: string = await this.bridge.runBridge(FEED_SCRIPT, DOM_SCRIPT_MS);
       const payload: FeedPayloadDto = JSON.parse(raw) as FeedPayloadDto;
-      this.noteDebug(`dom=${(payload.items ?? []).length} ${payload.debug ?? ''}`);
+      this.noteDebug(`dom=${(payload.items ?? []).length} ${payload.debug ?? ''}`, true);
       return payload;
     } catch (error) {
       return null;
@@ -1059,8 +1059,18 @@ export class FeedViewModel {
    * WebScripts 的 namesByRe / keyDump）—— 探针面板里有，但探针要手点；
    * 打一行日志，`hilog | grep feed debug` 当场就能看到，排查这类"某个计数不显示"最省事。
    */
-  private noteDebug(text: string): void {
+  private noteDebug(text: string, step: boolean = false): void {
     this.debug = text;
+    /*
+     * **中间那几步降到 debug**（审计 E14）：`cache=` / `api=` / `dom=` 每次取数都会各打一行，
+     * 真机上滚一屏下来就是几十行，把别的现场（收藏/翻页/限流那些）冲掉。
+     * **合成后的那一行仍然留在 info**：它带着信息流脚本回传的字段名清单，
+     * `hilog | grep "feed debug"` 一次取数只出一行，排查"某个计数不显示"靠的还是它。
+     */
+    if (step) {
+      hilog.debug(DOMAIN, TAG, 'feed debug(step): %{public}s', text);
+      return;
+    }
     hilog.info(DOMAIN, TAG, 'feed debug: %{public}s', text);
   }
 

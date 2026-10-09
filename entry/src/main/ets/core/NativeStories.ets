@@ -278,8 +278,18 @@ export class NativeStories {
       NativeStories.detail = 'no-user';
       return null;
     }
-    // 三条 URL × 三种身份的组合（见文件头 ANDROID_UA 的说明）：前四发都是那条整体 reels，
-    // 最后一发是"单用户 story"那条老接口，纯粹当兜底。
+    /*
+     * 四个候选 = **两条 URL × 三种身份**（见文件头 ANDROID_UA 的说明）：
+     *   ① 整体 reels + 网页身份（模板里那条，最常见能成）
+     *   ② 整体 reels + 安卓新版本号
+     *   ③ 整体 reels + 安卓旧版本号
+     *   ④ **单用户 story** + 网页身份（老接口，纯粹当兜底）
+     *
+     * 审计 E8 里写的"第 4 个候选与第 1 个同 URL 同身份、纯重复请求"**在这一版代码里不成立**
+     * （`urls[3]` 是 `storyUrl`，`urls[0]` 是 `reelUrl`；`git log` 显示这个数组从 init 起没改过）。
+     * 那句判断是照着**上面那段旧注释**（"前四发都是那条整体 reels"）读出来的 —— 旧注释留在
+     * 这里会继续误导下一次审计，所以按代码重写成现在这段。
+     */
     const reelUrl: string = `${SITE}/api/v1/feed/reels_media/?reel_ids=${encodeURIComponent(userId)}&source=raven`;
     const storyUrl: string = `${SITE}/api/v1/feed/user/${encodeURIComponent(userId)}/story/`;
     const urls: Array<string> = [reelUrl, reelUrl, reelUrl, storyUrl];

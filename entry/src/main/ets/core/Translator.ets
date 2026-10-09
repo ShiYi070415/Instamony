@@ -107,11 +107,17 @@ export class Translator {
     if (source.length === 0 || Translator.hasChinese(source)) {
       return null;
     }
-    const cached: string | undefined = Translator.cache.get(source);
+    /*
+     * **缓存键要带目标语言**（审计 E9）：原来只用原文当键，用户改了系统语言之后
+     * 同一句原文会直接命中上一次那种语言的译文（界面上就是"切了语言还是旧语种"）。
+     * `\u0000` 当分隔符：原文里不会出现它，不会和别的键撞。
+     */
+    const target: string = Translator.targetLang();
+    const key: string = `${target}\u0000${source}`;
+    const cached: string | undefined = Translator.cache.get(key);
     if (cached !== undefined) {
       return cached;
     }
-    const target: string = Translator.targetLang();
     const clipped: string = source.length > MAX_CHARS ? source.substring(0, MAX_CHARS) : source;
     const url: string = `${ENDPOINT}?client=gtx&sl=auto&tl=${encodeURIComponent(target)}`
       + `&dt=t&q=${encodeURIComponent(clipped)}`;
@@ -137,7 +143,7 @@ export class Translator {
         return null;
       }
       Translator.detail = '-';
-      Translator.remember(source, translated);
+      Translator.remember(key, translated);
       hilog.info(DOMAIN, TAG, 'translate ok %{public}s→%{public}s len=%{public}d',
         'auto', target, translated.length);
       return translated;
@@ -153,15 +159,15 @@ export class Translator {
     }
   }
 
-  /** 记进缓存（超了从头淘汰一条）。 */
-  private static remember(source: string, translated: string): void {
+  /** 记进缓存（超了从头淘汰一条）。`key` 已经是 `目标语言\0原文`（见 translate）。 */
+  private static remember(key: string, translated: string): void {
     if (Translator.cache.size >= CACHE_MAX) {
       const keys: Array<string> = Array.from(Translator.cache.keys());
       if (keys.length > 0) {
         Translator.cache.delete(keys[0]);
       }
     }
-    Translator.cache.set(source, translated);
+    Translator.cache.set(key, translated);
   }
 
   /**

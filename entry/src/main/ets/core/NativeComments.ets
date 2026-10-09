@@ -488,24 +488,31 @@ export class NativeComments {
     }
     merged['content-type'] = 'application/x-www-form-urlencoded';
     merged['x-requested-with'] = 'XMLHttpRequest';
-    return await NativeComments.request(url, merged, body, tag);
+    return await NativeComments.request(url, merged, true, body, tag);
   }
 
   /** 发一次 GET；失败给空串并把原因记在 detail 里。 */
   private static async get(url: string, headers: Record<string, string>): Promise<string> {
-    return await NativeComments.request(url, headers, '', 'get');
+    return await NativeComments.request(url, headers, false, '', 'get');
   }
 
-  /** 真正那一次 http 调用（GET / POST 只差 method 与 body）。 */
-  private static async request(url: string, headers: Record<string, string>, body: string,
-                               tag: string): Promise<string> {
-    const post: boolean = body.length > 0;
+  /**
+   * 真正那一次 http 调用（GET / POST 只差 method 与 body）。
+   *
+   * @param post **显式传**这是不是写请求（审计 E13）。
+   *
+   * 原来是 `const post = body.length > 0` 推断出来的：体为空的写请求
+   * （变更全在 URL 参数上、体是空串）会被发成 **GET** —— 服务端按只读路由处理，
+   * 回 200 但什么都没改，界面上就是"点了没反应"这类最难查的静默失败。
+   */
+  private static async request(url: string, headers: Record<string, string>, post: boolean,
+                               body: string, tag: string): Promise<string> {
     const request: http.HttpRequest = http.createHttp();
     try {
       const response: http.HttpResponse = await request.request(url, {
         method: post ? http.RequestMethod.POST : http.RequestMethod.GET,
         header: headers,
-        extraData: post ? body : undefined,
+        extraData: post && body.length > 0 ? body : undefined,
         connectTimeout: CONNECT_TIMEOUT_MS,
         readTimeout: READ_TIMEOUT_MS,
         expectDataType: http.HttpDataType.STRING

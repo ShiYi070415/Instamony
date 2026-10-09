@@ -18,6 +18,7 @@
 import { cacheDownload } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { PlatformCap } from './PlatformCap';
+import { NetworkState } from './NetworkState';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'MediaPrefetch';
@@ -28,7 +29,16 @@ const TAG: string = 'MediaPrefetch';
  * 免得调用方哪天给一大串把带宽全占了；正常情况下正好是"往后三张卡、每张两张图"。
  */
 const MAX_PER_CALL: number = 6;
-/** 已提交过的 url（会话级）。 */
+/**
+ * `seen` 最多记多少个 url。
+ *
+ * 原来这个集合**没有上限、进程内也不清**（只有 `clearCache()` 才 clear）：
+ * 滑得久了它会一直涨，而缓存下载内部那张"下载信息表"只有 2048 条（见 init）——
+ * 表和缓存一被淘汰，`seen` 却还记得，于是那些**缓存里已经没有的图再也不会被预取**
+ * （表现是滑回去突然变慢，却查不出原因）。现在按 FIFO 淘汰：超过上限就忘掉最早那批。
+ */
+const SEEN_MAX: number = 512;
+/** 已提交过的 url（会话级，超出 SEEN_MAX 按插入顺序淘汰）。 */
 const seen: Set<string> = new Set<string>();
 
 export class MediaPrefetch {
@@ -54,13 +64,24 @@ export class MediaPrefetch {
 
   /** 把一批 url 交给缓存下载（返回真正提交了几张，供日志用）。 */
   static prefetch(urls: Array<string>): number {
+    /*
+     * **只在不计费网络上预取**（审计 E12）。
+     *
+     * 这个入口以前不查网络：蜂窝网下照样把"往后三张卡、每张两张图"（几百 KB 到几 MB）
+     * 提前拉下来 —— 用户没要求、还可能正在流量套餐里。判据和启动预热那条保持一致
+     * （`NetworkState.allowPrefetch()`：Wi-Fi / 不计费网，拿不准按计费处理）。
+     * 预取只是加速，跳过它不影响任何正常显示路径。
+     */
+    if (!NetworkState.allowPrefetch()) {
+      return 0;
+    }
     let started: number = 0;
     for (let index: number = 0; index < urls.length && started < MAX_PER_CALL; index++) {
       const url: string = urls[index];
       if (url.length === 0 || seen.has(url)) {
         continue;
       }
-      seen.add(url);
+      MediaPrefetch.remember(url);
       try {
         const options: cacheDownload.CacheDownloadOptions = {};
         cacheDownload.download(url, options);
@@ -73,6 +94,18 @@ export class MediaPrefetch {
       hilog.info(DOMAIN, TAG, 'prefetch %{public}d (seen=%{public}d)', started, seen.size);
     }
     return started;
+  }
+
+  /** 记一个已提交的 url；超过 SEEN_MAX 就忘掉最早那个（见 SEEN_MAX 的说明）。 */
+  private static remember(url: string): void {
+    while (seen.size >= SEEN_MAX) {
+      const oldest: string | undefined = seen.values().next().value;
+      if (oldest === undefined) {
+        break;
+      }
+      seen.delete(oldest);
+    }
+    seen.add(url);
   }
 
   /**

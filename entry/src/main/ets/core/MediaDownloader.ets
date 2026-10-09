@@ -22,6 +22,15 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'MediaDownload';
+/**
+ * 一次下载最多等多久（毫秒）。
+ *
+ * 必须有这个上限（审计 E11）：`complete` / `fail` 都**可能不来**（网络卡在半路、
+ * 任务被系统回收），原来那种"只挂两个监听"的写法下 Promise 永不 settle ——
+ * 调用方的 `await` 永远不返回，沙盒里还留着一份半截文件。
+ * 取 60 秒：IG 的图几秒、视频十几秒，正常都在里面。
+ */
+const DOWNLOAD_TIMEOUT_MS: number = 60000;
 
 export class MediaDownloader {
   /**
@@ -71,14 +80,56 @@ export class MediaDownloader {
     } catch (error) {
     }
     const task: request.DownloadTask = await request.downloadFile(context, { url: url, filePath: path });
-    // downloadFile 的 promise 在"任务创建"时就会 resolve，真正下完要看 complete 事件。
+    /*
+     * `downloadFile` 的 promise 在"任务创建"时就会 resolve，真正下完要看事件。
+     *
+     * 这里必须自己收口（审计 E11）：
+     *   - 两个事件都**可能不来** → 必须加超时，否则 Promise 永不 settle（调用方悬死、
+     *     沙盒里留半截文件）；
+     *   - 监听器原来从不 `off()` → 任务对象回调里闭着页面上下文，泄漏；
+     *   - `complete` 与 `fail` 理论上可能都到（或超时后迟到）→ **只认第一个**。
+     * 所以：settle 一次、挂掉的监听在 finish 里摘掉、失败/超时把半截文件删掉
+     * （成功时由 `save` 的 finally 删）。
+     */
     await new Promise<void>((resolve: () => void, reject: (error: Error) => void): void => {
-      task.on('complete', (): void => {
+      let settled: boolean = false;
+      let timer: number = -1;
+      const finish = (error: Error | null): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timer >= 0) {
+          clearTimeout(timer);
+          timer = -1;
+        }
+        try {
+          task.off('complete');
+        } catch (error) {
+        }
+        try {
+          task.off('fail');
+        } catch (error) {
+        }
+        if (error !== null) {
+          try {
+            fileIo.unlinkSync(path);
+          } catch (error) {
+          }
+          reject(error);
+          return;
+        }
         resolve();
+      };
+      task.on('complete', (): void => {
+        finish(null);
       });
       task.on('fail', (err: number): void => {
-        reject(new Error(`download fail ${err}`));
+        finish(new Error(`download fail ${err}`));
       });
+      timer = setTimeout((): void => {
+        finish(new Error('download timeout'));
+      }, DOWNLOAD_TIMEOUT_MS);
     });
   }
 

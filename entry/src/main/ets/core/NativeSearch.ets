@@ -519,9 +519,17 @@ export class NativeSearch {
       hilog.info(DOMAIN, TAG, 'http op=%{public}s code=%{public}d json=%{public}s len=%{public}d',
         op, code, `${looksJson}`, text.length);
       if (code !== 200 || !looksJson) {
-        hilog.warn(DOMAIN, TAG, 'http body: %{public}s',
-          text.substring(0, 160).replace(/[\r\n]+/g, ' '));
-        return new NativeSearchResult(false, '', `http-${code}${looksJson ? '' : '/non-json'}`);
+        const head: string = text.substring(0, 160).replace(/[\r\n]+/g, ' ');
+        hilog.warn(DOMAIN, TAG, 'http body: %{public}s', head);
+        /*
+         * **400 的响应体要带给调用方**（审计 E7）：查询变量被服务端拒时 IG 回的是
+         * `{"message":"…noncoercible_variable_value…","status":"fail"}`，
+         * 调用方（`pageRequest`）只有看到它才能分清"是我改大的每页条数不被接受"，
+         * 还是"这一发本身就没成"（网络抖动 / 会话过期 / 限流）。
+         * 只带 400 的体、且截断到 120 字 —— 这是给判据用的，不是给业务解析的。
+         */
+        const carry: string = code === 400 ? `/${head.substring(0, 120)}` : '';
+        return new NativeSearchResult(false, '', `http-${code}${looksJson ? '' : '/non-json'}${carry}`);
       }
       /*
        * **被限流**：IG 会回 200 + `{"data":[],"errors":[{"message":"Rate limit exceeded",
@@ -560,9 +568,34 @@ export class NativeSearch {
     const size: number = NativeSearch.pageSizeRejected ? 0 : pageSize;
     let result: NativeSearchResult = await NativeSearch.post(op, '', '', cursor, size);
     if (!result.ok && size > 0) {
-      NativeSearch.diag.push(`pageSize=${size} rejected (${result.detail}) -> retry as-is`);
-      hilog.warn(DOMAIN, TAG, 'page size %{public}d rejected: %{public}s', size, result.detail);
-      NativeSearch.pageSizeRejected = true;
+      /*
+       * **先分清"这一发为什么失败"**（审计 E7）。
+       *
+       * 原来只要 `!ok` 就 `pageSizeRejected = true`：一次网络抖动 / 会话过期 / 被限流，
+       * "大页数"这条优化在**整个进程**里就再也不会被尝试了 —— 而它恰好是
+       * "翻页翻不动、一页只有十来条"的排查方向之一，却再也看不到现场。
+       *
+       * 现在只有服务端**明确说这个变量值不认**（`noncoercible_variable_value`）才永久关掉；
+       * 其余失败这次退回模板原样，下次仍然会试大页数。
+       */
+      const refused: boolean = result.detail.indexOf('noncoercible_variable_value') >= 0;
+      /*
+       * 这几类失败**再发一发也是白打**（没有模板 / 没有会话 / 正在限流）：
+       * 直接返回，省一次一模一样的请求（和 core/ApiThrottle 的取向一致）。
+       */
+      const hopeless: boolean = result.detail === 'no-template' || result.detail === 'no-session'
+        || result.detail === 'rate-limited';
+      if (hopeless) {
+        NativeSearch.diag.push(`pageSize=${size} skipped retry (${result.detail})`);
+        return result;
+      }
+      NativeSearch.diag.push(`pageSize=${size} failed (${result.detail.substring(0, 80)})`
+        + (refused ? ' -> 永久退回模板原样' : ' -> 本次退回模板原样'));
+      hilog.warn(DOMAIN, TAG, 'page size %{public}d failed refused=%{public}s: %{public}s',
+        size, `${refused}`, result.detail.substring(0, 120));
+      if (refused) {
+        NativeSearch.pageSizeRejected = true;
+      }
       result = await NativeSearch.post(op, '', '', cursor, 0);
     }
     return result;
