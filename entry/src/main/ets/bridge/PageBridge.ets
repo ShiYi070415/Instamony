@@ -12,6 +12,13 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { InstagramProbe } from '../probe/InstagramProbe';
 
 const DEFAULT_TIMEOUT_MS: number = 20000;
+/**
+ * "刚刚确认网页不就绪"的记忆能管多久（毫秒，见 `awaitPageReady`）。
+ *
+ * 取 10 秒：足够覆盖启动预热那几步串行的间隔（每步之间还有 `WARM_STEP_GAP_MS`），
+ * 又不至于让用户过一会儿主动重试时也被跳过等待。
+ */
+const NOT_READY_MEMO_MS: number = 10000;
 const TAG: string = 'InstarmonyBridge';
 const DOMAIN: number = 0xFF00;
 
@@ -125,6 +132,11 @@ export class InstagramPageBridge {
   /** 单调递增，不随换页归零——归零会让换页前登记的等待永远等不到。 */
   private replayCounter: number = 0;
   private ready: boolean = false;
+  /**
+   * "上一次等就绪超时"的时刻（毫秒）。见 `awaitPageReady`：短时间内别一段一段地陪等。
+   * `markReady()` / `markUnready()` 都会清掉它（就绪状态变了，这份记忆就不成立了）。
+   */
+  private notReadyAtMs: number = 0;
   private sequence: number = 0;
   private routeHandler: (url: string) => void = (url: string): void => {
   };
@@ -194,6 +206,8 @@ export class InstagramPageBridge {
 
   markReady(): void {
     this.ready = true;
+    // 真的就绪了：把"刚刚确认不就绪"的记忆清掉（见 awaitPageReady 的说明）。
+    this.notReadyAtMs = 0;
     // 先兑现等候者，再回调页面：这样「等加载完成」的调用方不会被页面回调的顺序影响。
     const waiters: Array<ReadyWaiter> = this.readyWaiters.splice(0, this.readyWaiters.length);
     for (let index: number = 0; index < waiters.length; index++) {
@@ -205,6 +219,11 @@ export class InstagramPageBridge {
   /** 页面开始/结束一轮导航：文档会重建，页面内存里的 __ogReplay 也随之作废。 */
   markUnready(): void {
     this.ready = false;
+    /*
+     * 新一轮导航开始了：作废"不就绪"的记忆 —— 这一次是真的要等它加载完
+     * （清掉记忆后，`awaitPageReady` 会老老实实挂上去等）。
+     */
+    this.notReadyAtMs = 0;
   }
 
   isReady(): boolean {
@@ -223,6 +242,20 @@ export class InstagramPageBridge {
     if (this.ready) {
       return 'ready';
     }
+    /*
+     * **刚刚已经确认"不就绪"，短时间内不再陪等一遍**（审计 G6）。
+     *
+     * 启动预热链是一步接一步串行的，每一步在自己的"网页兜底"路径里都会
+     * `awaitPageReady(20000)`。网页一直不就绪时那就是**每步白等 20 秒** ——
+     * 用户切到 Reels / 我的 看到的是空页 + "页面尚未就绪"，后台却还在一段一段地等。
+     * 结论本来就是同一个（就是没就绪），所以这里直接给 timeout。
+     * 页面真的就绪（markReady）或开始新一轮导航（markUnready）时，这份记忆都会作废。
+     */
+    if (this.notReadyAtMs > 0 && Date.now() - this.notReadyAtMs < NOT_READY_MEMO_MS) {
+      hilog.info(DOMAIN, TAG, 'awaitPageReady skip: not ready %{public}dms ago',
+        Date.now() - this.notReadyAtMs);
+      return 'timeout';
+    }
     const deferred: DeferredOutcome = new DeferredOutcome();
     deferred.promise = new Promise<string>((resolve: (outcome: string) => void) => {
       deferred.resolve = resolve;
@@ -238,6 +271,8 @@ export class InstagramPageBridge {
     hilog.info(DOMAIN, TAG, 'awaitPageReady %{public}s %{public}dms',
       outcome, Date.now() - started);
     if (outcome !== 'ready') {
+      // 记下"这一刻它不就绪"：后面几步短时间内再来问就立刻回 timeout（见函数开头）。
+      this.notReadyAtMs = Date.now();
       const keep: Array<ReadyWaiter> = [];
       for (let index: number = 0; index < this.readyWaiters.length; index++) {
         if (this.readyWaiters[index] !== waiter) {
