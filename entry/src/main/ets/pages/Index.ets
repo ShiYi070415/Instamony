@@ -412,7 +412,7 @@ interface TabItem {
  * 重新编译即可 —— 代码、面板、抓模板/结构摘要/打开页面这些能力全部保留（见 menus 与 ProbePanel）。
  * 界面上的其它入口（页内右上角 more、设定页）都不再暴露探针。
  */
-const PROBE_MENU_VISIBLE: boolean = true;
+const PROBE_MENU_VISIBLE: boolean = false;
 
 // 搜索框那几套常量（高度、收起来的时机、动画时长）跟着搜索框一起搬进了 SearchPage ——
 // 搜索框现在画在那一页里（见 SearchPage 的 searchBoxOverlay），标题栏只管标题和菜单。
@@ -2047,7 +2047,7 @@ struct Index {
      * 那样会被网页浮层卸载掉。每 15 秒把网页钩子里的请求倒进模板表并列出最近更新过的名字：
      * 我在可见网页里划几下之后，下一拍就能看到"网页翻历史用的是哪条请求"。
      */
-    if (this.probeTimer < 0) {
+    if (false) {
       hilog.info(DOMAIN, TAG, 'web probe timer start');
       this.probeTimer = setInterval((): void => {
         hilog.info(DOMAIN, TAG, 'web probe tick');
