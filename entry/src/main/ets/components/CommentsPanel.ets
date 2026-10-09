@@ -93,9 +93,19 @@ export class CommentsListController {
  */
 @Component
 struct CommentAvatar {
-  @Prop url: string = '';
+  /*
+   * url 变了要把"失败过"的标记清掉（审计 B4）。
+   *
+   * CDN 直链会失效：一次失败之后 `failed=true` 会**永久**停在这个占位图上 —— 即使外面换了一条
+   * 新的直链、`url` 已经变了，组件也不会再试（`@State` 只在组件重建时复位，而外层键未必把它重建）。
+   */
+  @Prop @Watch('onUrlChanged') url: string = '';
   @Prop boxSize: number = 32;
   @State private failed: boolean = false;
+
+  private onUrlChanged(): void {
+    this.failed = false;
+  }
 
   build() {
     if (this.url.length > 0 && !this.failed) {
@@ -141,13 +151,18 @@ struct CommentAvatar {
  */
 @Component
 struct CommentMedia {
-  @Prop url: string = '';
+  /** url 变了要清掉失败标记（审计 B4，理由同 CommentAvatar）。 */
+  @Prop @Watch('onUrlChanged') url: string = '';
   /** 贴图自己的宽高（接口给了才有；0 = 不知道）。 */
   @Prop mediaW: number = 0;
   @Prop mediaH: number = 0;
   /** 正文区可用宽度（vp）：由面板按屏幕宽度算好传进来。 */
   @Prop maxW: number = 240;
   @State private failed: boolean = false;
+
+  private onUrlChanged(): void {
+    this.failed = false;
+  }
   /** 竖图的高度上限（vp）：不限的话 9:16 会把整个评论面板占掉。 */
   private readonly maxH: number = 220;
 
@@ -271,8 +286,13 @@ export struct CommentsPanel {
    */
   private panOptionsList: PanGestureOptions =
     new PanGestureOptions({ fingers: 1, direction: PanDirection.None, distance: 1 });
-  /** 列表现在是不是在顶部（滚动的起停时更新，用来算手势方向）。 */
-  private listAtTopState: boolean = true;
+  /**
+   * 列表现在是不是在顶部（滚动的起停时更新，用来算手势方向）。
+   *
+   * **必须是 `@State`**（审计 B3）：它同时被 `build()` 里的 `.edgeEffect(… listAtTopState …)` 读取，
+   * 而写入它的 `onScrollStart/Stop` 不会触发重绘 —— 普通字段的话，回弹/滚动交互会一直停在旧档位。
+   */
+  @State private listAtTopState: boolean = true;
   /** 面板自己的滚动控制器（列表程序化滚动只有这一条路，手指不直接滚它）。 */
   private listScroller: Scroller = new Scroller();
   /** 列表当前的滚动位置（vp，0 = 在顶部）：宿主优先级的兜底判据。 */
