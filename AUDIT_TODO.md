@@ -188,23 +188,24 @@
   目前是断的；现在靠**不需要模板的 REST 搜索**（`/web/search/topsearch/`）顶着。
   以后若要恢复模板那条路，得先弄清页面为什么不发请求（可能是输入框需要更真实的按键序列，
   或者 IG 换成了别的触发方式）—— 体检日志里的 `op=` 为空就说明在用 REST。
-- **快拍取数 500** —— **两份诊断文件定案**（`f2b005c` 加现场 + `4cf9041` 修根因）：
-  第二份文件里读到决定性的三行：
-  * `detail=http-400`（已不再被 `empty` 掩盖）；
-  * `code=500 head={"message":"很抱歉，出错了，请重试。","status_code":"500","status":"fail"}`；
-  * **头清单里没有 `x-ig-www-claim`**，却带着 `x-fb-friendly-name` / `x-root-field-name` ——
-    那是**信息流 GraphQL 模板**的头。而 `reels_media` 是网页私有 REST。
-  根因：`NativeStories.fetchText` 一直用 `NativeFeed.sessionOrBrowserHeaders()`，
-  **从没用过**项目里为 `/api/v1/…` 准备的 `RestSession.headers()`（带网页抓来的 REST 模板头，
-  claim / instagram-ajax 都在里面）。另外 `android-old` 回
-  `challenge_required + unsupported_version` = 注定失败，纯白打。
-  本轮：取快拍改用 `RestSession.headers()`；删掉 `android-old` 候选；
-  **5xx 且没有 claim 时补抓一次 REST 模板再重试**（`NativeStories.setClaimRefresher` ←
-  `Index.ensureAymlTemplate`）；非 200 时把 **cookie 名清单**也记进轨迹。
-  **待验证**：真机当时锁屏，没能实测"换新头之后快拍照旧能开"（代码上无模板时退回同一套头，
-  属安全改动）。解锁后先自己点一条快拍确认；再给测试者一版，回传新的 `Instarmony_diag.txt`：
-  若 `claim=true` 后不再 500 即修复成功；若仍 500，则说明该账号/会话被私有 REST 拒绝，
-  下一步应改走**网页侧的快拍查询模板**（驱动隐藏网页打开一次快拍、抓 `PolarisStories…` 回放）。
+- **快拍取数 500** —— **三份诊断文件逐层定案，根因是"账号被要求安全验证"**（`f2b005c`/`4cf9041`/`3c6db74`）：
+  * 第一份：`empty` 是我自己的 bug（收尾无条件把 `detail` 覆盖成 `empty`，盖掉了 `http-500`/`http-400`）；
+  * 第二份：`reels_media` 回 500，而**头清单里没有 `x-ig-www-claim`**（用的是信息流 GraphQL 那套头）
+    → 改成用 `RestSession.headers()`（带 claim/instagram-ajax），并删掉注定 `unsupported_version` 的 `android-old`；
+  * 第三份：**claim 已就位（`claim=true ajax=true`、cookie 含 `sessionid`/`ds_user_id`）仍然 500**
+    → claim 不是原因。
+  随后把三条退路**逐条真机实测**：① 私有 REST 500（安卓身份那条回 `challenge_required` + `lock:true`）；
+  ② "抓网页快拍查询"这条路**在当前 IG 版本不存在**（打开 `/stories/<用户>/` 后页面一个新请求都不发；
+  顺带修掉 `storyOps()` 的假阳性 —— `PolarisProfileReelsTabContentQuery` 被当成快拍查询，
+  导致抓取被整个跳过）；③ "直接读页面媒体"也拿不到（页面标题/就绪都对，但只有 2 个 `<img>`、
+  0 个 `<video>`，URL 没跳到第一条 media）。
+  ⇒ 三条路都指向**同一根**：该账号/会话被 IG 要求完成 challenge（安全验证），
+  这也解释了"网页 GraphQL 托盘正常、私有一类接口一律被拒"这组现象。
+  已落地：`RestSession.headers()`、删死候选、5xx 补抓模板重试、轨迹带**响应体/头名/cookie 名**、
+  两条退路（当前版本不成立但留着，IG 一旦恢复就自动生效）、
+  **`challenge_required` 单独识别**并在界面提示「IG 要求这个账号先完成安全验证」。
+  **下一步看对方**：让复现者在 App 内网页或手机浏览器里登录同一账号，看 IG 是否弹安全验证 ——
+  浏览器里也看不了即为账号侧；浏览器正常而 App 内原生仍 500，再往"用网页会话直接取"做。
 - **快拍"点开显示取不到、页面自己收起"**：`story_load_failed` 的三处分支里有两处会
   **按设计把空卡片收走**（"自动收起"不是收起逻辑坏了，而是取数失败后被带走）。
   现场一律进 `Instarmony_diag.txt`（测试同学截图 `（原因 …）` 或直接发那个文件即可）；
