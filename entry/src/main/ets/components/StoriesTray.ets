@@ -35,6 +35,21 @@ const SEEN_GREY: string = '#C7C7C7';
  * 2.5 秒内都会被吃掉。1.5 秒够网络慢的情况把转圈显示出来，又不至于挡太久。
  */
 const PENDING_MS: number = 1500;
+/**
+ * 宿主带来的那份托盘数据"够新鲜"多久（毫秒）。
+ *
+ * 切 tab 回来时组件是**重建**的（内容层是 `if (selectedIndex === 0)`，见 Index.nativeShellContent），
+ * 所以每次都会重新 `aboutToAppear`。有宿主那份数据就**立刻画出来**（这就是"秒盖上刚刚的数据"），
+ * 只有在它过期时才去后台刷一次 —— 否则每切一次 tab 就打一发 IG 的托盘接口。
+ *
+ * 取 3 分钟：托盘的内容变化很慢（快拍 24 小时才过期），而"刚看完的快拍变灰"这类状态
+ * 由 StoryViewer 主动回报（见 Index 的 storyQueue 更新），不靠重新拉。
+ */
+const TRAY_FRESH_MS: number = 3 * 60 * 1000;
+/** 数据没到时画几个灰色占位头像（需求："数据没加载好可以在头像显示灰色"）。 */
+const SKELETON_COUNT: number = 5;
+/** 占位头像下面那条灰条的高度（vp）—— 和真名字那一行等高，免得列表上下跳。 */
+const SKELETON_LABEL_H_VP: number = 11;
 
 @Component
 export struct StoriesTray {
@@ -70,6 +85,16 @@ export struct StoriesTray {
   onRect: (userId: string, rect: StoryHeroRect) => void =
     (userId: string, rect: StoryHeroRect): void => {
     };
+  /**
+   * 宿主手上那份"上一次拉到的托盘"（Index.storyQueue）。
+   *
+   * 用途：切 tab 回来时本组件是重建的，`items` 从空开始 —— 没有它就会先空一块（占位）、
+   * 再等一发网络才出现，也就是用户报的"每次切换页面都会消失一会才加载出来"。
+   * 有它就在 `aboutToAppear` 里**先画出来**，网络只在数据过期时后台补。
+   */
+  seed: Array<StoryTrayItem> = [];
+  /** 那份 seed 是什么时候拉到的（毫秒；0 = 没有）。见 TRAY_FRESH_MS。 */
+  seedAtMs: number = 0;
   @State private items: Array<StoryTrayItem> = [];
   /** 正在"点开"的那一项（那一项的外环换成转圈）。 */
   @State private pendingUser: string = '';
@@ -120,6 +145,25 @@ export struct StoriesTray {
   }
 
   aboutToAppear(): void {
+    /*
+     * **先铺宿主那份数据，再决定要不要联网**（需求："切页面保留当前数据，回到主页秒盖上刚刚的数据"）。
+     *
+     * 这一步必须是**同步**的：`items` 在 `aboutToAppear` 里赋好值，首帧就直接画出来，
+     * 中间不存在"空一块"的帧。注意这里**不回调 `onLoaded`** —— 宿主本来就还留着这份顺序，
+     * 再交一次会触发 `StoryCache.reset`（那会把已经热好的预缓存整条扔掉）。
+     */
+    if (this.seed.length > 0) {
+      this.items = this.seed;
+      this.loaded = true;
+      // 记一行：这是"切回来没有先空/先灰"的现场证据（也是 seed 时间戳是否合理的核对点）。
+      hilog.info(DOMAIN, TAG, 'tray from seed n=%{public}d age=%{public}dms',
+        this.seed.length, this.seedAtMs > 0 ? Date.now() - this.seedAtMs : -1);
+      if (Date.now() - this.seedAtMs < TRAY_FRESH_MS) {
+        return;
+      }
+      hilog.info(DOMAIN, TAG, 'tray seed stale age=%{public}dms → refresh',
+        Date.now() - this.seedAtMs);
+    }
     this.load();
   }
 
@@ -227,15 +271,72 @@ export struct StoriesTray {
     })
   }
 
+  /**
+   * 数据还没到时的**灰色占位头像**（需求："数据没加载好可以在头像显示灰色"）。
+   *
+   * 尺寸与真头像**逐项对齐**（同一个外圈直径 + 同一行文字高度），所以数据到时是"灰圈里
+   * 长出内容"，不会有任何跳动。颜色用主题里那两个灰：`field_background` 正好也是真头像
+   * 加载不出来时的兜底色，`divider` 比它深/浅一档，用来画外环和下面那条名字位。
+   */
+  @Builder
+  skeletonItem() {
+    Column({ space: 6 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        Column()
+          .width(AVATAR_VP + RING_GAP_VP * 2)
+          .height(AVATAR_VP + RING_GAP_VP * 2)
+          .borderRadius((AVATAR_VP + RING_GAP_VP * 2) / 2)
+          .border({ width: RING_WIDTH_VP, color: $r('app.color.divider') })
+        Column()
+          .width(AVATAR_VP)
+          .height(AVATAR_VP)
+          .borderRadius(AVATAR_VP / 2)
+          .backgroundColor($r('app.color.field_background'))
+      }
+      .width(AVATAR_VP + (RING_GAP_VP + RING_WIDTH_VP) * 2)
+      .height(AVATAR_VP + (RING_GAP_VP + RING_WIDTH_VP) * 2)
+      // 名字那一行也占住：真数据到时高度不变（见文件里"列表不要上下跳"的一贯要求）。
+      Column()
+        .width(ITEM_WIDTH_VP - 32)
+        .height(SKELETON_LABEL_H_VP)
+        .borderRadius(SKELETON_LABEL_H_VP / 2)
+        .backgroundColor($r('app.color.field_background'))
+    }
+    .width(ITEM_WIDTH_VP)
+  }
+
+  /** 一排灰色占位（横向排列，和真托盘同一套间距/内边距）。 */
+  @Builder
+  skeletonRow() {
+    Row({ space: 0 }) {
+      ForEach([0, 1, 2, 3, 4], (index: number): void => {
+        if (index < SKELETON_COUNT) {
+          this.skeletonItem()
+        }
+      }, (index: number): string => `sk-${index}`)
+    }
+    .width('100%')
+    .height(AVATAR_VP + RING_GAP_VP * 2 + 26)
+    // 和真托盘同一套左右留白（见 build 里 List 的 padding），占位与真内容左右对齐。
+    .padding({ left: SIDE_PADDING_VP, right: SIDE_PADDING_VP })
+    // 占位不接手指：它只是"还没到"的观感，别让它抢掉列表的滑动。
+    .hitTestBehavior(HitTestMode.Transparent)
+  }
+
   build() {
     /*
-     * **有数据才建 List，但两种情况下都占同样高度**。
+     * **三态，高度完全一致**：
+     *   ① 有数据 → 真托盘（List）；
+     *   ② 还没拉到（首启 / 换账号）→ 一排**灰色占位头像**（需求："数据没加载好可以在头像显示灰色"）；
+     *   ③ 拉完了但确实没有（没登录 / 接口不给）→ 同高的空占位。
      *
-     * 上一版为了让"整行不会突然消失"去掉了这里的 `if`、让 List 一直存在 —— 真机上结果是
-     * **整条快拍序列真的不渲染了**（数据到了也不画，日志里 `story queue n=136`、`story visible 0-3`
-     * 都正常，就是屏幕上一片空）。空 List 先建、之后灌数据这条路在真机上不可靠。
-     * 所以回到"有数据才建 List"，同时**空态也占一块同高的占位**：信息流不会被顶来顶去，
-     * 也不会因为建了空 List 而卡住不画。
+     * 为什么不是"一直建 List、数据到了再灌"：试过，真机上结果是**整条序列真的不渲染**
+     * （日志里 `story queue n=136`、`story visible 0-3` 全正常，屏幕上一片空）——
+     * 空 List 先建、之后灌数据这条路在真机上不可靠。所以仍然"有数据才建 List"，
+     * 但把"没数据"那一段从空白换成占位。
+     *
+     * 为什么切 tab 回来不会先灰一下：宿主那份 `seed` 在 `aboutToAppear` 里**同步**铺上，
+     * 首帧就是真内容（见 aboutToAppear）。
      */
     if (this.items.length > 0) {
       List({ space: 0 }) {
@@ -266,8 +367,11 @@ export struct StoriesTray {
        * 上面那两个写法为什么不工作。
        */
       .padding({ left: SIDE_PADDING_VP, right: SIDE_PADDING_VP })
+    } else if (!this.loaded) {
+      // 正在拉：先摆一排灰色占位（而不是空一块），观感是"内容马上来"。
+      this.skeletonRow()
     } else {
-      // 数据还没到：占一块同高的占位，信息流不跳（但不建空 List，理由见上面）。
+      // 拉完了确实没有：占一块同高的空位，信息流不跳。
       Column()
         .width('100%')
         .height(AVATAR_VP + RING_GAP_VP * 2 + 26)

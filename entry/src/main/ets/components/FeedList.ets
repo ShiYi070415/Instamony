@@ -705,6 +705,16 @@ export struct FeedList {
    * 数据仍由托盘自己拉（StoriesTray 内部取数），这里只把回调转给页面。
    */
   @Prop showStories: boolean = false;
+  /**
+   * 宿主手上那份托盘数据 + 它的时间戳，原样交给 StoriesTray 当**首帧内容**。
+   *
+   * 为什么需要：FeedList 跟着 tab 一起被销毁重建（内容层是 `if (selectedIndex === 0)`，
+   * 见 Index.nativeShellContent），托盘每次都是新的 —— 没有这份数据就会先空/先灰一块，
+   * 再等网络，也就是"每次切换页面都会消失一会才加载出来"。
+   * 普通字段（不是 @Prop）：它**只在构造时**用一次，之后托盘自己维护 `items`。
+   */
+  storySeed: Array<StoryTrayItem> = [];
+  storySeedAtMs: number = 0;
   /** 点开某一项（宿主拉数据 + 开播放页），见 StoriesTray.onOpen。 */
   onStoryOpen: (item: StoryTrayItem, rect: StoryHeroRect) => void =
     (item: StoryTrayItem, rect: StoryHeroRect): void => {
@@ -2904,6 +2914,9 @@ export struct FeedList {
             if (this.showStories) {
               ListItem() {
                 StoriesTray({
+                  // 首帧就用宿主那份数据（见 storySeed 的说明）：切回来不再空一块。
+                  seed: this.storySeed,
+                  seedAtMs: this.storySeedAtMs,
                   onOpen: (item: StoryTrayItem, rect: StoryHeroRect): void => {
                     this.onStoryOpen(item, rect);
                   },
