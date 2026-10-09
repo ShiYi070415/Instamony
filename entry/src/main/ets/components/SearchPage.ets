@@ -700,7 +700,7 @@ export struct SearchPage {
         ListItem() {
           this.userRow(user)
         }
-      }, (user: SearchUser): string => user.username)
+      }, (user: SearchUser, index: number): string => `${index}-${user.username}`)
     }
     .width('100%')
     .layoutWeight(1)

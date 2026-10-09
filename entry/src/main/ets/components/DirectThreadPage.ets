@@ -404,7 +404,7 @@ export struct DirectThreadPage {
               ListItem() {
                 this.bubble(message, index)
               }
-            }, (message: DirectMessage): string => message.id)
+            }, (message: DirectMessage, index: number): string => `${index}-${message.id}`)
 
             if (this.allMessages().length === 0 && !this.busy) {
               ListItem() {

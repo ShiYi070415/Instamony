@@ -1447,7 +1447,7 @@ export struct ReelsPage {
         Swiper(this.swiperController) {
           ForEach(this.reels, (reel: Reel, index: number): void => {
             this.reelPage(reel, index)
-          }, (reel: Reel): string => reel.shortcode)
+          }, (reel: Reel, index: number): string => `${index}-${reel.shortcode}`)
         }
         .width('100%')
         .height('100%')
