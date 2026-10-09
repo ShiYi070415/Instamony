@@ -44,6 +44,15 @@ import {
 } from '../core/AppSettings';
 import { MATERIAL_PILL_HEIGHT, SelectSurfaceModifier, SurfaceModifier } from './MaterialSurface';
 import { PlatformCap } from '../core/PlatformCap';
+import { StoryDiag } from '../core/StoryDiag';
+import { fileIo, picker } from '@kit.CoreFileKit';
+import { pasteboard, BusinessError } from '@kit.BasicServicesKit';
+import { promptAction } from '@kit.ArkUI';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+import { common } from '@kit.AbilityKit';
+
+const DOMAIN: number = 0xFF00;
+const TAG: string = 'SettingsPanel';
 
 /** 左右留白（vp）：列表行与底部按钮共用，两边才会对齐。 */
 const SIDE_PADDING: number = 16;
@@ -90,6 +99,102 @@ export struct SettingsPanel {
   @StorageLink(SETTING_MATERIAL_THICKNESS) materialThickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
   /** 底栏行为（@StorageLink：这里切，栏的滚动行为换一套）。 */
   @StorageLink(SETTING_BAR_HIDE) barHideMode: string = BAR_HIDE_SINK;
+
+  /**
+   * 诊断行的通用外观（左文案 + 右箭头）：和系统设置里"能点进去"的行一致。
+   *
+   * 为什么这两行必须有（需求："把包发给别人测试获取日志"）：测试者手上**没有 DevEco、没有 hdc**，
+   * 沙箱里的文件他们根本看不到 —— 必须由 App 自己把文件送到"能被分享出去"的地方。
+   */
+  @Builder
+  actionRow(label: ResourceStr, action: () => void) {
+    Row({ space: 12 }) {
+      Text(label)
+        .fontSize(15)
+        .fontColor($r('app.color.primary_text'))
+        .layoutWeight(1)
+      SymbolGlyph($r('sys.symbol.chevron_right'))
+        .fontSize(16)
+        .fontColor([$r('app.color.secondary_text')])
+    }
+    .width('100%')
+    .height(ROW_HEIGHT)
+    .padding({ left: SIDE_PADDING, right: SIDE_PADDING })
+    .onClick((): void => {
+      action();
+    })
+  }
+
+  /** 一行提示（用系统 toast，设置页里没有状态行）。 */
+  private toast(text: ResourceStr): void {
+    try {
+      promptAction.showToast({ message: text, duration: 2000 });
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'toast failed: %{public}s', (error as Error).message);
+    }
+  }
+
+  /**
+   * **导出诊断日志**：让用户自己挑一个位置保存（落在「文件」里），再用微信/邮件发出来。
+   *
+   * 用 `DocumentViewPicker.save()` 而不是直接写公共目录：**不需要任何存储权限**
+   * （本 app 只申请了 INTERNET / GET_NETWORK_INFO），保存位置由系统文件选择器负责 ——
+   * 这也是官方推荐的"把应用文件交给用户"的方式。
+   */
+  private async exportDiag(): Promise<void> {
+    const text: string = StoryDiag.exportFull();
+    const name: string = StoryDiag.exportFileName();
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const options: picker.DocumentSaveOptions = new picker.DocumentSaveOptions();
+      options.newFileNames = [name];
+      const documentPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker(context);
+      const uris: Array<string> = await documentPicker.save(options);
+      if (uris.length === 0) {
+        // 用户取消了：不弹错，什么都不做。
+        return;
+      }
+      const file: fileIo.File = fileIo.openSync(uris[0],
+        fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
+      try {
+        fileIo.writeSync(file.fd, text);
+      } finally {
+        fileIo.closeSync(file);
+      }
+      hilog.info(DOMAIN, TAG, 'diag exported %{public}s len=%{public}d', name, text.length);
+      this.toast($r('app.string.diag_exported', name));
+    } catch (error) {
+      const message: string = (error as BusinessError).message ?? 'export-failed';
+      hilog.warn(DOMAIN, TAG, 'diag export failed: %{public}s', message);
+      this.toast($r('app.string.diag_export_failed', message));
+    }
+  }
+
+  /**
+   * **复制诊断摘要**：一行都存不了时的兜底（剪贴板不需要任何权限）。
+   *
+   * 只复制**精简版**（见 StoryDiag.exportBrief）：整份带 142 条托盘形状 + 80 条原始条目，
+   * 几十 KB 粘进聊天窗口谁都读不下去。
+   */
+  private copyDiag(): void {
+    const text: string = StoryDiag.exportBrief();
+    try {
+      const data: pasteboard.PasteData =
+        pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text);
+      pasteboard.getSystemPasteboard().setData(data, (err: BusinessError | undefined) => {
+        if (err !== undefined && err !== null) {
+          hilog.warn(DOMAIN, TAG, 'diag copy failed: %{public}s', err.message);
+          this.toast($r('app.string.diag_export_failed', err.message));
+          return;
+        }
+        this.toast($r('app.string.diag_copied'));
+      });
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'diag copy threw: %{public}s', (error as Error).message);
+      this.toast($r('app.string.diag_export_failed', (error as Error).message));
+    }
+  }
 
   /** 分组标题。 */
   @Builder
@@ -389,6 +494,31 @@ export struct SettingsPanel {
         ListItem() {
           this.groupHint($r('app.string.settings_unsupported_hint'))
         }
+      }
+
+      /*
+       * **诊断**（需求："把包发给别人测试获取日志"）。
+       *
+       * 给测试者的唯一一条路：他们手上没有 DevEco / hdc，沙箱里的文件看不到，
+       * 所以这里把文件**交给系统文件选择器**（不需要任何权限）保存到「文件」里，
+       * 或者退一步——把精简摘要放进剪贴板，粘到聊天窗口发回来。
+       * 内容见 core/StoryDiag：最近 8 次失败的 `detail`/`shape`/逐发轨迹 + 整条托盘的形状与原始条目。
+       */
+      ListItem() {
+        this.groupHeader($r('app.string.settings_group_diag'))
+      }
+      ListItem() {
+        this.actionRow($r('app.string.settings_export_diag'), (): void => {
+          this.exportDiag();
+        })
+      }
+      ListItem() {
+        this.actionRow($r('app.string.settings_copy_diag'), (): void => {
+          this.copyDiag();
+        })
+      }
+      ListItem() {
+        this.groupHint($r('app.string.settings_diag_hint'))
       }
 
       // 退出登录：设置列表的最后一项（跟着列表一起滚），宽度和上面几行对齐（左右各留 SIDE_PADDING）。

@@ -31,6 +31,13 @@ const FILE_NAME: string = 'Instarmony_diag';
 const MAX_FAILURES: number = 8;
 /** 汇总里最多带多少条托盘原始条目（形状摘要全带；原始 JSON 只带前面这些，控制文件大小）。 */
 const MAX_RAW_ENTRIES: number = 40;
+/**
+ * 导出文件名里带的版本号。
+ *
+ * 只用于**文件名可读**（测试者手上可能同时有好几版）：真要核对版本时看 `AppScope/app.json5`
+ * 的 `versionName`，改版本号时这里一起改（两处都在版本相关的提交里）。
+ */
+const APP_VERSION: string = '0.8.1';
 
 export class StoryDiag {
   /** 最近的失败记录（新的在前）。 */
@@ -69,6 +76,49 @@ export class StoryDiag {
       hilog.warn(DOMAIN, TAG, 'diag save failed');
     }
     return name;
+  }
+
+  /**
+   * **给"导出给别人"用的文件名**：带上版本与时间，避免多个测试者的文件混在一起。
+   *
+   * 例：`Instarmony_diag_v0.8.1_20261010_0130.txt`。
+   */
+  static exportFileName(): string {
+    const now: Date = new Date();
+    const two = (value: number): string => value < 10 ? `0${value}` : `${value}`;
+    const stamp: string = `${now.getFullYear()}${two(now.getMonth() + 1)}${two(now.getDate())}`
+      + `_${two(now.getHours())}${two(now.getMinutes())}`;
+    return `Instarmony_diag_v${APP_VERSION}_${stamp}.txt`;
+  }
+
+  /** 导出用的正文（当前就是完整那份；单列一个方法，方便以后按需裁剪）。 */
+  static exportFull(): string {
+    return StoryDiag.compose();
+  }
+
+  /**
+   * **精简版**：给"复制到剪贴板"那条路用。
+   *
+   * 只留"怎么读 + 当前状态 + 失败记录"，**不带**整条托盘（142 条形状 + 80 条原始条目会把剪贴板
+   * 塞成几十 KB，粘到聊天窗口里对方也读不了）。摘要通常几 KB，粘进微信/邮件都合适。
+   */
+  static exportBrief(): string {
+    const lines: Array<string> = [];
+    lines.push('Instarmony 诊断摘要（快拍取数）');
+    lines.push(`生成时间 ${StoryDiag.stamp()}`);
+    lines.push(`快拍这一族限流：${ApiThrottle.blocked(ApiThrottle.STORIES)
+      ? `是，还剩 ${ApiThrottle.remainingMinutes(ApiThrottle.STORIES)} 分钟`
+      : '否'}`);
+    lines.push(`失败记录 ${StoryDiag.failures.length} 条 / 托盘形状 ${StoryDiag.shapes.length} 条`);
+    lines.push('');
+    if (StoryDiag.failures.length === 0) {
+      lines.push('(还没有失败记录)');
+    }
+    for (let index: number = 0; index < StoryDiag.failures.length; index++) {
+      lines.push(StoryDiag.failures[index]);
+      lines.push('');
+    }
+    return lines.join('\n');
   }
 
   /** 有没有从上一份文件里捞过记录（一轮进程一次）。 */

@@ -591,6 +591,34 @@
     {
       "name": "save_rate_limited",
       "value": "IG 正在限流，约 %d 分钟后可再试"
+    },
+    {
+      "name": "settings_group_diag",
+      "value": "诊断"
+    },
+    {
+      "name": "settings_export_diag",
+      "value": "导出诊断日志"
+    },
+    {
+      "name": "settings_copy_diag",
+      "value": "复制诊断摘要"
+    },
+    {
+      "name": "settings_diag_hint",
+      "value": "遇到问题（比如点开快拍提示没取到）时点「导出诊断日志」保存成 txt，再从「文件」里发给开发者；存不了就点「复制诊断摘要」直接粘贴。"
+    },
+    {
+      "name": "diag_exported",
+      "value": "已导出 %s"
+    },
+    {
+      "name": "diag_export_failed",
+      "value": "导出失败：%s"
+    },
+    {
+      "name": "diag_copied",
+      "value": "诊断摘要已复制到剪贴板"
     }
   ]
 }

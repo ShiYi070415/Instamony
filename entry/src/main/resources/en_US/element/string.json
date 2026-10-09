@@ -591,6 +591,34 @@
     {
       "name": "direct_open_web",
       "value": "Open in web view"
+    },
+    {
+      "name": "settings_group_diag",
+      "value": "Diagnostics"
+    },
+    {
+      "name": "settings_export_diag",
+      "value": "Export diagnostics"
+    },
+    {
+      "name": "settings_copy_diag",
+      "value": "Copy diagnostics summary"
+    },
+    {
+      "name": "settings_diag_hint",
+      "value": "When something goes wrong (for example a story that won't open), tap “Export diagnostics”, save the txt and send it to the developer from Files; if saving is not possible, tap “Copy diagnostics summary” and paste it."
+    },
+    {
+      "name": "diag_exported",
+      "value": "Exported %s"
+    },
+    {
+      "name": "diag_export_failed",
+      "value": "Export failed: %s"
+    },
+    {
+      "name": "diag_copied",
+      "value": "Diagnostics summary copied"
     }
   ]
 }
