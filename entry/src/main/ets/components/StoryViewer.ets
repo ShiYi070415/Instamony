@@ -429,7 +429,28 @@ export struct StoryViewer {
   }
 
   aboutToDisappear(): void {
+    /*
+     * **销毁时把"还在飞的东西"全部作废**（审计发现：原来只 `stopTimer()`）。
+     *
+     * 留下没清的有：`unmountTimer`（收起动画后卸载内容的兜底）、`flipInTimer`（切用户的翻面）、
+     * `pocketExitTimer`（口袋动画回弹）、以及两处裸 `setTimeout`。它们在组件销毁后仍会回调 ——
+     * 写 `@State`、甚至调 `onClose()`（宿主那边页面已经走了）。`gen+1` 让所有动画的 `onFinish`
+     * 代次比对失败、自己作废（这是本文件既有的防竞态机制，见 gen 的说明）。
+     */
     this.stopTimer();
+    this.gen = this.gen + 1;
+    if (this.unmountTimer >= 0) {
+      clearTimeout(this.unmountTimer);
+      this.unmountTimer = -1;
+    }
+    if (this.flipInTimer >= 0) {
+      clearTimeout(this.flipInTimer);
+      this.flipInTimer = -1;
+    }
+    if (this.pocketExitTimer >= 0) {
+      clearTimeout(this.pocketExitTimer);
+      this.pocketExitTimer = -1;
+    }
   }
 
   /** 下一位用户的 reel 到了：回第一条重新播（见 reel 的 @Watch）。 */
