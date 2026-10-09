@@ -36,6 +36,14 @@ export class ApiThrottle {
   static readonly SAVE: string = 'save';
   /** 私信（`/api/v1/direct_v2/…` 那条路的读与发，见 core/NativeDirect）。 */
   static readonly DIRECT: string = 'direct';
+  /**
+   * 快拍（`/api/v1/feed/reels_media/`、`/api/v1/feed/user/{id}/story/`，见 core/NativeStories）。
+   *
+   * 为什么单列一族：这两条是**按用户**拉的，托盘预缓存一上来就是 5 位用户（每位最多 4 个候选），
+   * 用户再一位位点开、接续下一位 —— 请求量天然比别的接口大一个量级，也最容易撞上 IG 的节流。
+   * 撞上之后的界面表现正是用户报的那一幕："点开快拍 → 这条快拍没取到 → 播放页自己收起"。
+   */
+  static readonly STORIES: string = 'stories';
 
   /** 家族 → 解禁时刻（毫秒时间戳）。 */
   private static until: Map<string, number> = new Map<string, number>();

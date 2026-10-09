@@ -442,6 +442,13 @@ const PRELOAD_PAGE_WAIT_MS: number = 8000;
  */
 const WARM_START_DELAY_MS: number = 1200;
 /**
+ * "用户点开的这一发快拍取数失败"之后隔多久重试（毫秒，见 playStoryAt）。
+ *
+ * 取 600ms：够让一次瞬时的 Cookie/claim 刷新、网络抖动或一秒级的限流窗口过去，
+ * 又不至于让用户对着转圈等太久（浮层已经开着，转圈本来就在）。
+ */
+const STORY_RETRY_GAP_MS: number = 600;
+/**
  * **会话详情自检开关**（诊断用，与 DirectViewModel.SELF_TEST_THREAD 配套）。
  *
  * true = 启动预热跑完顺手让 App 自己读一次私信会话，把结果打进日志。排查期开着，
@@ -2072,7 +2079,7 @@ struct Index {
       (): Promise<void> => {
         return NativeStories.tray().then((tray: StoryTray | null): void => {
           if (tray !== null && tray.items.length > 0) {
-            this.storyQueue = tray.items;
+            this.rememberStoryQueue(tray.items);
             StoryCache.reset(tray.items, 0);
             StoryCache.ensure(tray.items, 0);
             hilog.info(DOMAIN, TAG, 'warm stories n=%{public}d cached=%{public}d',
@@ -5037,13 +5044,20 @@ struct Index {
           posts: this.posts,
           // 列表顶部放那条托盘（数据由托盘自己拉）。
           showStories: true,
+          /*
+           * **把上次拉到的托盘交给它当首帧内容**（需求："切页面保留当前数据，回到主页秒盖上
+           * 刚刚的数据"）。`storyQueue` 活在页面里、不随 tab 切换消失，而 FeedList / StoriesTray
+           * 每次切回主页都是**重建**的 —— 没有这份 seed，托盘就只能从空开始等一发网络。
+           */
+          storySeed: this.storyQueue,
+          storySeedAtMs: this.storyQueueAtMs,
           // 点开某一项：取数 + 开播放页（转场要用被点头像的屏幕矩形）。
           onStoryOpen: (item: StoryTrayItem, rect: StoryHeroRect): void => {
             this.openStory(item, rect);
           },
           // 整条顺序交过来：看某位最后一条时点右半屏要接"下一位"（见 advanceStory）。
           onStoryLoaded: (items: Array<StoryTrayItem>): void => {
-            this.storyQueue = items;
+            this.rememberStoryQueue(items);
             hilog.info(DOMAIN, TAG, 'story queue n=%{public}d', items.length);
             // 托盘一到就开始**预加载**：从第一位起把前五个用户的 story 热起来（见 core/StoryCache）。
             StoryCache.reset(items, 0);
@@ -6149,6 +6163,13 @@ struct Index {
   private storyClosing: boolean = false;
   /** 托盘那一整条顺序（托盘拉到后由 onLoaded 交过来）—— "下一位是谁"靠它。 */
   private storyQueue: Array<StoryTrayItem> = [];
+  /**
+   * 上面那份顺序是什么时候拿到的（毫秒；0 = 还没有）。
+   *
+   * 交给托盘用它判断 seed 还新不新鲜（见 StoriesTray.TRAY_FRESH_MS）：切回主页时
+   * "有就先画、只有过期才后台刷"，避免每切一次 tab 就打一发 IG 的托盘接口。
+   */
+  private storyQueueAtMs: number = 0;
   /** 现在播的是队列里第几位（点右半屏接续下一位用）。 */
   private storyQueueIndex: number = 0;
   /** 这一发是"用户点开的"（拿到数据后要开浮层 + 播放大转场）。 */
@@ -6160,6 +6181,20 @@ struct Index {
    * 并把播放页头像横移过去落上，不在就向下滑收（需求）。
    */
   private storyRects: Map<string, StoryHeroRect> = new Map<string, StoryHeroRect>();
+
+  /**
+   * 记下"最新这份托盘顺序"+时间。
+   *
+   * 两处要用它（别直接写 `storyQueue`）：
+   *   · 托盘拉到数据时（`onStoryLoaded` / 启动预热）；
+   *   · 切回主页重建托盘时，这份数据就是它的**首帧内容**（见 `storyQueueAtMs` 与
+   *     StoriesTray.seed）：所以时间戳必须跟着一起更新，否则托盘会把刚拉到的数据判成过期、
+   *     又白打一发。
+   */
+  private rememberStoryQueue(items: Array<StoryTrayItem>): void {
+    this.storyQueue = items;
+    this.storyQueueAtMs = Date.now();
+  }
 
   /**
    * 点开托盘里的一个用户：先取数，成功才进播放页（需求："加载成功跳进新页面"）。
@@ -6215,7 +6250,8 @@ struct Index {
    * @param first 只有"用户点开的那一发"才传（它带被点头像的矩形 / 名字，见 openStory）。
    * @param step 取不到时往哪边继续找：接续下一位 = +1，回上一位 = -1。
    */
-  private playStoryAt(at: number, first: StoryTrayItem | null, step: number): void {
+  private playStoryAt(at: number, first: StoryTrayItem | null, step: number,
+                      retried: boolean = false): void {
     if (at < 0 || at >= this.storyQueue.length) {
       // 那个方向没人了：第一发失败就只弹一句，已经开着浮层就直接收。
       if (this.storyPendingOpen) {
@@ -6229,7 +6265,7 @@ struct Index {
     const item: StoryTrayItem = this.storyQueue[at];
     /*
      * 先问**预缓存队列**（core/StoryCache）：命中就**同步**拿到，播放页零等待
-     * （"抽出一页"的同时队列会自己补一页新的，见 StoryCache.take）。
+     * （"抽出一页"的同时队列会自己补一个，见 StoryCache.take）。
      * 没命中才走网络，回来同样把队列补满。
      */
     const cached: StoryReel | null = StoryCache.take(item.userId);
@@ -6244,6 +6280,23 @@ struct Index {
       if (reel === null || reel.items.length === 0) {
         hilog.warn(DOMAIN, TAG, 'story load failed uid=%{public}s why=%{public}s → 试 %{public}d',
           item.userId, NativeStories.lastDetail(), step);
+        /*
+         * **"用户点开的这一发"再试一次**（用户报的"点开显示取不到、页面自己收起"）。
+         *
+         * 这一发失败的原因里有一大类是**一次性的**：Cookie/claim 正好在这一刻被刷新、
+         * 网络抖动、IG 那边一次瞬时限流。原来直接 toast + 收起 —— 用户看到的就是
+         * "明明有快拍，点开却说没取到，还自己退回首页"。隔一拍重发一次几乎不花代价
+         * （托盘在浮层下面，用户本来就等着），却能把这一整类失败就地消化掉。
+         * 只在**用户点开的那一发**重试：接续下一位（first === null）时失败了应该
+         * 继续往后找，不能在同一位上耗着。
+         */
+        if (!retried && first !== null) {
+          hilog.info(DOMAIN, TAG, 'story retry uid=%{public}s once', item.userId);
+          setTimeout((): void => {
+            this.playStoryAt(at, first, step, true);
+          }, STORY_RETRY_GAP_MS);
+          return;
+        }
         if (this.storyPendingOpen) {
           // 卡片已经弹出来了（先弹后取数）：取不到就**带动画收回去**，别留一张空卡片。
           this.storyPendingOpen = false;
@@ -6258,6 +6311,12 @@ struct Index {
     }).catch((error: Error): void => {
       this.storyLoading = false;
       hilog.warn(DOMAIN, TAG, 'story load threw: %{public}s', error.message ?? '-');
+      if (!retried && first !== null) {
+        setTimeout((): void => {
+          this.playStoryAt(at, first, step, true);
+        }, STORY_RETRY_GAP_MS);
+        return;
+      }
       if (this.storyPendingOpen) {
         this.storyPendingOpen = false;
         this.toast($r('app.string.story_load_failed'));

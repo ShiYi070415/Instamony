@@ -13,6 +13,7 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { http } from '@kit.NetworkKit';
 import { ApiRegistry, ApiTemplate } from '../bridge/ApiRegistry';
+import { ApiThrottle } from './ApiThrottle';
 import { NativeFeed } from './NativeFeed';
 import { JsonRead } from './JsonRead';
 import { StoryItem, StoryReel, StoryTray, StoryTrayItem } from '../model/Story';
@@ -283,9 +284,33 @@ export class NativeStories {
     const urls: Array<string> = [reelUrl, reelUrl, reelUrl, storyUrl];
     const identities: Array<number> =
       [IDENTITY_WEB, IDENTITY_ANDROID_NEW, IDENTITY_ANDROID_OLD, IDENTITY_WEB];
+    /*
+     * **已经"答过但没内容"的 URL**：同一条 URL 再换身份打一遍，拿回来的是同一份数据。
+     *
+     * 为什么记（这就是用户报的"点开这条快拍没取到"里最不该发生的那部分）：
+     * 前三个候选是**同一个 URL 换三种身份**。用户点开的那位如果此刻确实没有可看的快拍
+     * （全过期 / 全部已看完 / IG 就回了个空壳），原来会把这条 URL 再打两发 ——
+     * 白发不说，还正撞在 IG 对这个接口的节流上，把"偶尔一次没内容"放大成"接下来一片都点不开"。
+     * 第 4 个候选是**另一条 URL**（老的单用户 story 接口），它仍然照试（可能真有内容）。
+     */
+    const answeredEmpty: Array<string> = [];
     for (let at: number = 0; at < urls.length; at++) {
+      // 冷却期内不再往下试（见 core/ApiThrottle.STORIES）：再打只会把窗口拖长。
+      const cooled: string = NativeStories.cooling();
+      if (cooled.length > 0) {
+        NativeStories.detail = cooled;
+        hilog.warn(DOMAIN, TAG, 'reel stopped: stories throttled %{public}dmin left',
+          ApiThrottle.remainingMinutes(ApiThrottle.STORIES));
+        break;
+      }
+      if (answeredEmpty.indexOf(urls[at]) >= 0) {
+        hilog.info(DOMAIN, TAG, 'reel skip try=%{public}d id=%{public}s (same url already empty)',
+          at, NativeStories.identityName(identities[at]));
+        continue;
+      }
       const text: string | null = await NativeStories.fetchText(urls[at], identities[at]);
       if (text === null) {
+        // 传输层没拿到（非 200 / 非 JSON / 抛 / 没会话）：换个身份再试是有意义的。
         continue;
       }
       const reel: StoryReel | null = NativeStories.parseReel(text, userId);
@@ -297,12 +322,29 @@ export class NativeStories {
           `${reel.items[0].isVideo()}`, reel.items[0].width, reel.items[0].height);
         return reel;
       }
-      // 结构没认出来：把响应开头打出来（照着它补候选键名，见文件头）。
-      hilog.info(DOMAIN, TAG, 'reel shape miss try=%{public}d body=%{public}s',
-        at, text.substring(0, 220).replace(/[\r\n]+/g, ' '));
+      /*
+       * 服务端**答了**（200 + JSON）但这条用户没有可播的媒体：
+       * 记住这条 URL，别再换身份重打（见 answeredEmpty 的说明）。
+       * 结构没认出来（字段名变了）和"真的没内容"在这里分不开 —— 两种都只能记下来，
+       * 而前者需要的现场（响应开头）就在下面这行日志里，换身份重打也救不了它。
+       */
+      answeredEmpty.push(urls[at]);
+      hilog.info(DOMAIN, TAG, 'reel empty try=%{public}d id=%{public}s body=%{public}s',
+        at, NativeStories.identityName(identities[at]),
+        text.substring(0, 180).replace(/[\r\n]+/g, ' '));
     }
-    NativeStories.detail = 'empty';
+    if (NativeStories.detail !== 'empty' && NativeStories.detail.indexOf('throttled-') < 0) {
+      NativeStories.detail = 'empty';
+    }
     return null;
+  }
+
+  /** 快拍这一族的退避闸门（见 core/ApiThrottle.STORIES）。 */
+  private static cooling(): string {
+    if (!ApiThrottle.blocked(ApiThrottle.STORIES)) {
+      return '';
+    }
+    return `throttled-${ApiThrottle.remainingMinutes(ApiThrottle.STORIES)}min`;
   }
 
   /** 身份的名字（只给日志用）。 */
@@ -348,9 +390,32 @@ export class NativeStories {
         NativeStories.identityName(identity), url.substring(url.indexOf('/api/')),
         response.responseCode, `${json}`, text.length);
       if (response.responseCode !== 200 || !json) {
+        /*
+         * **限流要认出来**（见 core/ApiThrottle.STORIES）：IG 的节流响应是
+         * `200 + {"errors":[{"message":"Rate limit exceeded","code":1675004}]}`，
+         * 只看状态码会被当成"成功但没内容"，于是候选一个个接着打（每位最多 4 发）、
+         * 托盘预缓存再乘 5 位 —— 越打窗口越长，用户那边就是"点开快拍没取到、页面自己收起"。
+         */
+        if (ApiThrottle.looksLimited(text)) {
+          ApiThrottle.note(ApiThrottle.STORIES);
+          NativeStories.detail = `throttled-${ApiThrottle.remainingMinutes(ApiThrottle.STORIES)}min`;
+          hilog.warn(DOMAIN, TAG, 'reel rate limited id=%{public}s → back off %{public}dmin',
+            NativeStories.identityName(identity),
+            ApiThrottle.remainingMinutes(ApiThrottle.STORIES));
+          return null;
+        }
         NativeStories.detail = `http-${response.responseCode}${json ? '' : '/non-json'}`;
         hilog.info(DOMAIN, TAG, 'reel body=%{public}s',
           text.substring(0, 160).replace(/[\r\n]+/g, ' '));
+        return null;
+      }
+      // 200 + JSON 也可能是节流（IG 把文案放在 errors 里）：这一发照样要记账。
+      if (ApiThrottle.looksLimited(text)) {
+        ApiThrottle.note(ApiThrottle.STORIES);
+        NativeStories.detail = `throttled-${ApiThrottle.remainingMinutes(ApiThrottle.STORIES)}min`;
+        hilog.warn(DOMAIN, TAG, 'reel rate limited (json) id=%{public}s → back off %{public}dmin',
+          NativeStories.identityName(identity),
+          ApiThrottle.remainingMinutes(ApiThrottle.STORIES));
         return null;
       }
       return text;
