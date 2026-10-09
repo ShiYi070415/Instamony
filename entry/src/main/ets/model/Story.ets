@@ -20,14 +20,28 @@ export class StoryTrayItem {
   readonly seen: boolean;
   /** 有几条（拿不到给 0，只影响"有没有内容"的判断，不影响展示）。 */
   readonly count: number;
+  /**
+   * **备选 id**：同一条托盘条目里出现的其它数字字段（`user.pk` 之外的那些）。
+   *
+   * 为什么需要（用户报的"点开提示没取到、原因 empty，但换个人/换台设备又正常"）：
+   * 托盘解析是"按结构找 + 按**键名优先级**取 id"（见 NativeStories 的 ID_KEYS）。
+   * 条目里**有 `user` 对象**时取到的是用户 pk，一切正常；但有些条目没有 `user` 对象，
+   * 于是退回取**条目自己的 `id`** —— 那个 id 很可能是 reel/media 的 id，不是用户 pk。
+   * 拿它去 `reels_media?reel_ids=` 问，IG 会**如实回一个空 reels**（就是 `empty`），
+   * 所以只有"托盘里带这类条目"的用户才会踩到，别人（包括开发机）完全正常。
+   *
+   * 有了它：主 id 问不出内容时**换备选 id 再问一发**，把这一整类问题就地消化掉。
+   */
+  readonly altIds: Array<string>;
 
   constructor(userId: string, username: string, avatarUrl: string, seen: boolean,
-              count: number = 0) {
+              count: number = 0, altIds: Array<string> = []) {
     this.userId = userId;
     this.username = username;
     this.avatarUrl = avatarUrl;
     this.seen = seen;
     this.count = count;
+    this.altIds = altIds;
   }
 }
 

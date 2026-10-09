@@ -74,6 +74,13 @@ export class NativeStories {
   private static trace: Array<string> = [];
   /** 轨迹最多留几行（四发 + 头尾各留一点余量）。 */
   private static readonly TRACE_MAX: number = 12;
+  /** 最多试几个 id（主 id + 备选；见 reel 的第二段）。 */
+  private static readonly ID_TRY_MAX: number = 3;
+  /**
+   * 这一轮里服务端**答过**（200 + JSON）没有 —— 决定要不要换备选 id 再问（见 reel）。
+   * 它与 `detail` 不同：`detail` 是给用户/日志看的原因，这个只回答"那条请求通不通"。
+   */
+  private static answeredJson: boolean = false;
 
   static lastDetail(): string {
     return NativeStories.detail;
@@ -206,9 +213,22 @@ export class NativeStories {
       }
       const user: Record<string, Object> | null = JsonRead.recordOf(node, 'user');
       const host: Record<string, Object> = user !== null ? user : node;
+      /*
+       * 首选 id 仍按原来的键序（`pk` → `id` → `user_id` → `strong_id__`），
+       * 但**备选也一起收下来**：条目没有 `user` 对象时首选会退到 `node.id`（可能是 reel/media id），
+       * 这时备选里的 `user_id`/`strong_id__` 往往才是真正的用户 pk（见 StoryTrayItem.altIds）。
+       * 有 `user` 对象时首选就是用户 pk，备选基本用不上（留着无害）。
+       */
       const id: string = NativeStories.pickStr(host, ID_KEYS, '');
       if (id.length === 0) {
         continue;
+      }
+      const ids: Array<string> = NativeStories.collectIds(host);
+      const altIds: Array<string> = [];
+      for (let k: number = 0; k < ids.length; k++) {
+        if (ids[k] !== id) {
+          altIds.push(ids[k]);
+        }
       }
       const username: string = NativeStories.pickStr(host, NAME_KEYS, '');
       let avatar: string = NativeStories.pickStr(host, AVATAR_KEYS, '');
@@ -231,7 +251,7 @@ export class NativeStories {
         }
       }
       const count: number = JsonRead.arrayOf(node, 'items').length;
-      items.push(new StoryTrayItem(id, username, avatar, seen, count));
+      items.push(new StoryTrayItem(id, username, avatar, seen, count, altIds));
     }
     return new StoryTray(items);
   }
@@ -265,6 +285,24 @@ export class NativeStories {
       }
     }
     return null;
+  }
+
+  /**
+   * 按候选键把**所有非空**字符串收下来（第一个是"首选"，后面是备选 id，见 StoryTrayItem.altIds）。
+   *
+   * 为什么不全用首选就走：托盘条目有三种长相 —— 带完整 `user`、带精简 `user`、根本没有 `user`。
+   * 最后一类只能取条目自己的 `id`，而那个位置**可能是 reel/media 的 id**（不是用户 pk）。
+   * 把同一层里其它数字字段一起收着，主 id 问不出内容时还能逐个再问（见 reel 的第二段）。
+   */
+  private static collectIds(host: Record<string, Object>): Array<string> {
+    const out: Array<string> = [];
+    for (let index: number = 0; index < ID_KEYS.length; index++) {
+      const value: string = JsonRead.strOf(host, ID_KEYS[index]);
+      if (value.length > 0 && out.indexOf(value) < 0) {
+        out.push(value);
+      }
+    }
+    return out;
   }
 
   /** 按候选键取第一个非空字符串。 */
@@ -310,26 +348,42 @@ export class NativeStories {
    * 为什么不用模板：网页版那条"快拍播放页"的查询（doc_id）只有网页真的点开过某个人的快拍
    * 才会被抓到，而托盘是从首页进的 —— 手里只有托盘那条模板。所以这里走**私有 REST**
    * （App 接口），它一次就把 media 列表给全（见 fetchText / parseReel）。
+   *
+   * @param altIds 这条托盘条目的**备选 id**（见 StoryTrayItem.altIds）：主 id 问不出内容时逐个再问。
+   *   它解决的正是"只有部分用户点开提示没取到（原因 empty）"那一类 —— 托盘条目取错了 id 字段。
    */
-  static async reel(userId: string): Promise<StoryReel | null> {
+  static async reel(userId: string, altIds: Array<string> = []): Promise<StoryReel | null> {
     if (userId.length === 0) {
       NativeStories.detail = 'no-user';
       return null;
     }
     /*
-     * 四个候选 = **两条 URL × 三种身份**（见文件头 ANDROID_UA 的说明）：
+     * 候选 = **两条 URL × 三种身份**（见文件头 ANDROID_UA 的说明）：
      *   ① 整体 reels + 网页身份（模板里那条，最常见能成）
      *   ② 整体 reels + 安卓新版本号
      *   ③ 整体 reels + 安卓旧版本号
      *   ④ **单用户 story** + 网页身份（老接口，纯粹当兜底）
+     * 另外，主 id "答了但没内容"时，会用**备选 id** 把 ① 和 ④ 再各试一遍（见下面第二段）。
      *
      * 审计 E8 里写的"第 4 个候选与第 1 个同 URL 同身份、纯重复请求"**在这一版代码里不成立**
      * （`urls[3]` 是 `storyUrl`，`urls[0]` 是 `reelUrl`；`git log` 显示这个数组从 init 起没改过）。
      * 那句判断是照着**上面那段旧注释**（"前四发都是那条整体 reels"）读出来的 —— 旧注释留在
      * 这里会继续误导下一次审计，所以按代码重写成现在这段。
      */
-    const reelUrl: string = `${SITE}/api/v1/feed/reels_media/?reel_ids=${encodeURIComponent(userId)}&source=raven`;
-    const storyUrl: string = `${SITE}/api/v1/feed/user/${encodeURIComponent(userId)}/story/`;
+    // 候选 id：主 id 在前，后面是备选（去重、封顶，免得失败路径把请求发爆）。
+    const ids: Array<string> = [userId];
+    for (let index: number = 0; index < altIds.length && ids.length < NativeStories.ID_TRY_MAX; index++) {
+      const one: string = altIds[index].trim();
+      if (one.length > 0 && ids.indexOf(one) < 0) {
+        ids.push(one);
+      }
+    }
+    const reelUrlOf = (id: string): string =>
+      `${SITE}/api/v1/feed/reels_media/?reel_ids=${encodeURIComponent(id)}&source=raven`;
+    const storyUrlOf = (id: string): string =>
+      `${SITE}/api/v1/feed/user/${encodeURIComponent(id)}/story/`;
+    const reelUrl: string = reelUrlOf(userId);
+    const storyUrl: string = storyUrlOf(userId);
     const urls: Array<string> = [reelUrl, reelUrl, reelUrl, storyUrl];
     const identities: Array<number> =
       [IDENTITY_WEB, IDENTITY_ANDROID_NEW, IDENTITY_ANDROID_OLD, IDENTITY_WEB];
@@ -344,6 +398,7 @@ export class NativeStories {
      */
     const answeredEmpty: Array<string> = [];
     NativeStories.trace = [];
+    NativeStories.answeredJson = false;
     for (let at: number = 0; at < urls.length; at++) {
       // 冷却期内不再往下试（见 core/ApiThrottle.STORIES）：再打只会把窗口拖长。
       const cooled: string = NativeStories.cooling();
@@ -367,6 +422,7 @@ export class NativeStories {
           + `url=${NativeStories.tailOf(urls[at])} → 传输失败 detail=${NativeStories.detail}`);
         continue;
       }
+      NativeStories.answeredJson = true;
       const reel: StoryReel | null = NativeStories.parseReel(text, userId);
       if (reel !== null && reel.items.length > 0) {
         NativeStories.detail = '-';
@@ -391,6 +447,21 @@ export class NativeStories {
       hilog.info(DOMAIN, TAG, 'reel empty try=%{public}d id=%{public}s body=%{public}s',
         at, NativeStories.identityName(identities[at]),
         text.substring(0, 180).replace(/[\r\n]+/g, ' '));
+      /*
+       * **就在这一发之后试备选 id**（用户报的"只有部分用户点开提示没取到（原因 empty）"）。
+       *
+       * 为什么放在这里而不是整个循环之后：第一发（网页身份 + `reels_media`）是**最像正主**的那一发，
+       * 它"答了空"、而我们手上还有同一托盘条目里的其它 id 字段 —— 这时换 id 收益最大、代价最小（1 发）。
+       * 放到循环之后再试的话，会先把"换身份"的两发和"老接口"那发打完（白打三发）才轮到它。
+       */
+      if (at === 0 && ids.length > 1 && NativeStories.answeredJson) {
+        const viaAlt: StoryReel | null =
+          await NativeStories.tryAltIds(ids, answeredEmpty);
+        if (viaAlt !== null) {
+          NativeStories.detail = '-';
+          return viaAlt;
+        }
+      }
     }
     if (NativeStories.detail !== 'empty' && NativeStories.detail.indexOf('throttled-') < 0) {
       NativeStories.detail = 'empty';
@@ -402,6 +473,52 @@ export class NativeStories {
   private static tailOf(url: string): string {
     const at: number = url.indexOf('/api/');
     return at >= 0 ? url.substring(at) : url;
+  }
+
+  /**
+   * **换备选 id 再问一遍**（见 `reel` 里调用点的说明）。
+   *
+   * 每个备选 id 试两条 URL（`reels_media` 与老的 `user/<id>/story`），跳过已经答过空的那条；
+   * 命中就返回，全空返回 null（轨迹里留着每一发的现场）。
+   *
+   * @param ids 候选 id（`ids[0]` 是主 id，从 `ids[1]` 开始才是备选 —— 主 id 已经问过了）。
+   */
+  private static async tryAltIds(ids: Array<string>,
+                                 answeredEmpty: Array<string>): Promise<StoryReel | null> {
+    for (let index: number = 1; index < ids.length; index++) {
+      const alts: Array<string> = [
+        `${SITE}/api/v1/feed/reels_media/?reel_ids=${encodeURIComponent(ids[index])}&source=raven`,
+        `${SITE}/api/v1/feed/user/${encodeURIComponent(ids[index])}/story/`
+      ];
+      for (let at: number = 0; at < alts.length; at++) {
+        if (answeredEmpty.indexOf(alts[at]) >= 0) {
+          continue;
+        }
+        const cooled: string = NativeStories.cooling();
+        if (cooled.length > 0) {
+          NativeStories.detail = cooled;
+          NativeStories.note(`alt=${ids[index]} 跳过：stories 限流 ${cooled}`);
+          return null;
+        }
+        const text: string | null = await NativeStories.fetchText(alts[at], IDENTITY_WEB);
+        if (text === null) {
+          NativeStories.note(`alt=${ids[index]} url=${NativeStories.tailOf(alts[at])} → 传输失败`);
+          continue;
+        }
+        const reel: StoryReel | null = NativeStories.parseReel(text, ids[index]);
+        if (reel !== null && reel.items.length > 0) {
+          NativeStories.note(`alt=${ids[index]} url=${NativeStories.tailOf(alts[at])} `
+            + `→ ok items=${reel.items.length}（主 id=${ids[0]} 为空）`);
+          hilog.info(DOMAIN, TAG, 'reel ok via alt id=%{public}s（主 id=%{public}s 为空）n=%{public}d',
+            ids[index], ids[0], reel.items.length);
+          return reel;
+        }
+        answeredEmpty.push(alts[at]);
+        NativeStories.note(`alt=${ids[index]} url=${NativeStories.tailOf(alts[at])} `
+          + `→ 答了但没媒体 head=${text.substring(0, 120).replace(/[\r\n]+/g, ' ')}`);
+      }
+    }
+    return null;
   }
 
   /** 快拍这一族的退避闸门（见 core/ApiThrottle.STORIES）。 */

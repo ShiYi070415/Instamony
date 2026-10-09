@@ -6288,7 +6288,7 @@ struct Index {
       return;
     }
     this.storyLoading = true;
-    StoryCache.fetch(item.userId).then((reel: StoryReel | null): void => {
+    StoryCache.fetch(item.userId, item.altIds).then((reel: StoryReel | null): void => {
       this.storyLoading = false;
       if (reel === null || reel.items.length === 0) {
         hilog.warn(DOMAIN, TAG, 'story load failed uid=%{public}s why=%{public}s → 试 %{public}d',
@@ -6362,7 +6362,12 @@ struct Index {
     const head: Array<string> = [];
     for (let index: number = 0; index < this.storyQueue.length && index < 6; index++) {
       const one: StoryTrayItem = this.storyQueue[index];
-      head.push(`${one.userId}:${one.username}:seen=${one.seen}:n=${one.count}`);
+      /*
+       * 把**备选 id** 也写进去：这是"取错 id 字段"与"快拍真的过期"的判据 ——
+       * 备选里有别的数字、而主 id 问出来是空，就说明这条条目取错了字段（报告里一眼可见）。
+       */
+      const alts: string = one.altIds.length > 0 ? `,[alts ${one.altIds.join('/')}]` : '';
+      head.push(`${one.userId}:${one.username}:seen=${one.seen}:n=${one.count}${alts}`);
     }
     const report: string = NativeStories.failureReport(item.userId, item.username,
       this.storyQueue.length, head.join(' | '), at, StoryCache.has(item.userId),
