@@ -1729,8 +1729,20 @@ export struct FeedList {
      * 托盘有没有内容都算（ListItem 一直在），所以这里只看 showStories，不能看条数。
      */
     const listIndex: number = this.showStories ? target + 1 : target;
+    // 同一时刻只留一轮还原定时器：`onAppear` 可能连着触发几次，否则会累积多轮（审计项 A1）。
+    for (let old: number = 0; old < this.restoreTimers.length; old++) {
+      clearTimeout(this.restoreTimers[old]);
+    }
+    this.restoreTimers = [];
     for (let index: number = 0; index < delays.length; index++) {
-      setTimeout((): void => {
+      /*
+       * 句柄存进 `restoreTimers`、销毁时统一清（审计项 A1）。
+       *
+       * 这里原来是裸 `setTimeout`：`onAppear` 每触发一次就再注册一轮，而本组件**没有**
+       * `aboutToDisappear` —— 组件销毁后回调仍会跑，并去读已经放掉的 `this.listScroller`
+       * （`currentOffset()` 在销毁后可能抛，也可能读到脏值）。
+       */
+      this.restoreTimers.push(setTimeout((): void => {
         if (this.anchorRestored) {
           return;
         }
@@ -1747,8 +1759,22 @@ export struct FeedList {
             target, Math.round(offset), offset > 0 ? '' : ' (retry)');
         } catch (error) {
         }
-      }, delays[index]);
+      }, delays[index]));
     }
+  }
+
+  /**
+   * 位置还原的定时器句柄（`restoreAnchor` 每次 `onAppear` 会注册 3 个）。
+   *
+   * 组件销毁时必须清掉：它们是裸 `setTimeout`，回调里要读 `this.listScroller`（审计项 A1）。
+   */
+  private restoreTimers: Array<number> = [];
+
+  aboutToDisappear(): void {
+    for (let index: number = 0; index < this.restoreTimers.length; index++) {
+      clearTimeout(this.restoreTimers[index]);
+    }
+    this.restoreTimers = [];
   }
   /** 滚到底附近时请求更多：列表滚动会反复触发，这里限流一次。 */
   private askMore(): void {
