@@ -1108,6 +1108,24 @@ export struct StoryViewer {
    * 顺序：不是第一条 → 上一条；是第一条但前面还有人 → 回上一位用户（见 onPrevUser）；
    * **是第一条且就是第一位用户 → 什么都不做**（需求："在第一个 story 的第一页禁用点击左侧"）。
    */
+  /**
+   * 结束"长按暂停"并让进度接着走（`onActionEnd` 与 `onActionCancel` 共用）。
+   *
+   * 为什么要共用：被根 PanGesture / 卡片 PanGesture 抢走手势时 `onActionEnd` 不会回调，
+   * 只登记 end 会让 `paused` 永久卡 true（见那两处 gesture 上的注释）。
+   */
+  private resumeFromLongPress(): void {
+    if (!this.paused) {
+      return;
+    }
+    this.paused = false;
+    // 暂停这段不该算进进度：把起点往后推，等于"把刚才停住的时间抹掉"。
+    this.startedAt = Date.now() - this.elapsed;
+    if (this.currentIsVideo()) {
+      this.videoController.start();
+    }
+  }
+
   private prev(): void {
     // 同 next()：切用户/收起过程中连点会连跳，一律忽略（见 next 里的说明）。
     if (this.waiting || this.switching || this.closing) {
@@ -1590,11 +1608,17 @@ export struct StoryViewer {
             }
           })
           .onActionEnd((): void => {
-            this.paused = false;
-            this.startedAt = Date.now() - this.elapsed;
-            if (this.currentIsVideo()) {
-              this.videoController.start();
-            }
+            this.resumeFromLongPress();
+          })
+          /*
+           * **被别的手势抢走时也要复位**（审计发现：只登记了 onActionEnd）。
+           *
+           * 长按暂停期间，如果根部的 PanGesture（下滑收起）或卡片那层 PanGesture 把这一串事件接管了，
+           * `onActionEnd` **不会**回调 —— 于是 `paused` 卡在 true，进度条永久停住（画面还在、就是不走）。
+           * `onActionCancel` 走同一套复位逻辑。
+           */
+          .onActionCancel((): void => {
+            this.resumeFromLongPress();
           })
       )
     }
