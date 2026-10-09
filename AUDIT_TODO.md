@@ -179,6 +179,7 @@
 | `86b20b3` | **快拍失败诊断** 消息里带原因（`story_load_failed` 加 `%s`）+ 逐发轨迹落 `storyfail_<ts>.txt`（身份/URL/状态码/长度/响应开头/托盘年龄），供远端测试者截图或 hdc 回传 |
 | `65e9e09` | **快拍 empty 修复** 托盘条目收全部候选 id（`StoryTrayItem.altIds`）；主 id 答空时**换备选 id 再问**；预取链同样带上；报告里写出备选 id |
 | `107ffb7` | **快拍 empty 诊断加强** `trayshape_<ts>.txt`（每条条目 `reel_type`/`besties`/`expiring_at`/`entryItems`/`node.id`/`user.pk`）+ `trayraw_<ts>.txt`；`storyfail` 加 `shape=`/`raw[node]=`；加"用托盘条目自带 items 兜底" |
+| `71a53dc` | **诊断汇总文件** `Instarmony_diag.txt`（固定名，覆盖写）：怎么读 + 当前状态 + 最近 8 条失败记录 + 全部托盘形状 + 前 40 条原始条目；首启落盘一次、每次失败追加；**重启前先捞回上一份的失败记录**（实测重启不丢） |
 
 ## 遗留 / 下一步（本轮未做）
 
@@ -191,23 +192,16 @@
   第二个 id 候选）。本机实测（142 条）这一版托盘条目是：`reel_type` **全是 `user_reel`**、
   `node.id == user.pk`、`expiring_at` 都未过期、**条目里没有 `items`** —— 所以
   ①备选 id 无从谈起；②托盘补不出内容，只能靠 `reels_media`。
-  **下一步要对方的数据**（`107ffb7` 已把落盘做好）：让会复现的测试者点一次失败的快拍，回传
-  `storyfail_<ts>.txt` 与 `trayshape_<ts>.txt`；先看 `shape=` 里的
-  `reel_type` / `besties` / `expiring_at`：
+  **下一步：让对方回传 `Instarmony_diag.txt` 这一个文件**（`71a53dc` 已把汇总落盘做好：
+  固定名、含最近 8 条失败记录 + 全部托盘形状 + 前 40 条原始条目，重启也不丢）。拿到后先看
+  `shape=` 里三个字段 `reel_type` / `besties` / `expiring_at`：
   * `reel_type != user_reel` 或 `expiring_at` 已成过去 → **正常空**，改说法 + 队列里跳下一位；
   * 都正常却依然空 → 服务端对这个人不放行（权限/密友等），再考虑换取数路径
     （例如抓网页侧的快拍查询模板来替代这条 REST）。
 - **快拍"点开显示取不到、页面自己收起"**：`story_load_failed` 的三处分支里有两处会
   **按设计把空卡片收走**（"自动收起"不是收起逻辑坏了，而是取数失败后被带走）。
-  测试同学截图 `（原因 …）` 或回传 `storyfail_<时间戳>.txt` 即可；按档处理：
-  `empty`（见上一条）、`http-4xx`（会话或身份）、`throttled-Nmin`（节流）、
-  下次拿到 `storyfail_*.txt` 时看 `tray head=…,[alts …]`：
-  **备选也全空** → 那就不是 id 而是"这位真的没有可看的快拍"（刚过期 / 私密号未关注 / 条目来自别的分区），
-  到那一步再决定要不要给一个更准确的说法并在队列里**跳到下一位**（而不是收起整层）。
-- **快拍"点开显示取不到、页面自己收起"**：`story_load_failed` 的三处分支里有两处会
-  **按设计把空卡片收走**（"自动收起"不是收起逻辑坏了，而是取数失败后被带走）。
-  测试同学截图 `（原因 …）` 或回传 `storyfail_<时间戳>.txt` 即可；按档处理：
-  `empty`（见上一条）、`http-4xx`（会话或身份）、`throttled-Nmin`（节流）、
+  现场一律进 `Instarmony_diag.txt`（测试同学截图 `（原因 …）` 或直接发那个文件即可）；
+  按 `detail` 分档处理：`empty`（见上一条）、`http-4xx`（会话或身份）、`throttled-Nmin`（节流）、
   `no-session`、`throw:`（网络）。
 - **私信"会话只显示 4~5 条"**：本轮实测 `threadViaTemplate ok … msgs=19`，需要用户侧再复核
   是否还复现（若复现，看 `graphql raw edges=N` 是"服务端就给了几条"还是"解析丢了几条"）。
