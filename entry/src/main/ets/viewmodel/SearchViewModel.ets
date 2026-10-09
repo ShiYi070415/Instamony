@@ -443,7 +443,16 @@ export class SearchViewModel {
     }
     // 被限流期间不再往下要（发了也是白挨一发，见 core/ApiThrottle）。
     if (ApiThrottle.blocked(ApiThrottle.CLIPS)) {
-      hilog.info(DOMAIN, TAG, 'loadMore skipped: rate limited');
+      /*
+       * **把限流写到状态行上**（审计 C1 的现场结论）。
+       *
+       * 原来这里只打一行日志就 return —— 用户看到的是"滑到底什么都不发生、连转圈都没有"，
+       * 和"功能坏了"完全分不清（真机日志里那行是 `throttled=true`，其余守卫全正常）。
+       * 限流是 IG 侧的 12 分钟冷却，界面上说清楚就能解释"为什么现在加载不出更多"。
+       */
+      const minutes: number = ApiThrottle.remainingMinutes(ApiThrottle.CLIPS);
+      hilog.info(DOMAIN, TAG, 'loadMore skipped: rate limited %{public}dmin left', minutes);
+      this.onStatus(`被 IG 限流，约 ${minutes} 分钟后自动恢复`);
       return;
     }
     if (this.cursor.length === 0) {

@@ -2262,6 +2262,9 @@ struct Index {
     this.loadedOnce = false;
     if (signedIn) {
       this.selectedTab = AppTab.Home;
+      // 直接改 selectedTab 会绕过 selectTab 里的可见性同步：搜索页已经不是当前页了，
+      // 必须显式关掉它的"接受滚动翻页"闸门（审计 C1：否则 active 与实际可见页不符）。
+      this.searchVm.setActive(false);
       this.webVisible = false;
       this.viewModel.reset();
       // 会话刚生效：把网页送回首页信息流，页面加载完成后再由 handlePageReady 读流。
@@ -3627,6 +3630,8 @@ struct Index {
     });
     this.webVisible = false;
     this.selectedTab = AppTab.Home;
+    // 同上（审计 C1）：绕过 selectTab 时要显式同步搜索页的可见性闸门。
+    this.searchVm.setActive(false);
     const signedBefore: boolean = this.signedIn;
     const snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
     this.applySession(snapshot.signedIn);
