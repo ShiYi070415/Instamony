@@ -2112,6 +2112,19 @@ struct Index {
     // 顺手把「我的」四个分页的 feeds 页与媒体也备好（见 selectTab 里那一段的说明）：
     // 用户切过去、或点进帖子页时，数据和图片都已经在手边了。
     this.profileVm.preloadAllSegments();
+    /*
+     * 6) **搜索结果模板体检**（需求："进入首页时就测试搜索请求模板，失败重新抓 http 请求模板，
+     *    抓到更新进模板库"）。
+     *
+     * 放在**最后一步**：体检本身是一发几百毫秒的原生请求；万一模板不可用，它会走冷路径
+     * （导航共用的隐藏网页去重抓），那一步不能和前面的预热步骤抢页面。
+     * 失败不影响任何东西：它是"提前把搜索修好"，不是首屏路径的一部分。
+     */
+    try {
+      await this.searchVm.healthCheck();
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'search health check threw: %{public}s', (error as Error).message);
+    }
     // 5) **会话详情自检**（诊断用，见 DirectViewModel.selfTestThread 与 SELF_TEST_THREAD）。
     //    跑在最后：它要多打两条私信接口，别和首屏那几步抢时间。
     if (DM_THREAD_SELFTEST && !this.dmSelfTestRun) {

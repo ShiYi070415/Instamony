@@ -24,6 +24,7 @@ import { ApiRegistry, ApiTemplate } from '../bridge/ApiRegistry';
 import { JsonRead } from './JsonRead';
 import { MediaQuality, PickedMedia } from './MediaQuality';
 import { NativeFeed } from './NativeFeed';
+import { RestSession } from './RestSession';
 import { SearchCache } from './SearchCache';
 import { ApiThrottle } from './ApiThrottle';
 import { SearchPost, SearchUser } from '../model/Search';
@@ -73,8 +74,17 @@ const MAX_DEPTH: number = 8;
  * 顺序 = 优先级：越靠前的越像结果那条。
  */
 const RESULT_HINTS: Array<string> = ['searchresult', 'topsearch', 'search'];
-/** 这些片段说明"这条不是结果那条"，要排掉（空态/最近搜索/建议词）。 */
-const RESULT_EXCLUDE: Array<string> = ['nullstate', 'recent', 'suggested', 'typeahead'];
+/**
+ * 这些片段说明"这条不是结果那条"，要排掉（空态/最近搜索/建议词/**搜索框自己那条**）。
+ *
+ * `searchbox` / `refetchable` 是这一轮补上的（真机现场）：IG 的搜索页在**加载时**就会发一条
+ * `PolarisSearchBoxRefetchableQuery` —— 它是给搜索框下拉用的（建议词/最近搜索），
+ * 名字里带 'search' 又不含任何原来的排除词，于是被 `resultsOp()` 当成了"结果那条"。
+ * 后果是一整条链都错：`hasResultsTemplate()` 为真 → 原生拿它去搜账号（拿不到账号）→
+ * 冷路径虽然跑了但"已经有模板"的判断也是真 → 用户看到的就是"搜索用不了"。
+ */
+const RESULT_EXCLUDE: Array<string> = ['nullstate', 'recent', 'suggested', 'typeahead',
+  'searchbox', 'refetchable'];
 /**
  * **探索页**那几条操作的片段：推荐网格的真正来源。
  *
@@ -129,6 +139,55 @@ class NativeSearchResult {
     this.detail = detail;
   }
 }
+
+/**
+ * 搜索结果模板的"体检结果"（见 `NativeSearch.probeResults`）。
+ *
+ * `detail` 就是失败原因，直接可读可记：`no-template`（一条都没有）/ `no-users`
+ * （200 + JSON 但扫不到账号 —— 多半是抓错模板）/ `http-…` / `throw:…` / `rate-limited`。
+ */
+export class SearchTemplateHealth {
+  readonly ok: boolean;
+  readonly detail: string;
+  readonly users: number;
+  /** 这次体检用的是哪条模板（诊断：抓错模板时一眼能看出用的是谁）。 */
+  readonly op: string;
+
+  constructor(ok: boolean, detail: string, users: number, op: string) {
+    this.ok = ok;
+    this.detail = detail;
+    this.users = users;
+    this.op = op;
+  }
+}
+
+/**
+ * **账号搜索的 REST 兜底**（不依赖任何"抓来的模板"）。
+ *
+ * ## 为什么必须加它（真机现场）
+ * 搜索结果那条 GraphQL 模板现在**抓不到了**：冷路径导航到搜索页、把探测词打进搜索框，
+ * 页面这一版**一个新请求都不发**（日志：`type try=1 out=typed:search signal=timeout`，
+ * 之后 3 轮打字 + 4 轮抓取全是空）。于是 `resultsOp()` 为空、`searchUsers` 直接给 null，
+ * 用户看到的就是"搜索功能无法使用" —— 而这不是我们解析错了，是**那条请求压根没发生**。
+ *
+ * ## 这条路为什么靠得住
+ * `/web/search/topsearch/` 是网页自己那套 REST 接口，头和表单令牌走 `core/RestSession`
+ * ——和关注 / 收藏 / 评论点赞**完全同一套**（那几条在真机上都通了），所以它不需要先"抓到模板"。
+ * 返回结构是 `{"users":[{"user":{username, pk, profile_pic_url, full_name…}}], …}`，
+ * 正好能被按形状扫用户的 `usersOf()` 吃下去。
+ */
+const REST_SEARCH_URLS: Array<string> = [
+  'https://www.instagram.com/web/search/topsearch/?context=blended&query=',
+  'https://www.instagram.com/api/v1/fbsearch/topsearch/?context=blended&query=',
+  'https://i.instagram.com/api/v1/fbsearch/topsearch/?context=blended&query='
+];
+/**
+ * 安卓 App 的 User-Agent 与 app id（最后那条 `i.instagram.com` 要这套身份才认；
+ * 和 core/NativeSave、core/NativeStories 里那两处保持一致，改的时候一起改）。
+ */
+const ANDROID_UA: string = 'Instagram 448.0.0.52.84 Android (34/14; 480dpi; 1080x2340; '
+  + 'samsung; SM-G988N; ko_KR; 483385731; 480)';
+const ANDROID_APP_ID: string = '567067343352427';
 
 /**
  * 一页推荐帖子。
@@ -239,13 +298,6 @@ export class NativeSearch {
     return NativeSearch.recommendOp().length > 0;
   }
 
-  /** 有没有**任意**一条搜索/推荐相关的模板（视图模型据此判断要不要走"驱动网页"的冷路径）。 */
-  static hasAnyTemplate(): boolean {
-    return ApiRegistry.getInstance().storedNames().some((name: string): boolean => {
-      return NativeSearch.looksRelevant(name);
-    });
-  }
-
   /**
    * 搜账号（原生直发）。
    *
@@ -254,20 +306,192 @@ export class NativeSearch {
    *   （键名各版本不同：query / search_query / q …，写死一个名字会出现"换了关键词结果还是上一个"）。
    * @returns 扫到的账号；请求失败或没有模板给 null（调用方据此报错或退回网页）。
    */
+  /** 上一次搜账号是不是**REST 兜底**给的（界面上那句后缀与日志据此区分，见 searchUsers）。 */
+  private static viaRest: boolean = false;
+
+  static lastViaRest(): boolean {
+    return NativeSearch.viaRest;
+  }
+
   static async searchUsers(query: string, prevQuery: string): Promise<Array<SearchUser> | null> {
+    NativeSearch.viaRest = false;
     const op: string = NativeSearch.resultsOp();
     if (op.length === 0) {
+      /*
+       * **一条结果模板都没有**：别直接认输，走 REST 兜底（见 REST_SEARCH_URLS 的说明）。
+       * 这条正是真机上"搜索用不了"的主路 —— 抓不到模板时 REST 是唯一还能出账号的东西。
+       */
+      const viaRest: Array<SearchUser> | null = await NativeSearch.searchUsersViaRest(query);
+      if (viaRest !== null) {
+        NativeSearch.viaRest = true;
+        NativeSearch.source = `rest:${NativeSearch.restDiag}`;
+        return viaRest;
+      }
       return null;
     }
     const result: NativeSearchResult = await NativeSearch.post(op, prevQuery, query);
     if (!result.ok) {
       hilog.warn(DOMAIN, TAG, 'search http failed op=%{public}s: %{public}s', op, result.detail);
+      // 模板在但发不出去（过期令牌 / 抓错了）：再给 REST 一次机会。
+      const viaRest: Array<SearchUser> | null = await NativeSearch.searchUsersViaRest(query);
+      if (viaRest !== null) {
+        NativeSearch.viaRest = true;
+        NativeSearch.source = `rest:${NativeSearch.restDiag}`;
+        return viaRest;
+      }
       return null;
     }
     const users: Array<SearchUser> = NativeSearch.usersOf(result.text);
     hilog.info(DOMAIN, TAG, 'search op=%{public}s q=%{public}s users=%{public}d',
       op, query, users.length);
+    if (users.length === 0) {
+      // 200 + JSON 但一个账号都没有：多半是拿错了模板（例如搜索框那条），REST 再试一次。
+      const viaRest: Array<SearchUser> | null = await NativeSearch.searchUsersViaRest(query);
+      if (viaRest !== null) {
+        NativeSearch.viaRest = true;
+        NativeSearch.source = `rest:${NativeSearch.restDiag}`;
+        return viaRest;
+      }
+    }
     return users;
+  }
+
+  /** 上一次 REST 兜底的结果（诊断：`ok:0` = 第一条 URL 就成了 / `http-404` / `no-session`）。 */
+  private static restDiag: string = '-';
+
+  /**
+   * **不用模板搜账号**：直接打 `/web/search/topsearch/` 那几条 REST（见 REST_SEARCH_URLS）。
+   *
+   * 头和会话材料走 `core/RestSession`（网页抓来的 REST 模板那份头 + `_csrftoken`/`fb_dtsg`），
+   * 和关注 / 收藏 / 评论点赞同一条路数；最后一条 `i.instagram.com` 换安卓身份。
+   *
+   * @returns 扫到的账号；一条 URL 都没成给 null（原因记在 `restDiag` 里）。
+   */
+  static async searchUsersViaRest(query: string): Promise<Array<SearchUser> | null> {
+    const text: string = query.trim();
+    if (text.length === 0) {
+      NativeSearch.restDiag = 'no-query';
+      return null;
+    }
+    if (ApiThrottle.blocked(ApiThrottle.CLIPS)) {
+      // 搜索和推荐共用 clips 那把锁（见 core/ApiThrottle）：冷却期内别再打，如实说明原因。
+      NativeSearch.restDiag = `throttled-${ApiThrottle.remainingMinutes(ApiThrottle.CLIPS)}min`;
+      return null;
+    }
+    const baseHeaders: Record<string, string> = await RestSession.headers();
+    if (Object.keys(baseHeaders).length === 0) {
+      NativeSearch.restDiag = 'no-session';
+      return null;
+    }
+    const tail: string = encodeURIComponent(text);
+    for (let index: number = 0; index < REST_SEARCH_URLS.length; index++) {
+      const headers: Record<string, string> = {};
+      const keys: Array<string> = Object.keys(baseHeaders);
+      for (let k: number = 0; k < keys.length; k++) {
+        headers[keys[k]] = baseHeaders[keys[k]];
+      }
+      if (REST_SEARCH_URLS[index].indexOf('i.instagram.com') >= 0) {
+        headers['user-agent'] = ANDROID_UA;
+        headers['x-ig-app-id'] = ANDROID_APP_ID;
+      }
+      const body: string | null = await NativeSearch.getText(REST_SEARCH_URLS[index] + tail, headers);
+      if (body === null) {
+        continue;
+      }
+      const users: Array<SearchUser> = NativeSearch.usersOf(body);
+      hilog.info(DOMAIN, TAG, 'search rest try=%{public}d users=%{public}d len=%{public}d',
+        index, users.length, body.length);
+      if (users.length > 0) {
+        NativeSearch.restDiag = `ok:${index}`;
+        return users;
+      }
+      NativeSearch.restDiag = `empty:${index}`;
+    }
+    return null;
+  }
+
+  /** 一次 GET（返回响应文本；失败/非 JSON 给 null，原因写进 restDiag）。 */
+  private static async getText(url: string, headers: Record<string, string>): Promise<string | null> {
+    const request: http.HttpRequest = http.createHttp();
+    try {
+      const response: http.HttpResponse = await request.request(url, {
+        method: http.RequestMethod.GET,
+        header: headers,
+        connectTimeout: CONNECT_TIMEOUT_MS,
+        readTimeout: READ_TIMEOUT_MS,
+        expectDataType: http.HttpDataType.STRING
+      });
+      const text: string = typeof response.result === 'string'
+        ? response.result as string : JSON.stringify(response.result);
+      const head: string = text.length > 0 ? text.charAt(0) : '';
+      const json: boolean = head === '{' || head === '[';
+      hilog.info(DOMAIN, TAG, 'search rest http code=%{public}d json=%{public}s len=%{public}d',
+        response.responseCode, `${json}`, text.length);
+      if (response.responseCode !== 200 || !json) {
+        if (ApiThrottle.looksLimited(text)) {
+          ApiThrottle.note(ApiThrottle.CLIPS);
+          NativeSearch.restDiag = 'rate-limited';
+        } else {
+          NativeSearch.restDiag = `http-${response.responseCode}${json ? '' : '/non-json'}`;
+        }
+        hilog.info(DOMAIN, TAG, 'search rest body=%{public}s',
+          text.substring(0, 160).replace(/[\r\n]+/g, ' '));
+        return null;
+      }
+      return text;
+    } catch (error) {
+      NativeSearch.restDiag = `throw:${(error as Error).message ?? '-'}`.substring(0, 50);
+      hilog.warn(DOMAIN, TAG, 'search rest failed: %{public}s', NativeSearch.restDiag);
+      return null;
+    } finally {
+      try {
+        request.destroy();
+      } catch (error) {
+      }
+    }
+  }
+
+  /**
+   * **搜索结果模板体检**（需求："进入首页时就测试搜索请求模板，失败重新抓 http 请求模板"）。
+   *
+   * 这是**一次真请求**（不是"模板在不在"）：拿一个固定的探测词发一发，看服务端到底认不认。
+   * 因为"模板在"和"模板能用"是两件事 —— 过期的模板会被 IG 回 `1357004`、
+   * 抓错的那条（搜索框的 `…SearchBoxRefetchableQuery`）会回一段没有账号的 JSON，
+   * 而这两种在 `hasResultsTemplate()` 眼里都是"有模板"。
+   *
+   * 成本：一次往返（几百毫秒），不发就是"用户搜不出来"。
+   *
+   * @param query 探测词（给个常见的词，保证正常情况下能搜到账号）。
+   */
+  static async probeResults(query: string): Promise<SearchTemplateHealth> {
+    /*
+     * **两条路都要试**：模板那条（抓来的 GraphQL/REST）与 REST 兜底那条（不需要模板）。
+     * 体检的意义是回答"用户现在能不能搜出账号"，所以只要有一条出账号就算健康 ——
+     * 只测模板会把"模板抓不到但 REST 能用"误判成不健康，然后每次都去跑一遍十几秒的冷路径。
+     */
+    const op: string = NativeSearch.resultsOp();
+    if (op.length === 0) {
+      const viaRest: Array<SearchUser> | null = await NativeSearch.searchUsersViaRest(query);
+      const restOk: boolean = viaRest !== null && viaRest.length > 0;
+      hilog.info(DOMAIN, TAG, 'search probe no-template rest=%{public}s users=%{public}d',
+        NativeSearch.restDiag, viaRest === null ? 0 : viaRest.length);
+      return new SearchTemplateHealth(restOk, restOk ? '-' : 'no-template', 
+        viaRest === null ? 0 : viaRest.length, op);
+    }
+    const result: NativeSearchResult = await NativeSearch.post(op, '', query);
+    if (!result.ok) {
+      hilog.warn(DOMAIN, TAG, 'search probe failed op=%{public}s: %{public}s', op, result.detail);
+      return new SearchTemplateHealth(false, result.detail, 0, op);
+    }
+    const users: Array<SearchUser> = NativeSearch.usersOf(result.text);
+    /*
+     * 判据是"**扫到了账号**"，不只是"HTTP 200 + JSON"：抓错模板那种正好是 200 + 一段
+     * 合法但没有任何账号的 JSON —— 只看状态码会把它判成健康，于是永远不会去重抓。
+     */
+    const ok: boolean = users.length > 0;
+    hilog.info(DOMAIN, TAG, 'search probe op=%{public}s q=%{public}s users=%{public}d ok=%{public}s',
+      op, query, users.length, `${ok}`);
+    return new SearchTemplateHealth(ok, ok ? '-' : 'no-users', users.length, op);
   }
 
   /**

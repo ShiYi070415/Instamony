@@ -27,7 +27,7 @@ import { ApiRegistry, ApiTemplate } from '../bridge/ApiRegistry';
 import { OWN_PROFILE_SCRIPT, PAGE_STATE_SCRIPT, REPLAY_NAMES_SCRIPT, searchResultsScript, searchTypeScript } from '../bridge/WebScripts';
 import { AppConfig } from '../config/AppConfig';
 import { SearchMapper, SearchPost, SearchResultPage, SearchUser } from '../model/Search';
-import { NativeSearch, SearchPostPage } from '../core/NativeSearch';
+import { NativeSearch, SearchPostPage, SearchTemplateHealth } from '../core/NativeSearch';
 import { CachedSearchPage, SearchCache } from '../core/SearchCache';
 import { ApiThrottle } from '../core/ApiThrottle';
 
@@ -83,6 +83,8 @@ export class SearchViewModel {
   private diag: string = '-';
   /** 冷路径跑过了没有（抓模板只做一次，别每次进页面都导航网页）。 */
   private coldDone: boolean = false;
+  /** 搜索结果模板的体检做过了没有（一轮进程一次，见 healthCheck）。 */
+  private healthDone: boolean = false;
   /** 冷路径第二站最后停在哪个地址（诊断：`/reels/` 是否被重定向）。 */
   private exploreLanding: string = '-';
   /** 那一页记录到的请求名（诊断：空 = 服务端直出、根本没有可抓的请求）。 */
@@ -187,11 +189,56 @@ export class SearchViewModel {
     // **先吃落盘缓存**（见 core/SearchCache）：切到搜索页立刻就有上次那面网格，
     // 网络那份回来再整体替换。放在最前面 —— 它比任何网络路径都快（读盘几十毫秒）。
     this.hydrateFromCache();
-    // 缺"结果那条"或"推荐那条"都要走冷路径（搜索页与探索页各抓一遍，见 coldTemplateCapture）。
-    if (!NativeSearch.hasAnyTemplate() || !NativeSearch.hasRecommendedTemplate()) {
+    /*
+     * 只有**缺推荐那条**才走冷路径。
+     *
+     * 搜索结果那条不再需要它：现在有 REST 兜底（见 NativeSearch.REST_SEARCH_URLS 与
+     * `searchUsers` 的顺序），为了它去导航网页要十几秒，正是"进搜索页就卡住"的来源。
+     */
+    if (!NativeSearch.hasRecommendedTemplate()) {
       await this.coldTemplateCapture();
     }
     await this.loadRecommended();
+  }
+
+  /**
+   * **搜索结果模板体检 + 失败就重抓**（需求："进入首页时就测试搜索请求模板，失败重新抓 http
+   * 请求模板，抓到更新进模板库"）。
+   *
+   * 为什么必须做、而且要在**进首页时**做：
+   *   · "模板在"和"模板能用"是两件事 —— 冷启动读的是落盘那份（最长 24 小时），
+   *     里面的会话令牌可能早就过期了（IG 会回 `1357004`）；也可能抓成了**搜索框**那条
+   *     （名字里带 search，但只回建议词、回不了账号）。
+   *   · 不做的话，这个毛病**只有在用户真的搜一次时才暴露**：他要先等一整套十几秒的冷路径
+   *     （导航搜索页 → 打字 → 抓模板 → 导航短视频流 → 再回首页），最后还可能"搜索失败" ——
+   *     用户那边的说法就是"搜索功能无法使用了"。
+   *   · 放在预热链的**最后一步**：体检是一发几百毫秒的原生请求；万一要重抓，冷路径会用
+   *     共用的隐藏网页，不能和别的预热步骤抢页面（所以不给它放在中间）。
+   *
+   * 幂等：一次进程只做一轮（`healthDone`）。
+   */
+  async healthCheck(): Promise<void> {
+    if (this.healthDone) {
+      return;
+    }
+    this.healthDone = true;
+    const before: SearchTemplateHealth = await NativeSearch.probeResults(FALLBACK_PROBE_QUERY);
+    hilog.info(DOMAIN, TAG, 'search template check ok=%{public}s detail=%{public}s users=%{public}d op=%{public}s',
+      `${before.ok}`, before.detail, before.users, before.op);
+    if (before.ok) {
+      return;
+    }
+    /*
+     * 体检不过 → **重新抓一次 http 请求模板**（force：这一轮可能已经跑过冷路径，
+     * 但那次抓的是空态/推荐，不是"结果那条"）。抓到的模板由 `registry.capture` 直接进模板库，
+     * 再落盘（24 小时有效）—— 这就是需求里"抓到更新进模板库"那一步。
+     */
+    hilog.info(DOMAIN, TAG, 'search template unhealthy (%{public}s) → recapture',
+      before.detail);
+    await this.coldTemplateCapture(FALLBACK_PROBE_QUERY, true);
+    const after: SearchTemplateHealth = await NativeSearch.probeResults(FALLBACK_PROBE_QUERY);
+    hilog.info(DOMAIN, TAG, 'search template recaptured ok=%{public}s detail=%{public}s users=%{public}d op=%{public}s',
+      `${after.ok}`, after.detail, after.users, after.op);
   }
 
   /**
@@ -533,22 +580,20 @@ export class SearchViewModel {
     this.onStatus('正在搜索…');
     let usedColdPath: boolean = false;
     try {
-      if (!NativeSearch.hasResultsTemplate()) {
-        // 没有结果那条模板：冷路径（驱动网页搜一次，把模板抓下来），之后都能走 HTTP。
-        usedColdPath = true;
-        await this.coldTemplateCapture(text);
-      }
+      /*
+       * **先走原生**（模板 → REST 兜底，见 NativeSearch.searchUsers）：快到几百毫秒。
+       *
+       * 顺序反过来的代价是真机上量到的：原来"没有结果模板"就先跑冷路径（导航搜索页 →
+       * 打字逼请求 → 抓模板 → 导航短视频流 → 回首页），**十几到四十秒**，而这期间用户只看到
+       * "正在从网页抓搜索接口"，搜索框里打了字却什么也不出来 —— 这就是"搜索功能无法使用"。
+       * 现在 REST 那条不需要模板（`/web/search/topsearch/`，和关注/收藏同一套会话材料），
+       * 所以冷路径退成**最后**一手：两条原生路都不行才去驱动网页。
+       */
       let page: Array<SearchUser> | null = await NativeSearch.searchUsers(text, this.prevQuery);
-      if (page === null && !usedColdPath) {
-        /*
-         * **模板"在"不等于"能用"**：过期的模板原生发出去会被 IG 打回（或回空），
-         * 而页面回放那份配置（TTL 10 分钟）早就空了 —— 后面 fetch() 只会给出
-         * `no-cfg`。既然已经失败，就顺手让网页真搜一次把模板刷新，再走一次原生：
-         * 这一步是"搜索点了没结果"真正能自救的地方。
-         */
+      if (page === null) {
         hilog.info(DOMAIN, TAG, 'native search failed → cold capture then retry');
         usedColdPath = true;
-        // force：这一轮可能已经跑过冷路径了，但那次抓的是空态；这次要重新驱动网页搜一次。
+        // force：这一轮可能已经跑过冷路径了，但那次抓的是空态/推荐；这次要真搜一次。
         await this.coldTemplateCapture(text, true);
         page = await NativeSearch.searchUsers(text, this.prevQuery);
       }
@@ -562,9 +607,15 @@ export class SearchViewModel {
         return;
       }
       this.setUsers(page);
+      /*
+       * 后缀只在**真的走了网页抓模板**时才加：REST 兜底那条也算原生（用户不需要知道
+       * 我们绕了哪条路），而"（首次走网页抓模板）"出现在 REST 的结果上会误导排查。
+       */
+      const suffix: string = usedColdPath && !NativeSearch.lastViaRest()
+        ? '（首次走网页抓模板）' : '';
       this.onStatus(page.length === 0
         ? '没有找到结果'
-        : `找到 ${page.length} 个账号` + (usedColdPath ? '（首次走网页抓模板）' : ''));
+        : `找到 ${page.length} 个账号` + suffix);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'search threw: %{public}s', (error as Error).message);
       this.onStatus('搜索出错');
