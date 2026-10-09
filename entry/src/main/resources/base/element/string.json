@@ -619,6 +619,22 @@
     {
       "name": "diag_copied",
       "value": "诊断摘要已复制到剪贴板"
+    },
+    {
+      "name": "settings_capture_story",
+      "value": "抓故事页模板（测试）"
+    },
+    {
+      "name": "diag_story_captured",
+      "value": "已抓到故事页模板，之后快拍应该能打开"
+    },
+    {
+      "name": "diag_story_capture_failed",
+      "value": "没抓到故事页模板：%s"
+    },
+    {
+      "name": "story_need_challenge",
+      "value": "IG 要求这个账号先完成安全验证：请到网页里登录 / 验证一次再回来看快拍"
     }
   ]
 }

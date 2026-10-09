@@ -619,6 +619,22 @@
     {
       "name": "diag_copied",
       "value": "Diagnostics summary copied"
+    },
+    {
+      "name": "settings_capture_story",
+      "value": "Capture story page template (test)"
+    },
+    {
+      "name": "diag_story_captured",
+      "value": "Story page template captured — stories should open now"
+    },
+    {
+      "name": "diag_story_capture_failed",
+      "value": "Story page template not captured: %s"
+    },
+    {
+      "name": "story_need_challenge",
+      "value": "Instagram wants this account verified first: sign in / complete the check on the web, then try stories again"
     }
   ]
 }

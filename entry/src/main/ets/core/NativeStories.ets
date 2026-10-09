@@ -111,6 +111,277 @@ export class NativeStories {
       && NativeStories.detail.indexOf('http-5') === 0;
   }
 
+  /**
+   * **"去网页打开一次快拍页抓模板"的钩子**（由 pages/Index 接上，见 AppConfig.instagramStoriesUrl）。
+   *
+   * 为什么需要：`reels_media` 那条私有 REST 在部分会话上被 IG 回 500（诊断文件已证实头与 cookie
+   * 都齐、claim 也在，仍然 500），而**网页那条路是通的**（托盘就是网页抓的）。
+   * 所以在 REST 全失败之后，让宿主打开一次 `/stories/<用户名>/`，页面自己会发它那条快拍查询 ——
+   * 我们把它抓下来、之后原生照着回放（同私信/搜索/个人页的做法）。
+   */
+  private static storyCapture: ((username: string) => Promise<boolean>) | null = null;
+
+  static setStoryCaptureHook(hook: (username: string) => Promise<boolean>): void {
+    NativeStories.storyCapture = hook;
+  }
+
+  /**
+   * **"直接读故事页渲染出来的媒体"的钩子**（由 pages/Index 接上，见 storyMediaScript）。
+   *
+   * 为什么模板那条之后还要它：真机实测打开 `/stories/<用户名>/` 后页面**一个新请求都不发**
+   * （`story template not captured`），但页面**自己把故事画出来了** —— 那就直接读画出来的那条。
+   */
+  private static storyPageReader:
+    ((username: string, userId: string) => Promise<StoryReel | null>) | null = null;
+
+  static setStoryPageReader(reader: (username: string, userId: string) =>
+    Promise<StoryReel | null>): void {
+    NativeStories.storyPageReader = reader;
+  }
+
+  /**
+   * **手动跑一次"故事页抓模板"**（设定页的「抓故事页模板」按钮用；见 storyCapture）。
+   *
+   * 为什么要暴露出来：这条退路平时只在 REST 失败时触发，出问题的设备上不一定马上复现；
+   * 有了它，测试同学（或我们自己）**当场**就能知道"这条路在当前账号上到底通不通"，
+   * 不用等碰运气复现 —— 抓到就说明之后快拍能开。
+   */
+  static async runStoryCapture(): Promise<boolean> {
+    const hook: ((username: string) => Promise<boolean>) | null = NativeStories.storyCapture;
+    if (hook === null) {
+      return false;
+    }
+    // 用户名传空：由宿主自己决定用谁（它手上有托盘顺序）。
+    return await hook('');
+  }
+
+  /**
+   * **手动跑一次"直接读故事页媒体"**（设定页那个测试入口的第二段，见 storyPageReader）。
+   *
+   * @returns 读到了没有（`lastDetail()` 里是 `-page` 或失败原因）。
+   */
+  static async runStoryPageRead(): Promise<boolean> {
+    const reader:
+      ((username: string, userId: string) => Promise<StoryReel | null>) | null =
+      NativeStories.storyPageReader;
+    if (reader === null) {
+      return false;
+    }
+    try {
+      const reel: StoryReel | null = await reader('', '');
+      return reel !== null && reel.items.length > 0;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
+   * 模板名里像"某个人的快拍"的那几条（**排除托盘容器**那条：它是首页那一排的列表，不含 media）。
+   *
+   * 判据必须**紧**（真机踩过）：第一版只要求名字含 `stor` 或 `reel`，于是
+   * `PolarisProfileReelsTabContentQuery`（个人页的 reels 分页，本来就是存着的）被当成"快拍查询"
+   * —— `hasStoryTemplate()` 一开始就为真，抓取直接跳过，而界面还报"已抓到模板"，
+   * 等于**用一条错的模板把真正的退路整个挡掉**（还看不出来）。
+   *
+   * 现在：名字里必须出现 `stories`/`story`，并且不含下面这些"不是我们要的那条"的词
+   * （托盘容器、高亮托盘、个人页、reels/clips 分页、未读、归档、变更、广告）。
+   */
+  private static readonly STORY_BAD: Array<string> = ['tray', 'container', 'highlight', 'seen',
+    'mutation', 'archive', 'profile', 'reels', 'clip', 'ads'];
+
+  static storyOps(): Array<string> {
+    const names: Array<string> = ApiRegistry.getInstance().storedNames();
+    const out: Array<string> = [];
+    for (let index: number = 0; index < names.length; index++) {
+      const lower: string = names[index].toLowerCase();
+      if (lower.indexOf('stories') < 0 && lower.indexOf('story') < 0) {
+        continue;
+      }
+      let skip: boolean = false;
+      for (let b: number = 0; b < NativeStories.STORY_BAD.length; b++) {
+        if (lower.indexOf(NativeStories.STORY_BAD[b]) >= 0) {
+          skip = true;
+          break;
+        }
+      }
+      if (!skip) {
+        out.push(names[index]);
+      }
+    }
+    return out;
+  }
+
+  /** 手上有没有"某个人的快拍"那条模板。 */
+  static hasStoryTemplate(): boolean {
+    return NativeStories.storyOps().length > 0;
+  }
+
+  /**
+   * **用网页自己那条快拍查询回放**（见 storyCapture 的说明）。
+   *
+   * 和 `reel()` 的关系：REST 两条路都失败之后才走这里 —— 先试手上已有的模板；
+   * 一条都没有就让宿主打开一次故事页把模板抓下来，再试一遍。
+   */
+  private static async storyViaTemplate(userId: string,
+                                        username: string): Promise<StoryReel | null> {
+    let ops: Array<string> = NativeStories.storyOps();
+    if (ops.length === 0) {
+      const capture: ((username: string) => Promise<boolean>) | null = NativeStories.storyCapture;
+      if (capture === null || username.length === 0) {
+        return null;
+      }
+      NativeStories.note(userId, '  → REST 全失败：打开一次故事页抓模板');
+      try {
+        await capture(username);
+      } catch (error) {
+        NativeStories.note(userId, `  → 故事页抓模板失败：${(error as Error).message ?? '-'}`);
+        return null;
+      }
+      ops = NativeStories.storyOps();
+    }
+    for (let index: number = 0; index < ops.length; index++) {
+      const op: string = ops[index];
+      const tpl: ApiTemplate | null = ApiRegistry.getInstance().storedForNative(op);
+      if (tpl === null) {
+        continue;
+      }
+      const body: string = NativeStories.patchStoryVars(tpl.body ?? '', userId);
+      const headers: Record<string, string> = await NativeFeed.headersFor(op);
+      if (Object.keys(headers).length === 0) {
+        continue;
+      }
+      const isGet: boolean = (tpl.method ?? 'POST').toUpperCase() === 'GET';
+      const text: string | null = await NativeStories.postForm(tpl, headers, body, isGet, userId);
+      if (text === null) {
+        continue;
+      }
+      const reel: StoryReel | null = NativeStories.parseReel(text, userId);
+      if (reel !== null && reel.items.length > 0) {
+        NativeStories.detail = '-';
+        NativeStories.note(userId, `  → 网页查询回放成功 op=${op} items=${reel.items.length}`);
+        hilog.info(DOMAIN, TAG, 'reel ok via page query op=%{public}s uid=%{public}s n=%{public}d',
+          op, userId, reel.items.length);
+        return reel;
+      }
+      NativeStories.note(userId, `  → 网页查询 op=${op} 没解析出 media（len=${text.length}）`);
+    }
+    /*
+     * **最后：直接读页面渲染出来的那条媒体**（见 storyPageReader）。
+     * 真机上"抓网页查询"这条路不成立（页面不发请求），但故事是**页面上画着的**。
+     */
+    const reader:
+      ((username: string, userId: string) => Promise<StoryReel | null>) | null =
+      NativeStories.storyPageReader;
+    if (reader !== null) {
+      try {
+        const fromPage: StoryReel | null = await reader(username, userId);
+        if (fromPage !== null && fromPage.items.length > 0) {
+          NativeStories.detail = '-page';
+          NativeStories.note(userId, `  → 读页面媒体成功 op=page items=${fromPage.items.length}`);
+          return fromPage;
+        }
+      } catch (error) {
+        NativeStories.note(userId, `  → 读页面媒体失败：${(error as Error).message ?? '-'}`);
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 把网页快拍查询的 `variables` 里**指向"哪个人/哪条快拍"的那些键**换成目标用户。
+   *
+   * 按**键名**改（不是按值）：快拍查询的变量名是稳定的几个（`reel_ids` / `reel_media_ids` /
+   * `user_id` / `target_user_id`…），比"猜之前那个值"可靠得多（私信那条只能按值改，是因为
+   * 它的键名不固定）。
+   */
+  private static patchStoryVars(body: string, userId: string): string {
+    if (body.length === 0) {
+      return body;
+    }
+    const parts: Array<string> = body.split('&');
+    const out: Array<string> = [];
+    let patched: boolean = false;
+    for (let index: number = 0; index < parts.length; index++) {
+      const part: string = parts[index];
+      if (part.indexOf('variables=') !== 0) {
+        out.push(part);
+        continue;
+      }
+      try {
+        const raw: string = decodeURIComponent(part.substring('variables='.length));
+        const src: Record<string, Object> = JsonRead.parse(raw);
+        patched = NativeStories.patchStoryRecord(src, userId) || patched;
+        out.push(`variables=${encodeURIComponent(JSON.stringify(src))}`);
+      } catch (error) {
+        out.push(part);
+      }
+    }
+    return patched ? out.join('&') : body;
+  }
+
+  /** 递归改快拍变量里的"目标 id"字段（返回有没有改过）。 */
+  private static patchStoryRecord(node: Record<string, Object>, userId: string): boolean {
+    const targets: Array<string> = ['reel_ids', 'reel_media_ids', 'user_id', 'target_user_id',
+      'target_id', 'user_ids', 'reel_id'];
+    let changed: boolean = false;
+    const keys: Array<string> = Object.keys(node);
+    for (let index: number = 0; index < keys.length; index++) {
+      const key: string = keys[index];
+      const lower: string = key.toLowerCase();
+      if (targets.indexOf(lower) >= 0) {
+        const value: Object = node[key];
+        // 原来是数组就塞数组（IG 的 `reel_ids` 就是数组），否则塞字符串。
+        node[key] = Array.isArray(value) ? [userId] : userId;
+        changed = true;
+        continue;
+      }
+      const child: Record<string, Object> | null = JsonRead.asRecord(node[key]);
+      if (child !== null && NativeStories.patchStoryRecord(child, userId)) {
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  /** 发一次回放请求（表单体；GET 时把体拼到 query 上，和 NativeProfile.bodyWith 同思路）。 */
+  private static async postForm(tpl: ApiTemplate, headers: Record<string, string>, body: string,
+                                isGet: boolean, uid: string): Promise<string | null> {
+    const base: string = tpl.url.indexOf('http') === 0 ? tpl.url : `${SITE}${tpl.url}`;
+    const url: string = isGet && body.length > 0
+      ? `${base}${base.indexOf('?') >= 0 ? '&' : '?'}${body}` : base;
+    const request: http.HttpRequest = http.createHttp();
+    try {
+      const response: http.HttpResponse = await request.request(url, {
+        method: isGet ? http.RequestMethod.GET : http.RequestMethod.POST,
+        header: headers,
+        extraData: isGet ? undefined : body,
+        connectTimeout: CONNECT_TIMEOUT_MS,
+        readTimeout: READ_TIMEOUT_MS,
+        expectDataType: http.HttpDataType.STRING
+      });
+      const text: string = typeof response.result === 'string'
+        ? response.result as string : JSON.stringify(response.result);
+      const head: string = text.length > 0 ? text.charAt(0) : '';
+      const json: boolean = head === '{' || head === '[';
+      NativeStories.note(uid, `  page-query url=${NativeStories.tailOf(url)}`
+        + ` code=${response.responseCode} json=${json} len=${text.length}`
+        + ` head=${text.substring(0, 160).replace(/[\r\n]+/g, ' ')}`);
+      if (response.responseCode !== 200 || !json) {
+        NativeStories.detail = `page-http-${response.responseCode}${json ? '' : '/non-json'}`;
+        return null;
+      }
+      return text;
+    } catch (error) {
+      NativeStories.detail = `page-throw:${(error as Error).message ?? '-'}`.substring(0, 50);
+      return null;
+    } finally {
+      try {
+        request.destroy();
+      } catch (error) {
+      }
+    }
+  }
+
   /** `/api/v1/…` 要的头名与 cookie 名都在了没有（诊断）。 */
   static lastHeadersDiag(): string {
     return `claim=${NativeStories.lastHadClaim} ajax=${NativeStories.lastHadAjax}`;
@@ -532,7 +803,8 @@ export class NativeStories {
    * @param altIds 这条托盘条目的**备选 id**（见 StoryTrayItem.altIds）：主 id 问不出内容时逐个再问。
    *   它解决的正是"只有部分用户点开提示没取到（原因 empty）"那一类 —— 托盘条目取错了 id 字段。
    */
-  static async reel(userId: string, altIds: Array<string> = []): Promise<StoryReel | null> {
+  static async reel(userId: string, altIds: Array<string> = [],
+                    username: string = ''): Promise<StoryReel | null> {
     if (userId.length === 0) {
       NativeStories.detail = 'no-user';
       return null;
@@ -666,6 +938,16 @@ export class NativeStories {
           return viaAlt;
         }
       }
+    }
+    /*
+     * **第三段：改用网页自己那条快拍查询回放**（见 storyViaTemplate）。
+     *
+     * 这一步是用户那台设备的正解：`reels_media` 在他们会话上被 IG 回 500（头/cookie/claim
+     * 都验证过是全的），而网页那条路是通的（托盘就是网页抓的）。
+     */
+    const viaPage: StoryReel | null = await NativeStories.storyViaTemplate(userId, username);
+    if (viaPage !== null && viaPage.items.length > 0) {
+      return viaPage;
     }
     /*
      * **最后一道：用托盘那份数据自己拼一条**（不需要任何请求，见 reelFromTrayNode）。
@@ -855,6 +1137,18 @@ export class NativeStories {
           return null;
         }
         NativeStories.detail = `http-${response.responseCode}${json ? '' : '/non-json'}`;
+        /*
+         * **`challenge_required` 要单独认出来**（真机证据：安卓身份那条回的正是
+         * `{"message":"challenge_required","challenge":{...,"lock":true}}`）。
+         *
+         * 这不是"请求写错了"，而是 **IG 要求这个账号先完成安全验证** —— 那种状态下私有接口会被
+         * 一律拒掉（而网页 GraphQL 可能照常，所以"网页能看、原生 500"这组现象正好对上）。
+         * 认出来之后界面就能直接告诉用户"去网页里验证一下"，而不是丢一句 `http-500`。
+         */
+        if (text.indexOf('challenge_required') >= 0) {
+          NativeStories.detail = 'challenge';
+          NativeStories.note(uid, '    → 服务端要求 challenge（安全验证），不是请求写错');
+        }
         /*
          * 非 200 时把**头名清单 + cookie 名清单**也记进轨迹。
          *

@@ -27,6 +27,19 @@ export class AppConfig {
   static readonly INSTAGRAM_DIRECT_URL: string = 'https://www.instagram.com/direct/inbox/';
   /** 通知（活动页）：标题栏那颗爱心按钮要跳的地方。 */
   static readonly INSTAGRAM_ACTIVITY_URL: string = 'https://www.instagram.com/accounts/activity/';
+
+  /**
+   * 某个用户的**快拍页**（`/stories/<用户名>/`，页面自己会跳到第一条 media）。
+   *
+   * 为什么要它：`/api/v1/feed/reels_media/` 那条私有 REST 在部分会话上被 IG 直接回 **500**
+   * （用户回传的诊断文件：头与 cookie 都齐、claim/instagram-ajax 都在，仍然 500；
+   * 同一账号用安卓身份还回 `challenge_required`）。而**网页那条路是通的**——托盘数据就是
+   * 从网页抓的 `PolarisStoriesV3TrayContainerQuery`。所以取不到时改成"让网页打开一次这个人的
+   * 快拍页，把它自己发的那条查询抓下来、之后原生照着回放"（和私信/搜索/个人页同一套路）。
+   */
+  static instagramStoriesUrl(username: string): string {
+    return `https://www.instagram.com/stories/${encodeURIComponent(username)}/`;
+  }
   /**
    * 发布入口（网页版自己的发布器）。
    *

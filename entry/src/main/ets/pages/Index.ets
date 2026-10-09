@@ -50,9 +50,11 @@ import {
   likeOnPostPageScript,
   likeCommentScript,
   likePostScript,  OWN_PROFILE_SCRIPT,
+  PAGE_STATE_SCRIPT,
   PROBE_WATCH_ON_SCRIPT,
   repostPostScript,
   saveOnPostPageScript,
+  storyMediaScript,
   TIMELINE_PROBE_SCRIPT
 } from '../bridge/WebScripts';
 import { CommentsPanel, CommentsListController, COMMENTS_DRAG_ZONE_VP } from '../components/CommentsPanel';
@@ -65,6 +67,7 @@ import { LoginPanel } from '../components/LoginPanel';
 import { ProbePanel } from '../components/ProbePanel';
 import { WebChromeBar } from '../components/WebChromeBar';
 import { InstagramCookieJar, InstagramCookieSnapshot } from '../core/InstagramCookieJar';
+import { JsonRead } from '../core/JsonRead';
 import { MediaPrefetch } from '../core/MediaPrefetch';
 import { MediaDownloader } from '../core/MediaDownloader';
 import { NativeFollow, FollowResult } from '../core/NativeFollow';
@@ -122,7 +125,7 @@ import { CommentInputBar } from '../components/CommentInputBar';
 import { ProfileHeader, ProfilePost, ProfileStreamPage } from '../model/Profile';
 import { DirectThread } from '../model/Direct';
 import { SearchUser, SearchPost } from '../model/Search';
-import { EMPTY_REEL, StoryHeroRect, StoryReel, StoryTray, StoryTrayItem } from '../model/Story';
+import { EMPTY_REEL, StoryHeroRect, StoryItem, StoryReel, StoryTray, StoryTrayItem } from '../model/Story';
 import { NativeStories } from '../core/NativeStories';
 import { StoryCache } from '../core/StoryCache';
 import { StoryDiag } from '../core/StoryDiag';
@@ -214,6 +217,22 @@ const ACTIVITY_URL: string = 'https://www.instagram.com/accounts/activity/';
 const AYML_NAV_TIMEOUT_MS: number = 20000;
 const AYML_CAPTURE_POLLS: number = 6;
 const AYML_CAPTURE_GAP_MS: number = 1200;
+/**
+ * 「故事页抓模板」的参数（见 `captureStoryTemplate`）：打开某个用户的快拍页之后先等多久，
+ * 以及轮询几次、间隔多少。
+ *
+ * 等的时间比 ayml 那条长一点：故事页要先把第一条 media 渲出来才会发那条查询
+ * （`AYML_CAPTURE_WAIT_MS` 那种"页面一就绪就发"的假设在这里不成立）。
+ */
+const STORY_CAPTURE_WAIT_MS: number = 3500;
+const STORY_CAPTURE_POLLS: number = 6;
+const STORY_CAPTURE_GAP_MS: number = 1500;
+/** 故事页导航就绪的上限（和 ayml 那条同一个量级）。 */
+const STORY_NAV_TIMEOUT_MS: number = 20000;
+/** 故事页打开后等媒体画出来（毫秒）与轮询参数（见 readStoryFromPage）。 */
+const STORY_PAGE_WAIT_MS: number = 3000;
+const STORY_MEDIA_POLLS: number = 6;
+const STORY_MEDIA_GAP_MS: number = 1200;
 
 
 /** 探针报告自动落盘的最小间隔（毫秒），见 dumpProbeSilently。 */
@@ -1830,6 +1849,38 @@ struct Index {
     NativeStories.setClaimRefresher(async (): Promise<void> => {
       await this.ensureAymlTemplate();
     });
+    /*
+     * **给"取快拍"再补一条退路**：网页自己那条快拍查询（见 NativeStories.storyViaTemplate）。
+     *
+     * 为什么需要：`reels_media` 这条私有 REST 在**部分会话**上被 IG 直接回 500 ——
+     * 用户回传的诊断文件里，头与 cookie 都齐、`x-ig-www-claim`/`x-instagram-ajax` 都在，
+     * 仍然 500（同一账号用安卓身份还回 `challenge_required`）。而网页那条路是通的
+     * （托盘数据就是从网页抓的 `PolarisStoriesV3TrayContainerQuery`）。
+     * 所以 REST 全失败时，让这个钩子去打开一次该用户的**故事页**，把页面自己发的那条查询抓下来。
+     */
+    NativeStories.setStoryCaptureHook(async (username: string): Promise<boolean> => {
+      /*
+       * 用户名：调用方给了就用它；没给（设定页那个手动入口传空）就用**托盘里的第一位** ——
+       * 抓那条查询只需要"打开某个人的故事页"，用谁都行。
+       */
+      let name: string = username.trim();
+      if (name.length === 0 && this.storyQueue.length > 0) {
+        name = this.storyQueue[0].username;
+      }
+      return await this.captureStoryTemplate(name);
+    });
+    /*
+     * **兜底再兜底**：模板那条也不成立（真机实测：打开故事页后页面一个新请求都不发），
+     * 于是直接读"页面渲染出来的那条媒体"（见 readStoryFromPage）。
+     */
+    NativeStories.setStoryPageReader(async (username: string, userId: string):
+      Promise<StoryReel | null> => {
+      let name: string = username.trim();
+      if (name.length === 0 && this.storyQueue.length > 0) {
+        name = this.storyQueue[0].username;
+      }
+      return await this.readStoryFromPage(name, userId);
+    });
     // 起始分页的配色（正常是首页；万一恢复到了 Reels，这里也把深色落实一次）。
     this.syncReelsColorMode();
     // 降级底栏要避让系统条：量一次它的高度（支持悬浮栏的设备上直接返回，见 readBottomSafeVp）。
@@ -3253,6 +3304,129 @@ struct Index {
       this.aymlCapturing = false;
       hilog.warn(DOMAIN, TAG, 'ayml template capture failed: %{public}s', (error as Error).message);
       return false;
+    }
+  }
+
+  /**
+   * **打开某个用户的"故事页"，把网页自己那条快拍查询抓下来**（需求侧的退路，见调用点）。
+   *
+   * 为什么是"打开页面"而不是原生重放：`reels_media` 那条私有 REST 在部分会话上被 IG 回 500
+   * （诊断文件证实头/cookie/claim 都齐），而网页打开这个人的快拍时走的是**另一条**查询
+   * （GraphQL，名字随 IG 版本变），那条在他们环境里是通的 —— 抓下来之后原生就能照着重放
+   * 任意用户（见 NativeStories.storyViaTemplate）。
+   *
+   * 和别的冷路径一样：抓完把网页送回首页（它停在故事页会让信息流模板过期）。
+   *
+   * @returns 抓到没抓到"像快拍"的模板（`NativeStories.hasStoryTemplate()`）。
+   */
+  private async captureStoryTemplate(username: string): Promise<boolean> {
+    const name: string = username.trim();
+    if (name.length === 0) {
+      return false;
+    }
+    if (NativeStories.hasStoryTemplate()) {
+      return true;
+    }
+    if (this.storyCapturing) {
+      return false;
+    }
+    this.storyCapturing = true;
+    hilog.info(DOMAIN, TAG, 'story template missing → open stories page once for %{public}s', name);
+    try {
+      this.bridge.loadUrl(AppConfig.instagramStoriesUrl(name));
+      await this.bridge.awaitPageReady(STORY_NAV_TIMEOUT_MS);
+      await this.delay(STORY_CAPTURE_WAIT_MS);
+      for (let attempt: number = 1; attempt <= STORY_CAPTURE_POLLS; attempt++) {
+        await ApiRegistry.getInstance().capture('');
+        if (NativeStories.hasStoryTemplate()) {
+          hilog.info(DOMAIN, TAG, 'story template captured try=%{public}d %{public}s',
+            attempt, NativeStories.storyOps().join('|'));
+          this.bridge.loadUrl(AppConfig.INSTAGRAM_HOME_URL);
+          this.storyCapturing = false;
+          return true;
+        }
+        if (attempt < STORY_CAPTURE_POLLS) {
+          await this.delay(STORY_CAPTURE_GAP_MS);
+        }
+      }
+      hilog.warn(DOMAIN, TAG, 'story template not captured: %{public}s',
+        ApiRegistry.getInstance().storedSummary());
+      this.bridge.loadUrl(AppConfig.INSTAGRAM_HOME_URL);
+      this.storyCapturing = false;
+      return false;
+    } catch (error) {
+      this.storyCapturing = false;
+      hilog.warn(DOMAIN, TAG, 'story template capture failed: %{public}s',
+        (error as Error).message);
+      return false;
+    }
+  }
+
+  /** "故事页抓模板"正在跑（挡住并发：两个用户同时点会互相打断导航）。 */
+  private storyCapturing: boolean = false;
+
+  /**
+   * **最后一条退路：把故事页渲染出来的那条媒体读回来**（见 WebScripts.storyMediaScript）。
+   *
+   * 为什么需要（真机定案）：`/api/v1/feed/reels_media/` 在部分会话上被 IG 回 500；
+   * 而"抓网页那条快拍查询"也不成立 —— 打开 `/stories/<用户名>/` 后页面**一个新请求都不发**
+   * （`story template not captured`）。既然页面**自己把故事画出来了**，就直接读它。
+   *
+   * 代价：要导航共用的隐藏网页（秒级），所以它排在所有原生/模板尝试之后 ——
+   * 只在"这个人无论如何都取不到"时才走。抓到的那一条做成**单条** StoryReel
+   * （够"点开能看"；多条的续播仍然靠原生那条路，取不到就没有）。
+   *
+   * @returns 单条 StoryReel；读不到给 null（原因写进 `detail`）。
+   */
+  private async readStoryFromPage(username: string, userId: string): Promise<StoryReel | null> {
+    const name: string = username.trim();
+    if (name.length === 0) {
+      return null;
+    }
+    if (this.storyCapturing) {
+      return null;
+    }
+    this.storyCapturing = true;
+    hilog.info(DOMAIN, TAG, 'story page read → open stories page for %{public}s', name);
+    try {
+      this.bridge.loadUrl(AppConfig.instagramStoriesUrl(name));
+      await this.bridge.awaitPageReady(STORY_NAV_TIMEOUT_MS);
+      await this.delay(STORY_PAGE_WAIT_MS);
+      const state: string = await this.bridge.runBridge(PAGE_STATE_SCRIPT, 4000, 'story-page');
+      hilog.info(DOMAIN, TAG, 'story page state %{public}s', state.substring(0, 180));
+      let raw: string = '';
+      for (let attempt: number = 1; attempt <= STORY_MEDIA_POLLS; attempt++) {
+        raw = await this.bridge.runBridge(storyMediaScript(), 4000, 'story-media');
+        hilog.info(DOMAIN, TAG, 'story media try=%{public}d %{public}s',
+          attempt, raw.substring(0, 200));
+        if (raw.indexOf('"ok":true') >= 0) {
+          break;
+        }
+        if (attempt < STORY_MEDIA_POLLS) {
+          await this.delay(STORY_MEDIA_GAP_MS);
+        }
+      }
+      const parsed: Record<string, Object> = JSON.parse(raw) as Record<string, Object>;
+      const url: string = JsonRead.strOf(parsed, 'url');
+      if (url.length === 0) {
+        return null;
+      }
+      const video: boolean = JsonRead.boolOf(parsed, 'isVideo');
+      const width: number = JsonRead.numOf(parsed, 'w');
+      const height: number = JsonRead.numOf(parsed, 'h');
+      const item: StoryItem = video
+        ? new StoryItem(`page-${userId}`, '', url, Date.now(), 15000, width, height)
+        : new StoryItem(`page-${userId}`, url, '', Date.now(), 5000, width, height);
+      hilog.info(DOMAIN, TAG, 'story page read ok uid=%{public}s video=%{public}s %{public}dx%{public}d',
+        userId, `${video}`, width, height);
+      return new StoryReel(userId, name, '', [item]);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'story page read failed: %{public}s', (error as Error).message);
+      return null;
+    } finally {
+      // 和别的冷路径一样：用完把网页送回首页（停在故事页会让信息流模板过期）。
+      this.bridge.loadUrl(AppConfig.INSTAGRAM_HOME_URL);
+      this.storyCapturing = false;
     }
   }
 
@@ -6319,7 +6493,7 @@ struct Index {
       return;
     }
     this.storyLoading = true;
-    StoryCache.fetch(item.userId, item.altIds).then((reel: StoryReel | null): void => {
+    StoryCache.fetch(item.userId, item.altIds, item.username).then((reel: StoryReel | null): void => {
       this.storyLoading = false;
       if (reel === null || reel.items.length === 0) {
         hilog.warn(DOMAIN, TAG, 'story load failed uid=%{public}s why=%{public}s → 试 %{public}d',
@@ -6412,7 +6586,14 @@ struct Index {
      */
     StoryDiag.recordFailure(report);
     this.saveStoryDiag();
-    this.toast($r('app.string.story_load_failed', why));
+    /*
+     * 原因 `challenge` 单独给一句**可行动**的提示（见 NativeStories 里认 `challenge_required` 那段）：
+     * 这不是"快拍没内容"，而是 **IG 要求这个账号先做安全验证** —— 用户去网页里验证一次就好，
+     * 丢一句 `http-500` 只会让人以为应用坏了。
+     */
+    this.toast(why === 'challenge'
+      ? $r('app.string.story_need_challenge')
+      : $r('app.string.story_load_failed', why));
   }
 
   /**

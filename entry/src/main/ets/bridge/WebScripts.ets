@@ -1313,6 +1313,44 @@ export function commentsOnPostPageScript(): string {
 export const PAGE_STATE_SCRIPT: string = '(function(){return JSON.stringify({title:document.title,url:location.href,ready:document.readyState});})()';
 
 /**
+ * **从已经渲染出来的故事页里读出当前那条媒体的地址**（取快拍的最后一条退路）。
+ *
+ * 为什么需要它：`/api/v1/feed/reels_media/` 那条私有 REST 在部分会话上被 IG 回 500
+ * （诊断文件证实头/cookie/claim 都齐），而"抓网页那条快拍查询"也不成立 ——
+ * 真机日志：打开 `/stories/<用户名>/` 之后页面**一个新请求都不发**
+ * （`story template not captured`，只多了一条 `PolarisAPIGetFrCookieQuery`）。
+ * 既然页面**自己把故事画出来了**，那就直接把画出来的那个媒体读回来。
+ *
+ * 判据是"**够大的媒体元素**"：故事主体是全屏的，页面其它 `<img>`（头像 88×88、图标、封面缩略图）
+ * 都远小于它 —— 所以有**最小尺寸门槛**（`MIN`），不够大就报 `ok:false`，
+ * 让宿主继续轮询等它画出来（真机踩过：第一版没门槛，第一次轮询就选中了头像 88×88 并当成成功）。
+ *
+ * 视频可能是 MSE（`src` 是 `blob:`）：那种拿不到可下载地址，如实报 `blob:true`。
+ *
+ * @returns JSON：`{ok, url, isVideo, w, h, area, videos, imgs, blob}`
+ */
+export function storyMediaScript(): string {
+  return '(function(){try{' +
+    'var MIN=180;' +
+    'var best="",isVideo=false,bestArea=0,bw=0,bh=0,blob=false;' +
+    'var vids=document.querySelectorAll("video"),i,r,a,src;' +
+    'for(i=0;i<vids.length;i++){try{r=vids[i].getBoundingClientRect();' +
+    'a=r.width*r.height;src=vids[i].currentSrc||vids[i].src||"";' +
+    'if(r.width>=MIN&&r.height>=MIN&&a>bestArea){bestArea=a;best=src;isVideo=true;bw=r.width;bh=r.height;' +
+    'blob=src.indexOf("blob:")===0;}}catch(e){}}' +
+    'var imgs=document.querySelectorAll("img");' +
+    'for(i=0;i<imgs.length;i++){try{r=imgs[i].getBoundingClientRect();' +
+    'a=r.width*r.height;src=imgs[i].currentSrc||imgs[i].src||"";' +
+    'if(r.width>=MIN&&r.height>=MIN&&a>bestArea&&src.indexOf("cdninstagram")>=0){' +
+    'bestArea=a;best=src;isVideo=false;bw=r.width;bh=r.height;blob=false;}}catch(e){}}' +
+    'return JSON.stringify({ok:best.length>0&&!blob,url:best,isVideo:isVideo,blob:blob,' +
+    'w:Math.round(bw),h:Math.round(bh),area:Math.round(bestArea),' +
+    'win:window.innerWidth+"x"+window.innerHeight,' +
+    'videos:vids.length,imgs:imgs.length});' +
+    '}catch(e){return JSON.stringify({ok:false,error:String(e).slice(0,120)});}})()';
+}
+
+/**
  * 当前页面**记录到的请求名**（`window.__ogReplay` 的键）。
  *
  * 用途：抓模板抓不到东西时，先看"这个页面到底发过哪些请求" —— 比如 IG 的探索页是**服务端直出**

@@ -152,8 +152,9 @@ export class StoryCache {
    * @param altIds 这条托盘条目的备选 id（见 StoryTrayItem.altIds）：主 id 问不出内容时，
    *   取数那边会拿它们再试 —— "只有部分用户点开提示没取到"那一类就靠它兜住。
    */
-  static async fetch(userId: string, altIds: Array<string> = []): Promise<StoryReel | null> {
-    const reel: StoryReel | null = await NativeStories.reel(userId, altIds);
+  static async fetch(userId: string, altIds: Array<string> = [],
+                     username: string = ''): Promise<StoryReel | null> {
+    const reel: StoryReel | null = await NativeStories.reel(userId, altIds, username);
     if (reel !== null) {
       StoryCache.warmMedia(reel);
     }
@@ -172,15 +173,16 @@ export class StoryCache {
         continue;
       }
       StoryCache.loading = StoryCache.loading + 1;
-      // 预取也带上备选 id（同一个理由：这条条目的 id 字段可能不是用户 pk）。
-      StoryCache.loadOne(item.userId, item.altIds);
+      // 预取也带上备选 id 与用户名（同一个理由：id 字段可能不是 pk；用户名给"故事页抓模板"那条路用）。
+      StoryCache.loadOne(item.userId, item.altIds, item.username);
     }
   }
 
-  private static loadOne(userId: string, altIds: Array<string> = []): void {
+  private static loadOne(userId: string, altIds: Array<string> = [],
+                         username: string = ''): void {
     // 发这一发时的代次：回来时对不上就整发丢弃（见 generation 的说明）。
     const gen: number = StoryCache.generation;
-    NativeStories.reel(userId, altIds).then((reel: StoryReel | null): void => {
+    NativeStories.reel(userId, altIds, username).then((reel: StoryReel | null): void => {
       /*
        * **代次对不上 = 这一发是上一次 `reset()` 之前发的，结果属于旧队列**。
        *

@@ -45,6 +45,7 @@ import {
 import { MATERIAL_PILL_HEIGHT, SelectSurfaceModifier, SurfaceModifier } from './MaterialSurface';
 import { PlatformCap } from '../core/PlatformCap';
 import { StoryDiag } from '../core/StoryDiag';
+import { NativeStories } from '../core/NativeStories';
 import { fileIo, picker } from '@kit.CoreFileKit';
 import { pasteboard, BusinessError } from '@kit.BasicServicesKit';
 import { promptAction } from '@kit.ArkUI';
@@ -169,6 +170,31 @@ export struct SettingsPanel {
       hilog.warn(DOMAIN, TAG, 'diag export failed: %{public}s', message);
       this.toast($r('app.string.diag_export_failed', message));
     }
+  }
+
+  /**
+   * **抓一次"故事页"模板**（见 setStoryCaptureHook 的说明）。
+   *
+   * 故事页地址需要用户名：用**自己的**用户名（从 Cookie 罐读不到就在网页里问一次，
+   * 都不行就报一句"拿不到用户名"）。抓到什么模板由 `StoryDiag` 一句日志说清
+   * （`story template captured try=… op|op`）—— 这条日志是"新退路到底可不可用"的唯一判据。
+   */
+  private captureStoryTemplateForDiag(): void {
+    // 先试"抓模板"，再试"直接读页面媒体"（两条都走一遍，结果如实报出来）。
+    NativeStories.runStoryCapture().then((ok: boolean): void => {
+      if (ok) {
+        this.toast($r('app.string.diag_story_captured'));
+        return;
+      }
+      NativeStories.runStoryPageRead().then((read: boolean): void => {
+        this.toast(read ? $r('app.string.diag_story_captured')
+          : $r('app.string.diag_story_capture_failed', NativeStories.lastDetail()));
+      }).catch((): void => {
+        this.toast($r('app.string.diag_story_capture_failed', NativeStories.lastDetail()));
+      });
+    }).catch((error: Error): void => {
+      this.toast($r('app.string.diag_story_capture_failed', error.message ?? '-'));
+    });
   }
 
   /**
@@ -515,6 +541,19 @@ export struct SettingsPanel {
       ListItem() {
         this.actionRow($r('app.string.settings_copy_diag'), (): void => {
           this.copyDiag();
+        })
+      }
+      ListItem() {
+        /*
+         * **抓一次"故事页"的模板**（诊断 + 手动救急）。
+         *
+         * 为什么要有这个入口：`reels_media` 那条私有 REST 在部分会话上被 IG 回 500，
+         * 我们改走"网页自己那条快拍查询"（见 NativeStories.storyViaTemplate）—— 而那条路
+         * 只有在 REST 失败时才会自己触发。这个按钮让人**当场**试一次：抓到了就说明这条路可用
+         * （之后快拍就能开），抓不到也能立刻看到失败原因，不用等复现。
+         */
+        this.actionRow($r('app.string.settings_capture_story'), (): void => {
+          this.captureStoryTemplateForDiag();
         })
       }
       ListItem() {
