@@ -123,6 +123,11 @@ export class NativeDirect {
   private static described: number = 0;
   /** 会话模板的请求体只打一次（诊断用，见 replayThread：翻页变量叫什么只能从这里看）。 */
   private static bodyLogged: number = 0;
+  /**
+   * 上一次回放成功用的是哪个 id 形态（`ids` 里的下标；-1 = 还不知道）。
+   * 见 `threadViaTemplate` 里 `order` 的说明：会话页 4 秒一轮的实时轮询靠它省掉一半请求。
+   */
+  private static preferredId: number = -1;
 
   static lastDetail(): string {
     return NativeDirect.detail;
@@ -504,6 +509,24 @@ export class NativeDirect {
     }
     const ids: Array<string> = altId.length > 0 && altId !== threadId
       ? [threadId, altId] : [threadId];
+    /*
+     * **记住上次哪个 id 形态成了，下次先试它**。
+     *
+     * 真机日志里那条会话永远是 `id=0`（`thread_key`）回 `gql-parse`、`id=1`（`thread_id`）
+     * 才出消息 —— 而会话页有 4 秒一轮的实时轮询（见 DirectThreadViewModel.THREAD_POLL_MS），
+     * 也就是**每 4 秒固定白发一发**。记住之后每轮只发一发；
+     * 记忆不对时也只是退回到现在的行为（两发都试）并更新记忆，不会更差。
+     */
+    const order: Array<number> = [];
+    if (NativeDirect.preferredId >= 0 && NativeDirect.preferredId < ids.length
+      && ids.length > 1) {
+      order.push(NativeDirect.preferredId);
+    }
+    for (let a: number = 0; a < ids.length; a++) {
+      if (order.indexOf(a) < 0) {
+        order.push(a);
+      }
+    }
     let empty: DirectThreadView | null = null;
     /*
      * **候选要封顶，而且命中了限流立刻收手**（审计 E4）。
@@ -515,7 +538,8 @@ export class NativeDirect {
     let attempts: number = 0;
     let stopped: boolean = false;
     for (let index: number = 0; index < ops.length && !stopped; index++) {
-      for (let a: number = 0; a < ids.length && !stopped; a++) {
+      for (let oi: number = 0; oi < order.length && !stopped; oi++) {
+        const a: number = order[oi];
         if (attempts >= THREAD_TRY_MAX) {
           hilog.info(DOMAIN, TAG, 'threadViaTemplate stopped: tried %{public}d of %{public}d ops',
             attempts, ops.length);
@@ -535,6 +559,8 @@ export class NativeDirect {
           await NativeDirect.replayThread(ops[index], ids[a], olderCursor);
         if (view !== null && view.messages.length > 0) {
           NativeDirect.detail = '-';
+          // 记住这一发用的是哪个 id 形态（见上面 order 的说明）。
+          NativeDirect.preferredId = a;
           hilog.info(DOMAIN, TAG, 'threadViaTemplate ok op=%{public}s id=%{public}d msgs=%{public}d',
             ops[index], a, view.messages.length);
           return view;
