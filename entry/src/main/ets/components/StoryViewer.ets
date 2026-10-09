@@ -336,8 +336,13 @@ export struct StoryViewer {
    * 差了这一个偏移。实机量出来 x≈0、y≈39（状态栏高度），不换算掉的话"头像落回序列"就低 39vp。
    * 值在 `measureSpace()` 里量（见那里的说明），不写死。
    */
-  private spaceOffsetX: number = 0;
-  private spaceOffsetY: number = 0;
+  /*
+   * **必须是 `@State`**（审计 B5，和下面 overlayW 是同一类坑）：它们被 `startX()/startY()` 读去
+   * 算"头像飞回去"的落点，而 `measureSpace()` 写入它们 —— 普通字段的话那次写入不触发重绘，
+   * 首帧算出来的落点会带着默认偏移（0）去用，等于**偏移没生效**。
+   */
+  @State private spaceOffsetX: number = 0;
+  @State private spaceOffsetY: number = 0;
   /**
    * 浮层自己的尺寸（vp，`measureSpace` 里量）。
    *
