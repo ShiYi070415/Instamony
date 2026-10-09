@@ -64,16 +64,21 @@ const ID_KEYS: Array<string> = ['pk', 'id', 'user_id', 'strong_id__'];
 export class NativeStories {
   private static detail: string = '-';
   /**
-   * 最近一次 `reel()` 的**逐候选轨迹**（每发一行，最多留 TRACE_MAX 行）。
+   * 每个用户各自的**逐候选轨迹**（uid → 行数组，最多留 TRACE_MAX 行）。
    *
-   * 为什么必须留（用户报的"点开快拍说没取到"）：这条链一次最多发四发、每发的身份和 URL 都不同，
-   * 失败原因（`empty` / `http-429` / 非 JSON / 抛）**只有逐发看才能定位**；
+   * 为什么必须留（用户报的"点开快拍说没取到"）：这条链一次可能发好几发、每发的身份和 URL 都不同，
+   * 失败原因（`http-500` / `http-4xx` / 非 JSON / 抛 / 真的没内容）**只有逐发看才能定位**；
    * 而 hilog 在真机上被 chromium 冲得几秒就没了（我们自己的 INFO 行根本留不住）。
-   * 所以把它存下来，交给 `failureReport()` 落成文件（见 pages/Index 的 dumpProbeFile）。
+   *
+   * 为什么按 uid 分开（用户回传的诊断文件暴露的第二个问题）：托盘预取会**并发**对 5 位用户
+   * 各发一次 `reel()`，而轨迹原来是一个全局数组 —— 于是一次失败记录里混进了**六个人的 URL**，
+   * 根本看不出"被点的那位到底收到了什么"。现在按 uid 存，报告里只看这一位的轨迹。
    */
-  private static trace: Array<string> = [];
+  private static traces: Map<string, Array<string>> = new Map<string, Array<string>>();
   /** 轨迹最多留几行（四发 + 头尾各留一点余量）。 */
   private static readonly TRACE_MAX: number = 12;
+  /** 最多给几个用户留轨迹（防止长时间浏览把内存撑起来）。 */
+  private static readonly TRACE_UIDS_MAX: number = 24;
   /** 最多试几个 id（主 id + 备选；见 reel 的第二段）。 */
   private static readonly ID_TRY_MAX: number = 3;
   /**
@@ -175,12 +180,32 @@ export class NativeStories {
     return NativeStories.detail;
   }
 
-  /** 记一行轨迹（见 trace 的说明）。 */
-  private static note(line: string): void {
-    NativeStories.trace.push(line);
-    while (NativeStories.trace.length > NativeStories.TRACE_MAX) {
-      NativeStories.trace.shift();
+  /** 记一行轨迹（按 uid 分开存，见 traces 的说明）。 */
+  private static note(userId: string, line: string): void {
+    let list: Array<string> | undefined = NativeStories.traces.get(userId);
+    if (list === undefined) {
+      // 控制在 TRACE_UIDS_MAX 个用户以内：满了就整表清空（诊断够用，不做 LRU）。
+      if (NativeStories.traces.size >= NativeStories.TRACE_UIDS_MAX) {
+        NativeStories.traces.clear();
+      }
+      list = [];
+      NativeStories.traces.set(userId, list);
     }
+    list.push(line);
+    while (list.length > NativeStories.TRACE_MAX) {
+      list.shift();
+    }
+  }
+
+  /** 某一位的轨迹（没有就给空数组）。 */
+  private static traceOf(userId: string): Array<string> {
+    const list: Array<string> | undefined = NativeStories.traces.get(userId);
+    return list === undefined ? [] : list;
+  }
+
+  /** 开一次新尝试：清掉这一位的旧轨迹（同一位被点两次时不会把上一次的行混进来）。 */
+  private static resetTrace(userId: string): void {
+    NativeStories.traces.set(userId, []);
   }
 
   /**
@@ -217,11 +242,12 @@ export class NativeStories {
      */
     const shape: string | undefined = NativeStories.nodeShape.get(userId);
     lines.push(`shape=${shape === undefined ? '(not kept)' : shape}`);
-    lines.push('== 逐发轨迹 ==');
-    for (let index: number = 0; index < NativeStories.trace.length; index++) {
-      lines.push(`  ${NativeStories.trace[index]}`);
+    lines.push('== 这一位的逐发轨迹 ==');
+    const trace: Array<string> = NativeStories.traceOf(userId);
+    for (let index: number = 0; index < trace.length; index++) {
+      lines.push(`  ${trace[index]}`);
     }
-    if (NativeStories.trace.length === 0) {
+    if (trace.length === 0) {
       lines.push('  (空：还没发过请求就被判定失败 —— 看 detail)');
     }
     return lines.join('\n');
@@ -466,17 +492,16 @@ export class NativeStories {
       return null;
     }
     /*
-     * 候选 = **两条 URL × 三种身份**（见文件头 ANDROID_UA 的说明）：
+     * 候选 = **一条 URL × 三种身份**（见文件头 ANDROID_UA 的说明）：
      *   ① 整体 reels + 网页身份（模板里那条，最常见能成）
      *   ② 整体 reels + 安卓新版本号
      *   ③ 整体 reels + 安卓旧版本号
-     *   ④ **单用户 story** + 网页身份（老接口，纯粹当兜底）
-     * 另外，主 id "答了但没内容"时，会用**备选 id** 把 ① 和 ④ 再各试一遍（见下面第二段）。
+     * 另外，主 id "答了但没内容"时，会用**备选 id** 把 ① 再试一遍（见下面第二段）。
      *
-     * 审计 E8 里写的"第 4 个候选与第 1 个同 URL 同身份、纯重复请求"**在这一版代码里不成立**
-     * （`urls[3]` 是 `storyUrl`，`urls[0]` 是 `reelUrl`；`git log` 显示这个数组从 init 起没改过）。
-     * 那句判断是照着**上面那段旧注释**（"前四发都是那条整体 reels"）读出来的 —— 旧注释留在
-     * 这里会继续误导下一次审计，所以按代码重写成现在这段。
+     * **第 4 个候选（`/feed/user/<id>/story/`）在这一版 IG 上已经死了，删掉了**：
+     * 用户回传的诊断文件里，它对 5 位不同用户**一律回 `http-400`（42 字节 JSON）** ——
+     * 也就是每次失败都白打一发，还把一条误导性的 400 写进轨迹（让人以为"id 不对"）。
+     * 真正有用的那条始终是 `reels_media`。
      */
     // 候选 id：主 id 在前，后面是备选（去重、封顶，免得失败路径把请求发爆）。
     const ids: Array<string> = [userId];
@@ -488,13 +513,10 @@ export class NativeStories {
     }
     const reelUrlOf = (id: string): string =>
       `${SITE}/api/v1/feed/reels_media/?reel_ids=${encodeURIComponent(id)}&source=raven`;
-    const storyUrlOf = (id: string): string =>
-      `${SITE}/api/v1/feed/user/${encodeURIComponent(id)}/story/`;
     const reelUrl: string = reelUrlOf(userId);
-    const storyUrl: string = storyUrlOf(userId);
-    const urls: Array<string> = [reelUrl, reelUrl, reelUrl, storyUrl];
+    const urls: Array<string> = [reelUrl, reelUrl, reelUrl];
     const identities: Array<number> =
-      [IDENTITY_WEB, IDENTITY_ANDROID_NEW, IDENTITY_ANDROID_OLD, IDENTITY_WEB];
+      [IDENTITY_WEB, IDENTITY_ANDROID_NEW, IDENTITY_ANDROID_OLD];
     /*
      * **已经"答过但没内容"的 URL**：同一条 URL 再换身份打一遍，拿回来的是同一份数据。
      *
@@ -505,28 +527,30 @@ export class NativeStories {
      * 第 4 个候选是**另一条 URL**（老的单用户 story 接口），它仍然照试（可能真有内容）。
      */
     const answeredEmpty: Array<string> = [];
-    NativeStories.trace = [];
+    NativeStories.resetTrace(userId);
     NativeStories.answeredJson = false;
+    // 复位上一次留下的具体原因：不然"这一发到底为什么失败"会被上一次的 detail 混淆。
+    NativeStories.detail = '-';
     for (let at: number = 0; at < urls.length; at++) {
       // 冷却期内不再往下试（见 core/ApiThrottle.STORIES）：再打只会把窗口拖长。
       const cooled: string = NativeStories.cooling();
       if (cooled.length > 0) {
         NativeStories.detail = cooled;
-        NativeStories.note(`try=${at} 跳过：stories 限流 ${cooled}`);
+        NativeStories.note(userId, `try=${at} 跳过：stories 限流 ${cooled}`);
         hilog.warn(DOMAIN, TAG, 'reel stopped: stories throttled %{public}dmin left',
           ApiThrottle.remainingMinutes(ApiThrottle.STORIES));
         break;
       }
       if (answeredEmpty.indexOf(urls[at]) >= 0) {
-        NativeStories.note(`try=${at} 跳过：同 URL 已经答过但没内容`);
+        NativeStories.note(userId, `try=${at} 跳过：同 URL 已经答过但没内容`);
         hilog.info(DOMAIN, TAG, 'reel skip try=%{public}d id=%{public}s (same url already empty)',
           at, NativeStories.identityName(identities[at]));
         continue;
       }
-      const text: string | null = await NativeStories.fetchText(urls[at], identities[at]);
+      const text: string | null = await NativeStories.fetchText(urls[at], identities[at], userId);
       if (text === null) {
         // 传输层没拿到（非 200 / 非 JSON / 抛 / 没会话）：换个身份再试是有意义的。
-        NativeStories.note(`try=${at} id=${NativeStories.identityName(identities[at])} `
+        NativeStories.note(userId, `try=${at} id=${NativeStories.identityName(identities[at])} `
           + `url=${NativeStories.tailOf(urls[at])} → 传输失败 detail=${NativeStories.detail}`);
         continue;
       }
@@ -534,7 +558,7 @@ export class NativeStories {
       const reel: StoryReel | null = NativeStories.parseReel(text, userId);
       if (reel !== null && reel.items.length > 0) {
         NativeStories.detail = '-';
-        NativeStories.note(`try=${at} id=${NativeStories.identityName(identities[at])} `
+        NativeStories.note(userId, `try=${at} id=${NativeStories.identityName(identities[at])} `
           + `url=${NativeStories.tailOf(urls[at])} → ok items=${reel.items.length}`);
         hilog.info(DOMAIN, TAG,
           'reel ok try=%{public}d id=%{public}s uid=%{public}s n=%{public}d video=%{public}s size=%{public}dx%{public}d',
@@ -549,7 +573,7 @@ export class NativeStories {
        * 而前者需要的现场（响应开头）就在这一行日志 / 轨迹里，换身份重打也救不了它。
        */
       answeredEmpty.push(urls[at]);
-      NativeStories.note(`try=${at} id=${NativeStories.identityName(identities[at])} `
+      NativeStories.note(userId, `try=${at} id=${NativeStories.identityName(identities[at])} `
         + `url=${NativeStories.tailOf(urls[at])} → 答了但没媒体 items=${reel === null ? -1 : reel.items.length} `
         + `head=${text.substring(0, 160).replace(/[\r\n]+/g, ' ')}`);
       hilog.info(DOMAIN, TAG, 'reel empty try=%{public}d id=%{public}s body=%{public}s',
@@ -581,13 +605,27 @@ export class NativeStories {
     const fromTray: StoryReel | null = NativeStories.reelFromTrayNode(userId);
     if (fromTray !== null && fromTray.items.length > 0) {
       NativeStories.detail = '-tray';
-      NativeStories.note(`托盘兜底：条目自带 items=${fromTray.items.length}`);
+      NativeStories.note(userId, `托盘兜底：条目自带 items=${fromTray.items.length}`);
       hilog.info(DOMAIN, TAG, 'reel ok via tray node uid=%{public}s n=%{public}d',
         userId, fromTray.items.length);
       return fromTray;
     }
-    if (NativeStories.detail !== 'empty' && NativeStories.detail.indexOf('throttled-') < 0) {
+    /*
+     * **收尾：只在"服务端真的答过"时才把原因写成 `empty`**（这里以前有个 bug，见下）。
+     *
+     * 用户回传的诊断文件把这个 bug 抓了出来：`detail=empty` 而轨迹里明明是
+     * `reels_media` **500**、`user/<id>/story` **400** —— 因为原来这一行无条件把
+     * `detail` 覆盖成了 `empty`（只要不是 throttled）。于是界面一直说"没取到（原因 empty）"，
+     * 而真相是**请求根本没成功**，我们却在往"这条快拍没内容"的方向查。
+     *
+     * 现在：只有"某条候选拿到了 200 + JSON、只是没有媒体"才算 `empty`（那才是真的没内容）；
+     * 一条候选都没答上时，**保留具体原因**（http-500 / http-400 / throw:… / no-session）。
+     */
+    if (NativeStories.answeredJson) {
       NativeStories.detail = 'empty';
+    } else if (NativeStories.detail === '-') {
+      // 一条候选都没打（全被跳过）—— 给个能区分于 empty 的说法。
+      NativeStories.detail = 'no-answer';
     }
     return null;
   }
@@ -608,10 +646,10 @@ export class NativeStories {
    */
   private static async tryAltIds(ids: Array<string>,
                                  answeredEmpty: Array<string>): Promise<StoryReel | null> {
+    const mainId: string = ids[0];
     for (let index: number = 1; index < ids.length; index++) {
       const alts: Array<string> = [
-        `${SITE}/api/v1/feed/reels_media/?reel_ids=${encodeURIComponent(ids[index])}&source=raven`,
-        `${SITE}/api/v1/feed/user/${encodeURIComponent(ids[index])}/story/`
+        `${SITE}/api/v1/feed/reels_media/?reel_ids=${encodeURIComponent(ids[index])}&source=raven`
       ];
       for (let at: number = 0; at < alts.length; at++) {
         if (answeredEmpty.indexOf(alts[at]) >= 0) {
@@ -620,24 +658,25 @@ export class NativeStories {
         const cooled: string = NativeStories.cooling();
         if (cooled.length > 0) {
           NativeStories.detail = cooled;
-          NativeStories.note(`alt=${ids[index]} 跳过：stories 限流 ${cooled}`);
+          NativeStories.note(mainId, `alt=${ids[index]} 跳过：stories 限流 ${cooled}`);
           return null;
         }
-        const text: string | null = await NativeStories.fetchText(alts[at], IDENTITY_WEB);
+        const text: string | null = await NativeStories.fetchText(alts[at], IDENTITY_WEB, mainId);
         if (text === null) {
-          NativeStories.note(`alt=${ids[index]} url=${NativeStories.tailOf(alts[at])} → 传输失败`);
+          NativeStories.note(mainId,
+            `alt=${ids[index]} url=${NativeStories.tailOf(alts[at])} → 传输失败`);
           continue;
         }
         const reel: StoryReel | null = NativeStories.parseReel(text, ids[index]);
         if (reel !== null && reel.items.length > 0) {
-          NativeStories.note(`alt=${ids[index]} url=${NativeStories.tailOf(alts[at])} `
-            + `→ ok items=${reel.items.length}（主 id=${ids[0]} 为空）`);
+          NativeStories.note(mainId, `alt=${ids[index]} url=${NativeStories.tailOf(alts[at])} `
+            + `→ ok items=${reel.items.length}（主 id=${mainId} 为空）`);
           hilog.info(DOMAIN, TAG, 'reel ok via alt id=%{public}s（主 id=%{public}s 为空）n=%{public}d',
-            ids[index], ids[0], reel.items.length);
+            ids[index], mainId, reel.items.length);
           return reel;
         }
         answeredEmpty.push(alts[at]);
-        NativeStories.note(`alt=${ids[index]} url=${NativeStories.tailOf(alts[at])} `
+        NativeStories.note(mainId, `alt=${ids[index]} url=${NativeStories.tailOf(alts[at])} `
           + `→ 答了但没媒体 head=${text.substring(0, 120).replace(/[\r\n]+/g, ' ')}`);
       }
     }
@@ -667,11 +706,14 @@ export class NativeStories {
    * 发一发 GET，拿响应文本；非 200 / 不是 JSON 给 null。
    *
    * @param identity 用哪套身份（见 ANDROID_UA 的说明）：网页头 / 安卓新版本号 / 安卓旧版本号。
+   * @param uid 这一次是为哪位用户发的（轨迹按 uid 分开存，见 traces）。
    */
-  private static async fetchText(url: string, identity: number): Promise<string | null> {
+  private static async fetchText(url: string, identity: number, uid: string): Promise<string | null> {
     const headers: Record<string, string> = await NativeFeed.sessionOrBrowserHeaders();
     if (Object.keys(headers).length === 0) {
       NativeStories.detail = 'no-session';
+      NativeStories.note(uid, `  http id=${NativeStories.identityName(identity)} `
+        + `url=${NativeStories.tailOf(url)} → 没有会话（sessionOrBrowserHeaders 为空）`);
       return null;
     }
     if (identity === IDENTITY_ANDROID_NEW || identity === IDENTITY_ANDROID_OLD) {
@@ -694,8 +736,16 @@ export class NativeStories {
       hilog.info(DOMAIN, TAG, 'reel http id=%{public}s %{public}s code=%{public}d json=%{public}s len=%{public}d',
         NativeStories.identityName(identity), url.substring(url.indexOf('/api/')),
         response.responseCode, `${json}`, text.length);
-      NativeStories.note(`  http id=${NativeStories.identityName(identity)} `
-        + `url=${NativeStories.tailOf(url)} code=${response.responseCode} json=${json} len=${text.length}`);
+      /*
+       * 轨迹里**连响应体开头一起记**。
+       *
+       * 用户回传的诊断文件里，失败轨迹只有 `code=500 len=62`、没有体 —— 而那个 62 字节的 JSON
+       * 才是唯一能说明"IG 为什么 500"的东西（是 `{"message":…,"status":"fail"}`？还是
+       * `{"require_login":…}`？）。没有它只能猜，所以这里补上（截断 200 字符够看）。
+       */
+      NativeStories.note(uid, `  http id=${NativeStories.identityName(identity)} `
+        + `url=${NativeStories.tailOf(url)} code=${response.responseCode} json=${json} len=${text.length}`
+        + ` head=${text.substring(0, 200).replace(/[\r\n]+/g, ' ')}`);
       if (response.responseCode !== 200 || !json) {
         /*
          * **限流要认出来**（见 core/ApiThrottle.STORIES）：IG 的节流响应是
@@ -712,6 +762,16 @@ export class NativeStories {
           return null;
         }
         NativeStories.detail = `http-${response.responseCode}${json ? '' : '/non-json'}`;
+        /*
+         * 非 200 时把**头名清单**也记进轨迹。
+         *
+         * 为什么：`reels_media` 是网页私有接口，它认 `x-ig-www-claim` / `x-csrftoken` /
+         * `x-ig-app-id` 这几个头。如果某台设备的会话缺了其中一个，IG 的表现不是 401 而是
+         * **500**（用户回传的文件里就是这个 500）—— 光看状态码看不出缺什么，头名清单一比就清楚
+         * （正常设备那串里有 claim，出问题的设备那串里没有）。
+         * 只记**名字**，不记值（值里有会话材料）。
+         */
+        NativeStories.note(uid, `    hdr=[${Object.keys(headers).sort().join(',')}]`);
         hilog.info(DOMAIN, TAG, 'reel body=%{public}s',
           text.substring(0, 160).replace(/[\r\n]+/g, ' '));
         return null;
