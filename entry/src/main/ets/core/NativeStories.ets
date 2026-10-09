@@ -63,9 +63,58 @@ const ID_KEYS: Array<string> = ['pk', 'id', 'user_id', 'strong_id__'];
 
 export class NativeStories {
   private static detail: string = '-';
+  /**
+   * 最近一次 `reel()` 的**逐候选轨迹**（每发一行，最多留 TRACE_MAX 行）。
+   *
+   * 为什么必须留（用户报的"点开快拍说没取到"）：这条链一次最多发四发、每发的身份和 URL 都不同，
+   * 失败原因（`empty` / `http-429` / 非 JSON / 抛）**只有逐发看才能定位**；
+   * 而 hilog 在真机上被 chromium 冲得几秒就没了（我们自己的 INFO 行根本留不住）。
+   * 所以把它存下来，交给 `failureReport()` 落成文件（见 pages/Index 的 dumpProbeFile）。
+   */
+  private static trace: Array<string> = [];
+  /** 轨迹最多留几行（四发 + 头尾各留一点余量）。 */
+  private static readonly TRACE_MAX: number = 12;
 
   static lastDetail(): string {
     return NativeStories.detail;
+  }
+
+  /** 记一行轨迹（见 trace 的说明）。 */
+  private static note(line: string): void {
+    NativeStories.trace.push(line);
+    while (NativeStories.trace.length > NativeStories.TRACE_MAX) {
+      NativeStories.trace.shift();
+    }
+  }
+
+  /**
+   * 把"这一次为什么没取到"整理成一段可读文本（落文件用，见 pages/Index.dumpProbeFile）。
+   *
+   * 内容刻意全都是**下次能直接判定的东西**：问了哪个 uid、四发各自的身份/URL/状态码/长度、
+   * 响应开头（判断"服务端说没有"还是"我们解析不出来"）、托盘的原始条目、预缓存队列状态。
+   */
+  static failureReport(userId: string, username: string, trayCount: number,
+                       trayHead: string, queueIndex: number, cachedAvailable: boolean,
+                       trayAgeMs: number): string {
+    const lines: Array<string> = [];
+    lines.push(`Instamony 快拍取数失败 uid=${userId} name=${username}`);
+    lines.push(`detail=${NativeStories.detail}`);
+    lines.push(`tray items=${trayCount} at=${queueIndex} storyCacheHas=${cachedAvailable}`);
+    /*
+     * 托盘那份数据有多旧。这一条是**判断"快拍已经过期"还是"我们问错了 id"的关键**：
+     * 托盘的种子最长允许 3 分钟（见 StoriesTray.TRAY_FRESH_MS），期间 IG 侧完全可能有人的
+     * 快拍刚好到期 —— 那种情况下托盘还列着他，而 `reels_media` 已经回空。
+     */
+    lines.push(`tray age=${trayAgeMs}ms (~${Math.round(trayAgeMs / 1000)}s)`);
+    lines.push(`tray head=${trayHead}`);
+    lines.push('== 逐发轨迹 ==');
+    for (let index: number = 0; index < NativeStories.trace.length; index++) {
+      lines.push(`  ${NativeStories.trace[index]}`);
+    }
+    if (NativeStories.trace.length === 0) {
+      lines.push('  (空：还没发过请求就被判定失败 —— 看 detail)');
+    }
+    return lines.join('\n');
   }
 
   /**
@@ -294,16 +343,19 @@ export class NativeStories {
      * 第 4 个候选是**另一条 URL**（老的单用户 story 接口），它仍然照试（可能真有内容）。
      */
     const answeredEmpty: Array<string> = [];
+    NativeStories.trace = [];
     for (let at: number = 0; at < urls.length; at++) {
       // 冷却期内不再往下试（见 core/ApiThrottle.STORIES）：再打只会把窗口拖长。
       const cooled: string = NativeStories.cooling();
       if (cooled.length > 0) {
         NativeStories.detail = cooled;
+        NativeStories.note(`try=${at} 跳过：stories 限流 ${cooled}`);
         hilog.warn(DOMAIN, TAG, 'reel stopped: stories throttled %{public}dmin left',
           ApiThrottle.remainingMinutes(ApiThrottle.STORIES));
         break;
       }
       if (answeredEmpty.indexOf(urls[at]) >= 0) {
+        NativeStories.note(`try=${at} 跳过：同 URL 已经答过但没内容`);
         hilog.info(DOMAIN, TAG, 'reel skip try=%{public}d id=%{public}s (same url already empty)',
           at, NativeStories.identityName(identities[at]));
         continue;
@@ -311,11 +363,15 @@ export class NativeStories {
       const text: string | null = await NativeStories.fetchText(urls[at], identities[at]);
       if (text === null) {
         // 传输层没拿到（非 200 / 非 JSON / 抛 / 没会话）：换个身份再试是有意义的。
+        NativeStories.note(`try=${at} id=${NativeStories.identityName(identities[at])} `
+          + `url=${NativeStories.tailOf(urls[at])} → 传输失败 detail=${NativeStories.detail}`);
         continue;
       }
       const reel: StoryReel | null = NativeStories.parseReel(text, userId);
       if (reel !== null && reel.items.length > 0) {
         NativeStories.detail = '-';
+        NativeStories.note(`try=${at} id=${NativeStories.identityName(identities[at])} `
+          + `url=${NativeStories.tailOf(urls[at])} → ok items=${reel.items.length}`);
         hilog.info(DOMAIN, TAG,
           'reel ok try=%{public}d id=%{public}s uid=%{public}s n=%{public}d video=%{public}s size=%{public}dx%{public}d',
           at, NativeStories.identityName(identities[at]), userId, reel.items.length,
@@ -326,9 +382,12 @@ export class NativeStories {
        * 服务端**答了**（200 + JSON）但这条用户没有可播的媒体：
        * 记住这条 URL，别再换身份重打（见 answeredEmpty 的说明）。
        * 结构没认出来（字段名变了）和"真的没内容"在这里分不开 —— 两种都只能记下来，
-       * 而前者需要的现场（响应开头）就在下面这行日志里，换身份重打也救不了它。
+       * 而前者需要的现场（响应开头）就在这一行日志 / 轨迹里，换身份重打也救不了它。
        */
       answeredEmpty.push(urls[at]);
+      NativeStories.note(`try=${at} id=${NativeStories.identityName(identities[at])} `
+        + `url=${NativeStories.tailOf(urls[at])} → 答了但没媒体 items=${reel === null ? -1 : reel.items.length} `
+        + `head=${text.substring(0, 160).replace(/[\r\n]+/g, ' ')}`);
       hilog.info(DOMAIN, TAG, 'reel empty try=%{public}d id=%{public}s body=%{public}s',
         at, NativeStories.identityName(identities[at]),
         text.substring(0, 180).replace(/[\r\n]+/g, ' '));
@@ -337,6 +396,12 @@ export class NativeStories {
       NativeStories.detail = 'empty';
     }
     return null;
+  }
+
+  /** URL 里 `/api/` 之后那一段（轨迹里够用，又不至于把整条 URL 抄进去）。 */
+  private static tailOf(url: string): string {
+    const at: number = url.indexOf('/api/');
+    return at >= 0 ? url.substring(at) : url;
   }
 
   /** 快拍这一族的退避闸门（见 core/ApiThrottle.STORIES）。 */
@@ -389,6 +454,8 @@ export class NativeStories {
       hilog.info(DOMAIN, TAG, 'reel http id=%{public}s %{public}s code=%{public}d json=%{public}s len=%{public}d',
         NativeStories.identityName(identity), url.substring(url.indexOf('/api/')),
         response.responseCode, `${json}`, text.length);
+      NativeStories.note(`  http id=${NativeStories.identityName(identity)} `
+        + `url=${NativeStories.tailOf(url)} code=${response.responseCode} json=${json} len=${text.length}`);
       if (response.responseCode !== 200 || !json) {
         /*
          * **限流要认出来**（见 core/ApiThrottle.STORIES）：IG 的节流响应是

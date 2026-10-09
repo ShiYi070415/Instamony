@@ -566,7 +566,7 @@
     },
     {
       "name": "story_load_failed",
-      "value": "Couldn't load this story (see logs)"
+      "value": "Couldn't load this story (reason %s)"
     },
     {
       "name": "story_action_pending",

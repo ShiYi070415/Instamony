@@ -6269,7 +6269,7 @@ struct Index {
       // 那个方向没人了：第一发失败就只弹一句，已经开着浮层就直接收。
       if (this.storyPendingOpen) {
         this.storyPendingOpen = false;
-        this.toast($r('app.string.story_load_failed'));
+        this.showStoryFail(null, at);
         return;
       }
       this.closeStory();
@@ -6313,7 +6313,7 @@ struct Index {
         if (this.storyPendingOpen) {
           // 卡片已经弹出来了（先弹后取数）：取不到就**带动画收回去**，别留一张空卡片。
           this.storyPendingOpen = false;
-          this.toast($r('app.string.story_load_failed'));
+          this.showStoryFail(item, at);
           this.requestStoryClose();
           return;
         }
@@ -6332,12 +6332,45 @@ struct Index {
       }
       if (this.storyPendingOpen) {
         this.storyPendingOpen = false;
-        this.toast($r('app.string.story_load_failed'));
+        this.showStoryFail(item, at);
         this.requestStoryClose();
         return;
       }
       this.playStoryAt(at + step, null, step);
     });
+  }
+
+  /**
+   * **快拍取不到时：把原因摆到用户眼前，并把现场落成文件**。
+   *
+   * 为什么不能只弹一句"没取到（请看日志）"：真机上 hilog 里我们自己的 INFO 行几秒就被
+   * chromium 冲没了（缓冲区太小），**远端用户复现时我们什么也拿不到**；而这条失败恰恰只在他们
+   * 那边发生。所以两件事一起做：
+   *   ① 消息里带上 `NativeStories.lastDetail()` 那一档原因（`empty` / `http-429` /
+   *      `throttled-12min` / `no-session` / `throw:…`）—— 测试同学截一张图就是一条有效线索；
+   *   ② 把逐发轨迹（谁的身份、哪条 URL、状态码、长度、响应开头、托盘条目、预缓存状态）
+   *      写进沙箱 `probe_storyfail_*.txt`（见 dumpProbeFile），用 hdc 取出来就是完整现场。
+   */
+  private showStoryFail(item: StoryTrayItem | null, at: number): void {
+    const why: string = NativeStories.lastDetail();
+    if (item === null) {
+      // 队列走到底那一发：连"问的是谁"都没有，记一行就够（原因仍是 detail）。
+      hilog.warn(DOMAIN, TAG, 'story fail (queue end) why=%{public}s at=%{public}d', why, at);
+      this.toast($r('app.string.story_load_failed', why));
+      return;
+    }
+    const head: Array<string> = [];
+    for (let index: number = 0; index < this.storyQueue.length && index < 6; index++) {
+      const one: StoryTrayItem = this.storyQueue[index];
+      head.push(`${one.userId}:${one.username}:seen=${one.seen}:n=${one.count}`);
+    }
+    const report: string = NativeStories.failureReport(item.userId, item.username,
+      this.storyQueue.length, head.join(' | '), at, StoryCache.has(item.userId),
+      this.storyQueueAtMs > 0 ? Date.now() - this.storyQueueAtMs : -1);
+    hilog.warn(DOMAIN, TAG, 'story fail uid=%{public}s why=%{public}s at=%{public}d',
+      item.userId, why, at);
+    this.dumpProbeFile('storyfail', report);
+    this.toast($r('app.string.story_load_failed', why));
   }
 
   /**

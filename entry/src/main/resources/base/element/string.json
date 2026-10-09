@@ -234,7 +234,7 @@
     },
     {
       "name": "story_load_failed",
-      "value": "这条快拍没取到（请看日志）"
+      "value": "这条快拍没取到（原因 %s）"
     },
     {
       "name": "story_action_pending",
