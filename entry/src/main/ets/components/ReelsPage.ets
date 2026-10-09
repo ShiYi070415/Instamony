@@ -1192,6 +1192,8 @@ export struct ReelsPage {
       // 不恢复的话每次切回来都从第一条重新开始（视图模型记着它，见 ReelsViewModel.activeIndex）。
       const resume: number = this.vm.activeIndex();
       this.activeIndex = resume < cached.length ? resume : 0;
+      // 恢复位置时"落定页"就是它（见 settledIndex，审计 B1）。
+      this.settledIndex = this.activeIndex;
       this.initialIndex = this.activeIndex;
       // "上一次报过的条数"跟着恢复位置对齐：onAppear 里那次无动画定位（changeIndex）也会报
       // onChange，不对齐的话会被当成一次翻页、底栏一进页面就沉下去。
@@ -1322,6 +1324,14 @@ export struct ReelsPage {
 
   /** 已经打过"这条视频的比例是多少"日志的键（诊断用，见 videoAspect）。 */
   private aspectLogged: Array<string> = [];
+
+  /**
+   * **Swiper 真正落定**的那一页（`onChange`/`onAnimationEnd` 里更新）。
+   *
+   * 和 `activeIndex` 的区别：后者在 `onAnimationStart` 就提前切了（为了让新页面在转场期间起播），
+   * 转场途中它指向的是"即将到来"的那条。双击点赞要用这个"落定"的下标（见 doubleTapLike，审计 B1）。
+   */
+  private settledIndex: number = 0;
 
   /**
    * 一条视频的画面比例（宽 ÷ 高）。
@@ -1495,6 +1505,8 @@ export struct ReelsPage {
         // （索引一改就回调），所以"动画到底多慢"必须看下面的 onAnimationEnd。
         .onChange((index: number): void => {
           const before: number = this.lastReportedIndex;
+          // 落定页以 onChange 为准（见 settledIndex 的说明，审计 B1）。
+          this.settledIndex = index;
           this.switchTo(index);
           // 兜底：真的翻页了也报一次"滑动"（正常路径在 onTouch 的第一次 Move 已经报过，
           // 这里重复一次是无害的 —— 页面那边"已经沉着"就直接返回）。
@@ -1550,7 +1562,17 @@ export struct ReelsPage {
    * 已经赞过就什么都不做（不再发请求）。点赞本身仍走 tapLike 那套乐观 + 回滚。
    */
   private doubleTapLike(): void {
-    const reel: Reel | null = this.current();
+    /*
+     * **双击点赞以"落定那一条"为准，不用 `activeIndex`**（审计 B1）。
+     *
+     * `onAnimationStart` 会把 `activeIndex` **提前**切到目标条（那是为了新页面在转场期间就起播），
+     * 但画面这时还停在旧页 —— 这个窗口里双击，`current()` 已经是新那条了，赞就落在**用户没在看**
+     * 的视频上。`settledIndex` 只在 Swiper 的 `onChange`/`onAnimationEnd` 里更新，代表真正落定的页。
+     */
+    const settled: number = this.settledIndex >= 0 && this.settledIndex < this.reels.length
+      ? this.settledIndex : this.activeIndex;
+    const reel: Reel | null = settled >= 0 && settled < this.reels.length
+      ? this.reels[settled] : null;
     if (reel === null || reel.liked) {
       return;
     }
