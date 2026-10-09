@@ -174,7 +174,23 @@ export class StoryCache {
   }
 
   private static loadOne(userId: string): void {
+    // 发这一发时的代次：回来时对不上就整发丢弃（见 generation 的说明）。
+    const gen: number = StoryCache.generation;
     NativeStories.reel(userId).then((reel: StoryReel | null): void => {
+      /*
+       * **代次对不上 = 这一发是上一次 `reset()` 之前发的，结果属于旧队列**。
+       *
+       * 丢掉的理由有两条，都不是洁癖：
+       *   ① 写进去就是"把旧起点那几页塞进新队列"（用户已经点了别的用户，队列该从新的起点排）；
+       *   ② `loading--` 会把**新一代**的计数扣到负数，而 `fill()` 的判据是
+       *      `pages + loading < DEPTH` —— 负数会让它**多要几发**请求，等于白打接口。
+       * `reset()` 已经把 `loading` 归零了，所以旧响应什么都不该动。
+       */
+      if (gen !== StoryCache.generation) {
+        hilog.info(DOMAIN, TAG, 'drop stale uid=%{public}s gen=%{public}d now=%{public}d',
+          userId, gen, StoryCache.generation);
+        return;
+      }
       StoryCache.loading = StoryCache.loading - 1;
       if (reel !== null && reel.items.length > 0) {
         StoryCache.pages.push(reel);
@@ -188,6 +204,9 @@ export class StoryCache {
       // 补下一页（成功失败都继续，别让一次失败把队列饿住）。
       StoryCache.fill();
     }).catch((): void => {
+      if (gen !== StoryCache.generation) {
+        return;
+      }
       StoryCache.loading = StoryCache.loading - 1;
       StoryCache.fill();
     });

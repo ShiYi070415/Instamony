@@ -126,20 +126,24 @@
 
 ## G. 需要先给计划的（牵涉状态机，改动前先出一页方案）
 
-- [ ] **G1 `viewmodel/ProfileViewModel.load`** 跨 await 仍用 `this.tab` 取 `opName` 并写回 state：
-      切分页/并发时会把 **A 分页的帖子写进 B 分页**（同文件 698/707/1043 都有 `this.tab===tab` 守卫，
-      只有 `load` 漏了）。→ 入口保存 `const tab/state`，全程用 `opNameOf(tab)`，写回前按
-      `this.tab===tab` 守卫。
-- [ ] **G2 评论面板状态机**：`commentsVisible` 与 `commentsSuspended` 同帧互覆、`commentsClosing`
-      卡 true 时 `closeComments` 直接 return → 面板再也拉不起/关不掉。→ 单一状态机 + token。
-- [ ] **G3 `Index.applyComments`** 未重置 `commentsMediaId/commentsShortcode`（`openComments` 也不重置）
-      → 翻页可能拿上一条帖子的 mediaId 要评论。
-- [ ] **G4 `Index.loadCommentReplies`** await 后直接改数组元素，期间数组被替换会挂错条目
-      → await 后按 `pk` 重新定位。
-- [ ] **G5 评论定时器**：`commentsExitTimer/commentsSettleTimer` 未在 `aboutToDisappear` 清理
-      → 统一清定时器并把 `closing/suspended` 复位。
-- [ ] **G6 预热链**：`warmOtherTabs` 每一步都先 `waitIdle + awaitPageReady`（最长 30 秒），
-      首屏网页没就绪时后面 4 步全被判 not-ready → 网页就绪只等一次并共享结果，纯原生步骤不等网页。
+- [x] **G1 `viewmodel/ProfileViewModel.load`**（`a96984c`）入口取一次 `tab`、全程只用它，
+      写显示状态前按 `this.tab === tab` 守卫；`recaptureAndRetry` 改成收 `tab` 参数。
+- [x] **G2 评论浮层状态机**（`129d135`）新增 `commentsAfterQueue`：收起动画期间的收尾动作
+      **排队而不是丢掉**（`closeComments` 的注释早就这么写了，代码没做 ——
+      表现是"收起动画里点评论头像，用户主页永远不打开"）；收尾时把
+      `commentsSuspended/commentsSuspendBase` 一起复位（否则会留下一层"已关掉但被记为挂起"的
+      空面板，从页面返回时被弹回来）；`openComments` 取消收起动画时当场 flush 队列。
+- [x] **G3 `Index.openComments`**（`a96984c`）媒体 id 在开面板时按这一条算好
+      （抽出 `Index.mediaIdOfPost`），不再只在原生成功时才写。
+- [x] **G4 `Index.loadCommentReplies`**（`a96984c`）await 回来按 `pk` 重新定位
+      （`indexOfComment`），定位不到就丢弃并记一行；日志加 `at=`。
+- [x] **G5 评论定时器**（`a96984c`）`aboutToDisappear` 清 `commentsExitTimer`/`commentsSettleTimer`
+      并把 `commentsClosing` 复位。
+- [x] **G6 预热链**（`042bc7f`）改在 `PageBridge.awaitPageReady` 这一层：
+      一次超时后 10 秒内再来问**立刻**回 timeout（并记 `awaitPageReady skip`），
+      `markReady`/`markUnready` 清记忆 —— 不再"每步白等 20 秒"。
+
+> G 区全部完成。审计的 A~G 七节至此收口，逐项提交见下表。
 
 ---
 
@@ -156,3 +160,25 @@
 | `8ef91ec` | `ReelsPage.aboutToDisappear` 摘掉挂在宿主 vm 上的 `onReels/onBusy/onStatus` |
 | `a12863f` | `StoryViewer` 长按暂停补 `onActionCancel`（被 PanGesture 抢手势时 `paused` 卡 true） |
 | `5d1c548` | `StoryCache.reset()` 复位 `loading` + 加 `generation` 代次（回调侧的 gen 判断**尚未接**：见 A 区后续） |
+| `9b07d23` | **E2/E3** `JsonRead` 大整数白名单收紧（去掉裸 `id`，补 `offline_threading_id` 等）；`NativeDirect.send` 限流判定提到状态码判断之前 |
+| `0574bdf` | **E5/E6 + F1** 收藏路径：限流期间不再发请求（含调用方的网页兜底）、`NativeSave.detail` 不再被覆盖；`en_US` 补 7 键 |
+| `36b1dcf` | **E1** `storedForNative` 片段匹配从"任意子串"收紧到"独立 token"（片段也过同一分词器）+ `storedForNative miss` 按片段去重上报 |
+| `88402bc` | **E7~E14** 八处：`pageSizeRejected` 只在明确被拒时置位、`Translator` 缓存键带目标语言、`WebTokens` 改 in-flight Promise、`MediaDownloader` 超时+off+清理、`MediaPrefetch` `seen` 上限 + `allowPrefetch` 闸门、`NativeComments` 显式 method、`noteDebug` 降级 |
+| `738ced0` | **E4/E5b** 私信读路径加退避闸门、会话候选封顶 4、合并两份重复的 REST 兜底（`threadViaRest(id, cursor, identity)`） |
+| `7783e30` | **E4 后续** 记住会话能用的那个 id 形态，实时轮询每轮省掉一发请求 |
+| `d5e3e8d` | **F3** 删掉两处"一直在跑"的探针（`DirectThreadPage` 8 秒 `capture('')`、`Index` 里 `if (false)` 那段） |
+| `0415591` | **F2/F4/F5** 删无调用方的死代码 12 处 + 13 个无用字符串键（基座/en_US 各 148 键、集合一致） |
+| `a96984c` | **G1/G3/G4/G5** 个人主页分页串写；评论媒体 id 开面板即算；回复 await 后按 pk 重定位；评论定时器清理 |
+| `129d135` | **G2** 评论浮层收起期间的收尾动作排队而不是丢掉；关掉时清挂起记账 |
+| `042bc7f` | **G6** `awaitPageReady` 记住"刚刚不就绪"，预热链不再一段一段白等 |
+
+## 遗留 / 下一步（本轮未做）
+
+- **`StoryCache` 回调侧代次判断**：`generation` 字段已加（`5d1c548`），但回调里还没用它 ——
+  慢回调回来时可能把上一批快拍的封面写进新的列表（A 区后续）。
+- **私信"会话只显示 4~5 条"**：本轮实测 `threadViaTemplate ok … msgs=19`，需要用户侧再复核
+  是否还复现（若复现，看 `graphql raw edges=N` 是"服务端就给了几条"还是"解析丢了几条"）。
+- **Reels 视频宽高诊断**（`reel aspect w=… h=… ratio=…`）与**信息流高视频黑底占位**两项没动。
+- **手机 `192.168.3.183` 离线**：回来后要在真机上复验快拍那几项（模拟器已验）。
+- **`WebScripts.commentsByReplayScript`**（只在注释里被提到）删前要确认没有按名字间接调用。
+
