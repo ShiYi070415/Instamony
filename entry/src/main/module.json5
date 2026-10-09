@@ -54,6 +54,34 @@
             "actions": [
               "ohos.want.action.home"
             ]
+          },
+          /*
+           * 深链入口（需求/课程演示：让"外部世界"能直接进到本 App 的某个界面）。
+           *
+           * 这一段就是"网页/其他 App → 原生"的桥头：浏览器里打开
+           *     instarmony://open?route=post&id=ABC
+           * 系统会按 scheme+host 精确匹配到这里，把命中的 URI 通过 Want.uri 交给 EntryAbility
+           * （冷启 onCreate / 热启 onNewWant）。解析与执行见 core/DeepLink 与 pages/DeepLink。
+           *
+           * 注意两点：
+           *   1) `entities` 这里是 `entity.system.browsable`：让本 App 对"浏览这类 URI"的系统
+           *      分发可见，浏览器才会把 instarmony:// 交给我们（home 那条用的是 entity.system.home，
+           *      两者职责不同，所以是两条独立的 skill）。
+           *   2) `scheme` 必须与 core/DeepLink 里的 DEEPLINK_SCHEME 完全一致，改一处就得改两处。
+           */
+          {
+            "entities": [
+              "entity.system.browsable"
+            ],
+            "actions": [
+              "ohos.want.action.viewData"
+            ],
+            "uris": [
+              {
+                "scheme": "instarmony",
+                "host": "open"
+              }
+            ]
           }
         ]
       }

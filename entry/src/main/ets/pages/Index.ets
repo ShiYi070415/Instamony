@@ -95,6 +95,7 @@ import { BarChromeModifier, immersiveLevel, immersiveMaterialType, titleScrollEf
 import { PlatformCap } from '../core/PlatformCap';
 import { SettingsPanel } from '../components/SettingsPanel';
 import { AppTab } from '../model/AppTab';
+import { DeepLink, DeepLinkIntent, DeepLinkRoute } from '../core/DeepLink';
 import { CommentItem, CommentsPayload, LikePayload, RepostPayload, SavePayload } from '../model/Comment';
 import { FeedMapper } from '../model/FeedMapper';
 import { FeedStatus } from '../model/FeedStatus';
@@ -227,6 +228,16 @@ const REFRESH_NAV_WAIT_MS: number = 8000;
 const REFRESH_NAV_POLL_MS: number = 200;
 /** 页面级导航（去帖子页 / 回首页）的等待上限，以及帖子页上读评论的上限。 */
 const NAV_READY_TIMEOUT_MS: number = 20000;
+/**
+ * 深链执行前等"网页宿主就绪"的上限（毫秒）。
+ *
+ * 冷启动被深链唤起时，网页宿主可能还在建首帧，这时 loadUrl 会被随后的初始化覆盖
+ * （表现就是"链接点了没反应"）。给 6 秒：正常冷启动 1~2 秒内就绪，超时就放弃并回首页，
+ * 不让用户对着白屏等（见 Index.consumePendingDeepLink / openDeepLinkPost）。
+ */
+const DEEP_LINK_READY_TIMEOUT_MS: number = 6000;
+/** 等网页宿主就绪时的轮询间隔（毫秒）。 */
+const DEEP_LINK_READY_POLL_MS: number = 150;
 /**
  * 帖子页上读评论的上限。
  *
@@ -1876,6 +1887,8 @@ struct Index {
     };
     this.bridge.setReadyHandler((): void => {
       this.bridgeReady = true;
+      // 网页宿主就绪 = 切 tab / 导航网页都已经可用 → 这时候才执行深链意图（见 consumePendingDeepLink）。
+      this.consumePendingDeepLink();
     });
     // 页面刚发出评论请求 → 立刻把那份模板抓下来存住（见 PageBridge.commentTemplateHandler）。
     // 这是"评论回放"能不能成立的关键一环：模板只在当前文档里有效，等我们回首页就没了。
@@ -3724,6 +3737,131 @@ struct Index {
     // 搜索页的可见性：不可见时它**不接受滚动触发的翻页**（Tabs 会把五个分页都建出来，
     // 隐藏的瀑布流视口是 0，"接近底部"永远成立 —— 会把整条推荐流一路拉到底）。
     this.searchVm.setActive(tab === AppTab.Search);
+  }
+
+  // ==========================================================================
+  // 深链（deep link）
+  //
+  // 外部（系统浏览器 / 其他 App / 二维码）打开 instarmony://open?... 时，EntryAbility 把
+  // Want.uri 解析成 DeepLinkIntent：冷启动先铺 pages/DeepLink，热启动存进 core/DeepLink 的
+  // pending（见它的 onNewWant）。**执行**统一收在这里 —— 因为"当前能不能切页/导航网页"
+  // 只有本页面知道。
+  // ==========================================================================
+
+  /** 深链执行正在跑（防重入：消费过程中会换 tab / 导航网页，可能再次触发 onPageShow）。 */
+  private deepLinkRunning: boolean = false;
+
+  /**
+   * 取走待执行的深链意图并执行。
+   *
+   * 三个调用时机（都在下面）：
+   *   · 网页桥就绪（setReadyHandler）—— 冷启动主路径；
+   *   · 页面重新显示（onPageShow）—— 热启动：App 已在首页，onNewWant 存下 pending 后回到前台；
+   *   · 用户从落地页点「打开」进首页 —— 其实也是走桥就绪那条。
+   *
+   * 取走即清（DeepLink.take），所以同一条链接不会被反复执行。
+   */
+  private async consumePendingDeepLink(): Promise<void> {
+    if (this.deepLinkRunning || !DeepLink.hasPending()) {
+      return;
+    }
+    this.deepLinkRunning = true;
+    try {
+      const intent: DeepLinkIntent | null = DeepLink.take();
+      if (intent === null) {
+        return;
+      }
+      if (!intent.isComplete()) {
+        // 认识这个 scheme、但目标不完整（例如 profile 没给 id）：不猜，落到首页并在日志里留痕。
+        hilog.warn(DOMAIN, TAG, 'deep link incomplete, ignored: %{public}s', intent.raw);
+        return;
+      }
+      hilog.info(DOMAIN, TAG, 'executing deep link %{public}s', intent.describe());
+      switch (intent.route) {
+        case DeepLinkRoute.Reels:
+          this.selectTab(AppTab.Reels);
+          return;
+        case DeepLinkRoute.Search:
+          this.selectTab(AppTab.Search);
+          return;
+        case DeepLinkRoute.Direct:
+          this.selectTab(AppTab.Direct);
+          return;
+        case DeepLinkRoute.Profile:
+          // 深链只带用户名、没有数字 id：走搜索页并按该用户名发起一次搜索。
+          // 为什么不直接 openUserProfile：那条路要先按用户名换出数字 id（ProfileViewModel
+          // 的查询链），属于"进主页之后"的事；搜索页是一次现成的、按名字能出结果的入口。
+          this.selectTab(AppTab.Search);
+          this.searchVm.search(intent.id);
+          return;
+        case DeepLinkRoute.Post:
+          await this.openDeepLinkPost(intent);
+          return;
+        default:
+          this.selectTab(AppTab.Home);
+          return;
+      }
+    } finally {
+      this.deepLinkRunning = false;
+    }
+  }
+
+  /**
+   * 等"网页宿主就绪"（`bridgeReady`）或超时。
+   *
+   * 为什么不用 PageBridge 自己的 `awaitPageReady`：那条路等的是"当前这次的页面加载完成"，
+   * 而这里要等的是"宿主建好并跑完首帧、可以接受 loadUrl 了"——判据是 Index 自己的
+   * bridgeReady 标志（由 setReadyHandler 置位）。轮询间隔取 150ms：状态一变就往下走，
+   * 又不会在冷启动那一两秒里空转。
+   */
+  private async waitBridgeReady(timeoutMs: number): Promise<void> {
+    const deadline: number = Date.now() + timeoutMs;
+    while (!this.bridgeReady && Date.now() < deadline) {
+      await Index.delay(DEEP_LINK_READY_POLL_MS);
+    }
+  }
+
+  /** 睡一会儿（ArkTS 没有内置 sleep；Promise 包一层，和 WebTokens.delay 同一写法）。 */
+  private static delay(ms: number): Promise<void> {
+    return new Promise<void>((resolve: () => void): void => {
+      setTimeout((): void => {
+        resolve();
+      }, ms);
+    });
+  }
+
+  /**
+   * 深链到一条帖子。
+   *
+   * 为什么用**隐藏网页导航**而不是帖子页（openPostStream）：深链只有一个 shortcode，
+   * 而帖子页要的是一整份分页列表 + 翻页回调，凑不出那份上下文（见 core/DeepLink.toInstagramUrl）。
+   *
+   * 为什么要等桥就绪：冷启动点进帖子时网页宿主可能刚建好、还没跑完首帧，
+   * 这时 loadUrl 会被随后的初始化覆盖掉（表现就是"链接点了没反应"）。
+   */
+  private async openDeepLinkPost(intent: DeepLinkIntent): Promise<void> {
+    if (!this.bridgeReady) {
+      // PageBridge 没有"等就绪"的接口（只有 awaitPageReady / runBridge），而这里要等的是
+      // "网页宿主建好并报过一次 ready"（见 setReadyHandler），所以按标志轮询。
+      await this.waitBridgeReady(DEEP_LINK_READY_TIMEOUT_MS);
+    }
+    if (!this.bridgeReady) {
+      hilog.warn(DOMAIN, TAG, 'deep link post skipped: web host not ready');
+      this.selectTab(AppTab.Home);
+      return;
+    }
+    this.selectTab(AppTab.Home);
+    this.openWeb(DeepLink.toInstagramUrl(intent));
+  }
+
+  /**
+   * 页面重新显示（含从后台回到前台）。
+   *
+   * 深链的热启动路径落在这里：onNewWant 只把 intent 存进 pending，真正执行要等页面回到前台。
+   * 没有待执行意图时这里什么都不做（`hasPending` 只是一次判空，开销可忽略）。
+   */
+  onPageShow(): void {
+    this.consumePendingDeepLink();
   }
 
   // ==========================================================================

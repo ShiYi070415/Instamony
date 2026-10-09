@@ -1,6 +1,7 @@
 {
   "src": [
     "pages/Index",
-    "pages/CreatePost"
+    "pages/CreatePost",
+    "pages/LinkIn"
   ]
 }

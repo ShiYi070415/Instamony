@@ -36,6 +36,13 @@ export class StoryCache {
   private static cursor: number = 0;
   /** 正在取数的页数（避免重复并发同一个用户）。 */
   private static loading: number = 0;
+  /**
+   * 队列代次（每次 `reset()` +1）。
+   *
+   * 用途：`reset()` 会作废在飞的那几发请求 —— 它们回来时若代次已变，就**不再写缓存、也不动
+   * `loading`**（否则 `loading` 会虚高到 `≥DEPTH`，`fill()` 的条件永久为假，预缓存静默停摆）。
+   */
+  private static generation: number = 0;
 
   /**
    * 保证"从第 `from` 位开始"的若干页都在队列里（托盘**可见范围**变化时调它）。
@@ -86,7 +93,19 @@ export class StoryCache {
     StoryCache.tray = items;
     StoryCache.pages = [];
     StoryCache.cursor = from >= 0 ? from : 0;
-    hilog.info(DOMAIN, TAG, 'reset from=%{public}d of=%{public}d', StoryCache.cursor, items.length);
+    /*
+     * **`loading` 必须归零，并且作废在飞的那几发请求**（审计发现的静默失效）。
+     *
+     * 原来 reset 只清队列、不动 `loading`：清空时正在飞的那几发请求回来后照样 `loading--`，
+     * 于是 `loading` 会虚高甚至变负；`Index` 冷启动里 reset 被调了两次（预热一次 + 托盘
+     * `onStoryLoaded` 一次），`loading` 涨到 `≥DEPTH` 之后 `fill()` 的 while 条件**永久为假** ——
+     * 预缓存整条链就静默停摆了（点开快拍只能现拉，日志里也看不出为什么）。
+     * generation 的作用是让那几发"上一代"的响应回来后**不再写缓存、也不再动计数**。
+     */
+    StoryCache.generation = StoryCache.generation + 1;
+    StoryCache.loading = 0;
+    hilog.info(DOMAIN, TAG, 'reset from=%{public}d of=%{public}d gen=%{public}d',
+      StoryCache.cursor, items.length, StoryCache.generation);
     StoryCache.fill();
   }
 

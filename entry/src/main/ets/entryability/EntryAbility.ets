@@ -29,6 +29,7 @@ import { PlatformCap } from '../core/PlatformCap';
 import { ApiRegistry } from '../bridge/ApiRegistry';
 import { webview } from '@kit.ArkWeb';
 import { AppConfig } from '../config/AppConfig';
+import { DeepLink, DeepLinkIntent } from '../core/DeepLink';
 
 const DOMAIN = 0x0000;
 /**
@@ -44,6 +45,22 @@ const WARM_REELS_COUNT: number = 7;
 const TAG_MATERIAL: string = 'InstarmonyMaterialDiag';
 
 export default class EntryAbility extends UIAbility {
+  /**
+   * 冷启动这次带进来的深链（`instarmony://…`）。
+   *
+   * 冷启动的 Want 只在 onCreate 来一次，而决定"先铺哪一页"的时机在 onWindowStageCreate，
+   * 所以先存下来；热启动那条路（onNewWant）不走这个字段，直接存进 core/DeepLink 的 pending。
+   */
+  private coldDeepLink: DeepLinkIntent | null = null;
+  /**
+   * 本次实例的**第一个** Want（= onCreate 那个）已经处理过了。
+   *
+   * 为什么要这个标记：冷启动时系统会先 onCreate 再 onNewWant（携同一个 Want）——
+   * 不挡一下，同一条链接会被处理两次（落地页与 pending 各留一份，用户点"打开"时行为就重了）。
+   * 而热启动只走 onNewWant，所以标记在第一次 onNewWant 里清掉，之后每次都是真的新意图。
+   */
+  private coldWantHandled: boolean = false;
+
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     try {
       this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
@@ -115,6 +132,76 @@ export default class EntryAbility extends UIAbility {
       hilog.warn(DOMAIN, 'testTag', 'feed warmup failed: %{public}s', JSON.stringify(err));
     }
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
+    // ---- 深链：冷启动这次是不是被 instarmony:// 唤起的 ----
+    // 放在最后：预热那几条都是"只提前、不改行为"的优化，深链才是这次启动的**真实原因**，
+    // 它需要的数据（解析）只是一次字符串处理，不依赖上面任何一步。
+    this.readColdDeepLink(want, launchParam);
+  }
+
+  /**
+   * 冷启动读深链（Want.uri → intent）。
+   *
+   * 只解析、不跳页：跳页在 onWindowStageCreate 里（那时才有 windowStage 可以 loadContent）。
+   */
+  private readColdDeepLink(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    // 记下启动原因，出问题时能区分"被 startAbility 拉起"还是"预加载/迁移"。
+    const reason: number = launchParam === undefined ? -1 : launchParam.launchReason;
+    this.coldWantHandled = true;
+    const intent: DeepLinkIntent | null = this.parseIntent(want, 'onCreate');
+    if (intent === null) {
+      return;
+    }
+    this.coldDeepLink = intent;
+    /*
+     * 同时放进 pending 队列（和热启动同一条出口）。
+     *
+     * 落地页（pages/DeepLink）点「打开」后是 replaceUrl 进首页的，那时 EntryAbility 已经不参与
+     * 了 —— 首页只能从 core/DeepLink 里取意图。所以冷启动的这份也必须入队，否则"打开"会变成
+     * 单纯的回首页（链接丢在半路）。
+     */
+    DeepLink.stash(intent);
+    hilog.info(DOMAIN, 'testTag', 'cold deep link %{public}s reason=%{public}d',
+      intent.describe(), reason);
+  }
+
+  /**
+   * 热启动：App 实例已经在（可能在别的页面上），系统带着新 Want 把本 ability 唤到前台。
+   *
+   * 这里**不推页面**：当前压着哪些 NavDestination、网页宿主处于什么状态只有 pages/Index 知道。
+   * 所以只把 intent 存进 core/DeepLink.pending，由 Index 的 onForeground 取走执行 ——
+   * 这也是"网页/外部 App 的一个链接 = 原生侧一次普通方法调用"最省事的落地方式。
+   */
+  onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    if (this.coldWantHandled) {
+      // 冷启动必然紧跟一次携带同一 Want 的 onNewWant：那一次已经在 onCreate 处理过了。
+      this.coldWantHandled = false;
+      return;
+    }
+    const intent: DeepLinkIntent | null = this.parseIntent(want, 'onNewWant');
+    if (intent === null) {
+      return;
+    }
+    DeepLink.stash(intent);
+    hilog.info(DOMAIN, 'testTag', 'warm deep link %{public}s', intent.describe());
+  }
+
+  /**
+   * 从 Want 里取 uri 并解析成 intent（不是深链就返回 null）。
+   *
+   * 解析本身在 core/DeepLink 里（纯字符串处理、可单测），这里只负责"从 Want 到字符串"这一段。
+   */
+  private parseIntent(want: Want, from: string): DeepLinkIntent | null {
+    const uri: string = want === undefined || want.uri === undefined ? '' : `${want.uri}`;
+    const intent: DeepLinkIntent | null = DeepLink.parse(uri);
+    if (intent === null) {
+      return null;
+    }
+    if (!intent.isComplete()) {
+      // 认识这个 scheme 但目标不完整（例如 profile 没给 id）：照样存起来，
+      // 让落地页把"缺什么"显示给用户看，比默默忽略更有用。
+      hilog.warn(DOMAIN, 'testTag', 'deep link (%{public}s) incomplete: %{public}s', from, intent.raw);
+    }
+    return intent;
   }
 
   /**
@@ -140,13 +227,36 @@ export default class EntryAbility extends UIAbility {
     // —— 效果是有了，但全屏布局会把 HDS 标题栏的内容整体上移一个状态栏高度（标题和状态栏时钟
     // 叠在一起）。按需求**改回去了**：内容画到状态栏下沿为止，状态栏那一条仍由系统画。
 
-    windowStage.loadContent('pages/Index', (err) => {
+    windowStage.loadContent(this.landingPage(), this.landingParams(), (err) => {
       if (err.code) {
         hilog.error(DOMAIN, 'testTag', 'Failed to load the content. Cause: %{public}s', JSON.stringify(err));
         return;
       }
       hilog.info(DOMAIN, 'testTag', 'Succeeded in loading the content.');
     });
+  }
+
+  /**
+   * 首屏铺哪一页。
+   *
+   * 默认就是首页；**被深链唤起**时先铺落地页（pages/DeepLink）：把 Want 里收到的东西摊开给
+   * 用户看，点"打开"才进首页。为什么要多这一跳，见 pages/DeepLink 顶部的说明
+   * （冷启动时网页宿主还没建好，立刻切 tab/导航网页不可靠）。
+   */
+  private landingPage(): string {
+    return this.coldDeepLink === null ? 'pages/Index' : 'pages/LinkIn';
+  }
+
+  /** 落地页的路由参数：把**原始 uri** 原样交过去，解析在页面里做一次（单一解析入口）。 */
+  private landingParams(): Record<string, Object> {
+    const params: Record<string, Object> = {};
+    if (this.coldDeepLink !== null) {
+      params['uri'] = this.coldDeepLink.raw;
+      // 解析好的 route/id 也带上：落地页用它做展示，省得再解一遍。
+      params['route'] = this.coldDeepLink.route;
+      params['id'] = this.coldDeepLink.id;
+    }
+    return params;
   }
 
   onWindowStageDestroy(): void {
