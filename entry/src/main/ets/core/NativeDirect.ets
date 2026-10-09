@@ -52,6 +52,18 @@ const THREAD_LIMIT: number = 20;
  */
 const BIG_PAGE_COUNT: number = 100;
 /**
+ * 会话模板回放**一共试几发**（审计 E4）。
+ *
+ * 原来是 `会话候选 × 2 个 id` 全跑一遍：真机上 `threadOps()` 能凑出四五条名字
+ * （`…Thread…Query` 一类的都在），乘以两个 id 就是**十发串行请求**，
+ * 每条几百毫秒到几秒 —— 用户看到的是"打开会话转很久"，而其中绝大多数注定不命中。
+ * 取 4：够覆盖"首选候选的两个 id + 次选候选的两个 id"。
+ */
+const THREAD_TRY_MAX: number = 4;
+/** `threadViaRest` 的两套身份（见那个函数的 `identity` 参数）。 */
+const REST_IDENTITY_TEMPLATE: string = 'tpl';
+const REST_IDENTITY_ANDROID: string = 'android';
+/**
  * IG 网页版的 app id。
  *
  * `direct_v2` 那条私有 REST 校验它；缺了会回 `login_required` 或 403（看着像"没登录"，
@@ -114,6 +126,23 @@ export class NativeDirect {
 
   static lastDetail(): string {
     return NativeDirect.detail;
+  }
+
+  /**
+   * 私信这一族的退避闸门 —— **读取路径也要查**（审计 E5b）。
+   *
+   * 原来只有 `sendText` 查 `blocked(DIRECT)`：收件箱、会话详情、会话候选回放这些**读**路径
+   * 在冷却期里照样一发一发地打。而这条恰恰是最容易撞限流的接口之一，读取那边还会
+   * "候选 × 两个 id"地连打（见 THREAD_TRY_MAX）；继续打只会把 IG 的 12 分钟窗口越拖越长，
+   * 用户看到的却是"一直在转、最后读取失败"。
+   *
+   * @returns 空串 = 可以读；非空 = 写进 detail 的原因。
+   */
+  private static cooling(): string {
+    if (!ApiThrottle.blocked(ApiThrottle.DIRECT)) {
+      return '';
+    }
+    return `throttled-${ApiThrottle.remainingMinutes(ApiThrottle.DIRECT)}min`;
   }
 
   /**
@@ -242,6 +271,14 @@ export class NativeDirect {
    * @param after 翻页游标（空串 = 第一页；第一页**不动** variables，理由见 NativeProfile.bodyWith）。
    */
   static async inbox(after: string): Promise<DirectInboxPage | null> {
+    // 冷却期内不发（审计 E5b）：见 cooling 的说明。
+    const cooled: string = NativeDirect.cooling();
+    if (cooled.length > 0) {
+      NativeDirect.detail = cooled;
+      hilog.warn(DOMAIN, TAG, 'inbox skipped: direct family throttled %{public}dmin left',
+        ApiThrottle.remainingMinutes(ApiThrottle.DIRECT));
+      return null;
+    }
     const result: DirectFetchResult = await NativeDirect.post(OP_INBOX, after);
     if (!result.ok) {
       return null;
@@ -277,6 +314,14 @@ export class NativeDirect {
    * @param cursor 上一页的 `next_max_id`（空串 = 第一页）。
    */
   static async inboxRest(cursor: string): Promise<DirectInboxPage | null> {
+    // 冷却期内不发（审计 E5b）：收件箱翻页也一样。
+    const cooled: string = NativeDirect.cooling();
+    if (cooled.length > 0) {
+      NativeDirect.detail = cooled;
+      hilog.warn(DOMAIN, TAG, 'inboxRest skipped: direct family throttled %{public}dmin left',
+        ApiThrottle.remainingMinutes(ApiThrottle.DIRECT));
+      return null;
+    }
     const headers: Record<string, string> = await NativeDirect.restHeaders();
     if (Object.keys(headers).length === 0) {
       NativeDirect.detail = 'no-session';
@@ -460,8 +505,32 @@ export class NativeDirect {
     const ids: Array<string> = altId.length > 0 && altId !== threadId
       ? [threadId, altId] : [threadId];
     let empty: DirectThreadView | null = null;
-    for (let index: number = 0; index < ops.length; index++) {
-      for (let a: number = 0; a < ids.length; a++) {
+    /*
+     * **候选要封顶，而且命中了限流立刻收手**（审计 E4）。
+     *
+     * 原来这里是 `会话候选 × id 个数` 全跑：真机 `threadOps()` 能凑出四五条，
+     * 乘两个 id 就是十发串行请求，而其中绝大多数注定不命中（名字像会话查询、其实不是）。
+     * 更糟的是冷却期内也照跑，越打窗口越长、用户就一直看"读取失败"。
+     */
+    let attempts: number = 0;
+    let stopped: boolean = false;
+    for (let index: number = 0; index < ops.length && !stopped; index++) {
+      for (let a: number = 0; a < ids.length && !stopped; a++) {
+        if (attempts >= THREAD_TRY_MAX) {
+          hilog.info(DOMAIN, TAG, 'threadViaTemplate stopped: tried %{public}d of %{public}d ops',
+            attempts, ops.length);
+          stopped = true;
+          break;
+        }
+        const cooled: string = NativeDirect.cooling();
+        if (cooled.length > 0) {
+          NativeDirect.detail = cooled;
+          hilog.warn(DOMAIN, TAG, 'threadViaTemplate stopped: direct family throttled %{public}dmin',
+            ApiThrottle.remainingMinutes(ApiThrottle.DIRECT));
+          stopped = true;
+          break;
+        }
+        attempts++;
         const view: DirectThreadView | null =
           await NativeDirect.replayThread(ops[index], ids[a], olderCursor);
         if (view !== null && view.messages.length > 0) {
@@ -496,13 +565,20 @@ export class NativeDirect {
    * 只在上面盖一个安卓 UA —— 这正是"发消息"从 404/`useragent mismatch` 变成 `item_ack 200` 的原因。
    * 旧实现是拿自己拼的头（cookie + 安卓 app id + www-claim:0），IG 一律回
    * `404 + class="no-js not-logged-in"` 的 HTML。
+   *
+   * @param identity 用哪套身份发（见 `REST_IDENTITY_TEMPLATE` / `REST_IDENTITY_ANDROID`）。
+   *   两条都留着是有原因的：模板那套头"最像网页自己发的那次"（真机实测最常通），
+   *   自己拼的 App 身份在模板过期/换会话时是唯一的路。审计 E4 之前这两条各自写了一份
+   *   URL 拼装 + 发送 + 解析（`thread()` 里那段与这里几乎逐行相同），现在合成一个函数。
    */
-  private static async threadViaRest(id: string,
-                                     olderCursor: string): Promise<DirectThreadView | null> {
+  private static async threadViaRest(id: string, olderCursor: string,
+                                     identity: string): Promise<DirectThreadView | null> {
     let headers: Record<string, string> = {};
-    const op: string = NativeDirect.threadOp();
-    if (op.length > 0) {
-      headers = await NativeFeed.headersFor(op);
+    if (identity === REST_IDENTITY_TEMPLATE) {
+      const op: string = NativeDirect.threadOp();
+      if (op.length > 0) {
+        headers = await NativeFeed.headersFor(op);
+      }
     }
     if (Object.keys(headers).length === 0) {
       headers = await NativeDirect.restHeaders();
@@ -511,7 +587,13 @@ export class NativeDirect {
       NativeDirect.detail = 'no-session';
       return null;
     }
-    NativeDirect.putHeader(headers, 'user-agent', ANDROID_UA);
+    if (identity === REST_IDENTITY_TEMPLATE) {
+      // 模板那套头只盖一个安卓 UA（见文件头"发消息"那段的实测结论）。
+      NativeDirect.putHeader(headers, 'user-agent', ANDROID_UA);
+    } else {
+      // 手机 App 的完整身份（UA + app id + device id + www-claim 0）。
+      await NativeDirect.applyAndroidIdentity(headers);
+    }
     const cursor: string = olderCursor.length > 0
       ? `&cursor=${encodeURIComponent(olderCursor)}` : '';
     const url: string = `https://www.instagram.com/api/v1/direct_v2/threads/${encodeURIComponent(id)}/`
@@ -523,14 +605,14 @@ export class NativeDirect {
     const view: DirectThreadView | null =
       DirectMapper.threadFromJson(text, NativeProfile.ownIdCached());
     if (view === null) {
-      hilog.info(DOMAIN, TAG, 'threadViaRest parse failed body=%{public}s',
-        text.substring(0, 300));
+      hilog.info(DOMAIN, TAG, 'threadViaRest parse failed via=%{public}s body=%{public}s',
+        identity, text.substring(0, 300));
       NativeDirect.detail = 'rest-parse';
       return null;
     }
     hilog.info(DOMAIN, TAG,
-      'threadViaRest ok id=%{public}s msgs=%{public}d older=%{public}s cursor=%{public}d',
-      id, view.messages.length, `${view.hasOlder}`, view.oldestCursor.length);
+      'threadViaRest ok via=%{public}s id=%{public}s msgs=%{public}d older=%{public}s cursor=%{public}d',
+      identity, id, view.messages.length, `${view.hasOlder}`, view.oldestCursor.length);
     return view;
   }
 
@@ -907,51 +989,44 @@ export class NativeDirect {
       NativeDirect.detail = 'no-thread-id';
       return null;
     }
+    // 冷却期内不发（审计 E5b）：读会话这条在限流时接着打只会把窗口拖长。
+    const cooled: string = NativeDirect.cooling();
+    if (cooled.length > 0) {
+      NativeDirect.detail = cooled;
+      hilog.warn(DOMAIN, TAG, 'thread skipped: direct family throttled %{public}dmin left',
+        ApiThrottle.remainingMinutes(ApiThrottle.DIRECT));
+      return null;
+    }
     // ① 模板回放（抓到过会话模板时这条最快，也是真机上唯一能通的那条）。
     const viaTemplate: DirectThreadView | null =
       await NativeDirect.threadViaTemplate(id, olderCursor, altId);
     if (viaTemplate !== null && viaTemplate.messages.length > 0) {
       return viaTemplate;
     }
-    // ② REST（旧实现）：模板回放拿不到（尤其翻页）时走这条，见 threadViaRest。
-    const viaRest: DirectThreadView | null = await NativeDirect.threadViaRest(id, olderCursor);
-    if (viaRest !== null) {
-      return viaRest;
-    }
-    // ② REST 兜底。
-    const headers: Record<string, string> = await NativeDirect.restHeaders();
-    if (Object.keys(headers).length === 0) {
-      NativeDirect.detail = 'no-session';
-      return viaTemplate;
-    }
-    const base: string = `https://www.instagram.com/api/v1/direct_v2/threads/${encodeURIComponent(id)}/`;
-    const cursor: string = olderCursor.length > 0
-      ? `&cursor=${encodeURIComponent(olderCursor)}` : '';
     /*
-     * **和收件箱翻页那条一样用手机 App 的身份**（安卓 UA + 安卓 app id）。
+     * ② REST 兜底**两套身份**（旧实现）：模板回放拿不到（尤其翻页）时走这两条，
+     *    见 threadViaRest。
      *
-     * 真机实测：只带网页那套头发这一条，IG 回 404 + 一页 `class="no-js not-logged-in"` 的 HTML
-     * （响应体 20KB、看着像"会话不存在"，其实是被当成没登录）—— 用户报的"打开会话显示 404"
-     * 就是这个。`inboxRest` 当初就是这么修的，会话详情这条漏了（它曾经用网页身份能通，
-     * 后来 IG 收紧了口径）。
+     *    这两发以前是**同一段代码写了两遍**（这里一遍、`threadViaRest` 里一遍）：
+     *    URL 拼装 / 发送 / 解析 / 失败原因全各写一份，改一处漏一处（审计 E4）。
+     *    现在只是同一个函数传不同 identity。
      */
-    // 手机 App 的完整身份（UA + app id + device id + www-claim 0，见 applyAndroidIdentity）。
-    await NativeDirect.applyAndroidIdentity(headers);
-    const url: string = `${base}?limit=${THREAD_LIMIT}&visual_message_return_type=unseen${cursor}`;
-    const text: string = await NativeDirect.send(url, http.RequestMethod.GET, headers, '');
-    if (text.length === 0) {
+    const viaTemplateHeaders: DirectThreadView | null =
+      await NativeDirect.threadViaRest(id, olderCursor, REST_IDENTITY_TEMPLATE);
+    if (viaTemplateHeaders !== null) {
+      return viaTemplateHeaders;
+    }
+    // 中间这一发要是把限流撞出来了，第三发（同一把锁）就别打了。
+    if (NativeDirect.cooling().length > 0) {
       return viaTemplate;
     }
-    const view: DirectThreadView | null =
-      DirectMapper.threadFromJson(text, NativeProfile.ownIdCached());
-    if (view === null) {
-      hilog.info(DOMAIN, TAG, 'thread parse failed body=%{public}s', text.substring(0, 400));
-      NativeDirect.detail = 'parse';
-      return viaTemplate;
+    const viaAppIdentity: DirectThreadView | null =
+      await NativeDirect.threadViaRest(id, olderCursor, REST_IDENTITY_ANDROID);
+    if (viaAppIdentity !== null) {
+      return viaAppIdentity;
     }
-    hilog.info(DOMAIN, TAG, 'thread ok id=%{public}s msgs=%{public}d older=%{public}s avatar=%{public}s',
-      id, view.messages.length, `${view.hasOlder}`, view.withAvatar.substring(0, 90));
-    return view;
+    // 三条路都没拿到：把模板那条的结果（可能是"空会话"）交回去，信息比 null 多。
+    return viaTemplate;
   }
 
   /**
