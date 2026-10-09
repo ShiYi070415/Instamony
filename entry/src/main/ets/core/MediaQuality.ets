@@ -32,11 +32,6 @@ export class PickedMedia {
 }
 
 export class MediaQuality {
-  /** 展示用目标宽度（供脚本侧拼参数用）。 */
-  static targetWidth(): number {
-    return TARGET_WIDTH;
-  }
-
   /**
    * 图片候选 → 展示用那一张（宽度 ≥ 目标里最接近的；都不够就取最大的）。
    *

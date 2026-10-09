@@ -25,40 +25,8 @@
       "value": "Sign in to browse"
     },
     {
-      "name": "login_body",
-      "value": "Choose a sign-in method. Credentials go to the server only and are never stored in this app."
-    },
-    {
-      "name": "login_web",
-      "value": "Sign in on the web"
-    },
-    {
-      "name": "login_web_hint",
-      "value": "Sign-in happens on Instagram’s own web page; Instamony only reuses that session to read page content."
-    },
-    {
-      "name": "login_account",
-      "value": "Account"
-    },
-    {
-      "name": "login_web_sign_in",
-      "value": "Web sign in"
-    },
-    {
-      "name": "login_sign_in",
-      "value": "Sign in"
-    },
-    {
       "name": "login_recheck",
       "value": "I’m signed in — recheck"
-    },
-    {
-      "name": "session_none",
-      "value": "Not signed in"
-    },
-    {
-      "name": "session_label_prefix",
-      "value": "Session: "
     },
     {
       "name": "sign_out",
@@ -205,10 +173,6 @@
       "value": "More"
     },
     {
-      "name": "action_reload",
-      "value": "Reload"
-    },
-    {
       "name": "action_create",
       "value": "Create"
     },
@@ -225,14 +189,6 @@
       "value": "Mute"
     },
     {
-      "name": "action_share_to",
-      "value": "Share to"
-    },
-    {
-      "name": "comments_close",
-      "value": "Close"
-    },
-    {
       "name": "comments_title",
       "value": "Comments"
     },
@@ -247,10 +203,6 @@
     {
       "name": "comments_failed",
       "value": "Could not load comments"
-    },
-    {
-      "name": "comments_photo",
-      "value": "Photo comment"
     },
     {
       "name": "comments_send",
@@ -359,10 +311,6 @@
     {
       "name": "direct_thread_empty",
       "value": "No messages yet — say hi"
-    },
-    {
-      "name": "direct_thread_older",
-      "value": "See older messages"
     },
     {
       "name": "settings_group_appearance",

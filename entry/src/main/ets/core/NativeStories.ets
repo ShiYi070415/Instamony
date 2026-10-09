@@ -67,18 +67,6 @@ export class NativeStories {
     return NativeStories.detail;
   }
 
-  /** 托盘那条模板在不在（按原生那条 TTL，见 NativeProfile.hasTemplate 的说明）。 */
-  static hasTrayTemplate(): boolean {
-    const registry: ApiRegistry = ApiRegistry.getInstance();
-    const names: Array<string> = registry.storedNames();
-    for (let index: number = 0; index < names.length; index++) {
-      if (names[index].indexOf(OP_TRAY) >= 0) {
-        return registry.storedForNative(OP_TRAY) !== null;
-      }
-    }
-    return false;
-  }
-
   /**
    * 拉一次托盘（拿不到给 null）。
    *

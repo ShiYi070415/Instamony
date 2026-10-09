@@ -126,10 +126,6 @@ export class DirectThreadViewModel {
     this.onPending(this.pending);
   }
 
-  currentThreadId(): string {
-    return this.threadId;
-  }
-
   viewNow(): DirectThreadView | null {
     return this.view;
   }
@@ -140,10 +136,6 @@ export class DirectThreadViewModel {
 
   busyNow(): boolean {
     return this.busy;
-  }
-
-  sendingNow(): boolean {
-    return this.sending;
   }
 
   /** 标题：真名优先，其次收件箱那一行的标题，最后兜底"私信"。 */

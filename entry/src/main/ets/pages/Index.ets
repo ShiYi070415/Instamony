@@ -1173,13 +1173,13 @@ struct Index {
   /** 通知页的数据：抓回来的条目、是否在读、读不到时的原因与诊断。 */
   @State notifications: NotifyItem[] = [];
   /**
-   * 通知数据是走哪条路来的（**临时可见判据**）。
+   * 通知数据是走哪条路来的（`native` / `web` / `none`）——**只进日志，不进界面**。
    *
-   * 这一整轮里 ArkTS 的 hilog 行在抓取时一直时有时无，判断不了"原生直发"到底跑没跑通，
-   * 所以把来源直接写进通知页的标题：`通知 native·42` / `通知 web·42`，一眼就能看出来。
-   * 原生完全稳定后把这个后缀去掉即可。
+   * 原来它是 `@State`：写它会让整页重算一遍，而它只在几行 hilog 里用到
+   * （标题栏那个 `通知 native·42` 的临时后缀已经删掉了，见审计 F2）。
+   * 改成普通字段：日志照旧，少一次无意义的重渲染。
    */
-  @State notifySrc: string = '';
+  private notifySrc: string = '';
   @State notificationsLoading: boolean = false;
   @State notificationsState: string = '';
   @State notificationsDiag: string = '';
@@ -1324,15 +1324,6 @@ struct Index {
     return this.currentTab() === AppTab.Home
       ? $r('app.string.app_title')
       : TAB_ITEMS[this.selectedIndex].label;
-  }
-
-  /**
-   * 通知页标题（**临时**带上数据来源与条数，方便一眼判断原生/兜底，见 notifySrc）。
-   * 原生稳定后改回 `$r('app.string.notifications')` 即可。
-   */
-  private notifyTitleText(): string {
-    const src: string = this.notifySrc.length > 0 ? this.notifySrc : '…';
-    return `通知 ${src}·${this.notifications.length}`;
   }
 
   /**
@@ -3294,18 +3285,6 @@ struct Index {
   }
 
   /**
-   * 关掉通知窗口。
-   *
-   * 页面本身由 NavDestination 承载，返回键/手势会自己 pop 路由栈；这里只清数据，
-   * 留给"以后要在通知页里放一个刷新按钮"之类的场景复用。
-   */
-  private clearNotifications(): void {
-    this.notifications = [];
-    this.notificationsState = '';
-    this.notificationsDiag = '';
-  }
-
-  /**
    * 点「回关」：先乐观翻转，再用服务端/网页回报的状态校正。
    *
    * 两条路（和信息流的关注按钮同一套）：
@@ -3567,16 +3546,6 @@ struct Index {
       this.notifications = next;
       hilog.info(DOMAIN, TAG, 'NTF follow refresh');
     }
-  }
-
-  /**
-   * 通知：把常驻网页导航到 IG 的活动页再揭出来。
-   *
-   * 保留给"直接在网页里看通知"用（当前没有调用方：标题栏那颗爱心现在开的是原生窗口，
-   * 见 openNotifications）；如果以后要在窗口里放一个"在网页中打开"的入口，接这里。
-   */
-  private openNotificationsWeb(): void {
-    this.openWeb(AppConfig.INSTAGRAM_ACTIVITY_URL);
   }
 
   /**
@@ -6392,16 +6361,6 @@ struct Index {
     })
   }
 
-  /** 「我的」在 TAB_ITEMS 里的下标（找不到就退回 0，不让 UI 崩）。 */
-  private profileTabIndex(): number {
-    for (let i: number = 0; i < TAB_ITEMS.length; i++) {
-      if (TAB_ITEMS[i].tab === AppTab.Profile) {
-        return i;
-      }
-    }
-    return 0;
-  }
-
   /** 打开设定页（NavDestination，见 destinationBuilder）。 */
   private openSettings(): void {
     this.navStack.pushPath({ name: SETTINGS_PAGE });
@@ -7593,18 +7552,6 @@ struct Index {
       return;
     }
     this.settleCommentsHeight();
-  }
-
-  /**
-   * 列表报上来的离手速度（vp/s，**内容向上滚为正**，和我们的方向一致）。
-   *
-   * 只在"这一轮真的动过面板"时采纳：用户单纯滚列表时列表也会报一个很大的速度，
-   * 采纳它会让面板莫名其妙地跳档。
-   */
-  private onCommentsScrollVelocity(velocity: number): void {
-    if (this.commentsDragActive) {
-      this.commentsDragVelocity = velocity;
-    }
   }
 
   /** 结清这一轮拖动的账（下一轮从新高度重新出发）。 */

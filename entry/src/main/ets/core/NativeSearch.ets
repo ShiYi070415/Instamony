@@ -229,11 +229,6 @@ export class NativeSearch {
     return NativeSearch.diag.join('\n');
   }
 
-  /** 第一页用的模板名（诊断用；翻页时也靠它，见 chosenOp）。 */
-  static lastOp(): string {
-    return NativeSearch.chosenOp;
-  }
-
   /** 结果那条模板在不在（**已存模板**，不是接口索引）。 */
   static hasResultsTemplate(): boolean {
     return NativeSearch.resultsOp().length > 0;

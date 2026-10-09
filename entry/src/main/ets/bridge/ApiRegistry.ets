@@ -269,11 +269,6 @@ export class ApiEntry {
     this.bodyLen = bodyLen;
     this.vars = vars;
   }
-
-  /** 有没有这个旋钮（调用方据此决定要不要传分页/目标参数）。 */
-  hasVar(name: string): boolean {
-    return this.vars.indexOf(name) >= 0;
-  }
 }
 
 /** 结构摘要的一次结果（字段名对应 replayDigestScript 的返回）。 */
@@ -694,10 +689,6 @@ export class ApiRegistry {
     const shown: string = this.order.slice(0, LOG_NAMES).join("|");
     return `apis=${this.order.length} feed=${this.feedReady ? 'y' : 'n'} `
       + `comment=${this.commentReady ? 'y' : 'n'} watch=${this.watchOn ? 'y' : 'n'} ops=${shown}`;
-  }
-
-  lastSyncMs(): number {
-    return this.syncedAt;
   }
 
   /**

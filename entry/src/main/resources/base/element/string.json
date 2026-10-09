@@ -25,40 +25,8 @@
       "value": "登录以浏览"
     },
     {
-      "name": "login_body",
-      "value": "选择一种登录方式。凭据只提交给服务端，不会保存在本应用。"
-    },
-    {
-      "name": "login_web",
-      "value": "在网页中登录"
-    },
-    {
-      "name": "login_web_hint",
-      "value": "登录会在 Instagram 官方网页中完成，Instamony 只复用网页会话读取页面内容。"
-    },
-    {
-      "name": "login_account",
-      "value": "账号"
-    },
-    {
-      "name": "login_web_sign_in",
-      "value": "网页登录"
-    },
-    {
-      "name": "login_sign_in",
-      "value": "登录"
-    },
-    {
       "name": "login_recheck",
       "value": "我已登录，重新检查"
-    },
-    {
-      "name": "session_none",
-      "value": "未登录"
-    },
-    {
-      "name": "session_label_prefix",
-      "value": "会话："
     },
     {
       "name": "sign_out",
@@ -205,10 +173,6 @@
       "value": "更多"
     },
     {
-      "name": "action_reload",
-      "value": "重新加载"
-    },
-    {
       "name": "action_create",
       "value": "发布"
     },
@@ -225,14 +189,6 @@
       "value": "静音"
     },
     {
-      "name": "action_share_to",
-      "value": "分享到"
-    },
-    {
-      "name": "comments_close",
-      "value": "收起"
-    },
-    {
       "name": "comments_title",
       "value": "评论"
     },
@@ -247,10 +203,6 @@
     {
       "name": "comments_failed",
       "value": "评论读取失败"
-    },
-    {
-      "name": "comments_photo",
-      "value": "照片评论"
     },
     {
       "name": "comments_send",
@@ -387,10 +339,6 @@
     {
       "name": "direct_open_web",
       "value": "在网页中打开"
-    },
-    {
-      "name": "direct_thread_older",
-      "value": "查看更多消息"
     },
     {
       "name": "settings_group_appearance",
