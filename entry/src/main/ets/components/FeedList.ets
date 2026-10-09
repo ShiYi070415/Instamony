@@ -1341,7 +1341,8 @@ export struct FeedList {
    * 「删掉 → 重算 → 又播 → 又删」的抖动。
    */
   private noteVisibility(post: MediaPost, index: number, visible: boolean): void {
-    if (!visible) {
+    if (!visible || index < 0 || index >= this.posts.length) {
+      // -1/越界 = 这条已经不在当前列表里了（刷新把那条刷掉了）：不写进去，免得后面按它算焦点。
       return;
     }
     this.visiblePosts.set(FeedMapper.keyOf(post), index);
@@ -2769,8 +2770,30 @@ export struct FeedList {
     .id(this.cardId(post))
     .onVisibleAreaChange([VISIBLE_RATIO], (isExpanding: boolean, ratio: number): void => {
       // 判据是 currentRatio；isExpanding 只说明可见面积在变大还是变小，不能当可见性用。
-      this.noteVisibility(post, index, ratio > VISIBLE_RATIO);
+      /*
+       * **按 key 反查**当前下标，不用闭包里那个（审计 D4）。
+       *
+       * 这个闭包和构建时的 item builder 绑在一起，`ForEach` 键值不变时不会重跑 —— 刷新/插帖之后
+       * 闭包里的 index 已经过期，写进 `visiblePosts` 就会与帖子错位：`refreshFocus` 把过期条目
+       * 丢掉（它的注销日志就是为这种情况准备的），可见集合可能变空 → **正在播的视频被停掉**。
+       */
+      this.noteVisibility(post, this.indexOfPost(post), ratio > VISIBLE_RATIO);
     })
+  }
+
+  /**
+   * 一条帖子在**当前** `posts` 里的下标（找不到给 -1）。
+   *
+   * 给 `onVisibleAreaChange` 那种"闭包里的 index 会过期"的回调用（见审计 D4）。
+   */
+  private indexOfPost(post: MediaPost): number {
+    const key: string = FeedMapper.keyOf(post);
+    for (let index: number = 0; index < this.posts.length; index++) {
+      if (FeedMapper.keyOf(this.posts[index]) === key) {
+        return index;
+      }
+    }
+    return -1;
   }
 
   build() {
