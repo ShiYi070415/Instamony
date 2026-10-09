@@ -272,6 +272,28 @@ export class InstagramProbe {
     }
   }
 
+  /**
+   * 用**固定文件名**写一份到沙箱（`<name>.txt`，每次覆盖）。
+   *
+   * 为什么需要固定名：带时间戳的那些适合"每次抓一份快照"，但让测试同学回传时
+   * **永远不知道该拿哪一个**；诊断汇总（见 core/StoryDiag）必须是一个好找、好说的名字。
+   */
+  static dumpFixed(context: common.UIAbilityContext, name: string, text: string): string {
+    try {
+      const path: string = `${context.filesDir}/${name}.txt`;
+      const file: fileIo.File = fileIo.openSync(path,
+        fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
+      fileIo.writeSync(file.fd, text);
+      fileIo.closeSync(file);
+      hilog.info(DOMAIN, TAG, 'diag saved %{public}s len=%{public}d', name, text.length);
+      return `${name}.txt`;
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'diag save failed %{public}s: %{public}s',
+        name, (error as Error).message);
+      return '';
+    }
+  }
+
   private static pathOf(url: string): string {
     let rest: string = url;
     const scheme: number = rest.indexOf('://');

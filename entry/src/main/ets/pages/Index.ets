@@ -125,6 +125,7 @@ import { SearchUser, SearchPost } from '../model/Search';
 import { EMPTY_REEL, StoryHeroRect, StoryReel, StoryTray, StoryTrayItem } from '../model/Story';
 import { NativeStories } from '../core/NativeStories';
 import { StoryCache } from '../core/StoryCache';
+import { StoryDiag } from '../core/StoryDiag';
 import { PROFILE_TAB_POSTS, PROFILE_TAB_REELS, PROFILE_TAB_TAGGED, ProfileViewModel } from '../viewmodel/ProfileViewModel';
 import { DirectViewModel } from '../viewmodel/DirectViewModel';
 import { DirectThreadViewModel } from '../viewmodel/DirectThreadViewModel';
@@ -6208,26 +6209,24 @@ struct Index {
     this.storyQueue = items;
     this.storyQueueAtMs = Date.now();
     /*
-     * **一份进程只落一次托盘原始条目**（诊断，见 NativeStories.rawNodesDump）：
-     * "点开快拍提示没取到（原因 empty）只有部分用户遇到"这类问题，答案就在**托盘条目的原始形状**
-     * 里（带不带 user、有没有 items、id 字段叫什么）——而远端用户的日志我们拿不到，
-     * 所以让他们把这个文件发回来。一次进程一份，不做磁盘churn。
+     * **一轮进程写一次诊断汇总**（`Instarmony_diag.txt`，固定名，见 core/StoryDiag）：
+     * 把托盘形状与原始条目放进去，这样"点开快拍没取到"的现场**随时可发**——
+     * 不必等失败那一刻，也不必在带时间戳的一堆探针文件里挑。
      */
-    if (!this.trayRawDumped) {
-      this.trayRawDumped = true;
-      /*
-       * 两份一起落：**形状摘要**（一行一条，看 `reel_type`/`expiring_at`/`besties`，
-       * 判断"这条该不该有快拍"）与**原始条目**（截断到 1200 字符，看 id 字段与结构）。
-       */
-      const shapes: Array<string> = NativeStories.shapesDump();
-      this.dumpProbeFile('trayshape',
-        `Instamony 托盘形状 n=${shapes.length}\n` + shapes.join('\n'));
-      this.dumpProbeFile('trayraw', NativeStories.rawNodesDump());
-    }
+    StoryDiag.setTray(NativeStories.shapesDump(), NativeStories.rawNodes());
+    this.saveStoryDiag();
   }
 
-  /** 这一轮进程里托盘原始条目落过盘没有（见 rememberStoryQueue）。 */
-  private trayRawDumped: boolean = false;
+  /** 把诊断汇总写进沙箱（固定名；失败只记一行日志）。 */
+  private saveStoryDiag(): void {
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      StoryDiag.save(context);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'story diag save failed: %{public}s', (error as Error).message);
+    }
+  }
 
   /**
    * 点开托盘里的一个用户：先取数，成功才进播放页（需求："加载成功跳进新页面"）。
@@ -6394,7 +6393,13 @@ struct Index {
       this.storyQueueAtMs > 0 ? Date.now() - this.storyQueueAtMs : -1);
     hilog.warn(DOMAIN, TAG, 'story fail uid=%{public}s why=%{public}s at=%{public}d',
       item.userId, why, at);
-    this.dumpProbeFile('storyfail', report);
+    /*
+     * 落进**固定的诊断汇总**（`Instarmony_diag.txt`，见 core/StoryDiag）：
+     * 每次失败追加一段（保留最近几次），测试同学复现两次再把这个文件发回来就行 ——
+     * 不用抓日志、也不用在带时间戳的探针文件里挑。
+     */
+    StoryDiag.recordFailure(report);
+    this.saveStoryDiag();
     this.toast($r('app.string.story_load_failed', why));
   }
 

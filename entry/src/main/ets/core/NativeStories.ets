@@ -137,19 +137,18 @@ export class NativeStories {
   }
 
   /**
-   * 把这一轮托盘的**原始条目**整理成文本（诊断：落成 `trayraw_*.txt`）。
+   * 把这一轮托盘的**原始条目**整理成文本（诊断：进 `Instarmony_diag.txt`，见 core/StoryDiag）。
    *
    * 为什么值得单独留一份：托盘条目的形状**按账号/设备不一样**（带不带 `user`、有没有 `items`、
    * id 字段叫什么），而"点开快拍 empty 只有部分用户"恰恰取决于这些差异 ——
    * 只留我们自己解析出来的那几个字段，等于把判断依据丢了。
    */
-  static rawNodesDump(): string {
-    const lines: Array<string> = [];
-    lines.push(`Instamony 托盘原始条目 n=${NativeStories.nodeRaw.size}`);
+  static rawNodes(): Array<string> {
+    const out: Array<string> = [];
     NativeStories.nodeRaw.forEach((value: string, key: string): void => {
-      lines.push(`uid=${key} ${value}`);
+      out.push(`uid=${key} ${value}`);
     });
-    return lines.join('\n');
+    return out;
   }
 
   /** 记下一条条目的原始 JSON（见 nodeRaw 的说明）。 */
