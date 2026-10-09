@@ -50,8 +50,11 @@ struct LinkIn {
 
   aboutToAppear(): void {
     this.materialLevel = this.settingLevel;
-    // 路由参数由 EntryAbility 在 loadContent 时传进来（见它的 landingParams）。
-    const params: Record<string, Object> | undefined = this.getUIContext().getRouter().getParams();
+    // 参数由 EntryAbility 放进 `loadContent` 的 LocalStorage（见那边的 landingStorage）——
+    // 走 loadContent 这条路**不会**设置 router params，所以要从共享的 LocalStorage 里取。
+    const shared: LocalStorage | undefined = this.getUIContext().getSharedLocalStorage();
+    const params: Record<string, Object> | undefined = shared === undefined
+      ? undefined : shared.get('linkInParams') as Record<string, Object> | undefined;
     const uri: string = params === undefined ? '' : `${params['uri'] ?? ''}`;
     this.rawUri = uri;
     this.intent = DeepLink.parse(uri);

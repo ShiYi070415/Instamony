@@ -227,7 +227,15 @@ export default class EntryAbility extends UIAbility {
     // —— 效果是有了，但全屏布局会把 HDS 标题栏的内容整体上移一个状态栏高度（标题和状态栏时钟
     // 叠在一起）。按需求**改回去了**：内容画到状态栏下沿为止，状态栏那一条仍由系统画。
 
-    windowStage.loadContent(this.landingPage(), this.landingParams(), (err) => {
+    /*
+     * `loadContent(page, storage, cb)` 的第二个参数必须是 **LocalStorage**，不能直接塞一个
+     * `Record<string, Object>`（编译期会报 `Argument of type 'Record<string, Object>' is not
+     * assignable to parameter of type 'LocalStorage'`）。深链参数放进这个 storage，
+     * `LinkIn` 页用 `getUIContext().getSharedLocalStorage()` 取（见 LinkIn.aboutToAppear）。
+     */
+    const landingStorage: LocalStorage = new LocalStorage();
+    landingStorage.setOrCreate('linkInParams', this.landingParams());
+    windowStage.loadContent(this.landingPage(), landingStorage, (err) => {
       if (err.code) {
         hilog.error(DOMAIN, 'testTag', 'Failed to load the content. Cause: %{public}s', JSON.stringify(err));
         return;
