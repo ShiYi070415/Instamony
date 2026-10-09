@@ -134,6 +134,15 @@ export struct DirectThreadPage {
       clearInterval(this.probeTimer);
       this.probeTimer = -1;
     }
+    // 滚动/收圈那几个 setTimeout（审计项 A2）：销毁后不能再碰 listScroller 与 @State。
+    for (let index: number = 0; index < this.scrollTimers.length; index++) {
+      clearTimeout(this.scrollTimers[index]);
+    }
+    this.scrollTimers = [];
+    if (this.settleTimer >= 0) {
+      clearTimeout(this.settleTimer);
+      this.settleTimer = -1;
+    }
   }
 
   /** 临时探针定时器句柄（打通私信翻页后连同 PROBE_MS 一起删掉）。 */
@@ -159,10 +168,20 @@ export struct DirectThreadPage {
       } catch (error) {
       }
     };
-    setTimeout(run, 0);
-    setTimeout(run, 60);
-    setTimeout(run, 200);
+    this.scrollTimers.push(setTimeout(run, 0));
+    this.scrollTimers.push(setTimeout(run, 60));
+    this.scrollTimers.push(setTimeout(run, 200));
   }
+
+  /**
+   * 这些裸 `setTimeout` 的句柄（审计项 A2：以前既没句柄、`aboutToDisappear` 也没清）。
+   *
+   * 组件销毁后它们仍会跑：`scrollToNewest` 那三个去读已放掉的 `listScroller`，
+   * 8 秒兜底那个去写 `@State refreshing`（还可能把新一次加载的圈误收掉）。
+   */
+  private scrollTimers: Array<number> = [];
+  /** 8 秒兜底收圈那个定时器（见 loadOlderKeepPosition）。 */
+  private settleTimer: number = -1;
 
   /**
    * 取更老那批，并把视口**锚回加载前的那条消息**（需求："加载后页面位置保持不变"）。
@@ -176,8 +195,15 @@ export struct DirectThreadPage {
     if (showSpinner) {
       this.refreshing = true;
     }
-    // 兜底：取数这条路万一没回来，8 秒后也把圈收掉。
-    setTimeout((): void => {
+    /*
+     * 兜底：取数这条路万一没回来，8 秒后也把圈收掉。句柄存起来：新一次加载开始时要**取消上一次**
+     * （否则上一发的兜底会把这一发的圈提前收掉），销毁时也要清（审计项 A2）。
+     */
+    if (this.settleTimer >= 0) {
+      clearTimeout(this.settleTimer);
+    }
+    this.settleTimer = setTimeout((): void => {
+      this.settleTimer = -1;
       this.settleRefresh();
     }, 8000);
     this.vm.loadOlder()
