@@ -98,6 +98,13 @@ const REPLAY_MAX_BYTES: number = 200000;
 /** 日志里最多列几个操作名。 */
 const LOG_NAMES: number = 12;
 /**
+ * "某个片段在模板表里没命中"最多报几行（见 storedForNative 的 noteMiss）。
+ *
+ * 不是按次数而是按**片段去重**：启动早期模板还没抓到，同一个片段会被问很多遍，
+ * 每遍刷一行会把真机日志冲掉（这正是之前那些"看不到现场"的老问题）。
+ */
+const MISS_LOG_MAX: number = 32;
+/**
  * 存下来的模板能用多久（毫秒）。
  *
  * 模板里带着 `lsd` / `fb_dtsg` 这类令牌，放太久会失效；十分钟是个折中：够用户在
@@ -535,6 +542,18 @@ export class ApiRegistry {
 
   /**
    * 给"原生自己发 HTTP"用的模板：时效比页面内回放宽得多（见 NATIVE_TEMPLATE_TTL_MS）。
+   *
+   * ## 匹配为什么**不能**是纯子串（审计 E1）
+   * 调用方传的有两种东西：**完整的模板名**（`PolarisFeedTimelineRootV2Query`）和
+   * **片段**（`ayml`、`FeedTimeline`、`PolarisStoriesV3`）。原来精确名没命中就退化成
+   * `name.indexOf(片段) >= 0`，于是：
+   *   - `'ayml'` 这种三字母片段只要在**别的**名字里出现过就命中，
+   *   - 调用方拿到的是**别人那套请求头与令牌**（`NativeFeed.headersFor` 直接把模板头当请求头用，
+   *     `RestSession.formTokens` 从模板体里抠 `_uuid`/`_csrftoken`）。
+   * 请求看起来发出去了，服务端却按另一条路由解析 —— 失败现场全是"静默"（E 类问题的典型长相）。
+   *
+   * 现在：**精确名 → 名字里的独立 token（见 tokenHit）**，两级都命中不了就返回 null。
+   * 一条都命中不了时**只报一次**（同一片段不重复刷日志，见 missLogged）。
    */
   storedForNative(fragment: string): ApiTemplate | null {
     const now: number = Date.now();
@@ -542,18 +561,98 @@ export class ApiRegistry {
     if (exact !== undefined && now - exact.at < NATIVE_TEMPLATE_TTL_MS) {
       return exact;
     }
-    const needle: string = fragment.toLowerCase();
+    /*
+     * 片段也要**过同一个分词器**再比：网页抓来的 REST 模板名是**路径**
+     * （`rest_/api/v1/discover/ayml/`、`rest_/api/v1/friendships/show_many/`），
+     * 调用方传的片段里带 `_` 和 `/`（`show_many`）—— 只在名字侧切 token、片段侧原样比的话，
+     * `show_many` 永远比不上 `show` + `many` 拼出来的 `showmany`（真机上就是这条静默失败）。
+     */
+    const needle: string = ApiRegistry.tokensOf(fragment).join('');
+    if (needle.length === 0) {
+      return null;
+    }
     const names: Array<string> = Array.from(this.templates.keys());
     for (let index: number = 0; index < names.length; index++) {
       const item: ApiTemplate | undefined = this.templates.get(names[index]);
       if (item === undefined || now - item.at >= NATIVE_TEMPLATE_TTL_MS) {
         continue;
       }
-      if (item.name.toLowerCase().indexOf(needle) >= 0) {
+      if (ApiRegistry.tokenHit(item.name, needle)) {
         return item;
       }
     }
+    ApiRegistry.noteMiss(fragment, names);
     return null;
+  }
+
+  /** 已经报过"没命中"的片段（避免每次取数都刷一行；满了就不再记）。 */
+  private static missLogged: Set<string> = new Set<string>();
+
+  /** 记一次"这个片段在模板表里找不到"（同一片段只报一次，见 storedForNative）。 */
+  private static noteMiss(fragment: string, names: Array<string>): void {
+    if (ApiRegistry.missLogged.has(fragment) || ApiRegistry.missLogged.size >= MISS_LOG_MAX) {
+      return;
+    }
+    ApiRegistry.missLogged.add(fragment);
+    hilog.info(DOMAIN, TAG, 'storedForNative miss fragment=%{public}s have=%{public}s',
+      fragment, names.length === 0 ? '(none)' : names.slice(0, LOG_NAMES).join('|'));
+  }
+
+  /**
+   * 名字是不是"独立 token"命中。
+   *
+   * 判据：把模板名按**骆驼峰 / 数字 / 非字母数字**切成 token，片段必须等于**某一个 token**，
+   * 或者等于**连续几个 token 拼起来**：
+   *   - `PolarisDirectInboxAymlQuery` 命中 `ayml`（单个 token）；
+   *   - `PolarisFeedTimelineRootV2Query` 命中 `FeedTimeline`（feed + timeline）；
+   *   - `PolarisStoriesV3RootQuery` 命中 `PolarisStoriesV3`（polaris + stories + v3）。
+   * 这样"名字里恰好含这几个字母"不再算命中（例如 `save` 不会命中 `SavedPosts`）。
+   */
+  private static tokenHit(name: string, needle: string): boolean {
+    const tokens: Array<string> = ApiRegistry.tokensOf(name);
+    for (let start: number = 0; start < tokens.length; start++) {
+      let joined: string = '';
+      for (let end: number = start; end < tokens.length; end++) {
+        joined += tokens[end];
+        if (joined === needle) {
+          return true;
+        }
+        if (joined.length >= needle.length) {
+          // 已经比片段长了还没相等：再往后接只会更长，换下一个起点。
+          break;
+        }
+      }
+    }
+    return false;
+  }
+
+  /** 名字 → 小写 token（骆驼峰、数字、`_`/`-`/`.`/`/` 都当边界）。 */
+  private static tokensOf(name: string): Array<string> {
+    const out: Array<string> = [];
+    let current: string = '';
+    for (let index: number = 0; index < name.length; index++) {
+      const ch: string = name.charAt(index);
+      const isUpper: boolean = ch >= 'A' && ch <= 'Z';
+      if (isUpper && current.length > 0) {
+        out.push(current.toLowerCase());
+        current = ch;
+        continue;
+      }
+      const isDigit: boolean = ch >= '0' && ch <= '9';
+      const isLower: boolean = ch >= 'a' && ch <= 'z';
+      if (!isUpper && !isLower && !isDigit) {
+        if (current.length > 0) {
+          out.push(current.toLowerCase());
+          current = '';
+        }
+        continue;
+      }
+      current += ch;
+    }
+    if (current.length > 0) {
+      out.push(current.toLowerCase());
+    }
+    return out;
   }
 
   count(): number {

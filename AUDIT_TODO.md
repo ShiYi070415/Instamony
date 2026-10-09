@@ -73,18 +73,18 @@
 - [ ] **E1 `bridge/ApiRegistry.storedForNative`** 精确名未命中就退化**子串匹配** →
       `RestSession.formTokens('ayml')` / `NativeFeed.headersFor(op)` 可能拿到**别的模板**的头与令牌。
       → 精确未命中时按名字前缀/独立 token 匹配，或调用方直接传真实模板名。
-- [ ] **E2 `core/JsonRead`** 大整数正则的裸 `id` 分支会改写 `"media_id"`；无条件补引号还会破坏
-      已带引号/含换行的值。→ 排除 `media_id`，键收紧到 `thread_*`/`user_id`/`pk`。
-- [ ] **E3 `core/NativeDirect.send`** 限流判定在 `code!==200||!json` **之后** → 限流响应（200+JSON）
-      被前置分支吞掉 detail，调用方只看到"空串"，候选循环继续猛打。
-      → 把 `looksLimited` 提到状态码判断之前；限流时立刻中断候选循环。
+- [x] **E2 `core/JsonRead`**（`9b07d23`）裸 `id` 分支去掉（它会误伤 `media_id`），白名单收紧到
+      真正会读的键，并补上 `thread_fbid`/`thread_key`/`message_id`/`sender_fbid`/`offline_threading_id`。
+- [x] **E3 `core/NativeDirect.send`**（`9b07d23`）`looksLimited` 提到 `code!==200||!json` 之前：
+      限流响应如果不是标准 JSON 会被前置分支判成 `non-json`，限流既不记账、detail 还被覆盖。
 - [ ] **E4 `core/NativeDirect.threadViaTemplate`** 候选 op × 2 个 id 串行各发一次（最多约 10 发），
       中途不查冷却；且 `threadViaRest` 与 `thread()` 里那两段 REST 兜底是重复实现。
       → 候选上限 ≤2、命中限流即 break、合并两份实现。
-- [ ] **E5 读路径不查限流**：`ApiThrottle.blocked(DIRECT)` 只在 `sendText` 里查，`inbox/thread` 读
-      照样猛打。→ 读路径也查冷却并直接返回明细。
-- [ ] **E6 `core/NativeSave`** detail 被覆盖成 `template-fail`（丢掉限流原因）；`setSaved` 不查
-      `blocked(SAVE)`，一次点击连发 3 个 POST。→ 保留限流原因 + 入口短路。
+- [x] **E5/E6 收藏这一支**（`0574bdf`）：`byTemplate`/`setSaved` 入口加 `cooling()` 闸门；
+      第一发当场认出限流就不打后两发；`detail` 入口重置 + `note()` 先到先得（具体原因不再被
+      `http-404`/`template-fail` 盖掉）；调用方 `saveMedia` 原生失败后**网页那条路也一起停**
+      并提示 `save_rate_limited`（网页驱动发的是同一个账号的写请求，撞同一把锁）。
+      **E5 的 DM 读路径（`inbox`/`thread`）仍未做**，见下面单独一条。
 - [ ] **E7 `core/NativeSearch.pageSizeRejected`** 任何失败都记成"页数被拒"→ 一次网络抖动就永久
       关掉大页数这条优化（进程内）。→ 只在 detail 明确为 `400/noncoercible_variable_value` 时置位。
 - [ ] **E8 `core/NativeStories`** try 列表的第 4 个候选与第 1 个同 URL 同身份（纯重复请求，多打一发）。
@@ -102,9 +102,9 @@
 
 ## F. 资源、注释与死代码
 
-- [ ] **F1** 补 `en_US/element/string.json` 缺失的 7 键：`story_load_failed`、`story_action_pending`、
-      `story_message_hint`、`translate_action`、`translate_show_original`、`translate_failed`、
-      `direct_open_web`（base 有、en_US 无 → 英文机回退中文）。
+- [ ] **E5b DM 读路径查冷却**（待做）：`ApiThrottle.blocked(DIRECT)` 只在 `sendText` 里查，
+      `inbox/thread` 读照样猛打。→ 读路径也查冷却并直接返回明细。
+- [x] **F1**（`0574bdf`）`en_US` 补 7 键 + 新增的 `save_rate_limited`；两文件现已一致（161/161）。
 - [ ] **F2 `Index.notifyTitleText()`** 硬编码中文 + 诊断串（`通知 ${src}·${n}`）→ 改回
       `$r('app.string.notifications')`，删 `notifySrc`；该函数当前**无调用方**（先确认再删）。
 - [ ] **F3** 探针遗留：`Index` 里那段定时器已用 `if (false)` 停用（提交 `334dc4a`），

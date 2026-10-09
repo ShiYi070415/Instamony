@@ -208,10 +208,18 @@ export class NativeNotifications {
     // 模板没有（还没抓过）时才退回裸 POST 试一次。
     const aymlTpl: ApiTemplate | null = ApiRegistry.getInstance().storedForNative(AYML_OP);
     let aymlCall: Promise<NativeFetchResult>;
+    /*
+     * 走的哪条路要记下来（诊断）：`template` = 用了网页抓来的那条 REST 模板，
+     * `skeleton` = 退回包内骨架。两者都能出数据，但**只有 template 那条**带页面专有令牌，
+     * 出问题时（比如 ayml 一直空）第一件要确认的就是"现在到底走的哪条"。
+     * 顺带它是 `ApiRegistry.storedForNative` 片段匹配能否命中的现场证据。
+     */
+    let aymlVia: string = `skeleton(no-tpl:${AYML_OP})`;
     if (aymlTpl !== null) {
       // ① 有网页抓来的模板：和页面刚发的那条一模一样，最稳。
       const tplHeaders: Record<string, string> = await NativeFeed.headersFor(AYML_OP);
       if (Object.keys(tplHeaders).length > 0) {
+        aymlVia = 'template';
         aymlCall = NativeNotifications.post(NativeNotifications.absolute(aymlTpl.url),
           aymlTpl.body, tplHeaders);
       } else {
@@ -267,8 +275,8 @@ export class NativeNotifications {
     } else {
       hilog.warn(DOMAIN, TAG, 'ayml failed: %{public}s', ayml.error);
     }
-    hilog.info(DOMAIN, TAG, 'native notify items=%{public}d followResolved=%{public}d inboxLen=%{public}d aymlLen=%{public}d',
-      items.length, resolved, inbox.body.length, ayml.body.length);
+    hilog.info(DOMAIN, TAG, 'native notify items=%{public}d followResolved=%{public}d inboxLen=%{public}d aymlLen=%{public}d aymlVia=%{public}s',
+      items.length, resolved, inbox.body.length, ayml.body.length, aymlVia);
     const ok: NotificationsPayload = {
       state: 'ok',
       // rows 用"这次真正读到关注状态的人数"：页面据此判断 following 是"读到了"还是"没读到"
