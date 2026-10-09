@@ -4588,13 +4588,24 @@ struct Index {
         known.push(key);
         fresh.push(one);
       }
+      const before: string = this.commentsNextId;
       this.comments = this.comments.concat(fresh);
       this.commentsNextId = payload.nextMaxId ?? '';
-      // 游标没变也停：再翻只会拿到同一页。
-      this.commentsHasMore = payload.hasMore === true && this.commentsNextId.length > 0
-        && fresh.length > 0;
-      hilog.info(DOMAIN, TAG, 'comments more added=%{public}d total=%{public}d more=%{public}s',
-        fresh.length, this.comments.length, `${this.commentsHasMore}`);
+      /*
+       * **只有"游标没前进"才算到底**（审计 C2）。
+       *
+       * 原来是 `… && fresh.length > 0`：IG 的分页游标经常**回带**（下一页里混着一批已经见过的
+       * 评论），这一页去重后 `fresh` 就会是 0 —— 于是 `hasMore` 被永久置 false，面板停在
+       * "没有更多"，而服务端其实还有。现在改成看游标：
+       *   · 游标没变（或为空）→ 真的到底了，停；
+       *   · 游标变了但这一页全是重复 → **继续**，下一趟拿新游标接着翻。
+       */
+      const cursorAdvanced: boolean = this.commentsNextId.length > 0
+        && this.commentsNextId !== before;
+      this.commentsHasMore = payload.hasMore === true && cursorAdvanced;
+      hilog.info(DOMAIN, TAG,
+        'comments more added=%{public}d total=%{public}d more=%{public}s cursorMoved=%{public}s',
+        fresh.length, this.comments.length, `${this.commentsHasMore}`, `${cursorAdvanced}`);
     } catch (error) {
       this.commentsHasMore = false;
       hilog.warn(DOMAIN, TAG, 'comments more failed: %{public}s', (error as Error).message);
