@@ -81,6 +81,96 @@ export class NativeStories {
    * 它与 `detail` 不同：`detail` 是给用户/日志看的原因，这个只回答"那条请求通不通"。
    */
   private static answeredJson: boolean = false;
+  /**
+   * 托盘里每条条目的**原始 JSON**（userId → 该条目的 JSON 文本，截断保存）。
+   *
+   * 两个用途，都是"远端用户复现时我们看不到现场"逼出来的：
+   *   ① **兜底**：`reels_media` 不给内容时，用手上这份条目自己带的 media 拼一条（见 reelFromTrayNode）；
+   *   ② **诊断**：写进 `storyfail_*.txt` 的 `raw[node]=…` —— entry 里到底有哪些 id / 有没有 items，
+   *      只有原始数据能说清（我们解析出来的那几个字段不够）。
+   */
+  private static nodeRaw: Map<string, string> = new Map<string, string>();
+  /** 原始条目最多留多少条（托盘的 143 条也没必要全留）。 */
+  private static readonly NODE_RAW_MAX: number = 80;
+  /** 每条原始 JSON 截断到多少字符（够看清键名与值，又不至于让内存里的字符串太大）。 */
+  private static readonly NODE_RAW_CHARS: number = 1200;
+  /**
+   * 每条条目的**形状摘要**（userId → `reel_type=… besties=… expiring=… …`）。
+   *
+   * 为什么单存这个而不是只留原始 JSON：真机上 80 条条目的 JSON 全在 1200 字符处被截断
+   * （`items`/`user` 都排在后面），**恰恰是这几个短字段能一眼看出"这条该不该有快拍"**：
+   *   · `reel_type` —— 只有 `user_reel` 才是"某个用户的快拍"；别的类型拿用户 pk 去问
+   *     `reels_media` 本来就该是空的；
+   *   · `has_besties_media` / `latest_besties_reel_media` —— 只发给"密友"的那部分快拍；
+   *   · `expiring_at` —— 过期时刻（用来算"我们问的时候是不是已经过期了"）。
+   */
+  private static nodeShape: Map<string, string> = new Map<string, string>();
+
+  /** 记一条条目的形状摘要（读的就是托盘原始字段，见 nodeShape 的说明）。 */
+  private static rememberShape(userId: string, node: Record<string, Object>,
+                               user: Record<string, Object> | null): void {
+    if (userId.length === 0 || NativeStories.nodeShape.has(userId)) {
+      return;
+    }
+    const reelType: string = JsonRead.strOf(node, 'reel_type');
+    const besties: boolean = JsonRead.boolOf(node, 'has_besties_media');
+    const latest: number = JsonRead.numOf(node, 'latest_reel_media');
+    const expiring: number = JsonRead.numOf(node, 'expiring_at');
+    const seen: number = JsonRead.numOf(node, 'seen');
+    const nodeId: string = JsonRead.strOf(node, 'id');
+    const userPk: string = user === null ? '' : JsonRead.strOf(user, 'pk');
+    NativeStories.nodeShape.set(userId,
+      `reel_type=${reelType.length > 0 ? reelType : '(none)'} besties=${besties}`
+      + ` latest_reel_media=${latest} expiring_at=${expiring} seen=${seen}`
+      + ` entryItems=${JsonRead.arrayOf(node, 'items').length}`
+      + ` node.id=${nodeId.length > 0 ? nodeId : '(none)'}`
+      + ` user.pk=${userPk.length > 0 ? userPk : '(none)'}`);
+  }
+
+  /** 某一轮托盘的形状摘要（userId → 摘要行），供诊断落盘。 */
+  static shapesDump(): Array<string> {
+    const out: Array<string> = [];
+    NativeStories.nodeShape.forEach((value: string, key: string): void => {
+      out.push(`uid=${key} ${value}`);
+    });
+    return out;
+  }
+
+  /**
+   * 把这一轮托盘的**原始条目**整理成文本（诊断：落成 `trayraw_*.txt`）。
+   *
+   * 为什么值得单独留一份：托盘条目的形状**按账号/设备不一样**（带不带 `user`、有没有 `items`、
+   * id 字段叫什么），而"点开快拍 empty 只有部分用户"恰恰取决于这些差异 ——
+   * 只留我们自己解析出来的那几个字段，等于把判断依据丢了。
+   */
+  static rawNodesDump(): string {
+    const lines: Array<string> = [];
+    lines.push(`Instamony 托盘原始条目 n=${NativeStories.nodeRaw.size}`);
+    NativeStories.nodeRaw.forEach((value: string, key: string): void => {
+      lines.push(`uid=${key} ${value}`);
+    });
+    return lines.join('\n');
+  }
+
+  /** 记下一条条目的原始 JSON（见 nodeRaw 的说明）。 */
+  private static rememberNode(userId: string, node: Record<string, Object>): void {
+    if (userId.length === 0 || NativeStories.nodeRaw.has(userId)) {
+      return;
+    }
+    if (NativeStories.nodeRaw.size >= NativeStories.NODE_RAW_MAX) {
+      return;
+    }
+    try {
+      let text: string = JSON.stringify(node);
+      if (text.length > NativeStories.NODE_RAW_CHARS) {
+        text = text.substring(0, NativeStories.NODE_RAW_CHARS);
+      }
+      NativeStories.nodeRaw.set(userId, text);
+    } catch (error) {
+      // 循环引用之类：存一份标记就够了，诊断时看得出"没存成"。
+      NativeStories.nodeRaw.set(userId, '(stringify-failed)');
+    }
+  }
 
   static lastDetail(): string {
     return NativeStories.detail;
@@ -114,6 +204,20 @@ export class NativeStories {
      */
     lines.push(`tray age=${trayAgeMs}ms (~${Math.round(trayAgeMs / 1000)}s)`);
     lines.push(`tray head=${trayHead}`);
+    /*
+     * **这一条条目的原始 JSON**（见 nodeRaw 的说明）：`reels_media` 回空时，判断"是我们取错了 id
+     * 字段 / 条目来自别的分区 / 根本就没带 media"，只有原始数据能说清 —— 我们解析出来的那几个
+     * 字段（uid/username/seen/count）不足以区分这几种。
+     */
+    const raw: string | undefined = NativeStories.nodeRaw.get(userId);
+    lines.push(`raw[node]=${raw === undefined ? '(not kept)' : raw}`);
+    /*
+     * **形状摘要**（见 nodeShape）：比上面那坨截断的 JSON 好读，
+     * 而且直接回答了"这条该不该有快拍"——`reel_type` 不是 `user_reel`、或者
+     * `expiring_at` 已经过去，那 `empty` 就是**正常**结果，不是我们的 bug。
+     */
+    const shape: string | undefined = NativeStories.nodeShape.get(userId);
+    lines.push(`shape=${shape === undefined ? '(not kept)' : shape}`);
     lines.push('== 逐发轨迹 ==');
     for (let index: number = 0; index < NativeStories.trace.length; index++) {
       lines.push(`  ${NativeStories.trace[index]}`);
@@ -205,6 +309,9 @@ export class NativeStories {
       NativeStories.logMiss(data, 'no-tray-array');
       return null;
     }
+    // 新一轮托盘数据：原始条目表整个换掉（旧的 id 可能已经不在托盘里了）。
+    NativeStories.nodeRaw.clear();
+    NativeStories.nodeShape.clear();
     const items: Array<StoryTrayItem> = [];
     for (let index: number = 0; index < found.length; index++) {
       const node: Record<string, Object> | null = JsonRead.asRecord(found[index]);
@@ -251,6 +358,8 @@ export class NativeStories {
         }
       }
       const count: number = JsonRead.arrayOf(node, 'items').length;
+      NativeStories.rememberNode(id, node);
+      NativeStories.rememberShape(id, node, user);
       items.push(new StoryTrayItem(id, username, avatar, seen, count, altIds));
     }
     return new StoryTray(items);
@@ -463,6 +572,21 @@ export class NativeStories {
         }
       }
     }
+    /*
+     * **最后一道：用托盘那份数据自己拼一条**（不需要任何请求，见 reelFromTrayNode）。
+     *
+     * 放在所有网络候选之后：能拿到"正经那一份"当然最好（有全部条目、有视频地址），
+     * 但拿不到时，**手上这份托盘条目自带的 media** 远好过弹一句"没取到"并把整层收掉。
+     * 走这条路时 `detail` 记 `-tray`，报告与日志里一眼能看出"这次是托盘兜底顶上的"。
+     */
+    const fromTray: StoryReel | null = NativeStories.reelFromTrayNode(userId);
+    if (fromTray !== null && fromTray.items.length > 0) {
+      NativeStories.detail = '-tray';
+      NativeStories.note(`托盘兜底：条目自带 items=${fromTray.items.length}`);
+      hilog.info(DOMAIN, TAG, 'reel ok via tray node uid=%{public}s n=%{public}d',
+        userId, fromTray.items.length);
+      return fromTray;
+    }
     if (NativeStories.detail !== 'empty' && NativeStories.detail.indexOf('throttled-') < 0) {
       NativeStories.detail = 'empty';
     }
@@ -618,15 +742,27 @@ export class NativeStories {
   /** 响应文本 → 某个用户的快拍（media 数组按结构找，见文件头）。 */
   private static parseReel(text: string, userId: string): StoryReel | null {
     const root: Record<string, Object> = JsonRead.parse(text);
-    /*
-     * 两条接口的外壳不一样：
-     *   · `/feed/reels_media/`       → `{reels: {"<uid>": {items: […]}}}`
-     *   · `/feed/user/<uid>/story/`  → `{reel: {items: […]}}`
-     * 所以外壳不认键名，直接从根上按"结构像媒体"的数组找（findMediaArray）。
-     */
+    return NativeStories.reelOf(root, userId, true);
+  }
+
+  /**
+   * 任意"装着这一位快拍的 JSON 对象" → StoryReel（`parseReel` 与**托盘兜底**共用）。
+   *
+   * 两条接口的外壳不一样：
+   *   · `/feed/reels_media/`       → `{reels: {"<uid>": {items: […]}}}`
+   *   · `/feed/user/<uid>/story/`  → `{reel: {items: […]}}`
+   *   · **托盘条目自己**            → `{user:{…}, items: […]}`（见 reelFromTrayNode）
+   * 所以外壳不认键名，直接从根上按"结构像媒体"的数组找（findMediaArray）。
+   *
+   * @param logMiss 认不出结构时要不要打键树（托盘兜底那条**不打**：它失败很正常，别刷日志）。
+   */
+  private static reelOf(root: Record<string, Object>, userId: string,
+                        logMiss: boolean): StoryReel | null {
     const nodes: Array<Object> | null = NativeStories.findMediaArray(root, 0);
     if (nodes === null) {
-      NativeStories.logMiss(root, 'reel-no-media-array');
+      if (logMiss) {
+        NativeStories.logMiss(root, 'reel-no-media-array');
+      }
       return null;
     }
     const items: Array<StoryItem> = [];
@@ -654,6 +790,27 @@ export class NativeStories {
       }
     }
     return new StoryReel(userId, username, avatar, items);
+  }
+
+  /**
+   * **托盘兜底**：拿托盘响应里这一条条目自己带的 media 拼一个 StoryReel（**不需要任何请求**）。
+   *
+   * 为什么要有它：有些条目 IG 的 `reels_media` 就是不给内容（刚过期但托盘还留着、
+   * 私密号未关注、条目来自别的分区……），但**托盘响应里本来就带着这一位的 media**
+   * （解析托盘时我们就在数 `items`）。与其弹一句"没取到"，不如把手上这份用起来 ——
+   * 用户至少能点开看，而不是整层被收掉。
+   */
+  static reelFromTrayNode(userId: string): StoryReel | null {
+    const raw: string | undefined = NativeStories.nodeRaw.get(userId);
+    if (raw === undefined || raw.length === 0) {
+      return null;
+    }
+    try {
+      const node: Record<string, Object> = JsonRead.parse(raw);
+      return NativeStories.reelOf(node, userId, false);
+    } catch (error) {
+      return null;
+    }
   }
 
   /** 找"媒体数组"：元素看着像一条 media 的那个数组（广度优先，深度封顶）。 */

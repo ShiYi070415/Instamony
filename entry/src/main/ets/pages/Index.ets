@@ -6207,7 +6207,27 @@ struct Index {
   private rememberStoryQueue(items: Array<StoryTrayItem>): void {
     this.storyQueue = items;
     this.storyQueueAtMs = Date.now();
+    /*
+     * **一份进程只落一次托盘原始条目**（诊断，见 NativeStories.rawNodesDump）：
+     * "点开快拍提示没取到（原因 empty）只有部分用户遇到"这类问题，答案就在**托盘条目的原始形状**
+     * 里（带不带 user、有没有 items、id 字段叫什么）——而远端用户的日志我们拿不到，
+     * 所以让他们把这个文件发回来。一次进程一份，不做磁盘churn。
+     */
+    if (!this.trayRawDumped) {
+      this.trayRawDumped = true;
+      /*
+       * 两份一起落：**形状摘要**（一行一条，看 `reel_type`/`expiring_at`/`besties`，
+       * 判断"这条该不该有快拍"）与**原始条目**（截断到 1200 字符，看 id 字段与结构）。
+       */
+      const shapes: Array<string> = NativeStories.shapesDump();
+      this.dumpProbeFile('trayshape',
+        `Instamony 托盘形状 n=${shapes.length}\n` + shapes.join('\n'));
+      this.dumpProbeFile('trayraw', NativeStories.rawNodesDump());
+    }
   }
+
+  /** 这一轮进程里托盘原始条目落过盘没有（见 rememberStoryQueue）。 */
+  private trayRawDumped: boolean = false;
 
   /**
    * 点开托盘里的一个用户：先取数，成功才进播放页（需求："加载成功跳进新页面"）。
