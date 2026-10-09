@@ -38,6 +38,14 @@ const TAG: string = 'DirectThreadViewModel';
 /** 实时接收的轮询间隔（毫秒，见 startPolling 里为什么用轮询）。 */
 const THREAD_POLL_MS: number = 4000;
 /**
+ * 翻页"卡住"（去重后没多出任何一条）之后的冷却：这段时间内不再翻，过了允许再试一次。
+ *
+ * 为什么要它：这条查询的分页参数在真机上本来就不认（详见 NativeDirect 里的说明），一次卡住就把
+ * `hasOlder` 永久置 false 的话，用户再也翻不动、也没有重试入口（审计 C3）。给个 30 秒的冷却，
+ * 服务端一旦恢复可用，用户继续上拉就能自己接上。
+ */
+const LOAD_OLDER_RETRY_GAP_MS: number = 30000;
+/**
  * 冷启动抓模板用的片段：**空串 = 全抓**。
  *
  * 收件箱那边能用 `'Direct'` 过滤，是因为那条查询的名字已知（`PolarisDirectInboxMobileQuery`）。
@@ -332,6 +340,9 @@ export class DirectThreadViewModel {
     }
   }
 
+  /** 翻页"卡住"之后的冷却截止时刻（见 loadOlder 里 stuck 那段）。 */
+  private stuckUntilMs: number = 0;
+
   /** 这条会话的网页地址（冷启动抓模板导航用；读不出来时界面拿它回落网页，见 DirectThreadPage）。 */
   webUrl(): string {
     return 'https://www.instagram.com/direct/t/' + encodeURIComponent(this.threadId) + '/';
@@ -384,6 +395,15 @@ export class DirectThreadViewModel {
 
   /** 取更老的一批消息（接到前面）。 */
   async loadOlder(): Promise<void> {
+    /*
+     * 上一次"卡住"（去重后没多出东西）之后有个冷却期：期间直接返回，别每滑一下就发一发
+     * 必然重复的请求；过了冷却允许再试（见 loadOlder 里 stuck 那段与 LOAD_OLDER_RETRY_GAP_MS）。
+     */
+    if (this.stuckUntilMs > Date.now()) {
+      hilog.info(DOMAIN, TAG, 'loadOlder skip: cooling down %{public}dms left',
+        this.stuckUntilMs - Date.now());
+      return;
+    }
     if (this.busy || this.view === null || !this.view.hasOlder
       || this.view.oldestCursor.length === 0) {
       // 被挡下也要留痕：不然"上拉没反应"到底是没触发还是被守卫拦了，日志里看不出来。
@@ -431,9 +451,19 @@ export class DirectThreadViewModel {
       merged.sort((a: DirectMessage, b: DirectMessage): number => a.tsMs - b.tsMs);
       const added: number = merged.length - this.view.messages.length;
       /*
-       * **没多出来任何一条就不再往下翻**：游标换不动时继续翻只会无限重复同一页。
-       * 这样即使游标这条路暂时没打通，界面也只是"到头了"，不会再循环。
+       * **没多出来任何一条就不再往下翻 —— 但只是"这一次"停，不是永久停**（审计 C3）。
+       *
+       * 原来直接把 `hasOlder` 置 false：游标一旦吃错参数（这条查询的分页参数在真机上本来就不认），
+       * 用户就再也翻不动了，而且**没有任何重试入口**（`loadOlder` 第一行就 return）。
+       * 现在改成"停 + 冷却"：记录一次卡住的时刻，冷却过后允许再试一次（`loadOlder` 里的
+       * `stuckUntilMs` 判断）。这样服务端那边的参数一旦恢复可用，用户不用重开 App 就能继续翻。
        */
+      const stuck: boolean = added === 0;
+      if (stuck) {
+        this.stuckUntilMs = Date.now() + LOAD_OLDER_RETRY_GAP_MS;
+        hilog.warn(DOMAIN, TAG, 'loadOlder stuck: cursor=%{public}d retry after %{public}dms',
+          older.oldestCursor.length, LOAD_OLDER_RETRY_GAP_MS);
+      }
       const canGoOlder: boolean = older.hasOlder && added > 0;
       hilog.info(DOMAIN, TAG, 'loadOlder: +%{public}d total=%{public}d older=%{public}s cursor=%{public}d',
         added, merged.length, `${canGoOlder}`, older.oldestCursor.length);

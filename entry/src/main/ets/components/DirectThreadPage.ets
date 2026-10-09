@@ -206,6 +206,25 @@ export struct DirectThreadPage {
       this.settleTimer = -1;
       this.settleRefresh();
     }, 8000);
+    /*
+     * **首屏还没读出来时，下拉就是"重试加载"**（审计 C3）。
+     *
+     * `loadOlder()` 第一行就是 `if (this.busy || this.view === null || …) return;` —— 首屏失败
+     * （`view` 一直为 null）之后，下拉触顶只会立刻返回：用户看到的是"圈转一下就没了、什么也不发生"，
+     * 而这一页再也没有别的入口去重试。这里把下拉接到 `load()` 上，等于给用户一个重试键。
+     */
+    if (this.vm.viewNow() === null) {
+      this.vm.load()
+        .then((): void => {
+          this.syncFromVm();
+          this.scrollToNewest();
+          this.settleRefresh();
+        })
+        .catch((): void => {
+          this.settleRefresh();
+        });
+      return;
+    }
     this.vm.loadOlder()
       .then((): void => {
         const added: number = this.allMessages().length - before;
