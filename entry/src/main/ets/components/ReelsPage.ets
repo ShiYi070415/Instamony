@@ -1179,6 +1179,20 @@ export struct ReelsPage {
     // 离开页面要停播：不然声音会继续（视频在别处播放）。
     // 不用自己 stop 播放器了 —— 每个视频都有自己的 VideoSurface，组件销毁时它会 release
     // （arkui 的 VideoController 已经不用了，这里以前那句 this.controller.stop() 是历史遗留）。
+    /*
+     * **把挂在视图模型上的回调摘掉**（审计发现：这里是空实现）。
+     *
+     * `vm` 是宿主（`Index`）长期持有的字段，而 `aboutToAppear` 往它上面挂了三个闭包，闭包里写的
+     * 都是本组件的 `@State`（`reels/busy/status`）。页面销毁后 VM 的异步回调（翻页、取数回来）
+     * 仍会执行这些闭包 → 写已卸载组件的状态；`this.reels = …` 这类整体替换还可能连带触发
+     * `publishAction`/`logCurrent` 去碰已经放掉的资源。销毁时换成空实现即可。
+     */
+    this.vm.onReels = (reels: Array<Reel>, hasMore: boolean): void => {
+    };
+    this.vm.onBusy = (busy: boolean): void => {
+    };
+    this.vm.onStatus = (text: string): void => {
+    };
   }
 
   /**
