@@ -667,6 +667,19 @@ export struct StoryViewer {
     this.contentMounted = true;
     // 告诉宿主"这次收起被取消了"：它会清掉 storyClosing，返回键才继续有效（见 onReopen）。
     this.onReopen();
+    /*
+     * **被打断的收起要能把计时器重新点起来**（审计发现的"停摆"）。
+     *
+     * `collapseAndClose` / `slideDownAndClose` 一开始就 `stopTimer()`，而这个计时器只在
+     * `aboutToAppear` 里建过一次 —— 于是"按下返回/下滑触发了收起 → 中途又点一下打断展开"之后，
+     * 进度条与自动前进就**永久停摆**了（画面还在，就是再也不走）。
+     */
+    if (this.timerId < 0) {
+      this.timerId = setInterval((): void => {
+        this.tick();
+      }, TICK_MS);
+      hilog.info(DOMAIN, TAG, 'reopen: timer restarted');
+    }
     this.expand();
   }
 
