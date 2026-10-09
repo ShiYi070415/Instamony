@@ -1247,6 +1247,14 @@ export struct ReelsPage {
     this.activeIndex = index;
     // 换条了：新的播放器首帧还没出来，封面叠层要重新盖上（见 reelPage）。
     this.videoReady = false;
+    /*
+     * **切条时把上一条的"双击爱心"清掉**（审计 B2）。
+     *
+     * 爱心是整页一个节点（`REELS_BURST_KEY` 常量），动画与它的清理定时器都挂在 `burst` 上：
+     * 不在这里清的话，上一条的爱心会**闪在新这条上**（切页那一瞬还能看到）。
+     * 清 key 就是让节点消失（见 `LikeBurstState.key` 的说明）。
+     */
+    this.burst.key = '';
     // 标题栏那两颗按钮（下载/静音）跟着换到当前这条的原视频地址。
     this.publishAction();
     this.logCurrent();

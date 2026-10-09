@@ -51,6 +51,14 @@ const CHECK_MS: number = 300;
 export class LikeBurstState {
   /** 正在放动画的那一项的 key；空串表示没有。 */
   key: string = '';
+  /**
+   * 每次播放的序号（审计 B2）。
+   *
+   * 为什么不能只靠 `key` 判断"这次动画过没过期"：**整页共用一颗爱心**的场景（Reels 页）
+   * key 是常量，连续双击时两次的 key 完全一样 —— 第一次那个 `BURST_TOTAL_MS` 清理定时器
+   * 就会把第二次的动画提前清掉。用自增序号比对才分得清"我这一发"。
+   */
+  seq: number = 0;
   /** 落点（相对宿主容器的 vp 坐标）：跟手 —— 在哪儿双击就在哪儿炸开。负值 = 没拿到坐标，居中。 */
   x: number = -1;
   y: number = -1;
@@ -295,17 +303,20 @@ export function playLikeBurst(state: LikeBurstState, key: string, x: number, y: 
   state.y = y;
   state.scale = BURST_FROM;
   state.opacity = 1;
+  // 本次播放的序号：两个定时器都拿它比对"我还是不是最新那一发"（理由见 LikeBurstState.seq）。
+  state.seq = state.seq + 1;
+  const mine: number = state.seq;
   // 下一帧再改成终值：同一帧里"先复位再设终值"框架只看得到终值，补间起不来。
   setTimeout((): void => {
-    if (state.key !== key) {
-      // 这期间又双击了别处，这次就不用管了。
+    if (state.seq !== mine) {
+      // 这期间又双击了一次（key 可能一样），这次就不用管了。
       return;
     }
     state.scale = BURST_TO;
     state.opacity = 0;
   }, 16);
   setTimeout((): void => {
-    if (state.key === key) {
+    if (state.seq === mine) {
       state.key = '';
       hilog.debug(DOMAIN, TAG, 'burst done key=%{public}s', key);
     }
