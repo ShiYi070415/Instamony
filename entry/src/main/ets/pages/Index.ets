@@ -129,7 +129,6 @@ import { PROFILE_TAB_POSTS, PROFILE_TAB_REELS, PROFILE_TAB_TAGGED, ProfileViewMo
 import { DirectViewModel } from '../viewmodel/DirectViewModel';
 import { DirectThreadViewModel } from '../viewmodel/DirectThreadViewModel';
 import { NativeDirect } from '../core/NativeDirect';
-import { DmRealtime } from '../core/DmRealtime';
 import { SearchViewModel } from '../viewmodel/SearchViewModel';
 import { ReelsViewModel } from '../viewmodel/ReelsViewModel';
 import { ProfileReelsViewModel } from '../viewmodel/ProfileReelsViewModel';
@@ -1952,10 +1951,6 @@ struct Index {
    * 后台预热队列**跑过了没有**（它只在启动时排一次，见 preloadTabs 的第二阶段）。
    */
   private warmStarted: boolean = false;
-  /** 临时探针定时器（见 warmOtherTabs，打通私信翻页后删）。 */
-  private probeTimer: number = -1;
-  /** 探针已跑过的拍数（第 0 拍顺带问一次 MQTT 配置）。 */
-  private probeTicks: number = 0;
   /**
    * 会话详情自检（诊断用）：启动预热跑完顺手读一次私信会话并把结果打进日志。
    *
@@ -2057,32 +2052,6 @@ struct Index {
       return;
     }
     this.warmStarted = true;
-    /*
-     * **临时探针**（打通私信翻页后删）：挂在首页预热里，所以它**始终在跑** —— 不像挂在会话页里
-     * 那样会被网页浮层卸载掉。每 15 秒把网页钩子里的请求倒进模板表并列出最近更新过的名字：
-     * 我在可见网页里划几下之后，下一拍就能看到"网页翻历史用的是哪条请求"。
-     */
-    if (false) {
-      hilog.info(DOMAIN, TAG, 'web probe timer start');
-      this.probeTimer = setInterval((): void => {
-        hilog.info(DOMAIN, TAG, 'web probe tick');
-        // 第一拍顺手问一次 MQTT 连接配置（做"实时推送 + 离线补偿"的第一步，见 NativeDirect.mqttSetupProbe）。
-        if (this.probeTicks < 4) {
-          this.probeTicks = this.probeTicks + 1;
-          NativeDirect.mqttSetupProbe().catch((): void => {
-          });
-          // 实时通道探针（core/DmRealtime）暂时摘掉：三次握手尝试都到此为止，见该文件的说明。
-          // 要继续时把下面两行换回 DmRealtime.probeConnect() / probeWs() 即可。
-          // DmRealtime.probeWs().catch((): void => { });
-        }
-        ApiRegistry.getInstance().capture('').then((ok: boolean): void => {
-          hilog.info(DOMAIN, TAG, 'web probe recent ok=%{public}s %{public}s', `${ok}`,
-            ApiRegistry.getInstance().recentNames(60000).join('|'));
-        }).catch((error: Error): void => {
-          hilog.warn(DOMAIN, TAG, 'web probe failed: %{public}s', error.message);
-        });
-      }, 3600000);
-    }
     await this.delay(WARM_START_DELAY_MS);
     /*
      * 0) **限时快拍托盘**（需求："快拍功能在启动 app 时预加载，和 feeds 流一样"）。

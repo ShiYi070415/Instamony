@@ -10,7 +10,6 @@
 
 import { display } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { ApiRegistry } from '../bridge/ApiRegistry';
 import { DirectMessage, DirectThreadView } from '../model/Direct';
 import { DirectThreadViewModel } from '../viewmodel/DirectThreadViewModel';
 import { CommentInputBar, COMMENT_INPUT_BOTTOM_VP } from './CommentInputBar';
@@ -18,8 +17,6 @@ import { ScrollDelta } from '../core/ScrollReport';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'DirectThreadPage';
-/** 临时探针的间隔（毫秒）：把页面刚抓到的请求名打出来，见 aboutToAppear 里的说明。 */
-const PROBE_MS: number = 8000;
 
 /**
  * 顶部留白（vp）：把列表推到 HDS 标题栏**毛玻璃蒙层**下面。
@@ -109,31 +106,10 @@ export struct DirectThreadPage {
     this.vm.startPolling((): void => {
       this.scrollToNewest();
     });
-    /*
-     * **临时探针**：每 8 秒把"页面刚抓到的请求名"打出来。
-     *
-     * `capture('')` 把网页钩子里的请求倒进模板表，`recentNames` 只列最近更新过的 —— 这样我在
-     * **可见网页里用真手指上滑**时，页面发出的那条分页请求会立刻出现在日志里（详见上面那个
-     * "在网页中打开"的调试入口）。打通后删掉。
-     */
-    this.probeTimer = setInterval((): void => {
-      this.registry.capture('').then((): void => {
-        hilog.info(DOMAIN, TAG, 'dm probe recent=%{public}s',
-          this.registry.recentNames(15000).join('|'));
-      }).catch((): void => {
-      });
-    }, PROBE_MS);
   }
-
-  private readonly registry: ApiRegistry = ApiRegistry.getInstance();
 
   aboutToDisappear(): void {
     this.vm.stopPolling();
-    // 临时探针定时器（见 aboutToAppear 末尾）。
-    if (this.probeTimer >= 0) {
-      clearInterval(this.probeTimer);
-      this.probeTimer = -1;
-    }
     // 滚动/收圈那几个 setTimeout（审计项 A2）：销毁后不能再碰 listScroller 与 @State。
     for (let index: number = 0; index < this.scrollTimers.length; index++) {
       clearTimeout(this.scrollTimers[index]);
@@ -144,9 +120,6 @@ export struct DirectThreadPage {
       this.settleTimer = -1;
     }
   }
-
-  /** 临时探针定时器句柄（打通私信翻页后连同 PROBE_MS 一起删掉）。 */
-  private probeTimer: number = -1;
 
   private syncFromVm(): void {
     this.view = this.vm.viewNow();
