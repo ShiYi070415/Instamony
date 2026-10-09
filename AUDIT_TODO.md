@@ -188,19 +188,23 @@
   目前是断的；现在靠**不需要模板的 REST 搜索**（`/web/search/topsearch/`）顶着。
   以后若要恢复模板那条路，得先弄清页面为什么不发请求（可能是输入框需要更真实的按键序列，
   或者 IG 换成了别的触发方式）—— 体检日志里的 `op=` 为空就说明在用 REST。
-- **快拍 `empty`（只有部分用户）** —— **已由用户回传的诊断文件定案**（`f2b005c`）：
-  文件里 `detail=empty` 而轨迹显示 `reels_media` 回 **500**、`user/<id>/story` 回 **400** ——
-  前两轮猜的"取错 id / 条目类型不对 / 快拍已过期"**全部不成立**（那条条目是正常的 `user_reel`、
-  未过期、`node.id == user.pk`）。而 `empty` 这个说法本身是我自己的 bug：`reel()` 收尾**无条件**
-  把 `detail` 覆盖成 `empty`，把真正的原因盖掉了。本轮已修：
-  * `detail` 只在"确实拿到 200 + JSON 但没有媒体"时才是 `empty`，否则保留 `http-500` / `http-400` 等；
-    入口先复位 `detail`；
-  * 轨迹改**按 uid 存**（原来全局一个数组，被并发的托盘预取混进了六个人的 URL）；
-  * 删掉 `/feed/user/<id>/story/`（对 5 位用户一律 400，纯白打）；
-  * 非 200 时**把响应体开头与请求头名清单记进轨迹**。
-  **下一步：再取一份 `Instarmony_diag.txt`**。要看的就三样：`detail=` 的真实值、
-  那个 62 字节 500 响应的 body 开头、以及头名清单里**有没有 `x-ig-www-claim`**
-  （`reels_media` 缺它会 500 而不是 401 —— 这是目前最可能的解释）。
+- **快拍取数 500** —— **两份诊断文件定案**（`f2b005c` 加现场 + `4cf9041` 修根因）：
+  第二份文件里读到决定性的三行：
+  * `detail=http-400`（已不再被 `empty` 掩盖）；
+  * `code=500 head={"message":"很抱歉，出错了，请重试。","status_code":"500","status":"fail"}`；
+  * **头清单里没有 `x-ig-www-claim`**，却带着 `x-fb-friendly-name` / `x-root-field-name` ——
+    那是**信息流 GraphQL 模板**的头。而 `reels_media` 是网页私有 REST。
+  根因：`NativeStories.fetchText` 一直用 `NativeFeed.sessionOrBrowserHeaders()`，
+  **从没用过**项目里为 `/api/v1/…` 准备的 `RestSession.headers()`（带网页抓来的 REST 模板头，
+  claim / instagram-ajax 都在里面）。另外 `android-old` 回
+  `challenge_required + unsupported_version` = 注定失败，纯白打。
+  本轮：取快拍改用 `RestSession.headers()`；删掉 `android-old` 候选；
+  **5xx 且没有 claim 时补抓一次 REST 模板再重试**（`NativeStories.setClaimRefresher` ←
+  `Index.ensureAymlTemplate`）；非 200 时把 **cookie 名清单**也记进轨迹。
+  **待验证**：真机当时锁屏，没能实测"换新头之后快拍照旧能开"（代码上无模板时退回同一套头，
+  属安全改动）。解锁后先自己点一条快拍确认；再给测试者一版，回传新的 `Instarmony_diag.txt`：
+  若 `claim=true` 后不再 500 即修复成功；若仍 500，则说明该账号/会话被私有 REST 拒绝，
+  下一步应改走**网页侧的快拍查询模板**（驱动隐藏网页打开一次快拍、抓 `PolarisStories…` 回放）。
 - **快拍"点开显示取不到、页面自己收起"**：`story_load_failed` 的三处分支里有两处会
   **按设计把空卡片收走**（"自动收起"不是收起逻辑坏了，而是取数失败后被带走）。
   现场一律进 `Instarmony_diag.txt`（测试同学截图 `（原因 …）` 或直接发那个文件即可）；
