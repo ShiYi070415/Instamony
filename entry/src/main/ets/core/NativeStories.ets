@@ -525,6 +525,45 @@ export class NativeStories {
     NativeStories.traces.set(userId, []);
   }
 
+  /** 上一次网络探针的结果（见 probeNetwork；写进失败报告）。 */
+  private static netProbe: string = '-';
+  /** 探针用的普通浏览器 UA（只取 robots.txt，不涉及 IG 的客户端校验）。 */
+  private static readonly NET_PROBE_UA: string =
+    'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 '
+    + '(KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
+
+  static lastNetProbe(): string {
+    return NativeStories.netProbe;
+  }
+
+  /**
+   * **网络探针**：确认"到 IG 的基本链路通不通"（只在快拍失败时发一次）。
+   *
+   * 拿的是 `robots.txt`（公开、极小、不需要会话，也不会被当成接口调用），所以它的成败
+   * 只反映**链路**：通了而接口 500 ⇒ 服务端按来源拒（IP/代理问题）；不通 ⇒ VPN/链路本身的事。
+   */
+  private static async probeNetwork(): Promise<void> {
+    const request: http.HttpRequest = http.createHttp();
+    try {
+      const response: http.HttpResponse = await request.request(`${SITE}/robots.txt`, {
+        method: http.RequestMethod.GET,
+        header: { 'accept': '*/*', 'user-agent': NativeStories.NET_PROBE_UA },
+        connectTimeout: CONNECT_TIMEOUT_MS,
+        readTimeout: READ_TIMEOUT_MS,
+        expectDataType: http.HttpDataType.STRING
+      });
+      NativeStories.netProbe = `robots.txt http-${response.responseCode}`;
+    } catch (error) {
+      NativeStories.netProbe = `robots.txt throw:${(error as Error).message ?? '-'}`.substring(0, 60);
+    } finally {
+      try {
+        request.destroy();
+      } catch (error) {
+      }
+    }
+    hilog.info(DOMAIN, TAG, 'net probe %{public}s', NativeStories.netProbe);
+  }
+
   /**
    * 把"这一次为什么没取到"整理成一段可读文本（落文件用，见 pages/Index.dumpProbeFile）。
    *
@@ -545,6 +584,17 @@ export class NativeStories {
      */
     lines.push(`tray age=${trayAgeMs}ms (~${Math.round(trayAgeMs / 1000)}s)`);
     lines.push(`tray head=${trayHead}`);
+    /*
+     * **网络探针**（见 probeNetwork）：一条最轻的公开资源请求。
+     *
+     * 为什么要它：出问题的那台设备在**内地 + VPN**（我这台是香港网络，同一账号完全正常），
+     * 而 IG 对"可疑来源"会回 `challenge_required`（那次响应里还有 `lock:true`）——
+     * 也就是说**很可能是出口 IP/链路的问题，不是我们请求写错了**。
+     * 有了这一行就能区分两种完全不同的情况：
+     *   · 探针也失败（`http-…`/`throw:`）→ 链路本身不通（VPN 断了 / 被拦）；
+     *   · 探针 200 而接口 500 → 链路是通的，是**服务端按来源拒**（IP 被标记 / 透明代理改了头）。
+     */
+    lines.push(`net=${NativeStories.netProbe}`);
     /*
      * **这一条条目的原始 JSON**（见 nodeRaw 的说明）：`reels_media` 回空时，判断"是我们取错了 id
      * 字段 / 条目来自别的分区 / 根本就没带 media"，只有原始数据能说清 —— 我们解析出来的那几个
@@ -833,13 +883,21 @@ export class NativeStories {
       `${SITE}/api/v1/feed/reels_media/?reel_ids=${encodeURIComponent(id)}&source=raven`;
     const reelUrl: string = reelUrlOf(userId);
     /*
-     * 只剩**一种身份**了（原来还有"安卓旧版本号"）：用户回传的诊断文件里，那一发回的是
-     * `400 challenge_required` + `challenge.url=https://i.instagram.com/web/unsupported_version/`
-     * —— IG 明说这个客户端版本不受支持，也就是说它**每次都注定失败**，只会白打一发、
-     * 并把它那句 `http-400` 写进轨迹（掩盖前两发真正的 500）。
+     * 候选 URL（三条，都是同一条路径的不同**主机/身份**组合）：
+     *   ① `www.instagram.com` + 网页身份（网页自己那条，最常成）；
+     *   ② `www.instagram.com` + 安卓身份（换客户端指纹）；
+     *   ③ **`i.instagram.com` + 安卓身份** —— 官方 App 打的就是这个主机。
+     *
+     * 为什么要加第 ③ 条（用户提示"测试人在内地挂 VPN、我这边香港网络正常"之后再补的）：
+     * IG 对 `reels_media` 这类私有接口会按**来源**判定，两条链路的差异（VPN 出口 IP、
+     * 透明代理是否改写头）恰好是"网页主机 + 网页身份"最容易踩的；而 `i.instagram.com`
+     * 是 App 端点，走的是另一套网关，值得单独试一发。
      */
-    const urls: Array<string> = [reelUrl];
-    const identities: Array<number> = [IDENTITY_WEB];
+    const appHostUrl: string =
+      `https://i.instagram.com/api/v1/feed/reels_media/?reel_ids=${encodeURIComponent(userId)}&source=raven`;
+    const urls: Array<string> = [reelUrl, reelUrl, appHostUrl];
+    const identities: Array<number> =
+      [IDENTITY_WEB, IDENTITY_ANDROID_NEW, IDENTITY_ANDROID_NEW];
     /*
      * **已经"答过但没内容"的 URL**：同一条 URL 再换身份打一遍，拿回来的是同一份数据。
      *
@@ -980,6 +1038,15 @@ export class NativeStories {
     } else if (NativeStories.detail === '-') {
       // 一条候选都没打（全被跳过）—— 给个能区分于 empty 的说法。
       NativeStories.detail = 'no-answer';
+    }
+    /*
+     * 真的失败了：**顺手量一下到 IG 的基本链路**（见 probeNetwork）。
+     * 这一发只取 robots.txt、不需要会话，成本极低；但它能把"链路不通（VPN/网络）"与
+     * "链路通、服务端按来源拒（IP 被标记 / 代理改写头）"分开 —— 这正是用户问的那个问题。
+     */
+    if (NativeStories.detail !== 'challenge') {
+      await NativeStories.probeNetwork();
+      NativeStories.note(userId, `  net=${NativeStories.netProbe}`);
     }
     return null;
   }
