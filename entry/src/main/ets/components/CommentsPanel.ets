@@ -1139,9 +1139,14 @@ export struct CommentsPanel {
           // 键里带上"点过赞没有 + 赞数 + 回复展开状态 + 已取回回复数 + **回复们的点赞摘要**"：
           // 这些都会就地变化，键不变的话 ForEach 不会重跑这一项（同信息流/Reels 动作区那套键的处理）。
           // 最后那段是"给某条回复点赞后界面不刷新"的修复（见 repliesKey）。
-          `${index}-${comment.username}-${comment.text.length}`
+          //
+          // ⚠️ 文本/图片用**内容本身**而不是长度（审计 D7）：`text.length` 相同但内容不同的两条
+          // 评论会共用同一个键 → ArkUI 复用旧节点，译文/失败占位串味；位置变动时还会错配。
+          // 内容可能很长，这里截断到 48 字符 + 带上 `pk`，唯一性够用又不至于让键爆长。
+          `${index}-${comment.pk ?? ''}-${comment.username}`
+            + `-${comment.text.slice(0, 48)}`
             + `-${comment.liked === true ? 'l' : 'n'}-${comment.likes ?? 0}`
-            + `-${(comment.imageUrl ?? '').length}`
+            + `-${(comment.imageUrl ?? '').slice(-32)}`
             + `-${this.repliesExpanded(comment.pk ?? '') ? 'e' : 'c'}`
             + `-${this.repliesKey(comment)}`)
 

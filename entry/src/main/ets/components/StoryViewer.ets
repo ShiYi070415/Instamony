@@ -1419,7 +1419,7 @@ export struct StoryViewer {
         .borderRadius(SEG_H / 2)
         .backgroundColor('#66FFFFFF')
         .margin({ right: SEG_GAP })
-      }, (one: StoryItem): string => one.id)
+      }, (one: StoryItem, position: number): string => `${one.id}-${position}`)
     }
     .width('100%')
     // 需求："媒体区顶部显示进度条，和媒体顶部保持 5vp 距离"。
