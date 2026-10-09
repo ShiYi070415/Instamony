@@ -1818,6 +1818,18 @@ struct Index {
     // 起来就在后台预热 feeds / Reels / 我的（见 preloadTabs）。
     // 启动画面是系统那条启动窗口，应用里不自绘 —— 这里只是趁它显示的那几秒先取数据。
     this.preloadTabs();
+    /*
+     * **给"取快拍"那条链接一个"补抓 REST 模板"的钩子**（见 NativeStories.setClaimRefresher）。
+     *
+     * 用户回传的诊断文件定案：`reels_media`（网页私有 REST）在头里**缺 `x-ig-www-claim`** 时
+     * IG 回 500 —— 而那个 claim 只有"网页自己发过一条 `/api/v1/…` 请求"才拿得到。
+     * 钩子复用 `ensureAymlTemplate()`（抓的正是同一条 REST 模板 `rest_/api/v1/discover/ayml/`，
+     * claim 就在它身上），只在快拍那条链真的撞上 5xx 时才被调用一次（秒级、且要动共用隐藏网页，
+     * 不能每次开快拍都做）。
+     */
+    NativeStories.setClaimRefresher(async (): Promise<void> => {
+      await this.ensureAymlTemplate();
+    });
     // 起始分页的配色（正常是首页；万一恢复到了 Reels，这里也把深色落实一次）。
     this.syncReelsColorMode();
     // 降级底栏要避让系统条：量一次它的高度（支持悬浮栏的设备上直接返回，见 readBottomSafeVp）。

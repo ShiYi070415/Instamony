@@ -15,6 +15,7 @@ import { http } from '@kit.NetworkKit';
 import { ApiRegistry, ApiTemplate } from '../bridge/ApiRegistry';
 import { ApiThrottle } from './ApiThrottle';
 import { NativeFeed } from './NativeFeed';
+import { RestSession } from './RestSession';
 import { JsonRead } from './JsonRead';
 import { StoryItem, StoryReel, StoryTray, StoryTrayItem } from '../model/Story';
 
@@ -86,6 +87,51 @@ export class NativeStories {
    * 它与 `detail` 不同：`detail` 是给用户/日志看的原因，这个只回答"那条请求通不通"。
    */
   private static answeredJson: boolean = false;
+  /** 上一次请求的头里有没有 `x-ig-www-claim` / `x-instagram-ajax`（诊断与"要不要补抓模板"都用它）。 */
+  private static lastHadClaim: boolean = false;
+  private static lastHadAjax: boolean = false;
+  /**
+   * **"去抓一次 REST 模板"的钩子**（由 pages/Index 接上 `ensureAymlTemplate`）。
+   *
+   * 为什么需要：`reels_media` 要 `x-ig-www-claim`（会话级 hmac），而只有"网页自己发过一条
+   * `/api/v1/…` 请求"才拿得到它。设备上没抓过那条模板时，我们只能先发一发（大概率 500），
+   * 再让宿主去驱动一次隐藏网页把模板抓下来，然后**重试**——这正是用户那台设备需要的动作。
+   * 放在 core 里为的是不让"取快拍"这条链直接依赖页面层（钩子为空就跳过，行为同以前）。
+   */
+  private static claimRefresher: (() => Promise<void>) | null = null;
+
+  static setClaimRefresher(refresher: () => Promise<void>): void {
+    NativeStories.claimRefresher = refresher;
+  }
+
+  /** 需不需要"补抓模板再重试"：刚才因为 5xx 失败、手上又没有 claim。 */
+  private static wantsClaimRefresh(): boolean {
+    return NativeStories.claimRefresher !== null
+      && !NativeStories.lastHadClaim
+      && NativeStories.detail.indexOf('http-5') === 0;
+  }
+
+  /** `/api/v1/…` 要的头名与 cookie 名都在了没有（诊断）。 */
+  static lastHeadersDiag(): string {
+    return `claim=${NativeStories.lastHadClaim} ajax=${NativeStories.lastHadAjax}`;
+  }
+
+  /** 从 cookie 串里取**名字**（不取值：值里有会话材料）。 */
+  private static cookieNames(cookie: string): string {
+    if (cookie.length === 0) {
+      return '';
+    }
+    const parts: Array<string> = cookie.split(';');
+    const names: Array<string> = [];
+    for (let index: number = 0; index < parts.length; index++) {
+      const at: number = parts[index].indexOf('=');
+      const name: string = (at > 0 ? parts[index].substring(0, at) : parts[index]).trim();
+      if (name.length > 0) {
+        names.push(name);
+      }
+    }
+    return names.sort().join(',');
+  }
   /**
    * 托盘里每条条目的**原始 JSON**（userId → 该条目的 JSON 文本，截断保存）。
    *
@@ -514,9 +560,14 @@ export class NativeStories {
     const reelUrlOf = (id: string): string =>
       `${SITE}/api/v1/feed/reels_media/?reel_ids=${encodeURIComponent(id)}&source=raven`;
     const reelUrl: string = reelUrlOf(userId);
-    const urls: Array<string> = [reelUrl, reelUrl, reelUrl];
-    const identities: Array<number> =
-      [IDENTITY_WEB, IDENTITY_ANDROID_NEW, IDENTITY_ANDROID_OLD];
+    /*
+     * 只剩**一种身份**了（原来还有"安卓旧版本号"）：用户回传的诊断文件里，那一发回的是
+     * `400 challenge_required` + `challenge.url=https://i.instagram.com/web/unsupported_version/`
+     * —— IG 明说这个客户端版本不受支持，也就是说它**每次都注定失败**，只会白打一发、
+     * 并把它那句 `http-400` 写进轨迹（掩盖前两发真正的 500）。
+     */
+    const urls: Array<string> = [reelUrl];
+    const identities: Array<number> = [IDENTITY_WEB];
     /*
      * **已经"答过但没内容"的 URL**：同一条 URL 再换身份打一遍，拿回来的是同一份数据。
      *
@@ -531,6 +582,8 @@ export class NativeStories {
     NativeStories.answeredJson = false;
     // 复位上一次留下的具体原因：不然"这一发到底为什么失败"会被上一次的 detail 混淆。
     NativeStories.detail = '-';
+    // "补抓 REST 模板再重试"一轮只做一次（见 wantsClaimRefresh）。
+    let claimRetried: boolean = false;
     for (let at: number = 0; at < urls.length; at++) {
       // 冷却期内不再往下试（见 core/ApiThrottle.STORIES）：再打只会把窗口拖长。
       const cooled: string = NativeStories.cooling();
@@ -543,11 +596,30 @@ export class NativeStories {
       }
       if (answeredEmpty.indexOf(urls[at]) >= 0) {
         NativeStories.note(userId, `try=${at} 跳过：同 URL 已经答过但没内容`);
-        hilog.info(DOMAIN, TAG, 'reel skip try=%{public}d id=%{public}s (same url already empty)',
-          at, NativeStories.identityName(identities[at]));
         continue;
       }
-      const text: string | null = await NativeStories.fetchText(urls[at], identities[at], userId);
+      let text: string | null = await NativeStories.fetchText(urls[at], identities[at], userId);
+      /*
+       * **5xx 且手上没有 `x-ig-www-claim` → 让宿主去驱动一次隐藏网页把 REST 模板抓下来，再重试这一发。**
+       *
+       * 这是用户那台设备的修法：他们的 500 正是"头里缺 claim"（见 fetchText 的说明）。
+       * 抓模板要点时间（秒级）而且会动共用的隐藏网页，所以**只在真的撞上 5xx 时做一次**，
+       * 不是每次开快拍都做。
+       */
+      if (text === null && !claimRetried && NativeStories.wantsClaimRefresh()) {
+        claimRetried = true;
+        NativeStories.note(userId,
+          '  → 5xx 且没有 claim：抓一次 REST 模板（拿 x-ig-www-claim / x-instagram-ajax）后重试');
+        try {
+          const refresh: (() => Promise<void>) | null = NativeStories.claimRefresher;
+          if (refresh !== null) {
+            await refresh();
+          }
+        } catch (error) {
+          NativeStories.note(userId, `  → 抓模板失败：${(error as Error).message ?? '-'}`);
+        }
+        text = await NativeStories.fetchText(urls[at], identities[at], userId);
+      }
       if (text === null) {
         // 传输层没拿到（非 200 / 非 JSON / 抛 / 没会话）：换个身份再试是有意义的。
         NativeStories.note(userId, `try=${at} id=${NativeStories.identityName(identities[at])} `
@@ -709,15 +781,36 @@ export class NativeStories {
    * @param uid 这一次是为哪位用户发的（轨迹按 uid 分开存，见 traces）。
    */
   private static async fetchText(url: string, identity: number, uid: string): Promise<string | null> {
-    const headers: Record<string, string> = await NativeFeed.sessionOrBrowserHeaders();
+    /*
+     * **头要用"给 `/api/v1/…` 的那套"**（用户回传的诊断文件定案的）。
+     *
+     * 原来这里用的是 `NativeFeed.sessionOrBrowserHeaders()` —— 那是**信息流 GraphQL 模板**的头
+     * （清单里带着 `x-fb-friendly-name` / `x-root-field-name` / `x-fb-lsd`），
+     * **没有 `x-ig-www-claim`、也没有 `x-instagram-ajax`**。而 `reels_media` 是**网页私有 REST**，
+     * 网页自己发它时是带 claim 的。真机证据：出问题那台设备的轨迹里
+     * `code=500 head={"message":"很抱歉，出错了，请重试。","status_code":"500","status":"fail"}`
+     * 而头清单里恰好缺 claim。
+     *
+     * `RestSession.headers()` 就是为这条准备的：优先用**网页抓来的 REST 模板**那份头
+     * （claim / instagram-ajax 都在它身上），缺 `x-instagram-ajax` 时还会从页面现读
+     * （`WebTokens.rev`）。拿不到才退回信息流那套。
+     */
+    const restHeaders: Record<string, string> = await RestSession.headers();
+    const headers: Record<string, string> = Object.keys(restHeaders).length > 0
+      ? restHeaders : await NativeFeed.sessionOrBrowserHeaders();
+    NativeStories.lastHadClaim = (headers['x-ig-www-claim'] ?? '').length > 0;
+    NativeStories.lastHadAjax = (headers['x-instagram-ajax'] ?? '').length > 0;
     if (Object.keys(headers).length === 0) {
       NativeStories.detail = 'no-session';
       NativeStories.note(uid, `  http id=${NativeStories.identityName(identity)} `
-        + `url=${NativeStories.tailOf(url)} → 没有会话（sessionOrBrowserHeaders 为空）`);
+        + `url=${NativeStories.tailOf(url)} → 没有会话（头都拿不到）`);
       return null;
     }
-    if (identity === IDENTITY_ANDROID_NEW || identity === IDENTITY_ANDROID_OLD) {
-      headers['user-agent'] = identity === IDENTITY_ANDROID_NEW ? ANDROID_UA_NEW : ANDROID_UA;
+    if (identity === IDENTITY_ANDROID_NEW) {
+      headers['user-agent'] = ANDROID_UA_NEW;
+      headers['x-ig-app-id'] = ANDROID_APP_ID;
+    } else if (identity === IDENTITY_ANDROID_OLD) {
+      headers['user-agent'] = ANDROID_UA;
       headers['x-ig-app-id'] = ANDROID_APP_ID;
     }
     const request: http.HttpRequest = http.createHttp();
@@ -763,15 +856,18 @@ export class NativeStories {
         }
         NativeStories.detail = `http-${response.responseCode}${json ? '' : '/non-json'}`;
         /*
-         * 非 200 时把**头名清单**也记进轨迹。
+         * 非 200 时把**头名清单 + cookie 名清单**也记进轨迹。
          *
-         * 为什么：`reels_media` 是网页私有接口，它认 `x-ig-www-claim` / `x-csrftoken` /
-         * `x-ig-app-id` 这几个头。如果某台设备的会话缺了其中一个，IG 的表现不是 401 而是
-         * **500**（用户回传的文件里就是这个 500）—— 光看状态码看不出缺什么，头名清单一比就清楚
-         * （正常设备那串里有 claim，出问题的设备那串里没有）。
-         * 只记**名字**，不记值（值里有会话材料）。
+         * 头名：`reels_media` 是网页私有接口，认 `x-ig-www-claim` / `x-instagram-ajax` /
+         * `x-csrftoken`。用户回传的文件里正是"500 而头清单里没有 claim"，一眼就能对上。
+         * cookie 名：原生请求用的是 Cookie 罐快照；如果快照里少了 `sessionid` / `ds_user_id`
+         * 这类关键 cookie（比如会话是在 App 内嵌网页里登的、快照不完整），也是同样的后果。
+         * **只记名字，不记值**（值里有会话材料）。
          */
         NativeStories.note(uid, `    hdr=[${Object.keys(headers).sort().join(',')}]`);
+        NativeStories.note(uid,
+          `    cookie-names=[${NativeStories.cookieNames(headers['cookie'] ?? '')}]`
+          + ` claim=${NativeStories.lastHadClaim} ajax=${NativeStories.lastHadAjax}`);
         hilog.info(DOMAIN, TAG, 'reel body=%{public}s',
           text.substring(0, 160).replace(/[\r\n]+/g, ' '));
         return null;
