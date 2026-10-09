@@ -4165,6 +4165,11 @@ struct Index {
       clearTimeout(this.commentsExitTimer);
       this.commentsExitTimer = -1;
     }
+    /*
+     * 刚才那一段收起动画被这一下"重新开"取消了 —— 但它排队着的收尾动作不能跟着消失
+     * （用户点了评论里的头像，面板正好在关；见 commentsAfterQueue）。当场跑掉。
+     */
+    this.flushCommentsAfter();
     this.commentsMaskAlpha = 0;
     this.commentsEnterVp = this.commentsHeightVp;
     this.sinkBarForComments();
@@ -4773,6 +4778,9 @@ struct Index {
     }
     // 正在收：记下这一次的收尾动作，等同一个计时器跑完再一起做（不叠第二段动画）。
     if (this.commentsClosing) {
+      if (after !== undefined) {
+        this.commentsAfterQueue.push(after);
+      }
       return;
     }
     this.commentsClosing = true;
@@ -4789,6 +4797,17 @@ struct Index {
       this.commentsExitTimer = -1;
       this.commentsVisible = false;
       this.commentsClosing = false;
+      /*
+       * **关掉就是关掉**：连"被整屏页面挂起"的记账一起清（审计 G2）。
+       *
+       * 这期间可能有页面压上来把面板挂起（`suspendCommentsForPages` 只跳过"正在收"的面板，
+       * 但反过来 —— 先挂起、再被关 —— 是完全可能的）。只清 `commentsVisible` 的话，
+       * 会留下 `commentsVisible=false` + `commentsSuspended=true` + `commentsSuspendBase≥0`：
+       * 用户从那一页返回时 `onPageHidden` 会调 `resumeCommentsAfterProfile()`，
+       * 把一层**已经关掉、数据也清空了**的面板重新弹出来。
+       */
+      this.commentsSuspended = false;
+      this.commentsSuspendBase = -1;
       this.commentsEnterVp = 0;
       this.commentsPullVp = 0;
       this.commentsState = '';
@@ -4800,9 +4819,24 @@ struct Index {
       // ④ 面板收完了，再把底栏放回来（需求流程最后一步）。
       this.restoreBarAfterComments();
       if (after !== undefined) {
-        after();
+        this.commentsAfterQueue.push(after);
       }
+      // 排队中的收尾动作统一在这里跑（见 commentsAfterQueue）。
+      this.flushCommentsAfter();
     }, COMMENTS_OUT_MS);
+  }
+
+  /** 跑掉排队中的收尾动作（见 commentsAfterQueue）。一个抛了不影响后面几个。 */
+  private flushCommentsAfter(): void {
+    const queued: Array<() => void> = this.commentsAfterQueue;
+    this.commentsAfterQueue = [];
+    for (let index: number = 0; index < queued.length; index++) {
+      try {
+        queued[index]();
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'comments after threw: %{public}s', (error as Error).message);
+      }
+    }
   }
 
   /**
@@ -4864,6 +4898,8 @@ struct Index {
       return;
     }
     if (this.commentsClosing) {
+      // 正在收（用户先点了别处 / 上一次点头像还没跑完）：记下收尾动作，别把它吞掉（见 commentsAfterQueue）。
+      this.commentsAfterQueue.push(after);
       return;
     }
     this.commentsSuspendBase = this.coveringPages;
@@ -4884,7 +4920,8 @@ struct Index {
       this.commentsEnterVp = 0;
       this.commentsPullVp = 0;
       this.restoreBarAfterComments();
-      after();
+      this.commentsAfterQueue.push(after);
+      this.flushCommentsAfter();
     }, COMMENTS_OUT_MS);
   }
 
@@ -7475,6 +7512,16 @@ struct Index {
   @State private commentsAtTop: boolean = false;
   /** 浮层正在播收起动画（期间不再接受新的收起请求，也不响应拖动）。 */
   private commentsClosing: boolean = false;
+  /**
+   * 收起动画期间**又来的**收尾动作（见 closeComments / suspendCommentsForProfile）。
+   *
+   * 一段收起动画只播一次，但"动画跑完要做什么"可能来两次：用户连点两下、
+   * 或者点头像时面板正好在关。`closeComments` 的注释一直写着"记下这一次的收尾动作，
+   * 等同一个计时器跑完再一起做"，但代码里是**直接 return** —— 于是那次点击彻底消失
+   * （表现就是"在收起动画里点评论头像，用户主页永远不打开"，审计 G2）。
+   * 这里把注释说的那件事真的做出来：排队，动画跑完统一跑掉。
+   */
+  private commentsAfterQueue: Array<() => void> = [];
   /**
    * 评论浮层**被挂起**了（被上面压上来的整屏页面挡住，比如"从评论点进用户主页"）。
    *
