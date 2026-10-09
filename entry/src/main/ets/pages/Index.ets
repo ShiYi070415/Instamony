@@ -1975,9 +1975,26 @@ struct Index {
     }, FEED_RETRY_GAP_MS);
   }
 
-  /** 页面销毁：停掉背景侦测的定时快照。 */
+  /**
+   * 页面销毁：停掉背景侦测的定时快照，并把评论浮层的两个定时器清干净。
+   *
+   * 评论那两个（审计 G5）：`commentsExitTimer` 是收起动画结束后的收尾，
+   * `commentsSettleTimer` 是拖动松手后的吸附 —— 都是"到点改状态"的。
+   * 页面走了它们还在排着队，等回来时可能正好在动画中途改 `commentsClosing`，
+   * 于是 `closeComments` / `openComments` 撞上"正在关"的守卫直接 return，面板拉不起也关不掉。
+   * 这里清掉句柄并把两个过程标志复位（`commentsVisible`/数据不动：回来时面板该是什么样还是什么样）。
+   */
   aboutToDisappear(): void {
     BackdropTone.stop();
+    if (this.commentsExitTimer >= 0) {
+      clearTimeout(this.commentsExitTimer);
+      this.commentsExitTimer = -1;
+    }
+    if (this.commentsSettleTimer >= 0) {
+      clearTimeout(this.commentsSettleTimer);
+      this.commentsSettleTimer = -1;
+    }
+    this.commentsClosing = false;
   }
 
   // ==========================================================================
@@ -4185,6 +4202,15 @@ struct Index {
     // 记下这条帖子：评论点赞的网页驱动兜底要导航到它（见 likeCommentOnWeb）。
     this.commentsPost = post;
     this.commentsShortcode = post.shortcode;
+    /*
+     * **媒体 id 在开面板时就按这一条算好**（审计 G3）。
+     *
+     * 它是评论翻页（`loadMoreComments`）与取回复（`loadCommentReplies`）要用的参数，
+     * 原来只在**原生那条路成功**时才写（见 readCommentsNative）。于是
+     * "上一条帖子原生成功、这一条原生失败（走回放）"时，面板会拿着**上一条帖子的 mediaId**
+     * 去要评论/回复 —— 拿回来的是别人的评论，或者干脆空，而且现场看不出哪里不对。
+     */
+    this.commentsMediaId = Index.mediaIdOfPost(post.id);
     // 评论翻页状态：每次开面板都从头来（见 loadMoreComments）。
     this.commentsNextId = '';
     this.commentsHasMore = false;
@@ -4228,8 +4254,7 @@ struct Index {
    */
   private async readCommentsNative(post: MediaPost): Promise<CommentsPayload | null> {
     // 帖子 id 形如 `<mediaId>_<userId>`；reels 那条直接就是媒体 id（见 openReelComments）。
-    const cut: number = post.id.indexOf('_');
-    const mediaId: string = cut > 0 ? post.id.substring(0, cut) : post.id;
+    const mediaId: string = Index.mediaIdOfPost(post.id);
     const payload: CommentsPayload | null = await NativeComments.fetch(mediaId, '');
     if (payload === null || payload.state !== 'ok') {
       hilog.info(DOMAIN, TAG, 'comments native skip state=%{public}s detail=%{public}s',
@@ -4239,6 +4264,17 @@ struct Index {
     // 记下媒体 id：评论点赞那条私有 API 候选要用（见 likeComment）。
     this.commentsMediaId = mediaId;
     return payload;
+  }
+
+  /**
+   * 帖子 id → 媒体数字 id（`<mediaId>_<userId>` 取前半段；reels 那条本身就是媒体 id）。
+   *
+   * 抽出来是因为**开面板**（`openComments`）与**原生读取**（`readCommentsNative`）
+   * 都要它，而两边必须算出同一个值（见 openComments 里 commentsMediaId 的说明，审计 G3）。
+   */
+  private static mediaIdOfPost(postId: string): string {
+    const cut: number = postId.indexOf('_');
+    return cut > 0 ? postId.substring(0, cut) : postId;
   }
 
   /**
@@ -4330,16 +4366,41 @@ struct Index {
       NativeComments.childComments(this.commentsMediaId, pk),
       Index.emptyRepliesAfter(COMMENTS_REPLIES_TIMEOUT_MS)
     ]);
+    /*
+     * **await 回来要按 pk 重新定位，不能按下标写回**（审计 G4）。
+     *
+     * 这几百毫秒里 `this.comments` 可能已经被整份换掉（`applyComments` 重读、
+     * `loadMoreComments` 把下一页并进来……），`parentIndex` 那时指向的是**另一条评论**；
+     * 直接改那个下标，回复就挂到别人身上了（界面上是"点开 A 的回复，B 多出几条"）。
+     * 定位不到（这条评论已经不在列表里）就整个丢弃 —— 记一行，不猜。
+     */
+    const at: number = Index.indexOfComment(this.comments, pk);
+    if (at < 0) {
+      hilog.info(DOMAIN, TAG, 'comment replies dropped pk=%{public}s (list changed)', pk);
+      return;
+    }
+    const target: CommentItem = this.comments[at];
     if (items.length > 0) {
-      item.replies = items;
-      if (items.length > (item.repliesCount ?? 0)) {
-        item.repliesCount = items.length;
+      target.replies = items;
+      if (items.length > (target.repliesCount ?? 0)) {
+        target.repliesCount = items.length;
       }
     }
-    item.repliesLoaded = true;
-    hilog.info(DOMAIN, TAG, 'comment replies loaded pk=%{public}s n=%{public}d', pk, items.length);
+    target.repliesLoaded = true;
+    hilog.info(DOMAIN, TAG, 'comment replies loaded pk=%{public}s n=%{public}d at=%{public}d',
+      pk, items.length, at);
     // 换一个数组引用，触发评论列表重绘（面板里的 ForEach 才会补上这些回复）。
     this.comments = this.comments.slice(0);
+  }
+
+  /** 按 pk 找一条顶层评论的下标（找不到给 -1；见 loadCommentReplies 的重定位）。 */
+  private static indexOfComment(list: Array<CommentItem>, pk: string): number {
+    for (let index: number = 0; index < list.length; index++) {
+      if ((list[index].pk ?? '') === pk) {
+        return index;
+      }
+    }
+    return -1;
   }
 
   /**

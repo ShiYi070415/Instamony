@@ -98,27 +98,31 @@
       该预取的图被跳过。另：预取入口未查 `NetworkState.allowPrefetch()`（蜂窝网下仍提交预下载）。
 - [ ] **E13 `core/NativeComments`** 用 `body.length` 推断 HTTP method（空体写请求会变 GET）。
       → 显式传 method。
-- [ ] **E14 `viewmodel/FeedViewModel.noteDebug`** 每次取数把 debug 串写进 `hilog.info`。→ 降 `hilog.debug`。
+- [x] **E14 `viewmodel/FeedViewModel.noteDebug`**（`88402bc`）中间步骤（`cache=`/`api=`/`dom=`）
+      降到 `hilog.debug`；合成后的那一行仍在 `info`（`grep "feed debug"` 一次取数一行）。
+
+> E 区全部完成，见下方"已完成"表：`E1 36b1dcf`、`E2/E3 9b07d23`、`E4/E5b 738ced0`+`7783e30`、
+> `E5/E6 0574bdf`、`E7~E14 88402bc`。
 
 ## F. 资源、注释与死代码
 
-- [ ] **E5b DM 读路径查冷却**（待做）：`ApiThrottle.blocked(DIRECT)` 只在 `sendText` 里查，
-      `inbox/thread` 读照样猛打。→ 读路径也查冷却并直接返回明细。
-- [x] **F1**（`0574bdf`）`en_US` 补 7 键 + 新增的 `save_rate_limited`；两文件现已一致（161/161）。
-- [ ] **F2 `Index.notifyTitleText()`** 硬编码中文 + 诊断串（`通知 ${src}·${n}`）→ 改回
-      `$r('app.string.notifications')`，删 `notifySrc`；该函数当前**无调用方**（先确认再删）。
-- [ ] **F3** 探针遗留：`Index` 里那段定时器已用 `if (false)` 停用（提交 `334dc4a`），
-      连同 `probeTimer/probeTicks` 字段与"每 15 秒"的旧注释一起删干净。
-      `DirectThreadPage` 的 8 秒 `capture('')` 探针、`NativeSearch.probePageSizes()`、
-      `NativeDirect.mqttSetupProbe()`、`DmRealtime` 整套：按"留着当排查工具但不自动跑"的原则处理。
-- [ ] **F4** 可安全删除的无用 string 键 13 个（`login_*` 6、`session_*` 2、`action_reload`、
-      `action_share_to`、`comments_close`、`comments_photo`、`direct_thread_older`）；
-      `app_name`/`module_desc`/`EntryAbility_*` 由 `module.json5` 引用，**勿删**。
-- [ ] **F5** 死代码：`Index.clearNotifications/openNotificationsWeb/profileTabIndex/parseUserParam/
-      onCommentsScrollVelocity`、`WebScripts.commentsByReplayScript`、`ApiRegistry.hasVar/lastSyncMs`、
+- [x] **E5b DM 读路径查冷却**（`738ced0`）：`inbox` / `inboxRest` / `thread` / `threadViaTemplate`
+      入口都过 `cooling()`，冷却期直接返回并把原因写进 detail；实时轮询拿到 null 本来就静默跳过。
+- [x] **F1**（`0574bdf`）`en_US` 补 7 键 + `save_rate_limited`。
+- [x] **F2**（`0415591`）删掉无调用方的 `notifyTitleText()`；`@State notifySrc` → 普通字段
+      （它现在只进 hilog，@State 只会让整页白重算）。
+- [x] **F3**（`d5e3e8d`）删掉两处"一直在跑"的探针：`DirectThreadPage` 的 8 秒
+      `capture('')` 定时器（含 `PROBE_MS`/`probeTimer`/只它用到的 import）、
+      `Index.warmOtherTabs` 里 `if (false)` 那段（含 `probeTimer`/`probeTicks`/`DmRealtime` import）。
+      `probePageSizes` / `mqttSetupProbe` / `DmRealtime` 本体保留，但**没有任何调用点**。
+- [x] **F4**（`0415591`）删 13 个无用键，基座/en_US 各 148 个且键名集合一致
+      （`login_title`/`login_recheck`/`login_hint`/`login_open_web` 仍有引用，保留）。
+- [x] **F5**（`0415591`）删 `Index.clearNotifications/openNotificationsWeb/profileTabIndex/
+      parseUserParam/onCommentsScrollVelocity`、`ApiEntry.hasVar`、`ApiRegistry.lastSyncMs`、
       `MediaQuality.targetWidth`、`NativeStories.hasTrayTemplate`、`NativeSearch.lastOp`、
-      `DirectThreadViewModel.currentThreadId/sendingNow`、`ScrollReport.reset`（无调用点）等
-      （完整清单见审计原文；删前用 grep 复核一次引用数）。
+      `DirectThreadViewModel.currentThreadId/sendingNow`（每个删前都 grep 复核过引用数为 0）。
+- [ ] **F5b 待复核**：`WebScripts.commentsByReplayScript` 只在注释里被提到（声明处 + Index 注释），
+      但它是页面侧脚本，删之前要确认没有按名字间接调用；`ScrollReport.reset` 未找到该名字。
 
 ## G. 需要先给计划的（牵涉状态机，改动前先出一页方案）
 

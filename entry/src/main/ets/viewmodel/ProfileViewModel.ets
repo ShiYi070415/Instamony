@@ -513,7 +513,20 @@ export class ProfileViewModel {
 
   /** 拉一次（refresh=true 时丢掉游标从头拉）。 */
   async load(refresh: boolean): Promise<void> {
-    const state: ProfileTabState = this.tabs[this.tab];
+    /*
+     * **进函数先把分页钉死**（审计 G1）。
+     *
+     * 这里到写回之间有六七个 await（`ensureOwnName` / 头部 / 网格 / 抓模板，几秒起步）。
+     * 原来全程用 `this.tab`：用户在这几秒里切到别的分页，回来的时候
+     *   - 请求用的是**新**分页的 op，游标却是**旧**分页的（拿 A 的游标去翻 B）；
+     *   - `syncFrom(state)` 把 **A 分页的帖子**写进当前显示的列表（B 分页上看到 A 的内容）；
+     *   - `backfillVideoCovers/next/requestMoreFor` 也全都作用在切过去那一页上。
+     * 同文件里 `requestMoreFor`(698/707)、`applyCover`(1043)、`loadTabInBackground`(1113)
+     * 都有 `this.tab === tab` 守卫，只有 `load` 漏了 —— 这里补齐：
+     * 入口取一次 `tab`，全程只用 `tab`，**写显示状态之前先确认用户还停在那一页**。
+     */
+    const tab: number = this.tab;
+    const state: ProfileTabState = this.tabs[tab];
     if (state.loading) {
       return;
     }
@@ -521,7 +534,7 @@ export class ProfileViewModel {
       state.cursor = '';
       state.more = true;
     }
-    const op: string = this.tabOpName();
+    const op: string = this.opNameOf(tab);
     if (op.length === 0) {
       // 连模板都没有：先走冷启动那条路（打开一次自己的主页，把默认分页的模板抓下来）。
       const ok: boolean = await this.ensureTemplates();
@@ -529,10 +542,12 @@ export class ProfileViewModel {
         this.onStatus('拿不到接口模板');
         return;
       }
-      if (this.tabOpName().length === 0) {
+      if (this.opNameOf(tab).length === 0) {
         state.posts = [];
         state.more = false;
-        this.syncFrom(state);
+        if (this.tab === tab) {
+          this.syncFrom(state);
+        }
         this.onStatus(`这个分页的接口模板还没有（已存：${this.tabDiag()}）`);
         return;
       }
@@ -552,7 +567,7 @@ export class ProfileViewModel {
        */
       const headerJob: Promise<void> = this.header === null ? this.loadHeader() : Promise.resolve();
       let page: ProfilePostsPage | null =
-        await this.fetchPage(this.tabOpName(), state.cursor, this.tab);
+        await this.fetchPage(this.opNameOf(tab), state.cursor, tab);
       if (page === null) {
         /*
          * 原生失败最常见的原因是**那份模板过期了**（IG 对旧 doc_id 回一整页 HTML，
@@ -562,7 +577,7 @@ export class ProfileViewModel {
          *
          * 抓模板要导航隐藏网页（秒级），所以只在"真的失败了"之后做，而且只做一次。
          */
-        page = await this.recaptureAndRetry(state);
+        page = await this.recaptureAndRetry(tab, state);
       }
       await headerJob;
       if (page === null) {
@@ -594,15 +609,21 @@ export class ProfileViewModel {
       state.loaded = true;
       // 第一页重新来过了：缓存队列作废（游标链从头开始）。
       state.nextPages = [];
-      this.syncFrom(state);
-      this.onStatus(state.posts.length > 0 ? '已加载' : '这个分页还没有内容');
+      /*
+       * 写显示状态之前先确认用户还停在这一页（见函数开头 tab 的说明）：
+       * 切走了就只更新那一分页自己的 state，显示的那份等切回来时由 selectTab 铺上。
+       */
+      if (this.tab === tab) {
+        this.syncFrom(state);
+        this.onStatus(state.posts.length > 0 ? '已加载' : '这个分页还没有内容');
+      }
       // 这一段首屏里"没有封面的视频"补一下封面（见 backfillVideoCovers）。
-      this.backfillVideoCovers(this.tab);
+      this.backfillVideoCovers(tab);
       // 首屏到手之后：① 顺手把另外三个分页也备好（**顺序**拉，模板已有的才拉，
       //    见 prefetchOthersSequential）；② 把本分页的**下一页**也预取上（需求："缓存页加载"）。
       this.prefetchOthersSequential().catch((): void => {
       });
-      this.prefetchNext(this.tab);
+      this.prefetchNext(tab);
     } catch (error) {
       // 这里必须吞掉并记下来：异常一旦从这里跑出去，页面上的 aboutToAppear 是
       // "发了就不管"的调用，用户只会看到永远空白的页，日志里也什么都没有。
@@ -620,7 +641,8 @@ export class ProfileViewModel {
       if (state.wantMore) {
         state.wantMore = false;
         if (state.more && state.cursor.length > 0) {
-          this.requestMoreFor(this.tab);
+          // 补的是**这一分页**的下一页（不是"现在显示的那一页"，见函数开头 tab 的说明）。
+          this.requestMoreFor(tab);
         }
       }
     }
@@ -1141,12 +1163,16 @@ export class ProfileViewModel {
    * 抓完**顺手重发一次**：`captureTab` 会把隐藏网页送回首页，而模板已经落在原生侧了，
    * 所以这一次重试不会再碰网页。
    */
-  private async recaptureAndRetry(state: ProfileTabState): Promise<ProfilePostsPage | null> {
+  private async recaptureAndRetry(tab: number, state: ProfileTabState): Promise<ProfilePostsPage | null> {
     if (this.ownName.length === 0) {
       // 不知道自己的账号名就抓不了（抓模板要导航到 /用户名/saved/）。
       return null;
     }
-    const tab: number = this.tab;
+    /*
+     * `tab` 由调用方传进来（审计 G1）：原来这里读 `this.tab` —— 而它的上游（`load`）
+     * 已经 await 过好几次，用户切页之后就会给**另一个分页**抓模板 + 重试，
+     * 拿回来的帖子还会被写进那一页。
+     */
     this.onStatus('这一段读失败，正在重新抓模板…');
     const ok: boolean = await this.captureTab(this.ownName, tab);
     if (!ok) {
