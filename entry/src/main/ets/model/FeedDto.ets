@@ -8,6 +8,25 @@
  * 保留为 interface 是因为它们只用于 `JSON.parse` 的类型断言，没有行为。
  */
 
+/**
+ * 多图帖里的一页（`mediaItems[]` 的元素）。
+ *
+ * 需求："feeds 流多图片媒体可以包含视频媒体" —— 页面脚本按 `carousel_media[]` 逐页导出，
+ * 每页带上"图（视频则是封面）/ 视频 / 该页自己的宽高"，原生侧据此**按页**决定渲染图片还是播放器。
+ */
+export interface FeedMediaItemDto {
+  /** 这一页的图片地址；视频页是它的封面。 */
+  img: string;
+  /** 这一页的视频地址（图片页为空串）。 */
+  vid: string;
+  /** 这一页媒体的宽高（px，0 = 不知道）。 */
+  w: number;
+  h: number;
+  /** 下载用的原图 / 原视频（同 FeedItemDto.originalImages 的规则）。 */
+  orig?: string;
+  origVid?: string;
+}
+
 /** 单条帖子的桥回传结构。 */
 export interface FeedItemDto {
   id: string;
@@ -25,6 +44,14 @@ export interface FeedItemDto {
   liked?: boolean;
   takenAt?: number;
   hasVideo?: boolean;
+  /** 逐页媒体（多图帖；含视频页）——见 FeedMediaItemDto。 */
+  mediaItems?: FeedMediaItemDto[];
+  /**
+   * 多图帖里**最高那一页**的宽高比（w/h；脚本逐页量出来的最小值，视频页也参与）。
+   *
+   * 原生侧用它把媒体盒子钉到"所有页都放得下"的高度（需求：多图帖高度按最高的那张）。
+   */
+  aspectMin?: number;
   /** 转发数 / 分享数：网页没有专门渲染，脚本会按字段名在接口节点里找。 */
   reposts?: number;
   shares?: number;

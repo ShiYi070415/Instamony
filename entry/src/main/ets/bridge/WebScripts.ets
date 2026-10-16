@@ -212,24 +212,44 @@ export function timelineScript(cursor: string): string {
         // 原生侧要按真实宽高比排版（原来一律裁成正方形），接口里就有现成的数字，不必猜。
         // 挑选规则见 MEDIA_PICK_JS（展示降级到 1080 档、original=true 取最大档给下载用）。
         MEDIA_PICK_JS +
+        /*
+         * mapMedia：把一条帖子摊成「逐页媒体」。
+         *
+         * 为什么要有 `items`（需求："feeds 流多图片媒体可以包含视频媒体"）：
+         * 原来只导出 `images[]` + 帖子级的 `video`，于是**多图帖里的视频页整页丢失** ——
+         * 原生侧只看到一串图片地址（视频页给的是它的封面），既认不出那页是视频、也无从播它。
+         * 现在每一页都带上 { img, vid, w, h }：img 是图（视频页是封面）、vid 非空即视频页，
+         * w/h 是**这一页自己**的尺寸（视频页用视频尺寸），原生侧据此按页排版与播放。
+         * `images` / `video` / `w` / `h` 这些老字段照旧导出（下载、预取、帖子级判断都还在用）。
+         */
         'var mapMedia=function(m){var images=[];var orig=[];var video="";var origVideo="";' +
+        'var items=[];' +
         'var iw=0;var ih=0;var vw=0;var vh=0;' +
         'if(m.carousel_media&&m.carousel_media.length){' +
         'for(var i=0;i<m.carousel_media.length&&i<10;i++){var c=m.carousel_media[i];' +
         'var u=pickImage(c.image_versions2,false);var uo=pickImage(c.image_versions2,true);' +
         'if(u.url){images.push(u.url);orig.push(uo.url||u.url);if(!iw){iw=u.w;ih=u.h;}}' +
-        'if(!video){var v=pickVideo(c,false);video=v.url;vw=v.w;vh=v.h;' +
-        'var vb=pickVideo(c,true);origVideo=vb.url;}}' +
-        '}else{var one=pickImage(m.image_versions2,false);var oneo=pickImage(m.image_versions2,true);' +
+        'var iv=pickVideo(c,false);var ivb=pickVideo(c,true);' +
+        // 这一页的宽高：视频页用视频尺寸（图片给的是封面尺寸，拿它排版会把视频页压成封面的比例）。
+        'items.push({img:u.url,vid:iv.url,w:(iv.url?iv.w:u.w),h:(iv.url?iv.h:u.h),' +
+        'orig:(uo.url||u.url),origVid:ivb.url});' +
+        'if(!video&&iv.url){video=iv.url;origVideo=ivb.url;vw=iv.w;vh=iv.h;}' +
+        '}}else{var one=pickImage(m.image_versions2,false);var oneo=pickImage(m.image_versions2,true);' +
         'if(one.url){images.push(one.url);orig.push(oneo.url||one.url);iw=one.w;ih=one.h;}' +
         'var v1=pickVideo(m,false);video=v1.url;vw=v1.w;vh=v1.h;' +
-        'var v1b=pickVideo(m,true);origVideo=v1b.url;}' +
+        'var v1b=pickVideo(m,true);origVideo=v1b.url;' +
+        'if(one.url||v1.url){items.push({img:one.url,vid:v1.url,w:(v1.url?v1.w:one.w),' +
+        'h:(v1.url?v1.h:one.h),orig:(oneo.url||one.url),origVid:v1b.url});}}' +
         // 帖子的 original_width/height 才是这条媒体的真实比例，优先用它；
         // 没有就退回选中图片的尺寸，再没有才退回视频尺寸。都拿不到时给 0，原生侧按正方形兜底。
         'var ow=Number(m.original_width)||0;var oh=Number(m.original_height)||0;' +
         'if(!(ow>0&&oh>0)){ow=iw;oh=ih;}' +
         'if(!(ow>0&&oh>0)){ow=vw;oh=vh;}' +
-        'return {images:images,origImages:orig,video:video,origVideo:origVideo,w:ow,h:oh};};' +
+        // 多图帖的盒子按"最高的那一页"钉高（需求），所以要逐页取最小 w/h —— 视频页也参与。
+        'var amin=0;for(var k=0;k<items.length;k++){var it=items[k];' +
+        'if(it.w>0&&it.h>0){var a=it.w/it.h;if(!(amin>0)||a<amin)amin=a;}}' +
+        'return {images:images,origImages:orig,video:video,origVideo:origVideo,w:ow,h:oh,' +
+        'items:items,aspectMin:amin};};' +
         // 转发数 / 分享数：网页界面上并没有专门渲染这两个数字（网页版连转发按钮都没有），
         // 只能回到接口节点里找。字段名不确定，所以按「名字里含 repost/reshare 或 share、
         // 且值确实是数字」来取 —— 与形状无关，Instagram 改名字也能跟着走。

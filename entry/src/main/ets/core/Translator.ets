@@ -34,6 +34,17 @@ const CACHE_MAX: number = 64;
 
 export class Translator {
   /** 原文 → 译文（FIFO 淘汰）。 */
+  /**
+   * 清空译文缓存（退出登录 / 换账号时调）。
+   *
+   * 译文是按正文文本缓存的，里面全是被翻过的帖子文案 —— 属于"上一个人的内容"，
+   * 清掉最省心（下次用到再翻一遍，成本也就是一次接口调用）。
+   */
+  static clear(): void {
+    Translator.cache.clear();
+    Translator.detail = '-';
+  }
+
   private static cache: Map<string, string> = new Map<string, string>();
   /** 最近一次失败的原因（给日志/提示用）。 */
   private static detail: string = '-';

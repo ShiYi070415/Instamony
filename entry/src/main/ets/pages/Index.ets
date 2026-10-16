@@ -128,7 +128,14 @@ import { SearchUser, SearchPost } from '../model/Search';
 import { EMPTY_REEL, StoryHeroRect, StoryItem, StoryReel, StoryTray, StoryTrayItem } from '../model/Story';
 import { NativeStories } from '../core/NativeStories';
 import { StoryCache } from '../core/StoryCache';
+import { AccountChange, AccountScope } from '../core/AccountScope';
 import { StoryDiag } from '../core/StoryDiag';
+import { DirectCache } from '../core/DirectCache';
+import { DirectPrefetch } from '../core/DirectPrefetch';
+import { PosterCache } from '../core/PosterCache';
+import { Translator } from '../core/Translator';
+import { MobileSession } from '../core/mobileapi/MobileSession';
+import { MobileProbe } from '../core/mobileapi/MobileProbe';
 import { PROFILE_TAB_POSTS, PROFILE_TAB_REELS, PROFILE_TAB_TAGGED, ProfileViewModel } from '../viewmodel/ProfileViewModel';
 import { DirectViewModel } from '../viewmodel/DirectViewModel';
 import { DirectThreadViewModel } from '../viewmodel/DirectThreadViewModel';
@@ -2341,7 +2348,7 @@ struct Index {
       return;
     }
     const snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
-    this.applySession(snapshot.signedIn);
+    this.applySession(snapshot.signedIn, snapshot.cookie);
   }
 
   /** 以 Cookie 罐为准刷新登录态；罐里有会话时顺手落盘。 */
@@ -2352,14 +2359,45 @@ struct Index {
     if (snapshot.signedIn) {
       await InstagramCookieJar.save();
     }
-    this.applySession(snapshot.signedIn);
+    this.applySession(snapshot.signedIn, snapshot.cookie);
   }
 
-  private applySession(signedIn: boolean): void {
+  /**
+   * 刷新登录态。
+   *
+   * @param cookie Cookie 罐现读的那一串（可选）：有它才能判定"现在登的是谁" ——
+   *   账号一分区，换人就要清内存、把上一个人的缓存搬去备份位（见 core/AccountScope）。
+   */
+  private applySession(signedIn: boolean, cookie: string = ''): void {
     const changed: boolean = !this.sessionChecked || this.lastSessionState !== signedIn;
     this.sessionChecked = true;
     this.lastSessionState = signedIn;
     this.signedIn = signedIn;
+    /*
+     * **账号分区**：按 Cookie 里的 ds_user_id 判定"现在登的是谁"。
+     *
+     * 为什么放在这里（而不是只在退出登录时处理）：用户报的"退出登录后登另一个账号，
+     * 快拍还是上一个人的"—— 退出登录那条路清了，但**直接换账号**（在网页里登出再登入）
+     * 走的是这条"登录态变化"的路。两边都必须以 Cookie 罐为准重新判人：
+     *   · 上一个账号的活跃分区搬到它的备份位（活跃位清空，见 AccountScope.stashAll）；
+     *   · 这个账号以前登过、有备份，就搬回活跃位（用户要求："可以保存备份"）；
+     *   · 内存里"按人"的东西全清（列表、托盘队列、预取、覆盖表、会话材料…）。
+     */
+    const account: AccountChange = cookie.length > 0
+      ? AccountScope.adoptFrom(cookie)
+      : new AccountChange(AccountScope.current(), AccountScope.current());
+    if (account.changed() && this.sessionChecked) {
+      hilog.info(DOMAIN, TAG, 'account switch %{public}s -> %{public}s',
+        account.previous.length > 0 ? account.previous : '(none)',
+        account.current.length > 0 ? account.current : '(none)');
+      if (account.previous.length > 0) {
+        AccountScope.stashAll(account.previous);
+      }
+      if (account.current.length > 0) {
+        AccountScope.restoreAll(account.current);
+      }
+      this.forgetAccountMemory();
+    }
     if (!changed) {
       return;
     }
@@ -2420,17 +2458,90 @@ struct Index {
   private async signOut(): Promise<void> {
     // 退出登录是从设定页点的：先把设定页收掉，免得登出之后还停在一个没有上下文的页面上。
     this.navStack.clear();
-    // 退出登录走 SDK 清罐（见 InstagramCookieJar.clear 的说明）。
+    // ① 会话：Cookie 罐 + 网页存储（见 InstagramCookieJar.clear 的说明）。
     await InstagramCookieJar.getInstance().clear();
-    this.forgetNotifications();
+    /*
+     * ② 落盘缓存：这个账号的**活跃分区搬去备份位**（信息流 / reels / 搜索 / 私信快照 / 请求模板）。
+     *
+     * 用户要求："对登录过的用户数据进行分区，退出登录可以保存备份，但必须清除所有相关信息。"
+     * 搬完之后活跃位置全空 —— 界面与接口都看不到这个人的痕迹；备份留给这个人以后回来用，
+     * 而**别的账号永远读不到**（分区键里带账号，见 core/AccountScope）。
+     */
+    const account: string = AccountScope.current();
+    if (account.length > 0) {
+      AccountScope.stashAll(account);
+    }
+    AccountScope.setAccount('');
+    // ③ 内存里"按人"的东西全清。
+    this.forgetAccountMemory();
+    // ④ 诊断文件：里面是上一个人的 uid / 托盘形状 / 媒体地址，删掉。
+    this.wipeDiagnostics();
     this.signedIn = false;
     this.sessionChecked = true;
     this.lastSessionState = false;
-    this.viewModel.reset();
-    this.loadedOnce = false;
     this.statusShown = false;
     this.webVisible = true;
     this.bridge.loadUrl(AppConfig.INSTAGRAM_LOGIN_URL);
+    hilog.info(DOMAIN, TAG, 'signed out; account data cleared (%{public}s)', AccountScope.describe());
+  }
+
+  /**
+   * **清空内存里所有"按人"的状态**（退出登录 / 换账号共用）。
+   *
+   * 为什么合成一个方法：这两条路要清的东西**完全一样**，分开写必然漏 —— 原来 signOut 只清了
+   * 通知与信息流，于是托盘队列、私信快照、预取队列、设备会话材料、请求模板全都留给了下一个账号
+   * （用户报的"快拍还是上一个人的"就是其中一条）。任何"按人"的新状态都加到这里，并且**只加这里**。
+   */
+  private forgetAccountMemory(): void {
+    // 通知 + 关注 / 收藏 / 互动覆盖表（按人抓的，见 forgetNotifications）。
+    this.forgetNotifications();
+    // 限流冷却按账号记：换人之后额度要重新算。
+    ApiThrottle.clear();
+    // 各页面的列表与游标。
+    this.viewModel.reset();
+    this.reelsVm.reset();
+    this.searchVm.clear();
+    this.profileVm.reset();
+    this.directVm.reset();
+    this.directThreadVm.reset();
+    // 快拍：托盘队列 + 预缓存 —— "快拍还是上一个人的"就在这里。
+    this.storyQueue = [];
+    StoryCache.reset([], 0);
+    // 私信预取队列 + 快照缓存（落盘那份已由 AccountScope 搬到备份位）。
+    DirectPrefetch.cancel();
+    DirectCache.clear();
+    // 设备侧会话材料（claim / rur / mid / authorization）：设备身份留着，会话材料作废。
+    MobileSession.getInstance().clearSession();
+    // 网页抓来的请求模板带着**当时那条会话的头**，跨账号复用等于拿上一个人的身份打接口。
+    ApiRegistry.getInstance().forgetTemplates();
+    // 图片缓存 / 预下载 / 译文缓存。
+    PosterCache.clear();
+    MediaPrefetch.clearCache();
+    Translator.clear();
+    // 网页的 **HTTP 缓存**里可能存着上一个人的页面（HTML / JS / 图片）：一起清掉。
+    try {
+      this.bridge.controller.removeCache(true);
+      hilog.info(DOMAIN, TAG, 'web cache cleared');
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'clear web cache failed: %{public}s', (error as Error).message);
+    }
+    this.loadedOnce = false;
+    hilog.info(DOMAIN, TAG, 'account memory cleared');
+  }
+
+  /** 删掉沙箱里"按人"的诊断文件（见 InstagramProbe.clearDumps / StoryDiag.clear）。 */
+  private wipeDiagnostics(): void {
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      StoryDiag.clear(context);
+      MobileProbe.clearReport(context);
+      // 带时间戳的那批：文件名前缀见各 dump 的调用点（探针 / 快拍失败 / 托盘形状…）。
+      InstagramProbe.clearDumps(context,
+        ['probe', 'storyfail', 'trayshape', 'trayraw', 'search', 'Instarmony_']);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'wipe diagnostics failed: %{public}s', (error as Error).message);
+    }
   }
 
   // ==========================================================================

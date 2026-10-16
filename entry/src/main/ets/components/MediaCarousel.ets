@@ -13,6 +13,8 @@
  */
 
 import { PosterCache } from '../core/PosterCache';
+import { MediaSlide } from '../model/MediaPost';
+import { VideoSurface } from './VideoSurface';
 
 /** 圆点尺寸与间距（vp）：活动的那颗拉成椭圆，所以另有一个宽度。 */
 const DOT_SIZE: number = 6;
@@ -89,6 +91,21 @@ struct CarouselDot {
 
 @Component
 export struct MediaCarousel {
+  /**
+   * 逐页媒体（图 / 视频混排，见 model/MediaPost 的 MediaSlide）。
+   *
+   * 需求："feeds 流多图片媒体可以包含视频媒体……多媒体播放逻辑按照视频播放逻辑写"。
+   * 所以这一页是不是视频由它自己说（`slide.isVideo()`），是视频就用**和单视频帖完全同一个**
+   * `VideoSurface`（AVPlayer + XComponent）来播 —— 不是另起一套播放实现。
+   */
+  @Prop slides: MediaSlide[] = [];
+  /**
+   * 兼容用的图片地址表（老数据 / 逐页媒体没解析出来时用它兜底）。
+   *
+   * 为什么必须留这条兜底：`slides` 来自"逐页媒体"那条新链路，任何一环没给（老缓存、
+   * 接口没带 `carousel_media`、脚本那条路没导出）都会是空数组 —— 那时若只画 slides，
+   * **整条多图帖会变成空白**（比"视频页不播"严重得多）。所以空数组时按纯图片渲染。
+   */
   @Prop imageUrls: string[] = [];
   /** 键值前缀：用帖子 id，保证同一张卡片内的图片/圆点键值唯一。 */
   @Prop idPrefix: string = '';
@@ -109,30 +126,157 @@ export struct MediaCarousel {
    * 和单图帖同一套（见 FeedList 的 posterReady）。
    */
   @Prop posterReady: number = 0;
+  /**
+   * 这条帖子现在是不是"该播"（= 被聚焦的那条，见 FeedList.isPlaying）。
+   *
+   * 视频页是否真的在播 = **本属性 && 当前页是视频页** —— 多图帖翻到图片页时，
+   * 上一页的视频必须停下来（否则会有看不见的声音在放）。
+   */
+  @Prop playing: boolean = false;
+  /** 是不是"下一条要预加载"的帖子（提前把它的视频页准备起来，见 FeedList.preloadKey）。 */
+  @Prop preload: boolean = false;
+  /** 静音（全局开关，见 AppSettings.SETTING_VIDEO_MUTED）。 */
+  @Prop muted: boolean = false;
   /** 翻页后回报当前页号，供外层记住。 */
   onPageChange: (index: number) => void = (index: number): void => {
   };
+  /** 某一页的视频出了首帧（外层据此把"已就绪"记下来）。 */
+  onVideoReady: (page: number) => void = (page: number): void => {
+  };
+  /** 某一页的视频播不出来（外层据此撤封面，别让那页永远只剩封面）。 */
+  onVideoError: (page: number) => void = (page: number): void => {
+  };
   @State active: CarouselActive = new CarouselActive();
+  /** 当前所在页（整数）：只有它上面的视频才播，见 playing 的说明。 */
+  @State private page: number = 0;
+  /** 已经出过首帧的页（撤封面用；数组整体替换，@State 才会通知）。 */
+  @State private readyPages: Array<number> = [];
 
   aboutToAppear(): void {
     // 圆点形状由 position 算出来，重建时也得跟着回到那一张，否则图在第三张、圆点还在第一张。
     this.active.position = this.initialPage;
+    this.page = this.initialPage;
+  }
+
+  /**
+   * 实际要渲染的页：优先 `slides`（含视频页），没有就按纯图片兜底（见 imageUrls 的说明）。
+   *
+   * 每次 build 都算一遍：它是纯函数、只有几项，开销可以忽略；而缓存成字段会在
+   * `@Prop` 变化时变旧（@Prop 变了但组件没重建的情况是有的）。
+   */
+  private pages(): Array<MediaSlide> {
+    if (this.slides.length > 0) {
+      return this.slides;
+    }
+    const out: Array<MediaSlide> = [];
+    for (let index: number = 0; index < this.imageUrls.length; index++) {
+      out.push(new MediaSlide(this.imageUrls[index], ''));
+    }
+    return out;
+  }
+
+  /** 这一页现在该不该播：帖子被聚焦 + 就是当前这一页 + 确实是视频页。 */
+  private pagePlaying(index: number): boolean {
+    if (!this.playing || index !== this.page) {
+      return false;
+    }
+    const pages: Array<MediaSlide> = this.pages();
+    return index >= 0 && index < pages.length && pages[index].isVideo();
+  }
+
+  /**
+   * 这一页要不要**挂播放器**。
+   *
+   * 只在"该播的"和"下一条要预加载的那条的第一个视频页"上挂：缓存区里每页都开一个解码器
+   * 会互相抢带宽（这正是预加载想避免的）。与单视频帖的 hasSurface 同一条思路。
+   */
+  private pageHasSurface(index: number): boolean {
+    const pages: Array<MediaSlide> = this.pages();
+    if (index < 0 || index >= pages.length || !pages[index].isVideo()) {
+      return false;
+    }
+    if (this.pagePlaying(index)) {
+      return true;
+    }
+    return this.preload && index === this.firstVideoPage();
+  }
+
+  /** 第一个视频页的下标（预加载用；没有给 -1）。 */
+  private firstVideoPage(): number {
+    const all: Array<MediaSlide> = this.pages();
+    for (let index: number = 0; index < all.length; index++) {
+      if (all[index].isVideo()) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  private isReady(index: number): boolean {
+    return this.readyPages.indexOf(index) >= 0;
+  }
+
+  private markReady(index: number): void {
+    if (this.isReady(index)) {
+      return;
+    }
+    const next: Array<number> = this.readyPages.slice(0);
+    next.push(index);
+    this.readyPages = next;
   }
 
   build() {
     Column({ space: 0 }) {
       Swiper() {
-        ForEach(this.imageUrls, (url: string, index: number): void => {
-          if (index === 0 && PosterCache.has(url, this.posterReady)) {
+        ForEach(this.pages(), (slide: MediaSlide, index: number): void => {
+          /*
+           * **视频页照视频逻辑走**（见 slides 的说明）：和单视频帖一样用 VideoSurface，
+           * 封面（这一页的图片地址）在第一帧到位前盖住它。图片页就是原来的那张图。
+           */
+          if (slide.isVideo() && this.pageHasSurface(index)) {
+            Stack() {
+              VideoSurface({
+                url: slide.videoUrl,
+                playing: this.pagePlaying(index),
+                // 预加载那条挂上播放器、但不播（VideoSurface 自己会 prepare）。
+                preload: this.preload && !this.pagePlaying(index),
+                // 与单视频帖一致：盒子是按帖子比例算的，用 Cover 才不会有黑边/闪烁。
+                cover: true,
+                muted: this.muted,
+                onFirstFrame: (): void => {
+                  this.markReady(index);
+                  this.onVideoReady(index);
+                },
+                onError: (): void => {
+                  // 播不出来也得撤封面，否则这一页永远只剩封面（看着像卡住）。
+                  this.markReady(index);
+                  this.onVideoError(index);
+                }
+              })
+              .width('100%')
+              .height('100%')
+
+              if (!this.isReady(index) && slide.imageUrl.length > 0) {
+                Image(slide.imageUrl)
+                  .draggable(false)
+                  .width('100%')
+                  .height('100%')
+                  .objectFit(ImageFit.Contain)
+                  .backgroundColor($r('app.color.field_background'))
+              }
+            }
+            .width('100%')
+            .height('100%')
+          } else if (index === 0 && !slide.isVideo() && PosterCache.has(slide.imageUrl, this.posterReady)) {
             // 第一张先垫预解码的小图（见 core/PosterCache）：首屏那格不用等真图。
             Stack() {
-              Image(PosterCache.pixel(url)!)
+              Image(PosterCache.pixel(slide.imageUrl)!)
                 .draggable(false)
                 .width('100%')
                 .height('100%')
                 .objectFit(ImageFit.Contain)
                 .backgroundColor($r('app.color.field_background'))
-              Image(url)
+              Image(slide.imageUrl)
                 .draggable(false)
                 .width('100%')
                 .height('100%')
@@ -142,14 +286,14 @@ export struct MediaCarousel {
             .width('100%')
             .height('100%')
           } else {
-            Image(url)
+            Image(slide.imageUrl)
               .draggable(false)
               .width('100%')
               .height('100%')
               .objectFit(ImageFit.Contain)
               .backgroundColor($r('app.color.field_background'))
           }
-        }, (url: string, index: number): string => `${this.idPrefix}-img-${index}`)
+        }, (slide: MediaSlide, index: number): string => `${this.idPrefix}-slide-${index}`)
       }
       .width('100%')
       .aspectRatio(this.aspect)
@@ -174,14 +318,16 @@ export struct MediaCarousel {
       // 同时把页号回报给外层记住（卡片重建时要靠它还原）。
       .onChange((index: number): void => {
         this.active.position = index;
+        // 页号一变，上一页的视频立刻停、这一页的（若视频）开始播 —— 见 pagePlaying。
+        this.page = index;
         this.onPageChange(index);
       })
 
       Row({ space: DOT_SPACE }) {
         // 键值只用下标（稳定）：刷新走 @ObjectLink，不靠 ForEach 重建。
-        ForEach(this.imageUrls, (url: string, index: number): void => {
+        ForEach(this.pages(), (slide: MediaSlide, index: number): void => {
           CarouselDot({ active: this.active, pageIndex: index })
-        }, (url: string, index: number): string => `${this.idPrefix}-dot-${index}`)
+        }, (slide: MediaSlide, index: number): string => `${this.idPrefix}-dot-${index}`)
       }
       .width('100%')
       .height(DOT_ROW_HEIGHT)

@@ -273,6 +273,51 @@ export class InstagramProbe {
   }
 
   /**
+   * **删掉沙箱里的诊断文件**（退出登录 / 换账号时调）。
+   *
+   * 为什么必须删：这些报告里全是**按人**的东西 —— 探针报告有账号 uid 与整条托盘的形状、
+   * 失败报告有 uid/用户名/媒体地址。留着它们换账号后再导出，等于把上一个人的账号信息发出去。
+   *
+   * @param prefixes 文件名前缀（`probe` / `storyfail` / `trayshape` / …）；空数组 = 清全部 `.txt`
+   */
+  static clearDumps(context: common.UIAbilityContext, prefixes: Array<string>): void {
+    try {
+      const names: Array<string> = fileIo.listFileSync(context.filesDir);
+      let removed: number = 0;
+      for (let index: number = 0; index < names.length; index++) {
+        const one: string = names[index];
+        if (!one.endsWith('.txt')) {
+          continue;
+        }
+        if (!InstagramProbe.matchesAny(one, prefixes)) {
+          continue;
+        }
+        try {
+          fileIo.unlinkSync(`${context.filesDir}/${one}`);
+          removed++;
+        } catch (error) {
+        }
+      }
+      hilog.info(DOMAIN, TAG, 'dumps cleared n=%{public}d', removed);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'dumps clear failed: %{public}s', (error as Error).message);
+    }
+  }
+
+  /** 文件名是否以给定前缀之一开头（前缀表为空时视为"全部匹配"）。 */
+  private static matchesAny(name: string, prefixes: Array<string>): boolean {
+    if (prefixes.length === 0) {
+      return true;
+    }
+    for (let index: number = 0; index < prefixes.length; index++) {
+      if (name.startsWith(prefixes[index])) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * 用**固定文件名**写一份到沙箱（`<name>.txt`，每次覆盖）。
    *
    * 为什么需要固定名：带时间戳的那些适合"每次抓一份快照"，但让测试同学回传时

@@ -10,7 +10,7 @@
  * "走网页时排版对、走原生时不对"这种最难查的问题。
  */
 
-import { FeedItemDto } from '../model/FeedDto';
+import { FeedItemDto, FeedMediaItemDto } from '../model/FeedDto';
 import { MediaQuality, PickedMedia } from './MediaQuality';
 
 /** 连接键：响应 `.data` 里放首页信息流的那个键。 */
@@ -207,6 +207,27 @@ export class NativeTimelineParser {
   }
 
   /**
+   * 逐页媒体里**最高那一页**的宽高比（w/h；拿不到给 0）。
+   *
+   * 需求："所有 feeds 流多图片帖子媒体区高度根据高度最高的图片" —— 现在**视频页也参与**
+   * （多图帖里混着竖视频时，盒子必须放得下它，否则那一页会被裁）。
+   */
+  private static aspectMinOf(items: Array<FeedMediaItemDto>): number {
+    let min: number = 0;
+    for (let index: number = 0; index < items.length; index++) {
+      const w: number = items[index].w;
+      const h: number = items[index].h;
+      if (w > 0 && h > 0) {
+        const aspect: number = w / h;
+        if (min <= 0 || aspect < min) {
+          min = aspect;
+        }
+      }
+    }
+    return min;
+  }
+
+  /**
    * 媒体 → FeedItemDto（字段与页面脚本一一对应）。
    *
    * 图片/视频都取**两份**：展示用按 core/MediaQuality 降到 1080 档（省流量），
@@ -225,11 +246,21 @@ export class NativeTimelineParser {
     let videoW: number = 0;
     let videoH: number = 0;
     const carousel: Array<IgMedia> = media.carousel_media ?? [];
+    /*
+     * **逐页媒体**（需求："feeds 流多图片媒体可以包含视频媒体"）。
+     *
+     * 下面那两个循环原来只收图片地址（视频页收的是它的封面），于是多图帖里的视频页
+     * 到原生侧就完全"消失"了 —— 界面把它当图片显示、也不会播。这里给每一页都记一条
+     * `mediaItems`：img（图或视频封面）+ vid（视频页才有）+ **这一页自己的宽高**。
+     */
+    const mediaItems: Array<FeedMediaItemDto> = [];
     if (carousel.length > 0) {
       for (let index: number = 0; index < carousel.length && index < 10; index++) {
         const child: IgMedia = carousel[index];
         const picked: PickedImage = NativeTimelineParser.pickImage(child.image_versions2);
         const original: PickedImage = NativeTimelineParser.pickImage(child.image_versions2, true);
+        const childVideo: IgVideoVersion | undefined = NativeTimelineParser.pickVideo(child);
+        const childBest: IgVideoVersion | undefined = NativeTimelineParser.pickVideo(child, true);
         if (picked.url.length > 0) {
           images.push(picked.url);
           originalImages.push(original.url.length > 0 ? original.url : picked.url);
@@ -238,18 +269,22 @@ export class NativeTimelineParser {
             imageH = picked.height;
           }
         }
-        if (video.length === 0) {
-          const version: IgVideoVersion | undefined = NativeTimelineParser.pickVideo(child);
-          if (version !== undefined) {
-            video = version.url ?? '';
-            videoW = version.width ?? 0;
-            videoH = version.height ?? 0;
-          }
-          const best: IgVideoVersion | undefined = NativeTimelineParser.pickVideo(child, true);
-          if (best !== undefined) {
-            originalVideo = best.url ?? '';
-          }
+        if (video.length === 0 && childVideo !== undefined) {
+          video = childVideo.url ?? '';
+          videoW = childVideo.width ?? 0;
+          videoH = childVideo.height ?? 0;
+          originalVideo = childBest !== undefined ? (childBest.url ?? '') : '';
         }
+        // 这一页的宽高：视频页用**视频自身**的尺寸（图片给的是封面尺寸，拿它排版会把视频页压扁）。
+        const vidUrl: string = childVideo !== undefined ? (childVideo.url ?? '') : '';
+        mediaItems.push({
+          img: picked.url,
+          vid: vidUrl,
+          w: vidUrl.length > 0 ? (childVideo?.width ?? 0) : picked.width,
+          h: vidUrl.length > 0 ? (childVideo?.height ?? 0) : picked.height,
+          orig: original.url.length > 0 ? original.url : picked.url,
+          origVid: childBest !== undefined ? (childBest.url ?? '') : ''
+        });
       }
     } else {
       const picked: PickedImage = NativeTimelineParser.pickImage(media.image_versions2);
@@ -271,6 +306,15 @@ export class NativeTimelineParser {
       if (best !== undefined) {
         originalVideo = best.url ?? '';
       }
+      const singleVid: string = version !== undefined ? (version.url ?? '') : '';
+      mediaItems.push({
+        img: picked.url,
+        vid: singleVid,
+        w: singleVid.length > 0 ? (version?.width ?? 0) : picked.width,
+        h: singleVid.length > 0 ? (version?.height ?? 0) : picked.height,
+        orig: original.url.length > 0 ? original.url : picked.url,
+        origVid: best !== undefined ? (best.url ?? '') : ''
+      });
     }
     // 帖子的 original_width/height 才是这条媒体的真实比例，优先用它；没有才退回图片/视频尺寸。
     let width: number = media.original_width ?? 0;
@@ -307,7 +351,10 @@ export class NativeTimelineParser {
       liked: media.has_liked === true,
       takenAt: (media.taken_at ?? 0) * 1000,
       w: width,
-      h: height
+      h: height,
+      // 逐页媒体（含视频页）+ 多图帖"最高的那一页"的比例（见 FeedItemDto.mediaItems/aspectMin）。
+      mediaItems: mediaItems,
+      aspectMin: NativeTimelineParser.aspectMinOf(mediaItems)
     };
     if (thumb.length > 0) {
       item.thumb = thumb;

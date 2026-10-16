@@ -65,6 +65,16 @@ let sendEmptyProbeDone: boolean = false;
 export class DirectViewModel {
   private readonly bridge: InstagramPageBridge = InstagramPageBridge.getInstance();
   private readonly registry: ApiRegistry = ApiRegistry.getInstance();
+  /** 清空自己（退出登录 / 换账号时调，见 ReelsViewModel.reset 的说明）。 */
+  reset(): void {
+    this.threads = [];
+    this.endCursor = '';
+    this.more = false;
+    this.busy = false;
+    this.loadedAtMs = 0;
+    this.diag = '-';
+  }
+
   private threads: Array<DirectThread> = [];
   private endCursor: string = '';
   private more: boolean = false;

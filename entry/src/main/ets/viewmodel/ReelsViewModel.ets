@@ -50,6 +50,20 @@ const NATIVE_WARM_MAX_AGE_MS: number = 120000;
 export class ReelsViewModel implements ReelStreamVm {
   private readonly bridge: InstagramPageBridge = InstagramPageBridge.getInstance();
   private readonly registry: ApiRegistry = ApiRegistry.getInstance();
+  /**
+   * **清空自己**（退出登录 / 换账号时调，见 core/AccountScope 的文件头）。
+   *
+   * 为什么要它：这些视图模型是**长驻**的（页面切 tab 不重建），换账号后它们手里还攥着
+   * 上一个人的列表 —— 界面一挂载就会把那份铺出来（用户报的"快拍还是上一个账号的"就是
+   * 同一类问题，只不过那条在 StoryCache/托盘队列上）。
+   */
+  reset(): void {
+    this.reels = [];
+    this.endCursor = '';
+    this.more = true;
+    this.busy = false;
+  }
+
   private reels: Array<Reel> = [];
   private endCursor: string = '';
   private more: boolean = true;

@@ -37,6 +37,7 @@ import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
 import { util } from '@kit.ArkTS';
 import { InstagramPageBridge } from './PageBridge';
+import { AccountScope } from '../core/AccountScope';
 import {
   replayApiScript,
   replayDigestScript,
@@ -388,6 +389,9 @@ export class ApiRegistry {
     }
     try {
       ApiRegistry.store = preferences.getPreferencesSync(context, { name: TEMPLATE_STORE });
+      // 按账号分区（见 core/AccountScope）：运行期抓到的模板带着**当时那条会话的头**，
+      // 跨账号复用等于拿上一个人的身份去打接口 —— 必须分开。
+      AccountScope.register(ApiRegistry.store, [TEMPLATE_KEY]);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'open template store failed: %{public}s', (error as Error).message);
       return;
@@ -488,7 +492,7 @@ export class ApiRegistry {
         item.headers, item.rawHeaders, item.body, item.at));
     }
     try {
-      store.putSync(TEMPLATE_KEY, JSON.stringify(out));
+      store.putSync(AccountScope.slot(TEMPLATE_KEY), JSON.stringify(out));
       store.flushSync();
       hilog.info(DOMAIN, TAG, 'templates persisted n=%{public}d', out.length);
     } catch (error) {
@@ -497,6 +501,18 @@ export class ApiRegistry {
   }
 
   /** 读回上次落盘的模板；只在第一次调用时真的读一次。 */
+  /**
+   * **忘掉内存里的模板**（换账号 / 退出登录时调）。
+   *
+   * 为什么必须清：运行期抓到的模板里带着**当时那条会话的头**（claim / csrf / lsd 之类），
+   * 换账号后继续用它 = 拿上一个人的身份打接口（轻则 1357004、重则把两个人的状态混起来）。
+   * 清掉之后，新账号第一次取数会走"抓一次模板"那条老路，攒回属于**它自己**的那份。
+   */
+  forgetTemplates(): void {
+    this.templates.clear();
+    hilog.info(DOMAIN, TAG, 'templates forgotten (account switched)');
+  }
+
   private loadPersisted(): void {
     if (ApiRegistry.loadedPersisted) {
       return;
@@ -508,7 +524,7 @@ export class ApiRegistry {
     }
     let list: Array<StoredTemplateDto> = [];
     try {
-      const raw: string = store.getSync(TEMPLATE_KEY, '') as string;
+      const raw: string = store.getSync(AccountScope.slot(TEMPLATE_KEY), '') as string;
       if (raw.length === 0) {
         return;
       }

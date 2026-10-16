@@ -133,6 +133,13 @@ const VISIBLE_RATIO: number = 0;
  */
 const FOCUS_SWITCH_COVER: number = 0.5;
 /**
+ * 滚动中重算焦点的**最小间隔**（毫秒）：见 `refreshFocusThrottled`。
+ *
+ * 120ms 这个量是"跟手"与"别浪费"之间的经验值：一次重算要给可见的每张卡片量一次矩形
+ * （`getRectangleById`），按帧跑纯属浪费；而人眼在长视频滚动这个尺度上分辨不出 120ms 的差。
+ */
+const FOCUS_SCROLL_THROTTLE_MS: number = 120;
+/**
  * **成为焦点所需的最低占屏比例**。
  *
  * 真机日志抓到的病根：上一条帖子滚出视口、被 `syncFromRange` 从可见集合里删掉之后，候选集合
@@ -858,6 +865,15 @@ export struct FeedList {
   private lastOffsetY: number = 0;
   /** 有没有采到过第一帧：首帧只记基准不报增量，避免把历史偏移量当成一次大滚动。 */
   private offsetSampled: boolean = false;
+  /** 上一次"滚动中重算焦点"的时刻（节流用，见 refreshFocusThrottled）。 */
+  private lastFocusMs: number = 0;
+  /**
+   * 当前焦点**最后已知的可见高度**（px；-1 = 还没量到过，0 = 上一轮就已经整条在屏幕外）。
+   *
+   * 只在"焦点量不到"（卡片被回收/重建）的那一轮用得上：那时若它上一轮就已经看不见了，
+   * 就不该再靠"它是当前焦点"继续占着焦点（否则屏幕外的视频会接着播）。
+   */
+  private focusVisiblePx: number = -1;
   /**
    * 当前在屏幕上的帖子：key → 列表索引。
    *
@@ -1278,7 +1294,7 @@ export struct FeedList {
     if (post.displayUrl.length === 0) {
       return 1;
     }
-    if (post.imageUrls.length > 1 && !(this.isInlineVideo(post)) && aspect > 0) {
+    if (post.isCarousel() && aspect > 0) {
       /*
        * 多图帖的盒子按**最高那张图**钉高（需求："所有 feeds 流多图片帖子媒体区高度根据
        * 高度最高的图片"）：`imageAspectMin` 是逐张子媒体量出来的最小 w/h（= 最高的那张），
@@ -1327,13 +1343,31 @@ export struct FeedList {
    * 多图轮播里也可能带视频，但那种卡片的主体是轮播，不该被自动换成播放器，
    * 所以只认单媒体视频。
    */
+  /**
+   * **单视频帖**：整条帖子就是一个视频（多图帖哪怕含视频页也返回 false —— 那种帖由
+   * MediaCarousel 逐页渲染，见 mediaBlock）。
+   *
+   * 判"这条帖子要不要按视频排版/聚焦偏好处理"用它；判"这条帖子里的东西能不能播"
+   * 用 `hasVideoMedia`（下面那个）。
+   */
   private isInlineVideo(post: MediaPost): boolean {
-    return post.videoUrl.length > 0 && post.imageUrls.length <= 1;
+    return post.videoUrl.length > 0 && !post.isCarousel();
   }
 
-  /** 这一条是不是当前正在播放的视频。 */
+  /**
+   * **这条帖子里有没有可播的视频**（单视频帖，或多图帖里的视频页）。
+   *
+   * 用途是"播不播"这条链：焦点闸门（refreshFocus 里给 activeKey 赋值那一步）、
+   * 正在播放判定（isPlaying）、预加载找下一条视频 —— 多图帖里的视频页也要能播，
+   * 所以这几处都必须用它而不是 isInlineVideo。
+   */
+  private hasVideoMedia(post: MediaPost): boolean {
+    return post.hasVideo();
+  }
+
+  /** 这一条是不是当前正在播放的视频（单视频帖，或含视频页的多图帖）。 */
   private isPlaying(post: MediaPost): boolean {
-    return this.isInlineVideo(post) && this.activeKey === FeedMapper.keyOf(post);
+    return this.hasVideoMedia(post) && this.activeKey === FeedMapper.keyOf(post);
   }
 
   /**
@@ -1443,6 +1477,8 @@ export struct FeedList {
     const holdIndex: number = this.focusIndexOf(this.focusKey);
     const holdInSet: boolean = holdIndex >= 0 && indexes.indexOf(holdIndex) >= 0;
     let holdUnmeasured: boolean = false;
+    /** 当前焦点这一轮量到的**可见高度**（px，>0 = 还在屏幕上）；量不到保持 -1。 */
+    let holdVisiblePx: number = -1;
     let best: number = -1;
     let bestCover: number = -1;
     let bestDistance: number = -1;
@@ -1465,6 +1501,10 @@ export struct FeedList {
       const bottom: number = Math.min(span.bottom,
         viewport.measurable ? viewport.bottom : span.bottom);
       const visible: number = bottom > top ? (bottom - top) : 0;
+      if (index === holdIndex) {
+        // 当前焦点这一轮量到了：记下它到底还有多少在屏幕上（见下面"滚出屏幕就别占着焦点"）。
+        holdVisiblePx = visible;
+      }
       const cover: number = visible / screenHeight;
       const preferred: boolean = this.isTallVideoFullyVisible(this.posts[index], span, viewport);
       /*
@@ -1529,7 +1569,17 @@ export struct FeedList {
         const tallVideo: boolean = this.isInlineVideo(currentPost)
           && currentPost.aspectRatio() <= TALL_MEDIA_MAX_ASPECT;
         const forward: boolean = best > currentIndex;
-        if (tallVideo && forward && bestCover < FOCUS_SWITCH_COVER) {
+        /*
+         * **焦点已经滚出屏幕时，不再"粘"着它**（用户报的："连续两条长比例视频上滑，
+         * 第一条消失在屏幕后依然聚焦播放"）。
+         *
+         * 这道粘滞/保持的规则本来是为了防"刚往上滑一点点就被换掉"，前提是**焦点还在屏幕上**。
+         * 一旦它已经整条离开可视区，继续占着焦点就只剩坏处：那条视频在屏幕外接着播。
+         * 判据用**量出来的可见高度**（holdVisiblePx，px）：== 0 就是"一点都看不见了"。
+         * 量不到（-1）时不适用这条 —— 那种情况交给下面 holdUnmeasured 那条按老规则处理。
+         */
+        const offScreen: boolean = holdVisiblePx === 0;
+        if (tallVideo && forward && bestCover < FOCUS_SWITCH_COVER && !offScreen) {
           focusIndex = currentIndex;
         }
       }
@@ -1538,8 +1588,17 @@ export struct FeedList {
      * 当前焦点这一轮量不到、但**还在可见集合里**：只要新的最优候选没到"占屏过半"的门槛，
      * 就继续保持原焦点（见上面 holdUnmeasured 的说明）。这一条专治"上一条滚出视口后视频就停"。
      */
-    if (holdUnmeasured && holdInSet && bestCover < FOCUS_SWITCH_COVER) {
+    if (holdUnmeasured && holdInSet && bestCover < FOCUS_SWITCH_COVER
+      && this.focusVisiblePx !== 0) {
       focusIndex = holdIndex;
+    }
+    /*
+     * 记住这一轮"当前焦点还看得见多少"（见上面 offScreen 那条）：
+     * 下一轮它万一量不到（卡片正在被回收/重建），这条记录就是"最后已知它在不在屏幕上"，
+     * 用来决定还要不要继续保住它 —— == 0（上一轮就已经看不见）时不再保。
+     */
+    if (holdVisiblePx >= 0) {
+      this.focusVisiblePx = holdVisiblePx;
     }
     if (!measuredAny) {
       let smallest: number = -1;
@@ -1551,9 +1610,14 @@ export struct FeedList {
       focusIndex = smallest;
     }
 
-    this.focusKey = (focusIndex >= 0 && focusIndex < this.posts.length)
+    const nextFocusKey: string = (focusIndex >= 0 && focusIndex < this.posts.length)
       ? FeedMapper.keyOf(this.posts[focusIndex])
       : '';
+    if (nextFocusKey !== this.focusKey) {
+      // 焦点换人：上一条的"最后可见高度"作废（见 focusVisiblePx 的说明）。
+      this.focusVisiblePx = -1;
+    }
+    this.focusKey = nextFocusKey;
 
     // 焦点换了：叠字行的采样窗口跟着换（BackdropTone 用它的位置去取"文字背后的颜色"）。
     this.syncOverlayBand();
@@ -1563,7 +1627,7 @@ export struct FeedList {
     let focusIsVideo: boolean = false;
     if (this.focusKey.length > 0) {
       const focusedIndex: number = this.focusIndexOf(this.focusKey);
-      if (focusedIndex >= 0 && this.isInlineVideo(this.posts[focusedIndex])) {
+      if (focusedIndex >= 0 && this.hasVideoMedia(this.posts[focusedIndex])) {
         nextKey = this.focusKey;
         focusIsVideo = true;
       }
@@ -1610,7 +1674,7 @@ export struct FeedList {
     }
     const last: number = Math.min(this.posts.length - 1, from + PRELOAD_LOOKAHEAD);
     for (let index: number = from + 1; index <= last; index++) {
-      if (this.isInlineVideo(this.posts[index])) {
+      if (this.hasVideoMedia(this.posts[index])) {
         return FeedMapper.keyOf(this.posts[index]);
       }
     }
@@ -1822,7 +1886,31 @@ export struct FeedList {
     // 滚动会让叠字行在屏幕上移动：顺手把它的新位置节流报一次，
     // BackdropTone 才能一直在"文字真正盖住的那块画面"上取色。
     this.syncOverlayBandThrottled();
+    /*
+     * **滚动中也要重算焦点**（节流，见 refreshFocusThrottled）。
+     *
+     * 用户报的现象正是缺了这一步：两条**长比例视频**相连时，卡片比屏幕还高，
+     * 滚过一整屏才换一次可见下标 —— 这段时间里"哪条视频在屏幕上"早就变了，
+     * 而焦点只在「可见区间 / 可见性变化」时才重算，于是**第一条已经滚出屏幕却还在播**，
+     * 直到用户往回滑一点、触发一次下标变化才切到第二条。
+     */
+    this.refreshFocusThrottled();
     this.onFeedScroll(delta, y, scrollState);
+  }
+
+  /**
+   * 滚动中的**节流**焦点重算（见 refreshFocusThrottled 的调用点说明）。
+   *
+   * 为什么节流：一次重算要给可见的每张卡片调 `getRectangleById`（3~6 次），
+   * 按帧跑没必要 —— 120ms 已经足够跟手（人眼在这个尺度上看不出"晚了一帧"）。
+   */
+  private refreshFocusThrottled(): void {
+    const now: number = Date.now();
+    if (now - this.lastFocusMs < FOCUS_SCROLL_THROTTLE_MS) {
+      return;
+    }
+    this.lastFocusMs = now;
+    this.refreshFocus();
   }
 
   /**
@@ -2299,7 +2387,12 @@ export struct FeedList {
         if (post.imageUrls.length > 1) {
           // 多图轮播：圆点指示器由 MediaCarousel 画在图片**下方**（Swiper 自带的
           // indicator 是压在图片上的），于是它自然落在媒体与动作区之间。
+          //
+          // **含视频页**：每一页各自说自己是图还是视频（见 MediaCarousel.slides 与
+          // MediaPost.hasVideo），视频页由那个组件用**同一个 VideoSurface** 播 ——
+          // 播放逻辑（聚焦才播、翻走就停、静音、封面直切首帧）与单视频帖完全一致。
           MediaCarousel({
+            slides: post.mediaSlides,
             imageUrls: post.imageUrls,
             idPrefix: post.id,
             // **和盒子同源**：图片段的比例（= 最高那张图的比例），见 carouselAspect。
@@ -2308,8 +2401,20 @@ export struct FeedList {
             posterReady: this.posterReady,
             // 卡片可能会因为点赞等状态变化被重建，页号靠这两项传进传出。
             initialPage: this.carouselPage(post),
+            // 这条被聚焦时，里面的视频页才播（见 MediaCarousel.pagePlaying）。
+            playing: this.isPlaying(post),
+            preload: this.preloadKey === FeedMapper.keyOf(post),
+            muted: this.videoMuted,
             onPageChange: (index: number): void => {
               this.carouselPages.set(FeedMapper.keyOf(post), index);
+            },
+            onVideoReady: (page: number): void => {
+              // 与单视频帖共用"已就绪"这套记账（键里带页号，互不覆盖）。
+              this.markVideoReady(`${this.videoKeyOf(post)}#${page}`);
+            },
+            onVideoError: (page: number): void => {
+              this.onPlaybackError();
+              this.markVideoReady(`${this.videoKeyOf(post)}#${page}`);
             }
           })
         } else {
@@ -2429,8 +2534,7 @@ export struct FeedList {
    * 判据必须和 mediaBlock / mediaBoxAspect 的分支一致：轮播 = 多图 + 非内联视频 + 有封面。
    */
   private mediaButtonBottom(post: MediaPost): number {
-    const carousel: boolean = post.imageUrls.length > 1 && !this.isInlineVideo(post)
-      && post.displayUrl.length > 0;
+    const carousel: boolean = post.isCarousel() && post.displayUrl.length > 0;
     return carousel ? DOT_ROW_HEIGHT + MEDIA_BUTTON_INSET : MEDIA_BUTTON_INSET;
   }
 

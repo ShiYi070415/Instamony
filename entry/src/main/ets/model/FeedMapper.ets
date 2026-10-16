@@ -6,8 +6,8 @@
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { FeedItemDto } from './FeedDto';
-import { MediaPost } from './MediaPost';
+import { FeedItemDto, FeedMediaItemDto } from './FeedDto';
+import { MediaPost, MediaSlide } from './MediaPost';
 import { FollowState } from '../core/FollowState';
 
 const DOMAIN: number = 0xFF00;
@@ -38,6 +38,23 @@ export class FeedMapper {
     // blob: 是页面内部的对象地址，原生播放器拿不到，一律当作没有视频。
     const playable: string = rawVideo.startsWith('blob:') ? '' : rawVideo;
     const isVideo: boolean = (item.hasVideo ?? false) || playable.length > 0;
+    /*
+     * 诊断（只打多图帖）：逐页媒体到底有没有到原生侧、里面有几页视频、最高那页的比例是多少。
+     * "多图含视频"这条路有没有数据在走，看这一行就够了。
+     */
+    const slides: Array<MediaSlide> = FeedMapper.toSlides(item);
+    if (images.length > 1) {
+      let videos: number = 0;
+      for (let at: number = 0; at < slides.length; at++) {
+        if (slides[at].isVideo()) {
+          videos++;
+        }
+      }
+      hilog.info(DOMAIN, TAG,
+        'slides key=%{public}s imgs=%{public}d raw=%{public}d pages=%{public}d videos=%{public}d aspectMin=%{public}s',
+        shortcode, images.length, (item.mediaItems ?? []).length, slides.length, videos,
+        (item.aspectMin ?? 0).toFixed(3));
+    }
     return new MediaPost({
       id: id,
       shortcode: shortcode,
@@ -67,8 +84,37 @@ export class FeedMapper {
       originalImageUrls: (item.originalImages ?? []).length > 0 ? item.originalImages : images,
       originalVideoUrl: (item.originalVideo ?? '').length > 0 ? item.originalVideo : playable,
       // 首屏封面预解码用的低一档封面（见 core/PosterCache）：只有原生那条路会给。
-      thumbUrl: item.thumb ?? ''
+      thumbUrl: item.thumb ?? '',
+      // 逐页媒体（图 / 视频混排）+ "最高的那一页"的比例：见 toSlides 与 FeedItemDto。
+      mediaSlides: slides,
+      imageAspectMin: item.aspectMin ?? 0
     });
+  }
+
+  /**
+   * DTO 的逐页媒体 → 模型的 `MediaSlide[]`（**只收多图帖**；单图/单视频帖返回空数组）。
+   *
+   * 为什么只认 >1 页：单视频帖的"那一页"由帖子级 `videoUrl` 表达（那条链上的老逻辑
+   * 一个字都不用改）；多图帖才需要逐页区分图/视频。
+   */
+  private static toSlides(item: FeedItemDto): Array<MediaSlide> {
+    const raw: Array<FeedMediaItemDto> = item.mediaItems ?? [];
+    if (raw.length <= 1) {
+      return [];
+    }
+    const built: Array<MediaSlide> = [];
+    for (let index: number = 0; index < raw.length; index++) {
+      const one: FeedMediaItemDto = raw[index];
+      const img: string = one.img ?? '';
+      const vid: string = one.vid ?? '';
+      if (img.length === 0 && vid.length === 0) {
+        continue;
+      }
+      // blob: 是页面内部地址、原生播放器拿不到（同 toPost 里 videoUrl 的处理）。
+      const playable: string = vid.startsWith('blob:') ? '' : vid;
+      built.push(new MediaSlide(img, playable, one.w ?? 0, one.h ?? 0));
+    }
+    return built.length > 1 ? built : [];
   }
 
   /** 去重 key：shortcode 优先，其次 id，都没有就用位置（视为不去重）。 */
@@ -359,6 +405,41 @@ export class FeedMapper {
       if (video.length > 0 || images.length > 1 || hitCaption.length > post.caption.length) {
         enriched++;
       }
+      /*
+       * **逐页媒体**（需求："feeds 流多图片媒体可以包含视频媒体"）。
+       *
+       * 页面脚本按 `carousel_media[]` 逐页导出 `mediaItems`（每页带 图/视频/宽高），
+       * 这里翻成模型的 `MediaSlide[]`。**只有多图帖（>1 页）且真的导出成功时**才替换：
+       * 单图/单视频帖、以及老数据（脚本没给 items）一律保留原样，那些路的行为一个字都不变。
+       */
+      const rawItems: Array<FeedMediaItemDto> = hit.mediaItems ?? [];
+      let slides: Array<MediaSlide> = post.mediaSlides;
+      if (rawItems.length > 1) {
+        const built: Array<MediaSlide> = [];
+        for (let at: number = 0; at < rawItems.length; at++) {
+          const one: FeedMediaItemDto = rawItems[at];
+          const img: string = one.img ?? '';
+          const vid: string = one.vid ?? '';
+          if (img.length === 0 && vid.length === 0) {
+            continue;
+          }
+          built.push(new MediaSlide(img, vid, one.w ?? 0, one.h ?? 0));
+        }
+        if (built.length > 1) {
+          slides = built;
+          // 诊断：多图帖里有几页视频。"多图含视频"这条路到底有没有数据在走，看这一行。
+          let videos: number = 0;
+          for (let at: number = 0; at < built.length; at++) {
+            if (built[at].isVideo()) {
+              videos++;
+            }
+          }
+          if (videos > 0) {
+            hilog.info(DOMAIN, TAG, 'carousel with video pages=%{public}d videos=%{public}d key=%{public}s',
+              built.length, videos, post.shortcode);
+          }
+        }
+      }
       const apiImage: string = images.length > 0 ? images[0] : post.displayUrl;
       // 视频优先用接口给的封面；没有封面就退回第一张图 / 原封面。
       const displayUrl: string = video.length > 0
@@ -381,6 +462,10 @@ export class FeedMapper {
         ownerAvatarUrl: hitAvatar.length > 0 ? hitAvatar : post.ownerAvatarUrl,
         videoUrl: video.length > 0 ? video : post.videoUrl,
         imageUrls: images.length > 1 ? images : post.imageUrls,
+        // 逐页媒体（含视频页）：只有多图帖导出成功时才替换，见上面 rawItems 那段。
+        mediaSlides: slides,
+        // 多图帖的盒子按"最高的那一页"钉高（见 MediaPostInit.imageAspectMin）。
+        imageAspectMin: (hit.aspectMin ?? 0) > 0 ? (hit.aspectMin ?? 0) : post.imageAspectMin,
         liked: hit.liked ?? post.liked,
         viewCount: hit.views ?? post.viewCount,
         // 转发状态接口里没有，只能保留原生这边记住的（见 FeedViewModel.repostedKeys）。

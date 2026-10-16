@@ -18,6 +18,7 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { preferences } from '@kit.ArkData';
+import { AccountScope } from './AccountScope';
 import { common } from '@kit.AbilityKit';
 import { SearchPost } from '../model/Search';
 
@@ -116,6 +117,8 @@ export class SearchCache {
     }
     try {
       SearchCache.store = preferences.getPreferencesSync(context, { name: STORE });
+      // 按账号分区（见 core/AccountScope）：搜索推荐也是按人给的。
+      AccountScope.register(SearchCache.store, [KEY_OP, KEY_PAGE]);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'open store failed: %{public}s', (error as Error).message);
     }
@@ -130,7 +133,7 @@ export class SearchCache {
       return '';
     }
     try {
-      const text: string = store.getSync(KEY_OP, '') as string;
+      const text: string = store.getSync(AccountScope.slot(KEY_OP), '') as string;
       if (text.length === 0) {
         return '';
       }
@@ -159,7 +162,7 @@ export class SearchCache {
     }
     try {
       const payload: StoredOp = { v: FORMAT, at: Date.now(), name: name };
-      store.putSync(KEY_OP, JSON.stringify(payload));
+      store.putSync(AccountScope.slot(KEY_OP), JSON.stringify(payload));
       store.flushSync();
       hilog.info(DOMAIN, TAG, 'op saved %{public}s', name);
     } catch (error) {
@@ -176,7 +179,7 @@ export class SearchCache {
       return null;
     }
     try {
-      const text: string = store.getSync(KEY_PAGE, '') as string;
+      const text: string = store.getSync(AccountScope.slot(KEY_PAGE), '') as string;
       if (text.length === 0) {
         return null;
       }
@@ -238,7 +241,7 @@ export class SearchCache {
         hilog.warn(DOMAIN, TAG, 'page too big: %{public}d chars', text.length);
         return;
       }
-      store.putSync(KEY_PAGE, text);
+      store.putSync(AccountScope.slot(KEY_PAGE), text);
       store.flushSync();
       hilog.info(DOMAIN, TAG, 'page saved n=%{public}d chars=%{public}d', out.length, text.length);
     } catch (error) {

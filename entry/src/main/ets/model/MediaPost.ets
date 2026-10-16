@@ -5,11 +5,50 @@
  */
 
 /**
+ * 多图帖里的**一页**媒体。需求："feeds 流多图片媒体可以包含视频媒体"。
+ *
+ * IG 的 carousel（`carousel_media[]`）允许图 / 视频混排，而原来的模型只有一个
+ * `imageUrls: string[]` + 帖子级的 `videoUrl` —— 结果是**多图帖里的视频页整页丢失**：
+ * 界面拿视频的封面当图片显示，点它也不会播。
+ *
+ * 于是每一页显式带上"是图还是视频"，播放逻辑与单视频帖**同一套**（见 components/MediaCarousel
+ * 里对 VideoSurface 的用法、以及 FeedList 的 isPlaying）。
+ */
+export class MediaSlide {
+  /** 这一页的图片地址；**视频页这里放的是它的封面**（和单视频帖 displayUrl 的角色一致）。 */
+  readonly imageUrl: string;
+  /** 视频地址；图片页为空串。 */
+  readonly videoUrl: string;
+  /** 这一页媒体的宽高（px，0 = 不知道）；视频页用视频自身的尺寸。 */
+  readonly width: number;
+  readonly height: number;
+
+  constructor(imageUrl: string, videoUrl: string = '', width: number = 0, height: number = 0) {
+    this.imageUrl = imageUrl;
+    this.videoUrl = videoUrl;
+    this.width = width;
+    this.height = height;
+  }
+
+  isVideo(): boolean {
+    return this.videoUrl.length > 0;
+  }
+
+  /** 宽高比（w/h）；不知道就给 0（调用方按"未知"处理，别猜）。 */
+  aspectRatio(): number {
+    if (this.width > 0 && this.height > 0) {
+      return this.width / this.height;
+    }
+    return 0;
+  }
+}
+
+/**
  * MediaPost 的构造参数。
  *
  * 原构造函数有 10 个必填 + 4 个可选位置参数，映射与补全两处调用点各写一长串实参，
  * 极易错位（归档代码里就已经有一处把 permalink 传进了 shortcode 位）。
- * 改成配置对象后每个字段在调用处都带名字，漏填和错序都由编译器兜住。
+ * 改成配置对象后每个字段在调用点都带名字，漏填和错序都由编译器兜住。
  */
 export interface MediaPostInit {
   id: string;
@@ -48,6 +87,14 @@ export interface MediaPostInit {
   videoUrl?: string;
   /** 多图帖的图片列表；单图帖为单元素数组。 */
   imageUrls?: string[];
+  /**
+   * **多图帖的逐页媒体**（图 / 视频混排，见 MediaSlide）。
+   *
+   * 给了它就以它为准：`imageUrls` 会自动从各页的图片地址（视频页取封面）补出来，
+   * 单视频帖则是单元素数组 —— 于是"下载 / 预取 / 指示器"这些按 `imageUrls` 走的旧路径
+   * 一行都不用改，而播放那条路能按页认出视频。
+   */
+  mediaSlides?: MediaSlide[];
   liked?: boolean;
   viewCount?: number;
   /**
@@ -115,6 +162,8 @@ export class MediaPost {
   readonly ownerFollowKnown: boolean;
   readonly videoUrl: string;
   readonly imageUrls: Array<string>;
+  /** 逐页媒体（见 MediaPostInit.mediaSlides）；空数组 = 老数据（按单图/单视频处理）。 */
+  readonly mediaSlides: Array<MediaSlide>;
   readonly liked: boolean;
   readonly viewCount: number;
   readonly reposted: boolean;
@@ -145,7 +194,11 @@ export class MediaPost {
     this.ownerFollowing = init.ownerFollowing ?? false;
     this.ownerFollowKnown = init.ownerFollowKnown ?? true;
     this.videoUrl = init.videoUrl ?? '';
-    this.imageUrls = init.imageUrls ?? [];
+    this.mediaSlides = MediaPost.slidesOf(init);
+    // `imageUrls` 没显式给就从逐页媒体补出来（视频页取封面）——旧路径（下载/预取/指示器）
+    // 因此不用改，而"哪一页是视频"这条信息留在 mediaSlides 里（见 MediaPostInit.mediaSlides）。
+    this.imageUrls = (init.imageUrls ?? []).length > 0
+      ? (init.imageUrls ?? []) : MediaPost.imagesOf(this.mediaSlides);
     this.liked = init.liked ?? false;
     this.viewCount = init.viewCount ?? 0;
     this.reposted = init.reposted ?? false;
@@ -161,6 +214,66 @@ export class MediaPost {
 
   isVideo(): boolean {
     return this.mediaType === 'video' || this.mediaType === 'clips';
+  }
+
+  /**
+   * 这条帖子**有没有视频**（单视频帖，或多图帖里含视频页）。
+   *
+   * 与 `isVideo()` 的区别：`isVideo()` 看的是**帖子类型**（IG 给 carousel 的类型是
+   * `carousel_media`/`sidecar`，即"这条是多图"），所以多图帖里哪怕有视频它也是 false。
+   * 判断"该不该给它挂播放器"必须用这个（见 FeedList 的 isInlineVideo / 播放闸门）。
+   */
+  hasVideo(): boolean {
+    if (this.videoUrl.length > 0) {
+      return true;
+    }
+    for (let index: number = 0; index < this.mediaSlides.length; index++) {
+      if (this.mediaSlides[index].isVideo()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** 是不是**多页**媒体（图/视频混排的轮播）；单图、单视频都返回 false。 */
+  isCarousel(): boolean {
+    return this.mediaSlides.length > 1 || this.imageUrls.length > 1;
+  }
+
+  /** 逐页媒体；老数据（没有 mediaSlides）按"一页图片"或"一页视频"补出来。 */
+  private static slidesOf(init: MediaPostInit): Array<MediaSlide> {
+    const given: Array<MediaSlide> = init.mediaSlides ?? [];
+    if (given.length > 0) {
+      return given;
+    }
+    const images: Array<string> = init.imageUrls ?? [];
+    const out: Array<MediaSlide> = [];
+    const video: string = init.videoUrl ?? '';
+    if (images.length === 0) {
+      // 没有图列表：单视频帖（封面 = displayUrl）或纯占位。
+      if (video.length > 0 || (init.displayUrl ?? '').length > 0) {
+        out.push(new MediaSlide(init.displayUrl ?? '', video,
+          init.mediaWidth ?? 0, init.mediaHeight ?? 0));
+      }
+      return out;
+    }
+    for (let index: number = 0; index < images.length; index++) {
+      // 老数据里 `videoUrl` 是帖子级的（多图帖含视频时取第一条视频）：只有单图帖才认它。
+      const isVideo: boolean = index === 0 && images.length === 1 && video.length > 0;
+      out.push(new MediaSlide(images[index], isVideo ? video : '',
+        init.mediaWidth ?? 0, init.mediaHeight ?? 0));
+    }
+    return out;
+  }
+
+  private static imagesOf(slides: Array<MediaSlide>): Array<string> {
+    const out: Array<string> = [];
+    for (let index: number = 0; index < slides.length; index++) {
+      if (slides[index].imageUrl.length > 0) {
+        out.push(slides[index].imageUrl);
+      }
+    }
+    return out;
   }
 
   /**

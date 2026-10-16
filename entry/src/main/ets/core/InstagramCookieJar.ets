@@ -100,21 +100,33 @@ export class InstagramCookieJar {
   }
 
   /**
-   * 退出登录：走 SDK 原生清罐。
+   * 退出登录：走 SDK 原生清罐，**并把网页侧的存储一起清掉**。
    *
    * 曾经试过逐条拼 `name=; Domain=...; Max-Age=0` 把 Instagram 的 Cookie 置为过期，
    * 结果是同一 Web 引擎随后的初始化/渲染出问题（登录页整片空白）。这里改回
    * SDK 自己的清罐接口：字符串解析与属性校验都交给引擎，避免把无效 Cookie 写进罐里。
+   *
+   * 为什么还要清 WebStorage：网页版把**账号相关的东西**（比如 `ds_user_id` 之类的本地缓存、
+   * 各种 blob 状态）存在 localStorage / Web SQL 里。只清 Cookie 的话，换账号后同一台设备上
+   * 这些残留仍会让页面/我们的脚本读到上一个人的痕迹（用户报的"快拍还是上一个账号的"就是
+   * 这一类"清了 Cookie 没清存储"）。
    */
   async clear(): Promise<void> {
     try {
       webview.WebCookieManager.clearAllCookiesSync();
       webview.WebCookieManager.clearSessionCookieSync();
-      await InstagramCookieJar.save();
-      hilog.info(DOMAIN, TAG, 'cleared the cookie jar for sign out');
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'clear cookie jar failed');
     }
+    try {
+      // 清 Web SQL + HTML5 存储（localStorage / IndexedDB）；参数 = 是否连隐私模式一起清。
+      webview.WebStorage.deleteAllData(true);
+      hilog.info(DOMAIN, TAG, 'cleared web storage for sign out');
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'clear web storage failed: %{public}s', (error as Error).message);
+    }
+    await InstagramCookieJar.save();
+    hilog.info(DOMAIN, TAG, 'cleared the cookie jar for sign out');
   }
 
   private static async read(): Promise<Array<CookieEntry>> {

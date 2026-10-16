@@ -30,6 +30,7 @@ import { ApiRegistry } from '../bridge/ApiRegistry';
 import { MobileSession } from '../core/mobileapi/MobileSession';
 import { MobileProbe } from '../core/mobileapi/MobileProbe';
 import { DirectCache } from '../core/DirectCache';
+import { AccountScope } from '../core/AccountScope';
 import { webview } from '@kit.ArkWeb';
 import { AppConfig } from '../config/AppConfig';
 import { DeepLink, DeepLinkIntent } from '../core/DeepLink';
@@ -114,6 +115,15 @@ export default class EntryAbility extends UIAbility {
     //   2) 会话 Cookie：上面 initializeWebEngine() 已经起了 Web 内核，WebCookieManager 能读罐。
     // 失败无所谓：预热只是"提前量"，页面那条路会照旧自己发一次。
     try {
+      /*
+       * **账号分区**（见 core/AccountScope）必须**第一个** init。
+       *
+       * 为什么顺序这么紧要：`ApiRegistry.init` 在里面**立刻读盘**（loadPersisted），
+       * 而所有缓存的键都要过 `AccountScope.slot()`。账号还没读出来时槽位是 `anon` ——
+       * 那样读到的永远是"匿名槽"（等于没分区），而且第一次读盘的结果会被当成这个账号的模板
+       * 留在内存里。所以先建立账号，再让任何 cache 碰盘。
+       */
+      AccountScope.init(this.context);
       ApiRegistry.init(this.context);
       // 信息流第一页的落盘缓存（见 core/FeedCache）：冷启动时页面会先把它铺出来，
       // 再让网络那份整体替换 —— 用户一进 app 就有画面。这里只是同步打开那个 store。

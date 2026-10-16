@@ -66,6 +66,28 @@ export class StoryDiag {
     StoryDiag.raws = raws;
   }
 
+  /**
+   * **清空诊断**（退出登录 / 换账号时调）。
+   *
+   * 为什么必须清：这份汇总里全是**按人**的东西 —— 失败记录里的 uid / 用户名、整条托盘的形状、
+   * 前 40 条原始条目（含用户名与媒体地址）。留着它换账号后导出，等于把上一个人的账号信息
+   * 打包发出去。内存与落盘文件一起清。
+   */
+  static clear(context: common.UIAbilityContext): void {
+    StoryDiag.failures = [];
+    StoryDiag.shapes = [];
+    StoryDiag.raws = [];
+    try {
+      const path: string = `${context.filesDir}/${FILE_NAME}.txt`;
+      if (fileIo.accessSync(path)) {
+        fileIo.unlinkSync(path);
+      }
+      hilog.info(DOMAIN, TAG, 'diag cleared');
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'diag clear failed: %{public}s', (error as Error).message);
+    }
+  }
+
   /** 把汇总写进沙箱（固定名，覆盖）。返回文件名（失败给空串）。 */
   static save(context: common.UIAbilityContext): string {
     // 覆盖之前先把上一次那份里的失败记录捞回来：见 loadOnce。

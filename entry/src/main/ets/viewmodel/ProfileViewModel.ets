@@ -166,6 +166,14 @@ export class ProfileViewModel {
   private readonly bridge: InstagramPageBridge = InstagramPageBridge.getInstance();
   private readonly registry: ApiRegistry = ApiRegistry.getInstance();
   private header: ProfileHeader | null = null;
+  /** 清空自己（退出登录 / 换账号时调，见 ReelsViewModel.reset 的说明）。 */
+  reset(): void {
+    this.posts = [];
+    this.endCursor = '';
+    this.more = true;
+    this.busy = false;
+  }
+
   private posts: Array<ProfilePost> = [];
   private endCursor: string = '';
   /** 还有没有下一页（名字避开公开方法 hasMore()，否则同名冲突）。 */

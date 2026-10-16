@@ -72,6 +72,16 @@ export class DirectThreadViewModel {
   private threadId: string = '';
   /** 收件箱里那一行的标题（读消息之前先拿它当标题，读到了再用真名覆盖）。 */
   private fallbackTitle: string = '';
+  /** 清空自己（退出登录 / 换账号时调）：会话内容与待发消息一起丢掉。 */
+  reset(): void {
+    this.view = null;
+    this.pending = [];
+    this.busy = false;
+    this.threadId = '';
+    this.onView(null);
+    this.onPending(this.pending);
+  }
+
   private view: DirectThreadView | null = null;
   private busy: boolean = false;
   private sending: boolean = false;

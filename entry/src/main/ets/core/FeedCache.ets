@@ -22,6 +22,7 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { preferences } from '@kit.ArkData';
+import { AccountScope } from './AccountScope';
 import { common } from '@kit.AbilityKit';
 import { FeedItemDto } from '../model/FeedDto';
 
@@ -72,6 +73,8 @@ export class FeedCache {
     }
     try {
       FeedCache.store = preferences.getPreferencesSync(context, { name: STORE });
+      // 按账号分区（见 core/AccountScope）：换账号绝不能读到上一个人的首页缓存。
+      AccountScope.register(FeedCache.store, [KEY]);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'open store failed: %{public}s', (error as Error).message);
     }
@@ -101,7 +104,7 @@ export class FeedCache {
         hilog.warn(DOMAIN, TAG, 'page1 too big to cache: %{public}d chars', text.length);
         return;
       }
-      store.putSync(KEY, text);
+      store.putSync(AccountScope.slot(KEY), text);
       store.flushSync();
       hilog.info(DOMAIN, TAG, 'saved n=%{public}d chars=%{public}d', items.length, text.length);
     } catch (error) {
@@ -121,7 +124,7 @@ export class FeedCache {
       return null;
     }
     try {
-      const text: string = store.getSync(KEY, '') as string;
+      const text: string = store.getSync(AccountScope.slot(KEY), '') as string;
       if (text.length === 0) {
         return null;
       }

@@ -22,6 +22,7 @@
  */
 
 import { preferences } from '@kit.ArkData';
+import { AccountScope } from './AccountScope';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { DirectMessage, DirectThread, DirectThreadView } from '../model/Direct';
@@ -75,6 +76,8 @@ export class DirectCache {
     }
     try {
       DirectCache.store = preferences.getPreferencesSync(context, { name: STORE_NAME });
+      // 按账号分区（见 core/AccountScope）：私信快照更是"按人"的东西。
+      AccountScope.register(DirectCache.store, [STORE_KEY]);
       DirectCache.load();
       hilog.info(DOMAIN, TAG, 'cache opened n=%{public}d', DirectCache.threads.size);
     } catch (error) {
@@ -258,7 +261,7 @@ export class DirectCache {
       return;
     }
     try {
-      const raw: string = store.getSync(STORE_KEY, '') as string;
+      const raw: string = store.getSync(AccountScope.slot(STORE_KEY), '') as string;
       if (raw.length === 0) {
         return;
       }
@@ -285,7 +288,7 @@ export class DirectCache {
       all.push(one);
     });
     try {
-      store.putSync(STORE_KEY, JSON.stringify(all));
+      store.putSync(AccountScope.slot(STORE_KEY), JSON.stringify(all));
       store.flushSync();
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'persist cache failed: %{public}s', (error as Error).message);

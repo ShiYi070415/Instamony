@@ -20,6 +20,7 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { preferences } from '@kit.ArkData';
+import { AccountScope } from './AccountScope';
 import { common } from '@kit.AbilityKit';
 import { Reel } from '../model/Reel';
 
@@ -99,6 +100,8 @@ export class ReelsCache {
     }
     try {
       ReelsCache.store = preferences.getPreferencesSync(context, { name: STORE });
+      // 按账号分区（见 core/AccountScope）。
+      AccountScope.register(ReelsCache.store, [KEY]);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'open store failed: %{public}s', (error as Error).message);
     }
@@ -147,7 +150,7 @@ export class ReelsCache {
         hilog.warn(DOMAIN, TAG, 'page1 too big to cache: %{public}d chars', text.length);
         return;
       }
-      store.putSync(KEY, text);
+      store.putSync(AccountScope.slot(KEY), text);
       store.flushSync();
       hilog.info(DOMAIN, TAG, 'saved n=%{public}d chars=%{public}d', total, text.length);
     } catch (error) {
@@ -166,7 +169,7 @@ export class ReelsCache {
       return null;
     }
     try {
-      const text: string = store.getSync(KEY, '') as string;
+      const text: string = store.getSync(AccountScope.slot(KEY), '') as string;
       if (text.length === 0) {
         return null;
       }

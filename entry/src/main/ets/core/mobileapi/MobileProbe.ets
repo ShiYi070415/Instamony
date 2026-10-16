@@ -17,6 +17,7 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { common } from '@kit.AbilityKit';
+import { fileIo } from '@kit.CoreFileKit';
 import { ApiThrottle } from '../ApiThrottle';
 import { MobileRequest, MobileResult, MobileOptions } from './MobileRequest';
 import { MobileSession, MobileIdentity } from './MobileSession';
@@ -111,6 +112,27 @@ export class MobileProbe {
 
   static lastSummary(): string {
     return MobileProbe.last;
+  }
+
+  /**
+   * **删掉自检报告文件**（退出登录 / 换账号时调）。
+   *
+   * 报告里有账号 uid、托盘/私信的形状摘要 —— 都属于上一个人。留着换账号后导出，
+   * 等于把它一起发出去（见 core/AccountScope 的文件头）。
+   */
+  static clearReport(context: common.UIAbilityContext): void {
+    MobileProbe.last = '-';
+    MobileProbe.shape = [];
+    MobileProbe.identityLine = '-';
+    try {
+      const path: string = `${context.filesDir}/${REPORT_NAME}.txt`;
+      if (fileIo.accessSync(path)) {
+        fileIo.unlinkSync(path);
+      }
+      hilog.info(DOMAIN, TAG, 'selftest report cleared');
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'selftest report clear failed: %{public}s', (error as Error).message);
+    }
   }
 
   /**
