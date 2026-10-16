@@ -146,6 +146,7 @@ import { ProfileReelsViewModel } from '../viewmodel/ProfileReelsViewModel';
 import { MediaDetail, NativeMediaInfo } from '../core/NativeMediaInfo';
 import { NativeUserInfo } from '../core/NativeUserInfo';
 import { ApiThrottle } from '../core/ApiThrottle';
+import { SessionGate } from '../core/SessionGate';
 import { InstagramProbe } from '../probe/InstagramProbe';
 import { FeedViewModel } from '../viewmodel/FeedViewModel';
 
@@ -1484,7 +1485,16 @@ struct Index {
    *      取关没有这条退路（网页的取关要走菜单，脚本点不出来），所以取关只认 HTTP 的结果。
    */
   private async followUser(id: string, username: string, follow: boolean): Promise<boolean> {
-    const name: string = username.length > 0 ? username : 'instagram';
+    /*
+     * 展示用的名字：用户名拿不到时退回数字 id。
+     *
+     * **以前这里写死 `'instagram'`**，于是"用户名缺失"会变成一个看着很合理的假用户名，
+     * 一路带到下面那条网页兜底：`followAccount('instagram')` 把隐藏网页导航到
+     * `https://www.instagram.com/instagram/`（真有这个账号），IG 那头一转登录页就把路径里的
+     * "instagram" 填进用户名框 —— 用户报的"用户名自动填充 instagram"就是它。
+     * 用户名是空的就说明这条数据本身不完整，此时**不该**再造一个名字去点关注。
+     */
+    const label: string = username.length > 0 ? username : id;
     const result: FollowResult = await NativeFollow.setFollowing(id, follow);
     if (result.ok) {
       // 以服务端确认的状态为准（有时候 create 会回 following=false，比如对方是私密账号）。
@@ -1492,7 +1502,7 @@ struct Index {
       FollowState.remember(id, username, result.following);
       this.setLocalStatus(result.following
         ? $r('app.string.follow_done')
-        : $r('app.string.unfollow_done', name));
+        : $r('app.string.unfollow_done', label));
       return result.following === follow;
     }
     hilog.warn(DOMAIN, TAG, 'native follow failed (%{public}s), fallback=%{public}s',
@@ -1501,8 +1511,15 @@ struct Index {
       this.setLocalStatus($r('app.string.follow_failed'));
       return false;
     }
+    // 网页兜底要靠**用户名**拼主页地址（见 followAccount）：没有用户名就没法走，
+    // 编一个名字去点是纯粹的错（见上面 label 的说明）。
+    if (username.length === 0) {
+      hilog.warn(DOMAIN, TAG, 'web follow fallback skipped: empty username id=%{public}s', id);
+      this.setLocalStatus($r('app.string.follow_failed'));
+      return false;
+    }
     // 退回网页驱动：它自己会导航、等按钮、点击、读回状态，最后回信息流。
-    const outcome: FollowOutcome | null = await this.followAccount(name);
+    const outcome: FollowOutcome | null = await this.followAccount(username);
     if (outcome !== null && outcome.following) {
       FollowState.remember(id, username, true);
       this.setLocalStatus($r('app.string.follow_done'));
@@ -1996,6 +2013,12 @@ struct Index {
     });
     this.bridge.setRouteHandler((url: string): void => {
       this.currentUrl = url;
+      /*
+       * 路由逐条记日志：排查"网页自己在反复跳"这类问题（登录页刷屏、重定向打架）**只有这串
+       * 地址能说明问题** —— 原生侧看不到网页里的导航意图，页面上又只有最终那一帧。
+       * 一行一条，量很小（SPA 换路由 / 整页导航各一条）。
+       */
+      hilog.info(DOMAIN, TAG, 'web route %{public}s', url);
       // 路由一变就顺手抓一次评论模板：网页里"点开一条帖子"正是靠 SPA 换路由，
       // 那一下之后页面才会去请求评论（见 captureCommentTemplate）。
       this.captureCommentTemplate();
@@ -2139,6 +2162,11 @@ struct Index {
     }
     this.warmStarted = true;
     await this.delay(WARM_START_DELAY_MS);
+    // 等待这段时间里可能已经退出登录了（见 warmStep 的说明）：那就不必再往下走。
+    if (!this.signedIn) {
+      hilog.info(DOMAIN, TAG, 'warm skipped: signed out');
+      return;
+    }
     /*
      * **私信收件箱：与下面的预热链并行、且不等它**（用户报："私信列表加载的有点慢，
      * 可以在 feeds 流界面预取"）。
@@ -2244,6 +2272,15 @@ struct Index {
    */
   private async warmStep(name: string, isCached: () => boolean,
                          run: () => Promise<void>): Promise<void> {
+    /*
+     * 未登录就整条预热链歇着：这些步骤都是"用隐藏网页抓模板"，而未登录时网页只会被 IG
+     * 踢回登录页 —— 每一步都要等桥超时（真机日志里 `warm reels 12324ms`、`warm profile
+     * 12709ms`），既白烧电，又把共用网页推得团团转（见 core/SessionGate）。
+     */
+    if (!this.signedIn) {
+      hilog.info(DOMAIN, TAG, 'warm %{public}s skip (signed out)', name);
+      return;
+    }
     if (isCached()) {
       hilog.info(DOMAIN, TAG, 'warm %{public}s skip (cached)', name);
       return;
@@ -2342,9 +2379,29 @@ struct Index {
    * 「未登录」只是提示——移动版网页的结构不一定命中判断用的标记——所以回到
    * Cookie 罐核对一次，只有罐里也确实没有会话才切回登录页。
    */
+  /**
+   * 网页报来的登录态信号。
+   *
+   * **正信号必须回罐里核一遍**（用户报："退出登录后点登录，网页登录页反复刷新"）。
+   *
+   * 网页那条只是一个"快信号"：`SESSION_WATCHER` 在页面里认几个导航地标
+   * （`main article`、`svg[aria-label="Home"]` …）就报"已登录"。未登录时它会**误报** ——
+   * 真机日志抓到的正是这个环：误报 → `applySession(true)`（把 app 切成已登录 + 首页导航 +
+   * 整条预热链重跑）→ IG 把这次导航又踢回登录页 → 每次整页加载结束都去读罐、读到未登录 →
+   * 再切回未登录 …… 每几秒一轮，网页那边就是"登录页反复刷新"，
+   * 而且每一轮预热里那些没模板的页面还会走冷路径（预热的 reels / 我的各要跑十几秒）。
+   *
+   * 权威判据自始至终是 Cookie 罐（见 core/InstagramCookieJar 的文件头：会话 Cookie 是
+   * HttpOnly，只有原生罐读得到）。负信号不需要核：网页进登录页是可靠的。
+   */
   private async handleSessionSignal(signedIn: boolean): Promise<void> {
     if (signedIn) {
-      this.applySession(true);
+      const snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
+      if (!snapshot.signedIn) {
+        hilog.info(DOMAIN, TAG, 'page session hint ignored: jar still signed out');
+        return;
+      }
+      this.applySession(true, snapshot.cookie);
       return;
     }
     const snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
@@ -2386,6 +2443,12 @@ struct Index {
     this.sessionChecked = true;
     this.lastSessionState = signedIn;
     this.signedIn = signedIn;
+    /*
+     * **登录闸门**（见 core/SessionGate）：未登录时只允许网页停在登录流程那几条地址上，
+     * 其余导航一律丢掉。放在这里（applySession）是因为这是全 app 唯一的登录态出口 ——
+     * 启动核对、网页信号、退出登录三条路最后都汇到它。
+     */
+    SessionGate.setSignedIn(signedIn);
     /*
      * **账号分区**：按 Cookie 里的 ds_user_id 判定"现在登的是谁"。
      *
@@ -2445,6 +2508,12 @@ struct Index {
     this.viewModel.reset();
     // 退出登录：内存里的通知与它的存档都作废（不清的话下次登录会把上一个人的通知铺出来）。
     this.forgetNotifications();
+    // 首屏自动重试也停掉：未登录时它只会把同一发失败请求再打几遍（见 scheduleFeedRetry）。
+    this.feedRetryLeft = 0;
+    if (this.feedRetryTimer !== 0) {
+      clearTimeout(this.feedRetryTimer);
+      this.feedRetryTimer = 0;
+    }
     this.setLocalStatus($r('app.string.status_sign_in_required'));
   }
 
@@ -2508,6 +2577,8 @@ struct Index {
     this.sessionChecked = true;
     this.lastSessionState = false;
     this.statusShown = false;
+    // 登录闸门立刻落闸：下面的网页归位导航要放行（它是 `/accounts/…`），而其余一切导航从此拦掉。
+    SessionGate.setSignedIn(false);
     /*
      * ⑤ 停在**原生登录页**，而不是把网页顶上来。
      *
@@ -2516,10 +2587,20 @@ struct Index {
      * **`nativeShell` 连同登录页一起不建**，用户会被直接丢进网页登录页，等于把新登录页盖掉
      * （用户要求的是"未登录状态会一直在这个页面…点击登录按钮才跳转网页登录"）。
      *
-     * 所以退完留在这：网页保持隐藏（它现在停在信息流地址上，Cookie 已清，自己会转去登录页，
-     * 看不见也无所谓），用户点登录按钮时再由 openLoginWeb() 显式导航到登录地址。
+     * ⑥ 但导航这一步**不能省，只是要藏在后台做**（用户报："退出登录后点登录，网页反复刷新、
+     * 用户名还自动填成 instagram"）：
+     *
+     *   清 Cookie / WebStorage / HTTP 缓存（③④）是在**旧文档还活着**的时候做的 —— 那一刻常驻
+     *   网页停在上一个账号的信息流 SPA 上。它的会话没了、存储没了、缓存也没了，于是它自己不停
+     *   重载 / 往登录页跳；用户点登录时我们那次 `loadUrl` 正好跟它的重定向打架，看到的就是
+     *   "页面反复刷新"。冷启动未登录那条路没有这个毛病，差别就在这：那条路一开始就是一张干净的
+     *   未登录文档，没有任何旧 SPA 在抢导航。
+     *
+     *   所以退完立刻把隐藏网页换成**一页干净的登录页**：旧文档被换掉，重定向自然停；顺带用户
+     *   点登录那一下页面早就绪，直接亮出来就行（见 openLoginWeb）。
      */
     this.webVisible = false;
+    this.bridge.loadUrl(AppConfig.INSTAGRAM_LOGIN_URL);
     hilog.info(DOMAIN, TAG, 'signed out; account data cleared (%{public}s)', AccountScope.describe());
   }
 
@@ -2718,9 +2799,23 @@ struct Index {
   // 网页
   // ==========================================================================
 
+  /**
+   * 点登录页那颗「登录」按钮：把常驻网页亮出来，并确保它停在登录页。
+   *
+   * 为什么不无条件 `loadUrl`：退出登录时已经**在后台**把它导航到登录页了（见 signOut 的 ⑤），
+   * 用户点按钮那一刻页面早就在那儿 —— 再来一次整页导航只会白闪一下（用户报的"退出登录后
+   * 点登录，网页一直反复刷新"里就有一份是这个多余的重载）。所以这里先看它现在停在哪：
+   * 已经在 Instagram 的 `/accounts/...` 那一族（登录页 / 二次验证 / 改密页）就直接亮出来。
+   */
   private openLoginWeb(): void {
     this.webVisible = true;
     this.statusShown = false;
+    const onInstagramAuth: boolean = this.currentUrl.indexOf('instagram.com') >= 0
+      && this.currentUrl.indexOf('/accounts/') >= 0;
+    if (onInstagramAuth) {
+      hilog.info(DOMAIN, TAG, 'login web already at %{public}s', this.currentUrl);
+      return;
+    }
     this.bridge.loadUrl(AppConfig.INSTAGRAM_LOGIN_URL);
   }
 
@@ -3772,6 +3867,18 @@ struct Index {
    * 不含 await 的短脚本，页面再怎么跳转也只是某一步丢了、退化成一次可重试的读取。
    */
   private async followAccount(name: string): Promise<FollowOutcome | null> {
+    /*
+     * 先确认这真是一个用户名再导航。
+     *
+     * 真机日志里出现过 `page begin https://www.instagram.com/{"state":"not-ready"}/` ——
+     * 某条列表数据不完整时，桥那头的"未就绪"标记（`{"state":"not-ready"}`）被当成用户名
+     * 传进来了，于是隐藏网页被导航到一个 JSON 当路径的地址上。这里按 IG 用户名的字符集
+     * 卡一道（字母 / 数字 / 点 / 下划线），不是名字就直接放弃，不去污染共用网页。
+     */
+    if (!/^[A-Za-z0-9._]{1,64}$/.test(name)) {
+      hilog.warn(DOMAIN, TAG, 'followAccount rejected name=%{public}s', name.slice(0, 48));
+      return null;
+    }
     this.navigating = true;
     this.bridge.loadUrl(`https://www.instagram.com/${name}/`);
     const ready: string = await this.bridge.awaitPageReady(NAV_READY_TIMEOUT_MS);
@@ -8649,6 +8756,7 @@ struct Index {
     Stack({ alignContent: Alignment.TopStart }) {
       InstagramWebHost({
         visible: this.webVisible,
+        signedIn: this.signedIn,
         onPageReady: (): void => {
           this.handlePageReady();
         },

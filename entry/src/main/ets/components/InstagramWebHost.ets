@@ -23,6 +23,15 @@ const SESSION_RECHECK_MS: number = 1200;
 @Component
 export struct InstagramWebHost {
   @Prop visible: boolean = false;
+  /**
+   * 现在是不是已登录（`Index.applySession` 传进来）。
+   *
+   * 只用于一件事：**未登录时不要预加载**（见 prefetchLikelyPages）。它是本轮那个
+   * "退出登录后网页登录页反复刷新"的元凶之一：未登录时 `/reels/`、`/direct/inbox/`
+   * 这些预加载会被 IG 一条条重定向到 `/accounts/login/?next=…`，而每次整页导航结束又会
+   * 再触发一次预加载 —— 自己把自己踩成了循环。
+   */
+  @Prop signedIn: boolean = false;
   onPageReady: () => void = (): void => {
   };
   onSessionChanged: (signedIn: boolean) => void = (signedIn: boolean): void => {
@@ -65,6 +74,16 @@ export struct InstagramWebHost {
    */
   private prefetchLikelyPages(url: string): void {
     if (url.indexOf('instagram.com') < 0) {
+      return;
+    }
+    /*
+     * **未登录不预加载**：这几条地址在未登录时都会被 IG 重定向到登录页，而预加载触发的
+     * 导航结束又会再调一次本方法 —— 真机日志里就是每几秒一轮 `/` → `/reels/` →
+     * `/accounts/login/?next=…reels…` → `/direct/inbox/` → `/accounts/login/?next=…direct…`，
+     * 用户点登录把网页亮出来时看到的就是"登录页一直在刷新"（见 core/SessionGate）。
+     */
+    if (!this.signedIn) {
+      hilog.info(DOMAIN, TAG, 'prefetchPage skipped: signed out');
       return;
     }
     const targets: Array<string> = [
@@ -161,8 +180,13 @@ export struct InstagramWebHost {
         { script: SESSION_WATCHER, scriptRules: ['*'] },
         { script: NETWORK_WATCHER, scriptRules: ['*'] }
       ])
-      .onPageBegin(() => {
+      .onPageBegin((event) => {
         this.bridge.markUnready();
+        // 每次整页导航开一条日志：和 `Index` 里的 `web route` 拼起来，就能看出
+        // "同一页被反复整页重载"还是"SPA 在换路由"（见 Index 的 signOut 说明）。
+        if (event !== undefined && event.url !== undefined) {
+          hilog.info(DOMAIN, TAG, 'page begin %{public}s', event.url);
+        }
       })
       .onPageEnd((event) => {
         this.bridge.markReady();
@@ -203,6 +227,10 @@ export struct InstagramWebHost {
         try {
           if (event.request.isMainFrame()) {
             this.bridge.markUnready();
+            // 主文档加载失败要留痕：反复刷新那类问题常常是"主文档一直在报错 + 页面自己重试"，
+            // 只有这里能看到失败原因（超时 / 被中断 / 证书 / 重定向过多）。
+            hilog.warn(DOMAIN, TAG, 'main frame error %{public}s %{public}s',
+              `${event.error.getErrorCode()}`, event.error.getErrorInfo());
           }
         } catch (error) {
         }

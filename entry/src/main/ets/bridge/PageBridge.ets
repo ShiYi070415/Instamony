@@ -10,6 +10,7 @@
 import { webview } from '@kit.ArkWeb';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { InstagramProbe } from '../probe/InstagramProbe';
+import { SessionGate } from '../core/SessionGate';
 
 const DEFAULT_TIMEOUT_MS: number = 20000;
 /**
@@ -382,6 +383,21 @@ export class InstagramPageBridge {
   // ---- 导航 ----------------------------------------------------------------
 
   loadUrl(url: string): void {
+    /*
+     * **未登录闸门**（见 core/SessionGate 的文件头）。
+     *
+     * 这里是全 app 唯一的导航入口，所以闸门放在这一层：未登录时，后台那些"顺手导航一下"
+     * （预热的冷启动抓模板、失败重抓、页面自己回首页…）一条都别想推动隐藏网页 —— 它们推动的
+     * 结果就是 IG 把登录页连同 `next=` 一遍遍重定向，用户看到"登录页反复刷新"。
+     * 只放行登录流程自己那几条地址（登录页 / 验证 / challenge），否则登录路会被堵死。
+     *
+     * `reload()` 不设闸门：那是用户按的刷新键，也是渲染进程崩了之后的恢复路径，
+     * 拦下来只会让界面卡死（见 InstagramWebHost.onRenderExited）。
+     */
+    if (!SessionGate.allowsNavigation(url)) {
+      hilog.info(DOMAIN, TAG, 'navigation blocked (signed out): %{public}s', url);
+      return;
+    }
     this.ready = false;
     try {
       this.controller.loadUrl(url);
