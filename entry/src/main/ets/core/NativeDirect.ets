@@ -1045,7 +1045,9 @@ export class NativeDirect {
    * @param altId 同一条会话的另一个 id（收件箱带过来的 `thread_key`），回放时两个都试。
    */
   static async thread(threadId: string, olderCursor: string,
-                      altId: string = ''): Promise<DirectThreadView | null> {
+                      altId: string = '',
+                      priority: number = ApiThrottle.warm(),
+                      limit: number = 0): Promise<DirectThreadView | null> {
     const id: string = threadId.trim();
     if (id.length === 0) {
       NativeDirect.detail = 'no-thread-id';
@@ -1067,7 +1069,10 @@ export class NativeDirect {
      * 且解析用的是同一个 `DirectMapper.threadFromJson`。
      */
     if (MOBILE_DIRECT_FIRST) {
-      const mobile: DirectThreadView | null = await MobileDirect.thread(id, olderCursor);
+      // limit：0 = 用默认（一页 20 条）；预取会传 5（见 DirectPrefetch）。
+      const mobile: DirectThreadView | null = limit > 0
+        ? await MobileDirect.thread(id, olderCursor, priority, limit)
+        : await MobileDirect.thread(id, olderCursor, priority);
       if (mobile !== null && mobile.messages.length > 0) {
         NativeDirect.detail = '-';
         hilog.info(DOMAIN, TAG, 'thread via mobile id=%{public}s msgs=%{public}d older=%{public}s',

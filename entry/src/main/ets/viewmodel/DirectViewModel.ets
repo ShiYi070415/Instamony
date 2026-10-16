@@ -12,6 +12,7 @@ import { ApiRegistry } from '../bridge/ApiRegistry';
 import { directInboxScript } from '../bridge/WebScripts';
 import { AppConfig } from '../config/AppConfig';
 import { NativeDirect } from '../core/NativeDirect';
+import { DirectPrefetch } from '../core/DirectPrefetch';
 import { DirectThreadViewModel } from './DirectThreadViewModel';
 import { DirectMapper } from '../model/Direct';
 import { DirectInboxPage, DirectMessage, DirectThread, DirectThreadView } from '../model/Direct';
@@ -130,6 +131,14 @@ export class DirectViewModel {
       this.more = page.hasMore && page.endCursor.length > 0;
       this.loadedAtMs = Date.now();
       this.onThreads(this.threads, this.more);
+      /*
+       * **列表到手就开始预取会话消息**（用户："切换到私信列表时预取当前私信列表的所有会话消息，
+       * 每个会话 5 条"＋"私信列表刷新时预取新刷新出来的会话"）。
+       *
+       * `seed` 自带增量语义（跳过队列里已有的、快照还新鲜的），所以这里不用区分
+       * "首次加载 / 下拉刷新 / 触底翻页"——三种情况都调它，真正发请求的只有缺快照的那几条。
+       */
+      DirectPrefetch.seed(this.threads);
       this.onStatus(this.usedColdPath ? '已加载（首次走网页抓接口）' : '已加载');
     }
     catch (error) {
@@ -261,6 +270,8 @@ export class DirectViewModel {
       this.endCursor = page.endCursor;
       this.more = page.hasMore && page.endCursor.length > 0;
       this.onThreads(this.threads, this.more);
+      // 翻页新出来的那批也交给预取（同上：只有缺快照的才会真发请求）。
+      DirectPrefetch.seed(this.threads);
     }
     finally {
       this.busy = false;

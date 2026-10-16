@@ -29,6 +29,7 @@ import { PlatformCap } from '../core/PlatformCap';
 import { ApiRegistry } from '../bridge/ApiRegistry';
 import { MobileSession } from '../core/mobileapi/MobileSession';
 import { MobileProbe } from '../core/mobileapi/MobileProbe';
+import { DirectCache } from '../core/DirectCache';
 import { webview } from '@kit.ArkWeb';
 import { AppConfig } from '../config/AppConfig';
 import { DeepLink, DeepLinkIntent } from '../core/DeepLink';
@@ -126,6 +127,13 @@ export default class EntryAbility extends UIAbility {
       // 移动 API 的设备身份（见 core/mobileapi/MobileSession）：**只开落盘文件**，
       // 不读 Cookie 罐、不发请求。身份必须跨重启稳定，所以这里同步把上次那份读回内存。
       MobileSession.init(this.context);
+      /*
+       * 私信会话的**预取快照缓存**（见 core/DirectCache）：同步把上次那几十条读回内存。
+       *
+       * 为什么放在启动里同步做：进私信列表时要用它判断"哪几条还新鲜、不用再预取"，
+       * 也要用它给点开的会话铺第一屏 —— 异步读的话这两件事都会赶在数据到手之前发生。
+       */
+      DirectCache.init(this.context);
       NativeFeed.warmStart(WARM_FEED_COUNT);
       // reels 的预热**只在 Wi-Fi/不计费网络**下做：它是一次完整的 Clips 请求（响应比信息流那条
       // 更大），而用户开 app 未必会点进 Reels —— 蜂窝网下这笔钱不值得先花（见 core/NetworkState）。

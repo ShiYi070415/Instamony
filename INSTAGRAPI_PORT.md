@@ -461,6 +461,45 @@ MobileDirect: thread ok id=…363010 msgs=20 raw=21 older=true with=meowlok0w0
 2. **滑到底拉不出更多 → 修好**：根因就是上面那条游标（修之前移动端如实报 `hasMore=false`，
    触底哨兵因此一次都不触发）。修完触底即翻页，`more` 由服务端继续给 `oldest_cursor` 决定何时到底。
 
+### 9.8 私信会话消息的预取 + 落盘快照（用户要求的四个行为）
+
+需求原文：*"切换到私信列表时预取当前私信列表的所有会话消息，每个会话 5 条，点进去覆盖并触发
+刷新获取一页历史消息，私信列表刷新时预取新刷新出来的会话。预取的会话可以存进 app，
+无新消息就直接覆盖会话消息，预取数据仅限文本，图片/视频媒体用占位加载表示，加载成功后显示。"*
+
+新增两个模块 + 四处接线：
+
+| 文件 | 职责 |
+| --- | --- |
+| `core/DirectCache.ets`（新） | 每条会话一份**只含文本**的快照（最近 5 条 + `newestId/newestTs` 判新 + 翻页游标），落盘在 `instarmony_direct_cache`（preferences，同 FeedCache 那套），上限 80 条会话 |
+| `core/DirectPrefetch.ets`（新） | 后台预取队列：串行、`idle` 优先级（绝不挡用户点开）、跳过新鲜快照、按代次可取消、**不重试** |
+| `DirectViewModel.load/requestMore` | 列表到手/翻页后 `DirectPrefetch.seed(threads)` —— 增量：只给缺快照的那几条发请求 |
+| `DirectThreadViewModel.open` | 先用快照铺第一屏（`first paint from cache`），媒体位置画占位 |
+| `DirectThreadViewModel.load` | 刷新一页后：**没有新消息 → 保持快照画面**（只把媒体地址按 id 填进去，不跳）；有新消息 → 直接显示新那一页。两种都写回快照 |
+| `DirectThreadPage.bubbleContent` | 媒体类消息而地址为空时画**占位块**（尺寸与真媒体一致），地址到了自然换成图/封面 |
+
+**为什么只存文本**（三条理由，第一条是硬的）：① IG 媒体 URL 带签名且**会过期**，存下来的
+几小时后就是死链（快拍那边吃过这个亏），界面反而更糟；② 体积：带 URL 的话 20 条会话就上百 KB，
+而这份缓存每次列表刷新都要重写；③ 媒体本来就要点进去看，现取最准。
+
+实测（模拟器）：
+
+```
+第一次启动：seed threads=20 queued=20 fresh=0 cache=threads=0      → round done done=24 fail=0
+            拉回的缓存文件：24 条会话 / 102 条消息 / 每条 5 条；消息字段只有 id,userId,mine,tsMs,kind,text
+            （整份 22KB，唯一一处 "http" 是某条消息正文里的一个链接，不是媒体地址）
+第二次启动：seed threads=20 queued=0 fresh=20                       ← 全部命中快照，零请求
+翻到 40 条：seed threads=40 queued=15 fresh=25                      ← 只预取新出来的 15 条
+点开会话：  first paint from cache id=…767129 msgs=5                ← 第一屏来自快照
+             no new message → keep cache paint msgs=20               ← 无新消息：画面不跳，媒体补齐
+```
+
+**过程中修掉预取队列自己的两个坑**（都与 StoryCache 那两个同源，注释里都写了"别再犯"）：
+① 陈旧结果那条分支设了 `running=false` 就 `return`，**没有接着推队列** —— 只要刷新列表撞上一次
+在飞的旧请求，整条预取链就永久停住（现象："只预取了一条"）；② 被当成陈旧丢掉的那一条，
+在新一轮里已被算作"正在飞"而没入队 → **它永远不会有快照**（真机第一条会话就是这么漏的），
+现在丢掉时按当前列表补回队头。
+
 
 ---
 

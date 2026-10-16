@@ -31,6 +31,7 @@ import { directThreadProbeScript } from '../bridge/WebScripts';
 import { AppConfig } from '../config/AppConfig';
 import { directScrollUpScript } from '../bridge/WebScripts';
 import { NativeDirect } from '../core/NativeDirect';
+import { DirectCache } from '../core/DirectCache';
 import { DirectMessage, DirectThreadView } from '../model/Direct';
 
 const DOMAIN: number = 0xFF00;
@@ -119,7 +120,22 @@ export class DirectThreadViewModel {
     this.fallbackUserId = userId;
     this.fallbackUsername = username;
     this.view = null;
-    this.onView(null);
+    /*
+     * **先用预取的文本快照把这一屏铺上**（用户："点进去覆盖并触发刷新获取一页历史消息"）。
+     *
+     * 为什么放在这里（而不是等 `load()`）：`open()` 是点开的那一刻，页面第一帧就用这份数据画 ——
+     * 预取读回来的 5 条文本立刻就位（媒体位置画占位），随后 `load()` 那一发刷新再补齐媒体、
+     * 并在"没有新消息"时**保持画面不跳**（见 DirectCache.mergeMedia）。
+     * 快照里不存头像（见 DirectCache 文件头），所以头像用收件箱那一行带过来的。
+     */
+    const cached: DirectThreadView | null = DirectCache.viewOf(threadId, avatar);
+    if (cached !== null) {
+      this.view = cached;
+      this.onView(cached);
+      hilog.info(DOMAIN, TAG, 'first paint from cache id=%{public}s msgs=%{public}d',
+        threadId, cached.messages.length);
+    }
+    this.onView(this.view);
     this.diag = '-';
     this.usedColdPath = false;
     this.pending = [];
@@ -216,12 +232,46 @@ export class DirectThreadViewModel {
       }
       if (view === null) {
         this.diag = NativeDirect.lastDetail();
+        // 网络那一发没成：**手里有快照就继续用**（总比把预取好的内容换成"读取失败"强）。
+        if (this.view !== null && this.view.messages.length > 0) {
+          hilog.info(DOMAIN, TAG, 'load failed but cache shown id=%{public}s why=%{public}s',
+            this.threadId, this.diag);
+          this.onStatus('已加载（离线快照）');
+          return;
+        }
         this.onStatus('读取失败：' + this.diag);
         return;
       }
-      this.view = view;
-      this.onView(view);
-      this.onStatus(view.messages.length > 0
+      /*
+       * **"无新消息就直接覆盖会话消息"**（用户要求）+ 媒体补齐。
+       *
+       * 判据是"最新一条的 id 有没有变"：
+       *   · 没变 → 画面**保持快照的样子**（不跳），只把这一页里同 id 消息的媒体地址填进去
+       *     （占位换成真图/封面）；这就是"没有新消息时以快照为准"。
+       *   · 变了 → 直接显示新读到的那一页（新消息必须在场）。
+       * 无论哪一支，都把这一页**写回快照**（下一轮预取/下次点开就有更新的文本了）。
+       */
+      const cached: DirectThreadView | null = DirectCache.viewOf(this.threadId, this.fallbackAvatar);
+      let shown: DirectThreadView = view;
+      if (cached !== null && cached.messages.length > 0) {
+        const cachedNewest: DirectMessage = cached.messages[cached.messages.length - 1];
+        const freshNewest: DirectMessage = view.messages[view.messages.length - 1];
+        const same: boolean = cachedNewest.id.length > 0 && cachedNewest.id === freshNewest.id;
+        if (same) {
+          shown = new DirectThreadView(view.id, view.title, view.withUsername, view.withAvatar,
+            view.withId, DirectCache.mergeMedia(cached, view), view.hasOlder, view.oldestCursor,
+            view.isGroup, view.withFullName);
+          hilog.info(DOMAIN, TAG, 'no new message → keep cache paint msgs=%{public}d',
+            shown.messages.length);
+        } else {
+          hilog.info(DOMAIN, TAG, 'new messages cached=%{public}s fresh=%{public}s',
+            cachedNewest.id, freshNewest.id);
+        }
+      }
+      DirectCache.save(shown.messages.length > 0 ? shown : view);
+      this.view = shown;
+      this.onView(shown);
+      this.onStatus(shown.messages.length > 0
         ? (this.usedColdPath ? '已加载（首次走网页抓接口）' : '已加载') : '');
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'load threw: %{public}s', (error as Error).message);

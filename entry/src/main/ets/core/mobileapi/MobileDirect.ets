@@ -112,8 +112,12 @@ export class MobileDirect {
    * @param threadId 会话 id（19~20 位长数字，**必须**走 `JsonRead.parseWithBigIds` 那条取值路径，
    *                 普通 JSON.parse 会把它舍入成 30 位错 id —— 见 DirectMapper 的说明）
    * @param olderCursor 取更老那批的游标（空串 = 最新那批）
+   * @param priority 排队优先级（默认 WARM；后台预取传 `ApiThrottle.idle()`）
+   * @param limit 要几条（默认 20 = "一页"；预取只要 5，见 DirectPrefetch）
    */
-  static async thread(threadId: string, olderCursor: string = ''): Promise<DirectThreadView | null> {
+  static async thread(threadId: string, olderCursor: string = '',
+                      priority: number = ApiThrottle.warm(),
+                      limit: number = THREAD_PAGE_SIZE): Promise<DirectThreadView | null> {
     const id: string = threadId.trim();
     if (id.length === 0) {
       return null;
@@ -122,13 +126,13 @@ export class MobileDirect {
     if (identity === null) {
       return null;
     }
-    let params: string = `limit=${THREAD_PAGE_SIZE}`;
+    let params: string = `limit=${limit}`;
     if (olderCursor.length > 0) {
       params += `&cursor=${encodeURIComponent(olderCursor)}`;
     }
     const result: MobileResult = await MobileRequest.send(
       `direct_v2/threads/${id}/`, '', params, true, null,
-      new MobileOptions(ApiThrottle.DIRECT, ApiThrottle.warm()));
+      new MobileOptions(ApiThrottle.DIRECT, priority));
     if (!result.ok) {
       hilog.warn(DOMAIN, TAG, 'thread failed id=%{public}s %{public}s', id, result.summary());
       return null;

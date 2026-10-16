@@ -310,6 +310,25 @@ export struct DirectThreadPage {
               .fontColor([Color.White])
           }
         }
+      } else if (DirectThreadPage.isMediaKind(message.kind)) {
+        /*
+         * **媒体占位**（用户："图片/视频媒体用占位加载表示，加载成功后显示"）。
+         *
+         * 什么时候会走到这里：这一条来自**预取的文本快照** —— 缓存里刻意不存媒体地址
+         * （签名会过期，见 core/DirectCache 的文件头），所以先按这条消息的类型画一块占位，
+         * 等 `load()` 那一发刷新把媒体地址带回来，上面那个分支就把它换成真图/视频封面。
+         * 占位尺寸与真媒体一致，换上去时不会跳。
+         */
+        Stack({ alignContent: Alignment.Center }) {
+          Column()
+            .width(this.bubbleMediaWidth())
+            .height(this.bubbleMediaWidth() * 1.25)
+            .borderRadius(14)
+            .backgroundColor($r('app.color.field_background'))
+          SymbolGlyph($r(message.isVideo ? 'sys.symbol.play_fill' : 'sys.symbol.photo'))
+            .fontSize(22)
+            .fontColor([$r('app.color.secondary_text')])
+        }
       }
       if (message.text.length > 0) {
         Text(message.text)
@@ -319,7 +338,7 @@ export struct DirectThreadPage {
           .backgroundColor(message.mine ? $r('app.color.accent') : $r('app.color.field_background'))
           .borderRadius(18)
           .constraintSize({ maxWidth: this.bubbleMaxVp() })
-      } else if (message.mediaUrl.length === 0) {
+      } else if (message.mediaUrl.length === 0 && !DirectThreadPage.isMediaKind(message.kind)) {
         Text($r('app.string.direct_kind_other'))
           .fontSize(15)
           .fontColor(message.mine ? $r('app.color.on_accent') : $r('app.color.primary_text'))
@@ -329,6 +348,19 @@ export struct DirectThreadPage {
       }
     }
     .alignItems(message.mine ? HorizontalAlign.End : HorizontalAlign.Start)
+  }
+
+  /**
+   * 这条消息**是不是媒体类**（判据与列表占位同一套：见 DirectPage.messagePlaceholder）。
+   *
+   * `item_type` 的取值很多（`media` / `raven_media` / `clip` / `xma_clip` / `xma_media_share` …），
+   * 所以按片段认而不是枚举；文字/系统类走到这里会给 false，仍然显示文字或"其他"占位。
+   */
+  private static isMediaKind(kind: string): boolean {
+    const lower: string = kind.toLowerCase();
+    return lower.indexOf('media') >= 0 || lower.indexOf('clip') >= 0
+      || lower.indexOf('raven') >= 0 || lower.indexOf('xma') >= 0
+      || lower.indexOf('photo') >= 0 || lower.indexOf('video') >= 0;
   }
 
   build() {
