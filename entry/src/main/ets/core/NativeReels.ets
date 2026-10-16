@@ -201,8 +201,14 @@ export class NativeReels {
     // 限流要**当场认出来并记账**：不认的话下面会"原样重发一次"，等于又打一发。
     if (ApiThrottle.looksLimited(result.body)) {
       ApiThrottle.note(ApiThrottle.CLIPS);
-      hilog.warn(DOMAIN, TAG, 'reels rate limited → back off %{public}min',
-        ApiThrottle.remainingMinutes(ApiThrottle.CLIPS));
+      /*
+       * 把**响应的开头**打出来。为什么必须打：这条判定会直接封掉 reels + 搜索推荐 12 分钟，
+       * 而真机上曾经因为"响应里恰好出现了 rate limit 几个字"（其实是别的东西）误判过一次
+       * —— 没有 body 就只能靠猜（见 core/ApiThrottle.looksLimited 收紧后的判据）。
+       */
+      hilog.warn(DOMAIN, TAG, 'reels rate limited → back off %{public}dmin body=%{public}s',
+        ApiThrottle.remainingMinutes(ApiThrottle.CLIPS),
+        result.body.substring(0, 160).replace(/[\r\n]+/g, ' '));
       return null;
     }
     let parsed: NativeReelsPage | null = result.ok ? NativeReels.parse(result.body, result.ms) : null;
@@ -211,11 +217,14 @@ export class NativeReels {
       // 的整页文档），而页面里用同一份模板回放却是好的 —— 差别就在"我们动了 variables"。
       // 首屏不挑条数（下面按服务端给多少算多少），所以这里退回"原样发模板"最稳；
       // 翻页（cursor 非空）必须带 after，没法原样发，就只走上面那一次。
-      hilog.info(DOMAIN, TAG, 'native reels retry with raw template');
+      hilog.info(DOMAIN, TAG, 'native reels retry with raw template (first attempt body=%{public}s)',
+        result.body.substring(0, 120).replace(/[\r\n]+/g, ' '));
       result = await NativeFeed.firstPage(0, '', REELS_OP, CLIPS_KEY);
       if (ApiThrottle.looksLimited(result.body)) {
         ApiThrottle.note(ApiThrottle.CLIPS);
-        hilog.warn(DOMAIN, TAG, 'reels rate limited on retry → back off');
+        hilog.warn(DOMAIN, TAG, 'reels rate limited on retry → back off %{public}dmin body=%{public}s',
+          ApiThrottle.remainingMinutes(ApiThrottle.CLIPS),
+          result.body.substring(0, 160).replace(/[\r\n]+/g, ' '));
         return null;
       }
       parsed = result.ok ? NativeReels.parse(result.body, result.ms) : null;

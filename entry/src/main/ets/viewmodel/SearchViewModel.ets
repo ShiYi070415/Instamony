@@ -190,12 +190,14 @@ export class SearchViewModel {
     // 网络那份回来再整体替换。放在最前面 —— 它比任何网络路径都快（读盘几十毫秒）。
     this.hydrateFromCache();
     /*
-     * 只有**缺推荐那条**才走冷路径。
+     * 只有**缺推荐来源**才走冷路径。
      *
      * 搜索结果那条不再需要它：现在有 REST 兜底（见 NativeSearch.REST_SEARCH_URLS 与
      * `searchUsers` 的顺序），为了它去导航网页要十几秒，正是"进搜索页就卡住"的来源。
+     * 推荐那条现在**多半也不用**：移动端探索流（`discover/topical_explore/`）不需要模板
+     * （见 NativeSearch.hasRecommendedSource）。
      */
-    if (!NativeSearch.hasRecommendedTemplate()) {
+    if (!NativeSearch.hasRecommendedSource()) {
       await this.coldTemplateCapture();
     }
     await this.loadRecommended();
@@ -250,7 +252,7 @@ export class SearchViewModel {
   async warm(): Promise<void> {
     // 缓存先在后台铺上：这样"启动预热"和"用户切到搜索页"谁先发生都不影响首屏。
     this.hydrateFromCache();
-    if (this.recommendLoaded || !NativeSearch.hasRecommendedTemplate()) {
+    if (this.recommendLoaded || !NativeSearch.hasRecommendedSource()) {
       return;
     }
     await this.loadRecommended();
@@ -339,19 +341,22 @@ export class SearchViewModel {
     if (this.recommendLoaded || this.query.length > 0) {
       return;
     }
-    if (!NativeSearch.hasRecommendedTemplate()) {
-      // 没有推荐那条模板：不报错（用户可能只是还没抓到），留个能看懂的状态 ——
+    if (!NativeSearch.hasRecommendedSource()) {
+      // 没有任何推荐来源：不报错（用户可能只是还没抓到），留个能看懂的状态 ——
       // 出处在探针面板那颗「存搜索页模板」（它会顺手把短视频流那条也抓下来）。
       this.onStatus('还没有推荐数据（去探针面板点「存搜索页模板」抓一次）');
       return;
     }
     /*
-     * **被限流期间不发**（见 core/ApiThrottle）：推荐流用的就是 clips 那条重查询，
+     * **被限流期间不发**（见 core/ApiThrottle）：模板那条推荐流用的就是 clips 那个重查询，
      * 一被 IG 限流就会一个候选一个候选地打（每条几百 KB），越打冷却越久。
      * 这段时间**先把落盘缓存那一页铺上**（hydrateFromCache）—— 上次那 18 格瀑布流
      * 比"空白+错误提示"有用得多（用户报的"推荐流无法正确显示"）。
+     *
+     * 但**移动端探索流不受这把锁管**：它是另一条端点（`discover/topical_explore/`），
+     * clips 那条被限不等于探索页也被限 —— 所以只在"没有移动端这条路"时才整体跳过。
      */
-    if (ApiThrottle.blocked(ApiThrottle.CLIPS)) {
+    if (!NativeSearch.mobileRecommendedUsable() && ApiThrottle.blocked(ApiThrottle.CLIPS)) {
       const minutes: number = ApiThrottle.remainingMinutes(ApiThrottle.CLIPS);
       this.hydrateFromCache();
       this.onStatus(this.posts.length > 0
@@ -646,7 +651,7 @@ export class SearchViewModel {
     this.onQuery('');
     this.setUsers([]);
     this.onStatus('');
-    if (!this.recommendLoaded && NativeSearch.hasRecommendedTemplate()) {
+    if (!this.recommendLoaded && NativeSearch.hasRecommendedSource()) {
       this.loadRecommended();
     }
   }

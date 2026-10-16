@@ -584,3 +584,65 @@ MobileDirect: thread ok id=…363010 msgs=20 raw=21 older=true with=meowlok0w0
 4. 冷启动**先用上次内容**（`FeedCache` / `ReelsCache` / `SearchCache` / 快拍托盘已有这套），
    模板刷新在背后进行 —— 用户看到的是"秒开"，而不是"重加载"。
 
+## 12. 搜索结果 / 探索流 / 主页改走移动端点（2026-10-17）
+
+用户要求："搜索推荐流和 reels 的 http 请求应该不是同一个，然后尽量把 reels/搜索/主页的数据加载速度提升，
+参考 instagrapi 的协议逻辑。"
+
+### 12.1 为什么"搜索推荐流和 reels 是同一发请求"
+
+在这之前，搜索页那面**推荐网格**是靠**模板回放**拿的，而模板候选的优先级是
+`EXPLORE_HINTS`（explore/discover/chaining）→ `CLIPS_HINTS`（clips/reels）。真机上 `/explore/`
+要么服务端直出（一个请求都不发）、要么直接跳到 `/explore/search/`，所以**探索模板常常根本抓不到**,
+于是回落到 `CLIPS_HINTS` —— 那就是 reels 的 `PolarisClipsTabRootPaginationQuery`。
+结果：两个页面拿同一发请求、同一批内容，而且两条路还共用 `ApiThrottle.CLIPS` 那把限流锁。
+
+### 12.2 端点侦察（真机实测，`filesDir/Instarmony_scout.txt`）
+
+`MobileProbe` 里新加了**端点侦察**（`ENDPOINT_SCOUT`，默认关，设定页那颗自检按钮即可触发）：
+它把候选端点各打一发，把"通不通 + 结构树"写进单独一份文件。本轮结论（账号 `alice`）：
+
+| 端点 | 结果 | 关键形状 |
+|---|---|---|
+| `GET clips/home/`（GET 与 POST 都试） | **404**（HTML） | 这一版 App **没有**这个端点 → reels 只能继续走 GraphQL |
+| `GET discover/topical_explore/` | ✓ 200，1.30MB / 4.7s | `sectional_items[]` → `layout_content.medias[].media`（`feed_type=clips`/`media`）；游标 = **`max_id`**（长串，这一版 `next_max_id` 是 `"0"`）+ `session_paging_token`；`more_available` / `rank_token` |
+| `GET fbsearch/account_serp/` | ✓ 200，32KB / 1.9s | `users[]`（`pk` / `username` / `full_name` / `profile_pic_url` / `is_verified` / `is_private` / `friendship_status.following`）+ `page_token` / `has_more` |
+| `GET users/search/`（v1，参数是 `q`） | ✓ 200，43KB / 2.0s | `users[]`，`pk` 同样齐 |
+| `GET fbsearch/top_serp/` | ✓ 200，595KB / 3.8s | 帖子在 `media_grid.sections[].layout_content.medias[].media`；游标 `media_grid.next_max_id` / `has_next` |
+| `GET users/{pk}/info/` | ✓ 200，几百毫秒 | `user{username, full_name, biography, external_url, profile_pic_url, hd_profile_pic_url_info, is_private, is_verified, follower_count, following_count, media_count, friendship_status}` |
+| `GET feed/user/{pk}/?count=12` | ✓ 200，377KB / 2.2s | `items[]`（与信息流同形状：`pk`/`code`/`media_type`/`carousel_media`/`image_versions2`/…）+ `more_available` / `next_max_id` |
+| `users/{username}/usernameinfo/` | 见下一轮侦察 | 别人主页只有用户名时走这条（instagrapi 的 `user_info_by_username`） |
+
+参数按 instagrapi / `instagram-private-api` 的原样：探索流是
+`is_prefetch=false & omit_cover_media=true & module=explore_popular & reels_configuration=hide_hero &
+use_sectional_payload=true & cluster_id=explore_all:0 & session_id=<设备 uuid> & include_fixed_destinations=true`。
+
+### 12.3 落地的改动
+
+- 新增 `core/mobileapi/MobileDiscover.ets`（对应 instagrapi 的 `ExploreMixin` + `FbSearchMixin`）：
+  `explore()`（推荐网格）/ `mediaSearch()`（搜帖子的 `media_grid`）/ `accounts()`（账号搜索，
+  v2 失败落 v1）。**只搬原始节点**，字段映射留给 `NativeSearch`（它有现成的 `readPost`），
+  这样 mobileapi 只依赖 model，不会和 core 形成循环 import。
+- 新增 `core/mobileapi/MobileProfile.ets`（对应 `UserMixin.user_info* / user_medias`）：
+  `info()`（`users/{pk}/info/`，没 id 时 `users/{username}/usernameinfo/`）+ `medias()`
+  （`feed/user/{pk}/?count=N&max_id=…`），同样只搬原始节点。
+- `core/NativeSearch`：`recommendedPage()` **先走移动端探索流**（并记住第一页是哪条路给的 ——
+  两种游标互不通用）；`searchUsers()` **先走移动端账号搜索**；新增 `postsFromMedias()` 复用
+  `postOf` 的映射；新增 `hasRecommendedSource()` / `mobileRecommendedUsable()`。
+- `core/NativeProfile`：`fetchHeader()` 移动端优先（模板那条留作退路）；`fetchPosts()` 对
+  **帖子那一段**（`OP_POSTS`）移动端优先（视频/收藏/被标注三段移动端没有等价物，仍走模板）；
+  抽出 `headerFromUser()` / `postsFromItems()` 让两条路共用同一套字段映射。
+- `viewmodel/SearchViewModel`：四处"有没有推荐模板"的判断改成"有没有推荐**来源**"——
+  否则冷启动（还没抓过模板）会直接跳过推荐流、甚至去跑 `coldTemplateCapture()`
+  （导航隐藏网页十几秒，正是"进搜索页就卡住"）。限流那把 `CLIPS` 锁**不再拦移动端探索流**
+  （不同的端点）。
+- `core/ApiThrottle.looksLimited` 收紧：`"rate limit"` 字面会误命中整页 HTML（真机上把 reels
+  预热打成了 12 分钟冷却）。现在只有 `1675004` / `rate_limit_error`，或者该字面出现在
+  IG 的错误结构（`"message"`/`"error_type"`/`"errors"`/`"severity"` 附近）时才算；
+  `NativeReels` 那两个分支同时把**响应开头 160 字**打进日志，便于下次一眼看出误判。
+
+### 12.4 还没做的
+
+- `clips/home/` 既然 404，reels **仍然是 GraphQL 模板回放**。它的速度提升靠：预热更早 +
+  模板落盘（已有）+ 不再被假的限流锁住 + 去掉不必要的重发。移动端那条路要等 IG 重新给出
+  等价端点（侦察脚本留着，随时可以再跑一遍看）。

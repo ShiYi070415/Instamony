@@ -38,6 +38,26 @@ const TAG: string = 'MobileProbe';
  */
 const REPORT_NAME: string = 'Instarmony_mobile';
 
+/**
+ * **端点侦察**：把"下一步要接的移动端点"逐条打一发，把响应结构写进单独一份文件
+ * （`filesDir/Instarmony_scout.txt`）。
+ *
+ * 为什么要它（而不是直接照 instagrapi 写解析）：移动端这些端点的形状每隔一阵就变
+ * （托盘不再给 `items` 就是本项目踩过的例子），而"哪个端点在**我们这套身份**下通、
+ * 顶层与嵌套键叫什么"只能问服务端。侦察跑一遍，写解析层就不用猜。
+ *
+ * 默认**关**：一次 7 发，只在移植新端点时手工打开（或从设定页那顆自检按钮触发）。
+ */
+const ENDPOINT_SCOUT: boolean = false;
+
+/** 侦察用的搜索词（只读查询；用一个中性词，别拿真实用户名去搜）。 */
+const SCOUT_QUERY: string = 'photo';
+
+/** 侦察文件里每层最多打几个键（防一份响应铺满整份报告）。 */
+const SCOUT_KEYS_PER_LEVEL: number = 14;
+/** 侦察文件最深钻几层（`sectional_items[0].layout_content.medias[0].media` 是第 4~5 层）。 */
+const SCOUT_MAX_DEPTH: number = 5;
+
 /** 一条"翻页游标候选"（label 只用于报告）。 */
 class CursorTry {
   readonly label: string;
@@ -89,6 +109,13 @@ export class MobileProbe {
   private static firstThreadId: string = '';
   /** ⑧ 要试的 thread_id（前两条；对比用 —— 见 run() 里的说明）。 */
   private static threadIds: Array<string> = [];
+  /**
+   * **自己的用户名**（从 ① 那一发的响应里读出来）。
+   *
+   * 侦察 ⑦ 要按用户名问一发 `users/{username}/usernameinfo/`（别人主页只有用户名时走的那条），
+   * 而写死名字换账号就失效 —— 所以从他自己的 `users/{id}/info/` 里现取。
+   */
+  private static selfUsername: string = '';
   /** 收件箱响应里给出的翻页游标（给 ⑨ 的传参实验用）。 */
   private static inboxCursor: string = '';
   /** 收件箱响应里的 `prev_cursor` / `prev_cursor_v2`（同样是翻页材料）。 */
@@ -250,6 +277,10 @@ export class MobileProbe {
     if (INBOX_CURSOR_EXPERIMENT && MobileProbe.cursorTries.length > 0) {
       await MobileProbe.inboxPageVariants(identity, MobileProbe.firstThreadId);
     }
+    // ⑩ 端点侦察（**不计入分母**；默认关闭，见 ENDPOINT_SCOUT 的说明）。
+    if (ENDPOINT_SCOUT) {
+      await MobileProbe.scout(identity);
+    }
     MobileProbe.last = `ok=${ok}/${total} info=${MobileProbe.tip(info)} tray=${MobileProbe.tip(tray)}`
       + ` inbox=${MobileProbe.tip(inbox)} self=${MobileProbe.tip(story)}`
       + ` user=${MobileProbe.tipOrSkip(other)} media=${MobileProbe.tipOrSkip(mediaBare)}`
@@ -320,6 +351,17 @@ export class MobileProbe {
     const result: MobileResult = await MobileRequest.send(
       `users/${identity.userId}/info/`, '', '', true, null, MobileProbe.opts());
     MobileProbe.logShape('user_info', result);
+    // 顺手把自己的用户名记下来：侦察 ⑦（`users/{username}/usernameinfo/`）要拿它问一发。
+    const parsed: Record<string, Object> | null = MobileProbe.parse(result.body);
+    if (parsed !== null) {
+      const user: Record<string, Object> | null = MobileProbe.objectOf(parsed['user']);
+      if (user !== null) {
+        const name: string = MobileProbe.firstText(user, ['username']);
+        if (name.length > 0) {
+          MobileProbe.selfUsername = name;
+        }
+      }
+    }
     return result;
   }
 
@@ -872,6 +914,181 @@ export class MobileProbe {
     MobileProbe.shape.push(`parser inbox=ok n=${page.threads.length}`
       + ` first=${page.threads.length > 0 ? page.threads[0].title : '-'}`
       + ` cursor=${page.endCursor.length}b more=${page.hasMore}`);
+  }
+
+  /**
+   * 端点的短预览：值的短预览（见 preview），失败时给 err。
+   *
+   * 侦察报告里"这一发通不通"比什么都重要，所以先写一行结论再写结构树。
+   */
+  private static scoutLine(label: string, result: MobileResult): string {
+    return `${label} ${result.ok ? '✓' : '✗'} ${result.summary()}`;
+  }
+
+  /**
+   * 把一个 JSON 节点按**缩进树**写进侦察行（数组只展开第 0 个元素）。
+   *
+   * 为什么是树而不是 instagrapi 那样直接读字段：解析层要的是"这条路给什么"，
+   * 而 IG 的字段名新旧混杂（`pk` / `id` / `strong_id__`）—— 树能把它们一次摊开，
+   * 不用来回抓包。
+   */
+  private static scoutTree(lines: Array<string>, label: string, node: Object | undefined,
+                           depth: number, maxDepth: number): void {
+    const pad: string = '  '.repeat(depth);
+    if (node === undefined || node === null) {
+      lines.push(`${pad}${label} = null`);
+      return;
+    }
+    if (Array.isArray(node)) {
+      const list: Array<Object> = node as Array<Object>;
+      lines.push(`${pad}${label} [${list.length}]`);
+      if (list.length > 0 && depth < maxDepth) {
+        MobileProbe.scoutTree(lines, '[0]', list[0], depth + 1, maxDepth);
+      }
+      return;
+    }
+    if (typeof node !== 'object') {
+      const text: string = `${node}`;
+      lines.push(`${pad}${label} = ${text.length > 72 ? `${text.substring(0, 72)}…` : text}`);
+      return;
+    }
+    const obj: Record<string, Object> = node as Record<string, Object>;
+    const keys: Array<string> = Object.keys(obj);
+    lines.push(`${pad}${label} {${keys.length}} = [${keys.slice(0, SCOUT_KEYS_PER_LEVEL).join(' ')}]`);
+    if (depth >= maxDepth) {
+      return;
+    }
+    for (let index: number = 0; index < keys.length && index < SCOUT_KEYS_PER_LEVEL; index++) {
+      MobileProbe.scoutTree(lines, keys[index], obj[keys[index]], depth + 1, maxDepth);
+    }
+  }
+
+  /**
+   * 侦察那 7 发（见 ENDPOINT_SCOUT）。
+   *
+   * 每一发都写两样：结论行（ok / err / http / ms / bytes）+ 结构树。
+   * **只读**，不改任何状态；失败也继续往下打（"这条不通"也是结论）。
+   */
+  private static async scout(identity: MobileIdentity): Promise<void> {
+    const lines: Array<string> = [];
+    lines.push(`Instarmony 移动端点侦察 ${MobileProbe.stamp()}`);
+    lines.push(`身份 ${identity.summary()}`);
+    lines.push(`主机 ${MobileSession.host()}`);
+    lines.push('说明：每段 = 一行结论 + 一层缩进树（数组只展开 [0]，最多 '
+      + `${SCOUT_MAX_DEPTH} 层 / 每层 ${SCOUT_KEYS_PER_LEVEL} 键）`);
+    lines.push('');
+    const timezone: string = `${identity.timezoneOffset}`;
+    const sessionId: string = identity.uuid;
+    const selfId: string = identity.userId;
+    const tries: Array<string> = [];
+
+    // ① reels 流：移动端 `clips/home/`（GET 与 POST 各一发，哪种被接受让服务端说话）。
+    const clipsGet: MobileResult = await MobileRequest.send(
+      'clips/home/', '', `max_id=&_uid=${encodeURIComponent(selfId)}`,
+      true, null, MobileProbe.opts());
+    tries.push(MobileProbe.scoutLine('clips/home[GET]', clipsGet));
+    MobileProbe.scoutBody(lines, 'clips/home[GET]', clipsGet);
+
+    const clipsBody: Record<string, Object> = MobileRequest.withExtraData(identity);
+    clipsBody['max_id'] = '';
+    clipsBody['seen_reels'] = '[]';
+    const clipsPost: MobileResult = await MobileRequest.send(
+      'clips/home/', MobileRequest.formOf(clipsBody), '', true, null, MobileProbe.opts());
+    tries.push(MobileProbe.scoutLine('clips/home[POST]', clipsPost));
+    MobileProbe.scoutBody(lines, 'clips/home[POST]', clipsPost);
+
+    // ② 探索/推荐流：instagrapi 的 `explore_page`（`discover/topical_explore/`）。
+    const exploreParams: string = 'is_prefetch=false&omit_cover_media=true&max_id='
+      + '&module=explore_popular&reels_configuration=hide_hero&use_sectional_payload=true'
+      + `&timezone_offset=${encodeURIComponent(timezone)}&cluster_id=${encodeURIComponent('explore_all:0')}`
+      + `&session_id=${encodeURIComponent(sessionId)}&include_fixed_destinations=true`;
+    const explore: MobileResult = await MobileRequest.send(
+      'discover/topical_explore/', '', exploreParams, true, null, MobileProbe.opts());
+    tries.push(MobileProbe.scoutLine('discover/topical_explore', explore));
+    MobileProbe.scoutBody(lines, 'discover/topical_explore', explore);
+
+    // ③ 搜索账号（v2 SERP）：instagrapi 的 `fbsearch_accounts_v2`。
+    const accounts: MobileResult = await MobileRequest.send(
+      'fbsearch/account_serp/', '',
+      `search_surface=account_serp&timezone_offset=${encodeURIComponent(timezone)}`
+      + `&query=${encodeURIComponent(SCOUT_QUERY)}`, true, null, MobileProbe.opts());
+    tries.push(MobileProbe.scoutLine('fbsearch/account_serp', accounts));
+    MobileProbe.scoutBody(lines, 'fbsearch/account_serp', accounts);
+
+    // ④ 搜索账号（老 v1）：instagrapi 的 `search_users`。
+    const users: MobileResult = await MobileRequest.send(
+      'users/search/', '',
+      `search_surface=user_search_page&timezone_offset=${encodeURIComponent(timezone)}&count=30`
+      + `&q=${encodeURIComponent(SCOUT_QUERY)}`, true, null, MobileProbe.opts());
+    tries.push(MobileProbe.scoutLine('users/search', users));
+    MobileProbe.scoutBody(lines, 'users/search', users);
+
+    // ⑤ 搜索帖子（混合 SERP 里的 media_grid）：instagrapi 的 `fbsearch_topsearch_v2`。
+    const top: MobileResult = await MobileRequest.send(
+      'fbsearch/top_serp/', '',
+      `search_surface=top_serp&timezone_offset=${encodeURIComponent(timezone)}`
+      + `&query=${encodeURIComponent(SCOUT_QUERY)}&rank_token=${encodeURIComponent(sessionId)}`,
+      true, null, MobileProbe.opts());
+    tries.push(MobileProbe.scoutLine('fbsearch/top_serp', top));
+    MobileProbe.scoutBody(lines, 'fbsearch/top_serp', top);
+
+    // ⑥ 主页格子：instagrapi 的 `user_medias`（`feed/user/{pk}/`）。
+    const grid: MobileResult = await MobileRequest.send(
+      `feed/user/${selfId}/`, '', 'count=12', true, null, MobileProbe.opts());
+    tries.push(MobileProbe.scoutLine('feed/user/{self}', grid));
+    MobileProbe.scoutBody(lines, 'feed/user/{self}', grid);
+
+    // ⑦ **按用户名**取资料：instagrapi 的 `user_info_by_username`
+    //    （`users/{username}/usernameinfo/`）—— 别人主页只有用户名时走这一条。
+    //    用户名从 ① 那一发的响应里现取（写死会随账号失效）。
+    if (MobileProbe.selfUsername.length > 0) {
+      const byName: MobileResult = await MobileRequest.send(
+        `users/${encodeURIComponent(MobileProbe.selfUsername)}/usernameinfo/`, '', '',
+        true, null, MobileProbe.opts());
+      tries.push(MobileProbe.scoutLine('users/{username}/usernameinfo', byName));
+      MobileProbe.scoutBody(lines, 'users/{username}/usernameinfo', byName);
+    } else {
+      lines.push('');
+      lines.push('users/{username}/usernameinfo 跳过（没从 user_info 里读到自己的用户名）');
+    }
+
+    lines.push('');
+    lines.push('== 结论一览 ==');
+    for (let index: number = 0; index < tries.length; index++) {
+      lines.push(tries[index]);
+      hilog.info(DOMAIN, TAG, 'scout %{public}s', tries[index]);
+    }
+    MobileProbe.writeScout(lines);
+  }
+
+  /** 侦察的正文：一段结论 + 一棵结构树。 */
+  private static scoutBody(lines: Array<string>, label: string, result: MobileResult): void {
+    lines.push('');
+    lines.push(`---- ${label} ----`);
+    lines.push(MobileProbe.scoutLine(label, result));
+    if (!result.ok || result.body.length === 0) {
+      return;
+    }
+    const parsed: Record<string, Object> | null = MobileProbe.parse(result.body);
+    if (parsed === null) {
+      lines.push(`（响应不是 JSON，前 120 字）${result.body.substring(0, 120)}`);
+      return;
+    }
+    MobileProbe.scoutTree(lines, 'root', parsed, 0, SCOUT_MAX_DEPTH);
+  }
+
+  /** 侦察结论落盘（单独一份文件，不挤占常规自检报告）。 */
+  private static writeScout(lines: Array<string>): void {
+    const context: common.UIAbilityContext | null = MobileProbe.context;
+    if (context === null) {
+      return;
+    }
+    try {
+      const path: string = InstagramProbe.dumpFixed(context, 'Instarmony_scout', lines.join('\n'));
+      hilog.info(DOMAIN, TAG, 'scout report written %{public}s lines=%{public}d', path, lines.length);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'scout report failed: %{public}s', (error as Error).message);
+    }
   }
 
   /**

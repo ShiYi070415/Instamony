@@ -27,6 +27,8 @@ import { NativeFeed } from './NativeFeed';
 import { RestSession } from './RestSession';
 import { SearchCache } from './SearchCache';
 import { ApiThrottle } from './ApiThrottle';
+import { SessionGate } from './SessionGate';
+import { MobileDiscover, MobileMediaPage, MobileUserPage } from './mobileapi/MobileDiscover';
 import { SearchPost, SearchUser } from '../model/Search';
 
 const DOMAIN: number = 0xFF00;
@@ -234,6 +236,13 @@ export class NativeSearch {
    * 进程级即可：换一次会话/重启就重新试一遍。
    */
   private static pageSizeRejected: boolean = false;
+  /**
+   * 推荐网格**第一页是不是移动端探索流给的**（见 recommendedViaMobile）。
+   *
+   * 为什么记：两种路的游标互不通用（移动端是 `max_id` 长串，模板那条是 GraphQL 的
+   * `page_info.end_cursor`）。翻页时要照着**给游标的那条路**回去，否则第二页必空。
+   */
+  private static mobileUsable: boolean = false;
 
   static lastSource(): string {
     return NativeSearch.source;
@@ -299,6 +308,24 @@ export class NativeSearch {
   }
 
   /**
+   * 推荐流现在**有没有可用的来源**：抓到的模板，或者移动端探索流。
+   *
+   * 为什么单独加一个（而不是改 `hasRecommendedTemplate`）：名字要如实。调用方（SearchViewModel）
+   * 那几处判断问的其实是"推荐流现在读不读得出来" —— 而移动端那条**不需要任何模板**，
+   * 只要会话在就能出数据。不改判据的话，冷启动（还没抓过模板）会被直接跳过：
+   * 用户进搜索页看到的是"还没有推荐数据（去探针面板点…）"，新加的移动端路径等于白加；
+   * 更糟的是它还会去跑 `coldTemplateCapture()`（导航隐藏网页十几秒），正是"进搜索页就卡住"。
+   */
+  static hasRecommendedSource(): boolean {
+    return NativeSearch.hasRecommendedTemplate() || NativeSearch.mobileRecommendedUsable();
+  }
+
+  /** 移动端探索流这条现在能不能试（要登录：没会话时发出去只会拿到 no-session）。 */
+  static mobileRecommendedUsable(): boolean {
+    return SessionGate.isSignedIn();
+  }
+
+  /**
    * 搜账号（原生直发）。
    *
    * @param query 这次要搜的词。
@@ -315,6 +342,17 @@ export class NativeSearch {
 
   static async searchUsers(query: string, prevQuery: string): Promise<Array<SearchUser> | null> {
     NativeSearch.viaRest = false;
+    /*
+     * **① 移动端 `fbsearch/account_serp/` 优先**（instagrapi 的 `fbsearch_accounts_v2`）。
+     *
+     * 为什么排第一：这条**不需要任何模板**（模板要"先在网页里搜一次"才抓得到，冷启动时往往没有），
+     * 实测 32KB / 1.9s，而模板那条是几百 KB 的 GraphQL。走通它，搜索页一进去就有账号结果。
+     * 失败（无会话 / 被限流 / 形状变了）再落到原来那两条路，行为不变。
+     */
+    const viaMobile: Array<SearchUser> | null = await NativeSearch.searchUsersViaMobile(query);
+    if (viaMobile !== null) {
+      return viaMobile;
+    }
     const op: string = NativeSearch.resultsOp();
     if (op.length === 0) {
       /*
@@ -505,6 +543,19 @@ export class NativeSearch {
    *      —— 同样是原生 HTTP，不需要新模板（信息流模板本来就有）。
    */
   static async recommendedPage(cursor: string): Promise<SearchPostPage | null> {
+    /*
+     * **⓪ 移动端探索流优先**（`discover/topical_explore/`，见 core/mobileapi/MobileDiscover）。
+     *
+     * 用户要求的两件事都在这一步：
+     *   1) "搜索推荐流和 reels 的 http 请求应该不是同一个" —— 探索流是它**自己**那一发，
+     *      以前没有探索模板时会退到 `CLIPS_HINTS`（那就是 reels 的 `ClipsTabRoot`，
+     *      所以两个页面显示同一批内容）；
+     *   2) 速度 —— 不用等模板、不用导航网页，冷启动第一页就是原生直发。
+     */
+    const viaMobile: SearchPostPage | null = await NativeSearch.recommendedViaMobile(cursor);
+    if (viaMobile !== null) {
+      return viaMobile;
+    }
     if (cursor.length > 0) {
       // 翻页：**必须用第一页那条模板**（游标是那条查询给的，换一条就是另一条查询了）。
       const op: string = NativeSearch.chosenOp.length > 0 ? NativeSearch.chosenOp
@@ -1056,6 +1107,75 @@ export class NativeSearch {
       seen.push(mapped.code);
       posts.push(mapped);
     }, (): boolean => posts.length >= MAX_POSTS);
+    return posts;
+  }
+
+  /**
+   * 移动端探索流那一发（推荐网格的**首选**路，见 recommendedPage）。
+   *
+   * 翻页规则：只有当**第一页确实来自移动端**（`mobileUsable`）时，才承认调用方给的游标是
+   * 移动端的游标 —— 两种路的游标互不通用，拿错只会白打一发并报"读取失败"。
+   */
+  private static async recommendedViaMobile(cursor: string): Promise<SearchPostPage | null> {
+    if (cursor.length > 0 && !NativeSearch.mobileUsable) {
+      return null;
+    }
+    const page: MobileMediaPage | null = await MobileDiscover.explore(cursor, ApiThrottle.interactive());
+    if (page === null) {
+      if (cursor.length === 0) {
+        NativeSearch.mobileUsable = false;
+        NativeSearch.diag.push('mobile explore -> miss');
+      }
+      return null;
+    }
+    const posts: Array<SearchPost> = NativeSearch.postsFromMedias(page.medias);
+    NativeSearch.diag.push(`mobile explore -> medias=${page.medias.length} posts=${posts.length}`
+      + ` more=${page.hasMore} ms=${page.ms}`);
+    hilog.info(DOMAIN, TAG, 'recommend mobile medias=%{public}d posts=%{public}d more=%{public}s ms=%{public}d',
+      page.medias.length, posts.length, `${page.hasMore}`, page.ms);
+    if (posts.length === 0) {
+      return null;
+    }
+    NativeSearch.mobileUsable = true;
+    NativeSearch.chosenOp = '';
+    NativeSearch.source = 'mobile:topical_explore';
+    return new SearchPostPage(posts, page.nextCursor, page.hasMore, NativeSearch.source);
+  }
+
+  /** 移动端账号搜索那一发（见 searchUsers 的 ①）。 */
+  private static async searchUsersViaMobile(query: string): Promise<Array<SearchUser> | null> {
+    const page: MobileUserPage | null = await MobileDiscover.accounts(query, '',
+      ApiThrottle.interactive());
+    if (page === null || page.users.length === 0) {
+      return null;
+    }
+    NativeSearch.source = 'mobile:account_serp';
+    hilog.info(DOMAIN, TAG, 'search mobile q=%{public}s users=%{public}d ms=%{public}d',
+      query, page.users.length, page.ms);
+    return page.users;
+  }
+
+  /**
+   * **原始媒体节点**（移动端探索流 / 搜索帖子那两条路给的）→ 界面要的 `SearchPost`。
+   *
+   * 复用 `postOf`（它已经处理多图兜底与展示档封面），所以两条路的字段语义完全一致 ——
+   * 以后改映射只改一处。
+   */
+  static postsFromMedias(medias: Array<Object>): Array<SearchPost> {
+    const posts: Array<SearchPost> = [];
+    const seen: Array<string> = [];
+    for (let index: number = 0; index < medias.length && posts.length < MAX_POSTS; index++) {
+      const node: Record<string, Object> | null = JsonRead.asRecord(medias[index]);
+      if (node === null) {
+        continue;
+      }
+      const mapped: SearchPost | null = NativeSearch.postOf(node);
+      if (mapped === null || seen.indexOf(mapped.code) >= 0) {
+        continue;
+      }
+      seen.push(mapped.code);
+      posts.push(mapped);
+    }
     return posts;
   }
 

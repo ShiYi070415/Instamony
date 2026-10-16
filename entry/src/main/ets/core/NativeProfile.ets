@@ -27,6 +27,8 @@ import { JsonRead } from './JsonRead';
 import { MediaQuality, PickedMedia } from './MediaQuality';
 import { NativeFeed } from './NativeFeed';
 import { InstagramCookieJar, InstagramCookieSnapshot } from './InstagramCookieJar';
+import { ApiThrottle } from './ApiThrottle';
+import { MobileProfile, MobileUserBody, MobileGridPage } from './mobileapi/MobileProfile';
 import { ProfileHeader, ProfilePost, ProfilePostsPage } from '../model/Profile';
 
 const DOMAIN: number = 0xFF00;
@@ -312,6 +314,28 @@ export class NativeProfile {
 
   /** 拉一次个人页头部（拿不到就 null）。 */
   static async fetchHeader(target: ProfileTarget = ProfileTarget.self()): Promise<ProfileHeader | null> {
+    /*
+     * **① 移动端优先**（instagrapi 的 `user_info_v1` / `user_info_by_username_v1`）。
+     *
+     * 实测：`users/{pk}/info/` 是几百毫秒的一发小请求，而模板那条（`PolarisProfilePageContentQuery`）
+     * 是几百 KB 的重查询、还得先有模板。用户要求"主页数据加载速度提升"，这一发就是那个提升点。
+     * 本人这一路也要先把 id 读出来（Cookie 里的 `ds_user_id`，见 ownId）。
+     */
+    let uid: string = target.id;
+    if (uid.length === 0 && target.isSelf()) {
+      uid = await NativeProfile.ownId();
+    }
+    const mobile: MobileUserBody | null = await MobileProfile.info(uid, target.username,
+      ApiThrottle.interactive());
+    if (mobile !== null) {
+      const mapped: ProfileHeader | null = NativeProfile.headerFromUser(mobile.user);
+      if (mapped !== null) {
+        hilog.info(DOMAIN, TAG, 'header via mobile user=%{public}s ms=%{public}d bytes=%{public}d',
+          mapped.username, mobile.ms, mobile.bytes);
+        return mapped;
+      }
+      hilog.info(DOMAIN, TAG, 'header mobile shape unusable, falling back to template');
+    }
     const result: NativeProfileResult = await NativeProfile.post(NativeProfile.OP_HEADER, '', target);
     if (!result.ok) {
       hilog.warn(DOMAIN, TAG, 'header http failed: %{public}s', result.detail);
@@ -323,12 +347,60 @@ export class NativeProfile {
   /** 拉一页网格（拿不到就 null）。 */
   static async fetchPosts(op: string, after: string,
                           target: ProfileTarget = ProfileTarget.self()): Promise<ProfilePostsPage | null> {
+    /*
+     * **① 移动端优先** —— 只对"帖子"这一段（`OP_POSTS`）。
+     *
+     * 为什么只认这一段：`feed/user/{pk}/` 给的就是**帖子网格**；视频 / 收藏 / 被标注那三段是另外
+     * 三条 GraphQL 查询（`PolarisProfileReelsTabContentQuery` 等），移动端没有等价物，
+     * 换了会拿错内容。目标 id 不知道时（别人主页只给了用户名、本人又还没读出 id）也不能走 ——
+     * 这条路的路径参数必须是真的数字 id。
+     */
+    if (op === NativeProfile.OP_POSTS) {
+      let uid: string = target.id;
+      if (uid.length === 0 && target.isSelf()) {
+        uid = await NativeProfile.ownId();
+      }
+      if (uid.length > 0) {
+        const page: MobileGridPage | null = await MobileProfile.medias(uid, after, undefined,
+          ApiThrottle.interactive());
+        if (page !== null) {
+          const posts: Array<ProfilePost> = NativeProfile.postsFromItems(page.items);
+          hilog.info(DOMAIN, TAG,
+            'posts via mobile uid=%{public}s items=%{public}d posts=%{public}d more=%{public}s ms=%{public}d',
+            uid, page.items.length, posts.length, `${page.hasMore}`, page.ms);
+          // 移动端与 GraphQL 的游标互不通用，但**这一路我们只走移动端**（同一条路自己的游标），
+          // 所以直接把它的 `next_max_id` 交给上层即可。
+          return new ProfilePostsPage(posts, page.nextCursor, page.hasMore);
+        }
+      }
+    }
     const result: NativeProfileResult = await NativeProfile.post(op, after, target);
     if (!result.ok) {
       hilog.warn(DOMAIN, TAG, 'posts http failed op=%{public}s: %{public}s', op, result.detail);
       return null;
     }
     return NativeProfile.postsOf(result.text);
+  }
+
+  /**
+   * **原始媒体节点**（移动端 `feed/user/{pk}/` 的 `items`）→ 网格用的 `ProfilePost`。
+   *
+   * 复用 `postOf`（封面挑 360 档、多图收子媒体、视频档位…都在里面），所以移动端与模板那条路
+   * 出来的卡片字段完全一致 —— 界面与帖子页都不用区分数据是哪条路来的。
+   */
+  static postsFromItems(items: Array<Object>): Array<ProfilePost> {
+    const posts: Array<ProfilePost> = [];
+    for (let index: number = 0; index < items.length; index++) {
+      const node: Record<string, Object> | null = NativeProfile.asRecord(items[index]);
+      if (node === null) {
+        continue;
+      }
+      const post: ProfilePost | null = NativeProfile.postOf(node);
+      if (post !== null) {
+        posts.push(post);
+      }
+    }
+    return posts;
   }
 
   /**
@@ -498,12 +570,27 @@ export class NativeProfile {
     if (user === null) {
       return null;
     }
+    return NativeProfile.headerFromUser(user);
+  }
+
+  /**
+   * **一个 user 对象** → 头部（GraphQL 与移动端 `users/{id}/info/` 共用这一份映射）。
+   *
+   * 两个形状的字段名基本一致（`follower_count` / `media_count` / `hd_profile_pic_url_info` /
+   * `friendship_status.following`），移动端那几个计数在 `user` 上就带着 —— 所以同一段逻辑
+   * 两边都能用，只有头像那两处兜底不同（见下面 `profile_pic_url_hd`）。
+   */
+  static headerFromUser(user: Record<string, Object>): ProfileHeader | null {
     const username: string = NativeProfile.strOf(user, 'username');
     if (username.length === 0) {
       return null;
     }
     const hd: Record<string, Object> | null = NativeProfile.recordOf(user, 'hd_profile_pic_url_info');
-    const avatar: string = hd === null ? '' : NativeProfile.strOf(hd, 'url');
+    let avatar: string = hd === null ? '' : NativeProfile.strOf(hd, 'url');
+    if (avatar.length === 0) {
+      // 移动端这条把高清头像直接挂在 user 上（`profile_pic_url_hd`），GraphQL 那条没有。
+      avatar = NativeProfile.strOf(user, 'profile_pic_url_hd');
+    }
     // 关注状态：`friendship_status.followed_by_viewer`（新版把 `followed_by_viewer` 直接挂在
     // user 上，两处都读一次 —— 少了它，用户主页那颗按钮就永远是"关注"）。
     // 关注状态：**真机上这个字段叫 `friendship_status.following`**（探针实测的键：

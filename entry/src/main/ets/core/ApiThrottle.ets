@@ -219,15 +219,32 @@ export class ApiThrottle {
   /**
    * 这段响应/诊断里是不是"被限流"了。
    *
-   * 两个判据都留着：IG 的文案是英文的 `Rate limit exceeded`（大小写不保证），
-   * 而 `1675004` 是这个错误的稳定 code —— 文案被本地化/改写时还能认出来。
+   * 判据要**稳**，因为误判的代价是 12 分钟冷却（reels / 搜索推荐整条路一起哑掉）：
+   *   · `1675004` 是 IG 那条错误的稳定 code（文案被本地化/改写时还能认出来）；
+   *   · `rate_limit_error` 是 `error_type` 的取值；
+   *   · 光看 `"rate limit"` 字面**不够** —— 整页 HTML、无关文案里都可能出现（真机日志里
+   *     reels 预热就是这么被打上冷却的：响应其实是一份别的东西）。所以只有它出现在 IG 的
+   *     错误结构里（`"message"` / `"error_type"` / `"errors"` / `"severity"` 附近）才算。
    */
   static looksLimited(text: string): boolean {
     if (text.length === 0) {
       return false;
     }
+    if (text.indexOf('1675004') >= 0) {
+      return true;
+    }
     const lower: string = text.toLowerCase();
-    return lower.indexOf('rate limit') >= 0 || text.indexOf('1675004') >= 0;
+    if (lower.indexOf('rate_limit_error') >= 0) {
+      return true;
+    }
+    const hit: number = lower.indexOf('rate limit');
+    if (hit < 0) {
+      return false;
+    }
+    const from: number = hit > 80 ? hit - 80 : 0;
+    const around: string = lower.substring(from, hit + 60);
+    return around.indexOf('"message"') >= 0 || around.indexOf('"error_type"') >= 0
+      || around.indexOf('"errors"') >= 0 || around.indexOf('"severity"') >= 0;
   }
 
   /** 记一次限流：这个家族在 BACKOFF_MS 之内不再发请求。 */
