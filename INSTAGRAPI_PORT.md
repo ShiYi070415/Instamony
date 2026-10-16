@@ -427,23 +427,40 @@ MobileDirect: thread ok id=…363010 msgs=20 raw=21 older=true with=meowlok0w0
 - 顺带说明：会话页每 4 秒轮询一次（`DirectThreadViewModel.THREAD_POLL_MS`）是**既有设计**，
   不是新路径引入的循环。
 
-**未解（留给下一步）：收件箱翻页游标。**
+**收件箱翻页游标：已解开**（`MobileProbe.inboxPageVariants`，2026-10-17）。
 `inbox.next_cursor` **不是字符串**，是结构
 `{cursor_thread_v2_id, cursor_timestamp_seconds, cursor_relevancy_score, cursor_primary_sort_id}`
-（旁边还有 `prev_cursor` / `prev_cursor_v2` / `prev_cursor_type=PAGING`）。四种传法实测：
+（旁边还有 `prev_cursor` / `prev_cursor_v2` / `prev_cursor_type=PAGING`）。判据是**回来的第一会话 id
+是否与上一页不同**（只看状态码会被"原地打转"骗过去）。逐个试的结果：
 
 | 传法 | 结果 |
 | --- | --- |
-| `?cursor=<JSON>` | **400** `Invalid Inbox Cursor: The cursor parameter passed in the Inbox API is not valid. Please refresh your Inbox.` |
-| `?cursor=<cursor_thread_v2_id>` | **400**（同上） |
-| `?cursor=<prev_cursor>` / `<prev_cursor_v2>` | **400**（同上） |
-| `?cursor_v2=<JSON>` / `?max_id=<JSON>` | 200，但**又是第一页**（比对首页 thread_id 完全一致）→ 参数被忽略 |
+| `?cursor=<oldest_cursor>`（105 字符串） | **200 且真的换了页**（n=20，第一会话变了）✓ |
+| `?cursor=<prev_cursor>`（同一串值） | 同样 200/NEW ✓ |
+| `?cursor=<next_cursor>`（180 结构体） | **400** `Invalid Inbox Cursor: The cursor parameter passed in the Inbox API is not valid.` |
+| `?cursor=<prev_cursor_v2>`（81） | 400（同上） |
+| `cursor=<…>` 放在**表单体**里 | 200，但**又是第一页**（参数被忽略） |
+| `?cursor_v2=…` / `?max_id=…` | 200，但**又是第一页**（参数被忽略） |
 
-所以在解出正确形态之前：`MobileDirect.inbox` **只做第一页**（`cursor` 非空直接让位给老路径），
-并把 `hasMore` 报成 false（常量 `MOBILE_INBOX_CURSOR_USABLE`）—— 不让界面拿着不合法游标连打四发
-（16:12 的日志就是这么打的），也不把"原地打转"当成翻页成功。
-实验本身留在探针里（`MobileProbe.inboxPageVariants`，由 `INBOX_CURSOR_EXPERIMENT` 控制，**默认关**：
-它的结论已经拿到，留在自检里每次启动都白打六发、白推限流窗口）。下次有想法把它打开、加一种传法再跑一遍即可。
+⇒ 实现：`MobileDirect.withCursor` 只认 `oldest_cursor` / `prev_cursor`（`CURSOR_KEYS`），
+游标**只走查询串**，`MOBILE_INBOX_CURSOR_USABLE` 已打开。
+真机验证（18:39）：连续 4 页 `req cursorLen=105/105/106/106`，第一会话依次为
+`MeowlokHongKong → 𝐀𝐁𝐁𝐘❀ → choy → Nulla`，列表从 20 条长到 80 条，日期一路回到 9 月。
+实验本身留在探针里（`INBOX_CURSOR_EXPERIMENT`，**默认关**：结论已拿到，不必每次开机白打六发）。
+
+### 9.7 私信体验：feeds 页预取 + 上拉翻页（用户报的两个问题）
+
+1. **列表加载慢 → 在 feeds 页预取**：
+   `Index.warmOtherTabs` 开头起一发 `directVm.load(false)`，**与后面的预热链并行、不等它**
+   （挂在链尾要 30 秒开外，用户早就点进私信了）。`directVm` 与 `DirectPage` 是**同一个实例**，
+   所以预取结果直接成为用户切过去时的第一屏。
+   配套：`DirectViewModel.loadedAtMs` + `isFresh(2 分钟)`；`DirectPage.aboutToAppear` 先
+   `syncFromVm()`，**新鲜就不再重拉**（状态行显示「已加载（feeds 页已预热）」）。
+   实测：`Ability onCreate` 之后 **10.2 秒**预热完成（`direct prefetch done n=20`），
+   16 秒时切到私信页 → 列表已就绪、状态行显示"已预热"。
+2. **滑到底拉不出更多 → 修好**：根因就是上面那条游标（修之前移动端如实报 `hasMore=false`，
+   触底哨兵因此一次都不触发）。修完触底即翻页，`more` 由服务端继续给 `oldest_cursor` 决定何时到底。
+
 
 ---
 

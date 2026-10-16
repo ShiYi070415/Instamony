@@ -2133,6 +2133,22 @@ struct Index {
     this.warmStarted = true;
     await this.delay(WARM_START_DELAY_MS);
     /*
+     * **私信收件箱：与下面的预热链并行、且不等它**（用户报："私信列表加载的有点慢，
+     * 可以在 feeds 流界面预取"）。
+     *
+     * 为什么并行而不是挂在链里：那条链一步接一步（托盘 → 通知 → reels → 搜索 → 我的 →
+     * 搜索体检），全部走完实测要 30 秒开外 —— 挂在链尾等于"用户早就点进私信了，预热才刚开始"。
+     * 收件箱那一发（≈800KB）不依赖链上任何一步，也不和它们抢同一条传输通道（它们是网页那条路），
+     * 所以这里直接起一发、**不等**：
+     *   · 成功：`directVm` 里就有数据了（同一个实例，见 `directPage()`），
+     *     用户切过去时 `DirectPage.aboutToAppear` 走 `syncFromVm()` + `isFresh()`，**零等待**；
+     *   · 失败/太慢：用户切过去时那条链会自己走一遍（`isFresh` 判 false），行为与以前一致。
+     */
+    this.directVm.load(false).then((): void => {
+      hilog.info(DOMAIN, TAG, 'direct prefetch done n=%{public}d', this.directVm.list().length);
+    }).catch((): void => {
+    });
+    /*
      * 0) **限时快拍托盘**（需求："快拍功能在启动 app 时预加载，和 feeds 流一样"）。
      *
      * 以前托盘是等它自己挂载后才去取数（首屏能看到"空一拍再长出来"），这里跟着 feeds 的预热链
@@ -2175,6 +2191,11 @@ struct Index {
     await this.warmStep('search', (): boolean => this.searchVm.postList().length > 0,
       (): Promise<void> => {
         return this.searchVm.warm();
+      });
+    // 4) 我的。
+    await this.warmStep('profile', (): boolean => this.profileVm.postsNow().length > 0,
+      (): Promise<void> => {
+        return this.profileVm.load(true);
       });
     // 4) 我的。
     await this.warmStep('profile', (): boolean => this.profileVm.postsNow().length > 0,

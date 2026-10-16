@@ -35,14 +35,23 @@ const INBOX_PAGE_SIZE: number = 20;
 const THREAD_MESSAGE_LIMIT: number = 10;
 /** 打开一条会话时先取几条消息（instagrapi 的 `amount`，默认 20）。 */
 const THREAD_PAGE_SIZE: number = 20;
-/** 翻页游标的候选键（顺序即优先级）；**只看 `inbox` 自己这一层**，别钻进 threads 里。 */
-const CURSOR_KEYS: Array<string> = ['next_max_id', 'next_cursor', 'cursor', 'oldest_cursor'];
 /**
- * 移动端收件箱的翻页游标**是否已解出可用形态**（见 `withCursor` 里的实测表）。
+ * 翻页游标的候选键（顺序即优先级）；**只看 `inbox` 自己这一层**，别钻进 threads 里。
  *
- * 解出之前保持 false：移动端只给第一页，界面不会去点"加载更多"白打请求。
+ * 实测（`MobileProbe.inboxPageVariants`，2026-10-17）：
+ *   · `oldest_cursor`（105 字符串）→ **200，且真的换了页**（回来的第一会话与第一页不同，n=20）；
+ *   · `prev_cursor`（同一条 105 字符串）→ 同样 200/NEW；
+ *   · `next_cursor`（180 的结构体）→ **400** `Invalid Inbox Cursor…`；
+ *   · `prev_cursor_v2`（81）→ 400；表单体里带游标 → 200 但**又是第一页**（参数被忽略）。
+ * 所以只认前两个（它们其实是同一串值），别的键一个都不能用。
  */
-const MOBILE_INBOX_CURSOR_USABLE: boolean = false;
+const CURSOR_KEYS: Array<string> = ['oldest_cursor', 'prev_cursor'];
+/**
+ * 移动端收件箱的翻页游标**是否已解出可用形态** —— 已解出（见上面实测），所以打开。
+ *
+ * 关掉它 = 移动端只给第一页（界面不会去点"加载更多"）；调试时想退回那个状态就改这里。
+ */
+const MOBILE_INBOX_CURSOR_USABLE: boolean = true;
 
 export class MobileDirect {
   /**
@@ -51,18 +60,6 @@ export class MobileDirect {
    * @param cursor 上一页的游标（空串 = 第一页）
    */
   static async inbox(cursor: string = ''): Promise<DirectInboxPage | null> {
-    /*
-     * **翻页暂时不归这条路管**（`cursor` 非空时直接让位给老路径）。
-     *
-     * 实测：把响应里的 `inbox.next_cursor` 放进 `cursor` 参数会被 IG 回
-     * `400 Invalid Inbox Cursor: The cursor parameter passed in the Inbox API must be …`
-     * —— 界面"加载更多"于是连续失败 4 次再退回模板那条路（真机日志 16:12:20 起）。
-     * 正确传参由 `MobileProbe.inboxPageVariants` 的三种传法实验给出（见自检报告），
-     * 定下来之前**宁可少翻一页，也不要每次点"加载更多"都白打四发**。
-     */
-    if (cursor.length > 0) {
-      return null;
-    }
     const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
     if (identity === null) {
       hilog.info(DOMAIN, TAG, 'inbox skipped: no session');
@@ -73,10 +70,16 @@ export class MobileDirect {
     data['thread_message_limit'] = THREAD_MESSAGE_LIMIT;
     data['persistentBadging'] = 'true';
     data['limit'] = INBOX_PAGE_SIZE;
-    // 游标**只走查询串**：上一版查询串与表单体一起放，IG 报 Invalid Inbox Cursor
-    // （自检报告里的三种传法实验就是为这件事做的）。
-    const query: string = 'visual_message_return_type=unseen'
+    /*
+     * 游标**只走查询串**（实测：表单体里带 `cursor` 会被忽略 —— 回 200 但又是第一页，
+     * 这种"原地打转"最坑，翻页看着成功、内容一模一样）。参数名就用 `cursor`，
+     * 值取响应里的 `oldest_cursor`（见 CURSOR_KEYS 的实测表）。
+     */
+    let query: string = 'visual_message_return_type=unseen'
       + `&thread_message_limit=${THREAD_MESSAGE_LIMIT}&persistentBadging=true&limit=${INBOX_PAGE_SIZE}`;
+    if (cursor.length > 0) {
+      query += `&cursor=${encodeURIComponent(cursor)}`;
+    }
     const result: MobileResult = await MobileRequest.send(
       'direct_v2/inbox/', MobileRequest.formOf(data), query, true, null,
       new MobileOptions(ApiThrottle.DIRECT, ApiThrottle.warm()));
@@ -84,6 +87,9 @@ export class MobileDirect {
       hilog.warn(DOMAIN, TAG, 'inbox failed: %{public}s', result.summary());
       return null;
     }
+    // 请求带没带游标、翻页回来的第一会话是谁 —— 排查"加载更多到底动没动"就看这一行。
+    hilog.info(DOMAIN, TAG, 'inbox req cursorLen=%{public}d bytes=%{public}d',
+      cursor.length, result.bytes);
     const page: DirectInboxPage | null = DirectMapper.inboxFromRestJson(result.body);
     if (page === null) {
       hilog.warn(DOMAIN, TAG, 'inbox parse failed bytes=%{public}d head=%{public}s',
@@ -166,48 +172,28 @@ export class MobileDirect {
   }
 
   /**
-   * 用**响应里真正存在的**游标键补一个 `DirectInboxPage`。
+   * 用**响应里真正可用的**游标键补一个 `DirectInboxPage`。
    *
-   * 实测（`MobileProbe.inboxPageVariants` 的四种传法实验，2026-10-16）：
-   *   · 移动端收件箱响应里的翻页材料**不是字符串**：
-   *     `inbox.next_cursor` 是 `{cursor_thread_v2_id, cursor_timestamp_seconds,
-   *     cursor_relevancy_score, cursor_primary_sort_id}`，旁边还有 `prev_cursor` /
-   *     `prev_cursor_v2` / `prev_cursor_type=PAGING`；
-   *   · 这几种形态**都进不了 `cursor` 参数**：
-   *     `cursor=<JSON>` / `cursor=<cursor_thread_v2_id>` / `cursor=<prev_cursor>` → **400**
-   *     （IG 原话：`Invalid Inbox Cursor: The cursor parameter passed in the Inbox API is not valid.
-   *     Please refresh your Inbox.`）；而 `cursor_v2=…` / `max_id=…` 被**忽略**——
-   *     回 200 但**又是第一页**（比对首页 thread_id 完全一致）。
-   *   ⇒ 在解出正确形态之前：**只认字符串游标**（老路那种 `next_max_id`），
-   *     拿不到就如实报 `hasMore=false`。宁可"这次没有更多"，也不要让界面拿着一个
-   *     不合法游标连打四发（真机日志 16:12:20 就是这么打的），更不要把"原地打转"
-   *     当成翻页成功、把同一页塞两遍。
+   * 实测（`MobileProbe.inboxPageVariants`，2026-10-17；判据是"回来的第一会话 id 是否与上一页不同"）：
+   *   · `cursor=<oldest_cursor>`（105 字符串）→ **200 且真的换了页**（n=20，第一会话不同）✓
+   *   · `cursor=<prev_cursor>`（同一串值）→ 同样 200/NEW ✓
+   *   · `cursor=<next_cursor>`（180 的结构体 `{cursor_thread_v2_id,…}`）→ **400**
+   *     `Invalid Inbox Cursor: The cursor parameter passed in the Inbox API is not valid.`
+   *   · `cursor=<prev_cursor_v2>`（81）→ 400；表单体里带 `cursor` → 200 但**又是第一页**（被忽略）。
+   *
+   * 所以：只认 `oldest_cursor` / `prev_cursor`，并且**必须放在查询串里**。
+   * 另外那句 400 的教训值得记着：**200 不等于翻页成功** —— IG 对不认识的游标会原样再给第一页，
+   * 只看状态码会把"原地打转"当成功、把同一页塞两遍。
    */
   private static withCursor(page: DirectInboxPage, body: string): DirectInboxPage {
     if (page.endCursor.length > 0 || !page.hasMore) {
       return page;
     }
-    /*
-     * 移动端收件箱的游标**目前一个都不能用**（见上面那段实测表），所以这里直接如实收尾：
-     * `hasMore=false`。
-     *
-     * 为什么不留着 `oldest_cursor`（它确实是字符串，105 字符，看着像游标）：
-     * 界面拿到它就会去发"加载更多" —— 移动端这条路又拒（游标未解）、老路那条 REST 用
-     * 安卓身份是 **404 not-logged-in**，等于每次点"加载更多"白打一发、还把 DIRECT 家族的
-     * 限流窗口往前推（`ApiThrottle` 那条设计就是为这个存在的）。宁可这次先"没有更多"。
-     *
-     * 等哪天把游标形态解开了（探针 `MobileProbe.inboxPageVariants` 里加一种传法再跑一遍即可），
-     * 把 `MOBILE_INBOX_CURSOR_USABLE` 打开就恢复翻页 —— 不用改别的任何地方。
-     */
     if (!MOBILE_INBOX_CURSOR_USABLE) {
+      // 调试开关关掉时（想看"只有第一页"的样子）：如实报没有更多，别让界面空转。
       return new DirectInboxPage(page.threads, '', false);
     }
-    let parsed: Record<string, Object> | null = null;
-    try {
-      parsed = JSON.parse(body) as Record<string, Object>;
-    } catch (error) {
-      parsed = null;
-    }
+    const parsed: Record<string, Object> | null = MobileDirect.parse(body);
     if (parsed === null) {
       return page;
     }
@@ -218,7 +204,7 @@ export class MobileDirect {
     const box: Record<string, Object> = inbox as Record<string, Object>;
     for (let index: number = 0; index < CURSOR_KEYS.length; index++) {
       const value: Object | undefined = box[CURSOR_KEYS[index]];
-      // **只认字符串**：对象/数组正是上面实验里被 400 拒掉的那种形态。
+      // **只认字符串**：结构体那种（`next_cursor`）实测会被 400 拒掉。
       if (value === undefined || value === null || typeof value !== 'string') {
         continue;
       }
@@ -229,8 +215,17 @@ export class MobileDirect {
         return new DirectInboxPage(page.threads, text, true);
       }
     }
-    hilog.info(DOMAIN, TAG, 'inbox cursor unreadable (structural) keys=%{public}s',
+    // 响应里没有可用游标（只有结构体那种）：如实说"没有更多"，别把不合法游标交给界面。
+    hilog.info(DOMAIN, TAG, 'inbox has no usable cursor keys=%{public}s',
       Object.keys(box).join(','));
     return new DirectInboxPage(page.threads, '', false);
+  }
+
+  private static parse(text: string): Record<string, Object> | null {
+    try {
+      return JSON.parse(text) as Record<string, Object>;
+    } catch (error) {
+      return null;
+    }
   }
 }

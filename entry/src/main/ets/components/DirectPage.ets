@@ -28,6 +28,14 @@ const SIDE_PADDING: number = 16;
 const FALLBACK_WIDTH_VP: number = 360;
 /** 时间分档（毫秒）。 */
 const MINUTE_MS: number = 60 * 1000;
+/**
+ * 收件箱"还算新鲜"的窗口（毫秒）：在这个窗口内，进私信页**不再重新拉一次**。
+ *
+ * 见 `DirectViewModel.isFresh` 与 `aboutToAppear` 的说明：feeds 页会提前预热收件箱，
+ * 这个窗口决定"预热来的数据能用多久"。取 2 分钟 —— 盖得住"打开 app → 看一会儿 → 点私信"
+ * 这个真实节奏，又不至于让用户看到明显过期的列表。
+ */
+const PREFETCH_FRESH_MS: number = 2 * MINUTE_MS;
 const HOUR_MS: number = 60 * MINUTE_MS;
 const DAY_MS: number = 24 * HOUR_MS;
 const WEEK_MS: number = 7 * DAY_MS;
@@ -78,6 +86,20 @@ export struct DirectPage {
     };
     // 先回填视图模型里已有的数据（切 tab 会重建这个组件，取数结果留在视图模型里）。
     this.syncFromVm();
+    /*
+     * **数据新鲜就别再拉一次**（用户报的"私信列表加载慢"）。
+     *
+     * feeds 页现在会提前把收件箱预热好（`Index.warmOtherTabs` 的 direct 那一步，同一个 vm 实例），
+     * 切过来时 `syncFromVm()` 已经把列表铺上了 —— 这时再 `load(true)` 等于让用户白等一次网络往返
+     * （而且强制刷新会把游标清掉，用户刚滚出来的"更多"也就没了）。
+     * 判断窗口取 2 分钟：足够盖住"打开 app → 看一会儿 → 点私信"这个真实节奏，
+     * 又不会让用户看到太旧的列表（更旧的情况会照常重新拉）。
+     */
+    if (this.vm.isFresh(PREFETCH_FRESH_MS)) {
+      // 文案与 vm 里那两句（'已加载' / '已加载（首次走网页抓接口）'）同一风格：状态行是诊断性的。
+      this.status = '已加载（feeds 页已预热）';
+      return;
+    }
     // 再拉一次（有模板时是毫秒级回放）；完成后回读一次，避免回调落在已被销毁的实例上。
     this.vm.load(true)
       .then((): void => {

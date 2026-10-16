@@ -69,6 +69,14 @@ export class DirectViewModel {
   private more: boolean = false;
   private busy: boolean = false;
   private usedColdPath: boolean = false;
+  /**
+   * 上次**成功**拉到收件箱的时刻（毫秒；0 = 还没拉到过）。
+   *
+   * 用途：feeds 页会提前把收件箱预热好（见 Index.warmOtherTabs 的 direct 那一步），
+   * 用户切到私信页时 `DirectPage.aboutToAppear` 就能靠它判断"这份数据还新鲜，别再拉一次"——
+   * 否则预热白做，用户还是要等一次网络往返（用户报的"私信列表加载慢"）。
+   */
+  private loadedAtMs: number = 0;
   /** 最近一次失败的原样回报（截断），失败提示里带上它 —— 界面就是排查通道。 */
   private diag: string = '-';
   onThreads: (threads: Array<DirectThread>, hasMore: boolean) => void = (threads: Array<DirectThread>, hasMore: boolean): void => {
@@ -85,6 +93,19 @@ export class DirectViewModel {
   }
   hasMore(): boolean {
     return this.more;
+  }
+
+  /**
+   * 手上这份列表还"新鲜"吗（`maxAgeMs` 之内拉到的，且确实有内容）。
+   *
+   * 给 `DirectPage.aboutToAppear` 用：新鲜就不要立刻再拉一次（预热来的数据直接显示），
+   * 用户下拉刷新那条路（`load(true)`）不受影响。
+   */
+  isFresh(maxAgeMs: number): boolean {
+    if (this.loadedAtMs <= 0 || this.threads.length === 0) {
+      return false;
+    }
+    return Date.now() - this.loadedAtMs <= maxAgeMs;
   }
   /** 拉一次（refresh=true 时丢掉游标从头拉）。 */
   async load(refresh: boolean): Promise<void> {
@@ -107,6 +128,7 @@ export class DirectViewModel {
       this.endCursor = page.endCursor;
       // 没有游标就当到底了：触底哨兵只看 more，不看清游标，会让它一直空转。
       this.more = page.hasMore && page.endCursor.length > 0;
+      this.loadedAtMs = Date.now();
       this.onThreads(this.threads, this.more);
       this.onStatus(this.usedColdPath ? '已加载（首次走网页抓接口）' : '已加载');
     }

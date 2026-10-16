@@ -231,8 +231,14 @@
   generic_xma=1`）。补上映射后同一会话 `msgs=20 raw=21`，分享的 Reel 预览正常显示。
   顺带：`animated_media`（贴纸/GIF，`images.{fixed_height,…}.url`）也补了。
   私信取数同时改走移动端私有 API（`core/mobileapi/MobileDirect`，见 `INSTAGRAPI_PORT.md` 第 9.6 节），
-  收件箱 20 条会话 / 会话 21 条消息；**收件箱翻页游标仍未解**（四种传法均被拒或忽略），
-  目前只做第一页并如实报 `hasMore=false`。
+  收件箱 20 条会话 / 会话 21 条消息。
+  **翻页与预取也做完了**（用户反馈"列表加载慢、滑到底拉不出更多"）：
+  ① 收件箱翻页游标解开了 —— 是 `inbox.oldest_cursor`（105 字符串）**放在查询串**里，
+  `next_cursor`（结构体）/`prev_cursor_v2` 会被 400 拒、放表单体里会被忽略（详见 9.6 的实测表）；
+  真机连续翻 4 页、列表 20 → 80 条，日期回到 9 月；
+  ② feeds 页并行预取收件箱（`Index.warmOtherTabs` 开头起一发、不等它），配合
+  `DirectViewModel.isFresh(2min)` + `DirectPage.aboutToAppear` 的新鲜度判断 ——
+  实测创建后 10.2 秒预取完成，切过去零等待（状态行「已加载（feeds 页已预热）」）。
 - **Reels 视频宽高诊断**（`reel aspect w=… h=… ratio=…`）与**信息流高视频黑底占位**两项没动。
 - **`WebScripts.commentsByReplayScript`**（只在注释里被提到）删前要确认没有按名字间接调用。
 

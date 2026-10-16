@@ -37,6 +37,17 @@ const TAG: string = 'MobileProbe';
  */
 const REPORT_NAME: string = 'Instarmony_mobile';
 
+/** 一条"翻页游标候选"（label 只用于报告）。 */
+class CursorTry {
+  readonly label: string;
+  readonly value: string;
+
+  constructor(label: string, value: string) {
+    this.label = label;
+    this.value = value;
+  }
+}
+
 /** 响应摘要里最多列几个键。 */
 const MAX_KEYS: number = 14;
 /** 摘要里每个值最多留多少字符。 */
@@ -82,6 +93,14 @@ export class MobileProbe {
   /** 收件箱响应里的 `prev_cursor` / `prev_cursor_v2`（同样是翻页材料）。 */
   private static inboxPrevCursor: string = '';
   private static inboxPrevCursorV2: string = '';
+  /**
+   * ⑨ 要试的翻页游标候选（在 `describeInbox` 里按响应现填）。
+   *
+   * 上一轮实验只测了"结构游标整体/其 id 字段/prev_cursor 系列"进 `cursor` 参数 —— 全被 400 或忽略。
+   * 这一轮补上**从没测过**的那几个：`oldest_cursor`（105 字符的字符串，看着最像游标）、
+   * `prev_cursor_v2` 的原始值、以及**表单体里带游标**那种传法。
+   */
+  private static cursorTries: Array<CursorTry> = [];
   /**
    * 启动自检的延迟（毫秒）。
    *
@@ -206,9 +225,8 @@ export class MobileProbe {
       MobileProbe.shape.push('direct thread 跳过（收件箱里没取到 thread_id）');
     }
     // ⑨ 收件箱翻页传参实验（**不计入分母**；默认关闭，见 INBOX_CURSOR_EXPERIMENT 的说明）。
-    if (INBOX_CURSOR_EXPERIMENT && MobileProbe.inboxCursor.length > 0) {
-      await MobileProbe.inboxPageVariants(identity, MobileProbe.inboxCursor,
-        MobileProbe.firstThreadId);
+    if (INBOX_CURSOR_EXPERIMENT && MobileProbe.cursorTries.length > 0) {
+      await MobileProbe.inboxPageVariants(identity, MobileProbe.firstThreadId);
     }
     MobileProbe.last = `ok=${ok}/${total} info=${MobileProbe.tip(info)} tray=${MobileProbe.tip(tray)}`
       + ` inbox=${MobileProbe.tip(inbox)} self=${MobileProbe.tip(story)}`
@@ -496,6 +514,42 @@ export class MobileProbe {
         + ` prev_cursor_type=${MobileProbe.preview(cursorBox['prev_cursor_type'])}`);
       MobileProbe.inboxPrevCursor = MobileProbe.firstText(cursorBox, ['prev_cursor']);
       MobileProbe.inboxPrevCursorV2 = MobileProbe.firstText(cursorBox, ['prev_cursor_v2']);
+      // ⑨ 的候选：把响应里所有"像游标"的东西都排进去，逐个试（见 cursorTries 的说明）。
+      MobileProbe.cursorTries = [];
+      MobileProbe.addCursorTry('oldest_cursor', MobileProbe.firstText(cursorBox, ['oldest_cursor']));
+      MobileProbe.addCursorTry('prev_cursor', MobileProbe.rawTextOf(cursorBox['prev_cursor']));
+      MobileProbe.addCursorTry('prev_cursor_v2', MobileProbe.rawTextOf(cursorBox['prev_cursor_v2']));
+      MobileProbe.addCursorTry('next_cursor', MobileProbe.inboxCursor);
+      MobileProbe.shape.push(`inbox cursor candidates=[${MobileProbe.cursorTries.map(
+        (one: CursorTry): string => `${one.label}:${one.value.length}`).join(' ')}]`);
+    }
+  }
+
+  /** 候选清单里加一条（空值跳过；同名不重复）。 */
+  private static addCursorTry(label: string, value: string): void {
+    if (value.length === 0) {
+      return;
+    }
+    for (let index: number = 0; index < MobileProbe.cursorTries.length; index++) {
+      if (MobileProbe.cursorTries[index].label === label) {
+        return;
+      }
+    }
+    MobileProbe.cursorTries.push(new CursorTry(label, value));
+  }
+
+  /** 一个字段的"原始文本"（字符串原样给，对象/数组给 JSON）——翻页实验要拿原值去试。 */
+  private static rawTextOf(value: Object | undefined): string {
+    if (value === undefined || value === null) {
+      return '';
+    }
+    if (typeof value === 'string') {
+      return value as string;
+    }
+    try {
+      return JSON.stringify(value);
+    } catch (error) {
+      return '';
     }
   }
 
@@ -598,15 +652,10 @@ export class MobileProbe {
    * @param cursorJson `next_cursor` 结构的 JSON 串
    * @param firstId 上一页第一条会话的 id（用来判断"是不是又给了第一页"）
    */
-  static async inboxPageVariants(identity: MobileIdentity, cursorJson: string,
-                                 firstId: string): Promise<string> {
-    if (cursorJson.length === 0) {
+  static async inboxPageVariants(identity: MobileIdentity, firstId: string): Promise<string> {
+    if (MobileProbe.cursorTries.length === 0) {
       return 'no-cursor';
     }
-    const cursorObj: Record<string, Object> | null = MobileProbe.parse(cursorJson);
-    // 只取结构里的 id 字段再试一种（IG 有些接口只认这一半）。
-    const threadV2: string = cursorObj === null ? ''
-      : MobileProbe.firstText(cursorObj, ['cursor_thread_v2_id']);
     const base: string = 'visual_message_return_type=unseen'
       + '&thread_message_limit=10&persistentBadging=true&limit=20';
     const data: Record<string, Object> = MobileRequest.withExtraData(identity);
@@ -614,44 +663,32 @@ export class MobileProbe {
     data['thread_message_limit'] = 10;
     data['persistentBadging'] = 'true';
     data['limit'] = 20;
-    const forms: Array<string> = ['cursor', 'cursor_v2', 'max_id'];
     const out: Array<string> = [];
-    let cursorDetail: string = '-';
-    for (let index: number = 0; index < forms.length; index++) {
-      const one: MobileResult = await MobileRequest.send('direct_v2/inbox/',
-        MobileRequest.formOf(data), `${base}&${forms[index]}=${encodeURIComponent(cursorJson)}`, true,
+    let detail: string = '-';
+    for (let index: number = 0; index < MobileProbe.cursorTries.length; index++) {
+      const one: CursorTry = MobileProbe.cursorTries[index];
+      const result: MobileResult = await MobileRequest.send('direct_v2/inbox/',
+        MobileRequest.formOf(data), `${base}&cursor=${encodeURIComponent(one.value)}`, true,
         null, MobileProbe.opts());
-      out.push(`${forms[index]}=${MobileProbe.pageVerdict(one, firstId)}`);
-      // 400 的**响应体原话**一定要留下：IG 那条 "Invalid Inbox Cursor…" 后面接着的就是
-      // "这个参数应该长什么样"（本次唯一的官方说明来源）。
-      if (!one.ok && cursorDetail === '-') {
-        cursorDetail = one.detail;
+      out.push(`${one.label}=${MobileProbe.pageVerdict(result, firstId)}`);
+      if (!result.ok && detail === '-') {
+        detail = result.detail;
       }
     }
-    if (threadV2.length > 0) {
-      const half: MobileResult = await MobileRequest.send('direct_v2/inbox/',
-        MobileRequest.formOf(data), `${base}&cursor=${encodeURIComponent(threadV2)}`, true,
-        null, MobileProbe.opts());
-      out.push(`cursor-id-only=${MobileProbe.pageVerdict(half, firstId)}`);
-    }
-    // `prev_cursor` / `prev_cursor_v2` 也试一发：响应里专门带 `prev_cursor_type=PAGING`，
-    // 说明这两个字段与翻页有关，值可能是"上一页游标"的正确形态。
-    const prevKeys: Array<string> = ['prev_cursor', 'prev_cursor_v2'];
-    const prevValues: Array<string> = [MobileProbe.inboxPrevCursor, MobileProbe.inboxPrevCursorV2];
-    for (let index: number = 0; index < prevKeys.length; index++) {
-      const text: string = prevValues[index];
-      if (text.length === 0) {
-        continue;
-      }
-      const one: MobileResult = await MobileRequest.send('direct_v2/inbox/',
-        MobileRequest.formOf(data), `${base}&cursor=${encodeURIComponent(text)}`, true,
-        null, MobileProbe.opts());
-      out.push(`${prevKeys[index]}-as-cursor=${MobileProbe.pageVerdict(one, firstId)}`);
-    }
+    // 表单体里带游标那种传法（第一次实验用的是 "[object Object]"，等于没测）。
+    const bodyData: Record<string, Object> = MobileRequest.withExtraData(identity);
+    bodyData['visual_message_return_type'] = 'unseen';
+    bodyData['thread_message_limit'] = 10;
+    bodyData['persistentBadging'] = 'true';
+    bodyData['limit'] = 20;
+    bodyData['cursor'] = MobileProbe.inboxCursor;
+    const inBody: MobileResult = await MobileRequest.send('direct_v2/inbox/',
+      MobileRequest.formOf(bodyData), base, true, null, MobileProbe.opts());
+    out.push(`body-cursor=${MobileProbe.pageVerdict(inBody, firstId)}`);
     const summary: string = out.join(' ');
     hilog.info(DOMAIN, TAG, 'inbox page variants → %{public}s', summary);
     MobileProbe.shape.push(`inbox 翻页实验(比对首页 id) ${summary}`);
-    MobileProbe.shape.push(`inbox 翻页 400 原话=${cursorDetail.substring(0, 300)}`);
+    MobileProbe.shape.push(`inbox 翻页 400 原话=${detail.substring(0, 200)}`);
     return summary;
   }
 
