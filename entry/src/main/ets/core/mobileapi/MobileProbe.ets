@@ -17,7 +17,8 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { common } from '@kit.AbilityKit';
-import { MobileRequest, MobileResult } from './MobileRequest';
+import { ApiThrottle } from '../ApiThrottle';
+import { MobileRequest, MobileResult, MobileOptions } from './MobileRequest';
 import { MobileSession, MobileIdentity } from './MobileSession';
 import { SUPPORTED_CAPABILITIES } from './MobileConfig';
 import { InstagramProbe } from '../../probe/InstagramProbe';
@@ -263,10 +264,21 @@ export class MobileProbe {
       + `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
   }
 
+  /**
+   * 自检那几发的排队策略：**空闲优先级**（`ApiThrottle.idle()`）。
+   *
+   * 为什么不是默认的 WARM：自检一次 9 发，跑在启动后 6 秒那个时间点上 —— 恰好是用户已经
+   * 开始滑首屏、点快拍的时候。给它们最低优先级，用户此刻点的请求就能插到队头，
+   * 不会被自检一排 9 发挡住（挡一下就是 1 秒起）。
+   */
+  private static opts(): MobileOptions {
+    return new MobileOptions(ApiThrottle.MOBILE, ApiThrottle.idle());
+  }
+
   /** ① `GET /api/v1/users/{uid}/info/`（instagrapi 的 `user_info_v1`，最小的一发）。 */
   static async userInfo(identity: MobileIdentity): Promise<MobileResult> {
     const result: MobileResult = await MobileRequest.send(
-      `users/${identity.userId}/info/`, '', '', true);
+      `users/${identity.userId}/info/`, '', '', true, null, MobileProbe.opts());
     MobileProbe.logShape('user_info', result);
     return result;
   }
@@ -297,7 +309,7 @@ export class MobileProbe {
       data['reel_tray_impressions'] = impressions;
     }
     const result: MobileResult = await MobileRequest.send(
-      'feed/reels_tray/', MobileRequest.formOf(data), '', true);
+      'feed/reels_tray/', MobileRequest.formOf(data), '', true, null, MobileProbe.opts());
     MobileProbe.logShape('reels_tray', result);
     MobileProbe.describeTray(result);
     return result;
@@ -313,7 +325,7 @@ export class MobileProbe {
     const query: string = 'visual_message_return_type=unseen'
       + `&thread_message_limit=10&persistentBadging=true&limit=${limit}`;
     const result: MobileResult = await MobileRequest.send(
-      'direct_v2/inbox/', MobileRequest.formOf(data), query, true);
+      'direct_v2/inbox/', MobileRequest.formOf(data), query, true, null, MobileProbe.opts());
     MobileProbe.logShape('direct_inbox', result);
     MobileProbe.describeInbox(result);
     return result;
@@ -328,7 +340,7 @@ export class MobileProbe {
    */
   static async userStories(identity: MobileIdentity, userId: string): Promise<MobileResult> {
     const result: MobileResult = await MobileRequest.send(
-      `feed/user/${userId}/story/`, '', '', true);
+      `feed/user/${userId}/story/`, '', '', true, null, MobileProbe.opts());
     MobileProbe.logShape('user_stories', result);
     MobileProbe.describeStoryItems(result);
     return result;
@@ -348,7 +360,7 @@ export class MobileProbe {
     const value: string = asJsonArray ? JSON.stringify(ids) : reelId;
     const label: string = asJsonArray ? 'reels_media[arr]' : 'reels_media[bare]';
     const params: string = `reel_ids=${encodeURIComponent(value)}`;
-    const result: MobileResult = await MobileRequest.send('feed/reels_media/', '', params, true);
+    const result: MobileResult = await MobileRequest.send('feed/reels_media/', '', params, true, null, MobileProbe.opts());
     MobileProbe.logShape(label, result);
     MobileProbe.describeStoryItems(result, label);
     return result;
@@ -563,7 +575,7 @@ export class MobileProbe {
                             limit: number = 20): Promise<MobileResult> {
     const params: string = `limit=${limit}`;
     const result: MobileResult = await MobileRequest.send(
-      `direct_v2/threads/${threadId}/`, '', params, true);
+      `direct_v2/threads/${threadId}/`, '', params, true, null, MobileProbe.opts());
     MobileProbe.logShape('direct_thread', result);
     MobileProbe.describeThread(result, threadId);
     return result;
@@ -607,7 +619,8 @@ export class MobileProbe {
     let cursorDetail: string = '-';
     for (let index: number = 0; index < forms.length; index++) {
       const one: MobileResult = await MobileRequest.send('direct_v2/inbox/',
-        MobileRequest.formOf(data), `${base}&${forms[index]}=${encodeURIComponent(cursorJson)}`, true);
+        MobileRequest.formOf(data), `${base}&${forms[index]}=${encodeURIComponent(cursorJson)}`, true,
+        null, MobileProbe.opts());
       out.push(`${forms[index]}=${MobileProbe.pageVerdict(one, firstId)}`);
       // 400 的**响应体原话**一定要留下：IG 那条 "Invalid Inbox Cursor…" 后面接着的就是
       // "这个参数应该长什么样"（本次唯一的官方说明来源）。
@@ -617,7 +630,8 @@ export class MobileProbe {
     }
     if (threadV2.length > 0) {
       const half: MobileResult = await MobileRequest.send('direct_v2/inbox/',
-        MobileRequest.formOf(data), `${base}&cursor=${encodeURIComponent(threadV2)}`, true);
+        MobileRequest.formOf(data), `${base}&cursor=${encodeURIComponent(threadV2)}`, true,
+        null, MobileProbe.opts());
       out.push(`cursor-id-only=${MobileProbe.pageVerdict(half, firstId)}`);
     }
     // `prev_cursor` / `prev_cursor_v2` 也试一发：响应里专门带 `prev_cursor_type=PAGING`，
@@ -630,7 +644,8 @@ export class MobileProbe {
         continue;
       }
       const one: MobileResult = await MobileRequest.send('direct_v2/inbox/',
-        MobileRequest.formOf(data), `${base}&cursor=${encodeURIComponent(text)}`, true);
+        MobileRequest.formOf(data), `${base}&cursor=${encodeURIComponent(text)}`, true,
+        null, MobileProbe.opts());
       out.push(`${prevKeys[index]}-as-cursor=${MobileProbe.pageVerdict(one, firstId)}`);
     }
     const summary: string = out.join(' ');

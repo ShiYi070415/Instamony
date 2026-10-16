@@ -28,7 +28,8 @@
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { MobileRequest, MobileResult } from './MobileRequest';
+import { ApiThrottle } from '../ApiThrottle';
+import { MobileRequest, MobileResult, MobileOptions } from './MobileRequest';
 import { MobileSession, MobileIdentity } from './MobileSession';
 import { StoryItem, StoryReel, StoryTray, StoryTrayItem } from '../../model/Story';
 import { SUPPORTED_CAPABILITIES } from './MobileConfig';
@@ -45,8 +46,10 @@ export class MobileStories {
    *
    * 对应 instagrapi 的 `get_reels_tray_feed`：表单字段照抄（`reason` / `timezone_offset` /
    * `tray_session_id` / `request_id` / `page_size` / `_uuid` / `supported_capabilities_new`）。
+   *
+   * @param priority 排队优先级（见 ApiThrottle.acquire）：默认 WARM。
    */
-  static async tray(): Promise<StoryTray | null> {
+  static async tray(priority: number = ApiThrottle.warm()): Promise<StoryTray | null> {
     const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
     if (identity === null) {
       hilog.info(DOMAIN, TAG, 'tray skipped: no session');
@@ -63,7 +66,8 @@ export class MobileStories {
     const none: Record<string, Object> = {};
     data['reel_tray_impressions'] = none;
     const result: MobileResult = await MobileRequest.send(
-      'feed/reels_tray/', MobileRequest.formOf(data), '', true);
+      'feed/reels_tray/', MobileRequest.formOf(data), '', true, null,
+      new MobileOptions(ApiThrottle.STORIES, priority));
     if (!result.ok) {
       hilog.warn(DOMAIN, TAG, 'tray failed: %{public}s', result.summary());
       return null;
@@ -94,16 +98,20 @@ export class MobileStories {
    *
    * @param altIds 托盘条目的备选 id（主 id 问不出内容时逐个再问）
    * @param username 托盘里已知的用户名（响应里拿不到时用它，别让界面显示空）
+   * @param priority 排队优先级：用户点开的那一发传 `ApiThrottle.interactive()`（插到队头），
+   *                 预缓存传默认的 WARM
    */
   static async reel(userId: string, altIds: Array<string> = [],
-                    username: string = ''): Promise<StoryReel | null> {
+                    username: string = '',
+                    priority: number = ApiThrottle.warm()): Promise<StoryReel | null> {
     const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
     if (identity === null || userId.length === 0) {
       return null;
     }
+    const opts: MobileOptions = new MobileOptions(ApiThrottle.STORIES, priority);
     // ① 单用户那条（媒体在 `reel.items`）
     const direct: MobileResult = await MobileRequest.send(
-      `feed/user/${userId}/story/`, '', '', true);
+      `feed/user/${userId}/story/`, '', '', true, null, opts);
     if (direct.ok) {
       const items: Array<StoryItem> = MobileStories.storyItemsOfBody(direct.body, 'reel');
       if (items.length > 0) {
@@ -122,7 +130,8 @@ export class MobileStories {
     for (let index: number = 0; index < ids.length; index++) {
       const reelId: string = ids[index];
       const params: string = `reel_ids=${encodeURIComponent(reelId)}`;
-      const result: MobileResult = await MobileRequest.send('feed/reels_media/', '', params, true);
+      const result: MobileResult = await MobileRequest.send('feed/reels_media/', '', params, true,
+        null, opts);
       if (!result.ok) {
         hilog.info(DOMAIN, TAG, 'reel reels_media miss id=%{public}s %{public}s',
           reelId, result.summary());

@@ -882,7 +882,8 @@ export class NativeStories {
    *   它解决的正是"只有部分用户点开提示没取到（原因 empty）"那一类 —— 托盘条目取错了 id 字段。
    */
   static async reel(userId: string, altIds: Array<string> = [],
-                    username: string = ''): Promise<StoryReel | null> {
+                    username: string = '',
+                    priority: number = ApiThrottle.warm()): Promise<StoryReel | null> {
     if (userId.length === 0) {
       NativeStories.detail = 'no-user';
       return null;
@@ -897,7 +898,7 @@ export class NativeStories {
      * 两条都不成，才落回下面那串"模板/换身份/换主机"的老候选。
      */
     if (MOBILE_STORIES_FIRST) {
-      const mobile: StoryReel | null = await MobileStories.reel(userId, altIds, username);
+      const mobile: StoryReel | null = await MobileStories.reel(userId, altIds, username, priority);
       if (mobile !== null && mobile.items.length > 0) {
         NativeStories.detail = '-';
         hilog.info(DOMAIN, TAG, 'reel via mobile uid=%{public}s user=%{public}s n=%{public}d',
@@ -1211,6 +1212,15 @@ export class NativeStories {
       headers['x-ig-app-id'] = ANDROID_APP_ID;
     }
     const request: http.HttpRequest = http.createHttp();
+    /*
+     * **老路径也要过限速闸门**（见 ApiThrottle.acquire）。
+     *
+     * 这一发是"一位用户 × 最多三种身份"里的那一发，预取 5 位就是最多 15 发 —— 与移动端那条
+     * 新路是同一种连发形态，限流不认我们内部走的是哪条路。优先级给 WARM（预取是后台行为）；
+     * 用户点开那一发在 `StoryCache.fetch` 里已经用交互优先级发起了（移动端那条），
+     * 走到这里说明移动端那条没成，此时再抢优先级意义不大。
+     */
+    await ApiThrottle.acquire(ApiThrottle.warm());
     try {
       const response: http.HttpResponse = await request.request(url, {
         method: http.RequestMethod.GET,
@@ -1300,6 +1310,8 @@ export class NativeStories {
         request.destroy();
       } catch (error) {
       }
+      // 放闸：成败、提前 return 都要放到（拿到 acquire 就必须 release，见那里的说明）。
+      ApiThrottle.release();
     }
   }
 

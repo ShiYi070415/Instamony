@@ -15,13 +15,16 @@
  *   - **cookie 从 Cookie 罐现读**：instagrapi 自己维护 `requests.Session` 的 cookie jar；
  *     我们的会话属于 ArkWeb，所以每发一次都读一遍（见 MobileSession.ensure）。
  *   - **不做 `time.sleep(request_timeout)`**：instagrapi 每次私有请求前固定睡 1 秒。
- *     本项目已经有 `core/ApiThrottle` 那套"撞限流才退避"的机制，不该再叠一层固定延迟
- *     （那会让快拍/私信这种本来就慢的路径更慢）。要限速就交给 ApiThrottle。
+ *     本项目用的是**全局闸门**（`ApiThrottle.acquire/release`）：同一时刻只允许一发在路上、
+ *     两发之间至少隔 900ms±400ms（抖动），而且**优先级可插队** —— 用户此刻点开的那一发
+ *     会越过预取/自检排到队头。固定 1 秒 sleep 做不到这两件事：它既不防"我们代码自己排出来的
+ *     连发"（预取 5 页 + 自检 9 发就是这么打出去的），又会把用户点开那一发一起拖慢。
  */
 
 import { http } from '@kit.NetworkKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { InstagramCookieJar, InstagramCookieSnapshot } from '../InstagramCookieJar';
+import { ApiThrottle } from '../ApiThrottle';
 import { MobileSession, MobileIdentity } from './MobileSession';
 import { signedBody } from './MobileSign';
 import {
@@ -63,6 +66,22 @@ export const MOBILE_THREW: string = 'threw';
 export enum MobileMethod {
   GET = 0,
   POST = 1
+}
+
+/**
+ * 一发的"排队策略"：**家族**（限流退避按它记）+ **优先级**（闸门按它插队）。
+ *
+ * 为什么要显式传：`MobileRequest` 是通用骨架，它自己不知道"这一发是用户在点快拍"
+ * 还是"后台自检"。默认给 `MOBILE` + `WARM`（不抢用户、也不排最后）。
+ */
+export class MobileOptions {
+  readonly family: string;
+  readonly priority: number;
+
+  constructor(family: string = ApiThrottle.MOBILE, priority: number = 1) {
+    this.family = family;
+    this.priority = priority;
+  }
 }
 
 /** 一发的诊断信息（沿用项目里 NativeFetchResult 的"不抛异常、用字段说话"风格）。 */
@@ -202,10 +221,13 @@ export class MobileRequest {
    * @param params   GET 的查询参数（直接拼在 URL 上）
    * @param withSignature 是否包 `signed_body=`（instagrapi 的 `with_signature`，默认 true）
    * @param extraHeaders 调用方要额外带的头（例如私信那条的 `X-FB-Friendly-Name`）
+   * @param options 排队策略（家族 + 优先级，见 MobileOptions）；null = MOBILE + WARM
    */
   static async send(endpoint: string, data: string = '', params: string = '',
                     withSignature: boolean = true,
-                    extraHeaders: Record<string, string> | null = null): Promise<MobileResult> {
+                    extraHeaders: Record<string, string> | null = null,
+                    options: MobileOptions | null = null): Promise<MobileResult> {
+    const opts: MobileOptions = options === null ? new MobileOptions() : options;
     const started: number = Date.now();
     const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
     if (identity === null || !identity.isComplete()) {
@@ -246,6 +268,17 @@ export class MobileRequest {
       endpoint, MobileRequest.shortUrl(url), isPost ? 'POST' : 'GET', payload.length,
       identity.authorization.length > 0 ? 'y' : 'n');
     const request: http.HttpRequest = http.createHttp();
+    /*
+     * **闸门**（主动限速，见 ApiThrottle.acquire 的说明）：排队 → 拿到名额才发。
+     * 拿到之后**必须** release，所以整段用 try/finally 包住 —— 任何一支抛异常都要放闸，
+     * 否则后面的请求全被卡死（`ApiThrottle` 那边还有 30 秒防呆兜底）。
+     */
+    const queued: number = Date.now();
+    await ApiThrottle.acquire(opts.priority);
+    if (Date.now() - queued > 50) {
+      hilog.info(DOMAIN, TAG, 'paced %{public}s waited=%{public}dms %{public}s',
+        endpoint, Date.now() - queued, ApiThrottle.paceDescribe());
+    }
     try {
       const response: http.HttpResponse = await request.request(url, {
         method: isPost ? http.RequestMethod.POST : http.RequestMethod.GET,
@@ -265,6 +298,19 @@ export class MobileRequest {
       }
       const code: number = response.responseCode;
       const outcome: MobileResult = MobileRequest.classify(code, text, Date.now() - started);
+      /*
+       * **撞上限流就记冷却**（这条以前只有网页那几条路有，移动端这条路是新加的）。
+       *
+       * 为什么必须在这里做：移动端的连发（预取 5 页 + 自检 9 发）恰恰是最容易把额度打满的，
+       * 而"被限流了还接着打"正是本项目审计里 E 类那个"越打越久"的老毛病。
+       * 记到**调用方给的家族**上（快拍记 STORIES、私信记 DIRECT），退避才对得上语义。
+       */
+      if (outcome.error === MOBILE_RATE_LIMIT || outcome.error === MOBILE_THROTTLED
+        || outcome.error === MOBILE_FEEDBACK) {
+        ApiThrottle.note(opts.family);
+        hilog.warn(DOMAIN, TAG, 'throttled %{public}s family=%{public}s → backoff %{public}dmin',
+          endpoint, opts.family, 12);
+      }
       hilog.info(DOMAIN, TAG, 'recv %{public}s -> %{public}s', endpoint, outcome.summary());
       return outcome;
     } catch (error) {
@@ -279,6 +325,7 @@ export class MobileRequest {
         request.destroy();
       } catch (error) {
       }
+      ApiThrottle.release();
     }
   }
 

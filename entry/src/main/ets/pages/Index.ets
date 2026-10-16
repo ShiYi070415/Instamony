@@ -2144,7 +2144,15 @@ struct Index {
         return NativeStories.tray().then((tray: StoryTray | null): void => {
           if (tray !== null && tray.items.length > 0) {
             this.rememberStoryQueue(tray.items);
-            StoryCache.reset(tray.items, 0);
+            /*
+             * **只调 `ensure`，不要再先 `reset` 一遍**。
+             *
+             * 这里原来写成 `reset(items, 0)` + `ensure(items, 0)`：而 `ensure` 在队列为空时
+             * **自己就会 reset**，于是同一个起点被 reset 了两次 —— 前一批 5 发预取整批作废
+             * （代次变了），可请求**已经发出去了**（真机日志里同一秒出现 5 位用户各两发）。
+             * 以前这只是白打 5 发；现在每一发之间还有约 1 秒的限速闸门，白打那批会把真正要用的
+             * 那批往后顶好几秒（"点开要等"这类观感问题就会来自这里）。
+             */
             StoryCache.ensure(tray.items, 0);
             hilog.info(DOMAIN, TAG, 'warm stories n=%{public}d cached=%{public}d',
               tray.items.length, StoryCache.size());
@@ -5259,8 +5267,14 @@ struct Index {
           onStoryLoaded: (items: Array<StoryTrayItem>): void => {
             this.rememberStoryQueue(items);
             hilog.info(DOMAIN, TAG, 'story queue n=%{public}d', items.length);
-            // 托盘一到就开始**预加载**：从第一位起把前五个用户的 story 热起来（见 core/StoryCache）。
-            StoryCache.reset(items, 0);
+            /*
+             * 托盘一到就开始**预加载**：从第一位起把前五个用户的 story 热起来（见 core/StoryCache）。
+             *
+             * 用 `ensure` 而不是 `reset`：启动预热那条链（`warmOtherTabs`）已经 reset 过一次，
+             * 托盘组件挂载后再 `reset` 就是**同一批预取再来一遍** —— `ensure` 在"队列起点已覆盖
+             * 可见范围"时直接返回，正好把这次重复省掉（见它上面那段注释）。
+             */
+            StoryCache.ensure(items, 0);
           },
           // 每一项头像的当前位置：收起时要朝"现在这一位"的托盘头像收缩（见 storyRects）。
           onStoryRect: (userId: string, rect: StoryHeroRect): void => {

@@ -1467,6 +1467,13 @@ export class NativeDirect {
   private static async send(url: string, method: http.RequestMethod,
                            headers: Record<string, string>, body: string): Promise<string> {
     const request: http.HttpRequest = http.createHttp();
+    /*
+     * **过限速闸门**（见 ApiThrottle.acquire）：私信这条老路一次会连发好几条
+     * （收件箱翻页 + 会话详情两套身份 + 4 秒一次的轮询），全部串行、每发之间隔开，
+     * 真撞上限流时下面 `looksLimited` 那一步照样会记冷却。
+     * 优先级 WARM：会话页轮询与打开都不算"用户此刻的连发"，不必插队。
+     */
+    await ApiThrottle.acquire(ApiThrottle.warm());
     try {
       const response: http.HttpResponse = await request.request(url, {
         method: method,
@@ -1529,6 +1536,8 @@ export class NativeDirect {
         request.destroy();
       } catch (error) {
       }
+      // 放闸：老路径的每一发也要过限速闸门（见下面 acquire 的说明），成败都要放。
+      ApiThrottle.release();
     }
   }
 

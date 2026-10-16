@@ -17,6 +17,7 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { NativeStories } from './NativeStories';
+import { ApiThrottle } from './ApiThrottle';
 import { MediaPrefetch } from './MediaPrefetch';
 import { StoryItem, StoryReel, StoryTrayItem } from '../model/Story';
 
@@ -27,6 +28,17 @@ const DEPTH: number = 5;
 /** 每一页预下载头几条媒体（再多就是替用户白下了，反正他会停在第一条）。 */
 const PREFETCH_ITEMS: number = 3;
 
+/** 排队等闸门的一个请求。 */
+class InflightPage {
+  readonly userId: string;
+  readonly generation: number;
+
+  constructor(userId: string, generation: number) {
+    this.userId = userId;
+    this.generation = generation;
+  }
+}
+
 export class StoryCache {
   /** 已缓存的页（队头 = 最先被用到的那个用户）。 */
   private static pages: Array<StoryReel> = [];
@@ -36,6 +48,20 @@ export class StoryCache {
   private static cursor: number = 0;
   /** 正在取数的页数（避免重复并发同一个用户）。 */
   private static loading: number = 0;
+  /**
+   * **正在路上**的页（`userId` + 发出时的代次）。
+   *
+   * 为什么光有 `loading` 计数不够（真机日志实测出来的）：
+   * 加入限速闸门之后，一发要排 ~1 秒才发出去、回来得更晚 —— 于是"队列还空着"这个窗口
+   * 从两百毫秒变成了好几秒。启动时 `ensure()` 会被调两次（预热链一次、托盘挂载
+   * `onStoryLoaded` 一次），两次都看到 `pages` 为空 → **同一批 5 位用户被发了两遍**
+   * （日志：同一秒里 5 位用户各两发）。白打的那批还会占住闸门，把真正要用的那批往后顶。
+   * 所以这里按"谁在路上"记一份，`ensure` 与 `fill` 都拿它判重。
+   *
+   * 记**代次**是为了不误伤：用户点了别人触发 `reset()` 之后，上一代在飞的页已经作废，
+   * 不该再挡住新一代的取数（它们在响应回来时按代次丢弃，并从这里移除）。
+   */
+  private static inflight: Array<InflightPage> = [];
   /**
    * 队列代次（每次 `reset()` +1）。
    *
@@ -60,7 +86,55 @@ export class StoryCache {
         return;
       }
     }
+    /*
+     * 队列虽然还空着，但**同一代次已经有一批在路上**（见 inflight 的说明）：
+     * 这一批马上就会把队列填上，这里再 reset 一次就是白打 5 发。
+     * 判据与上面一致 —— 在飞那批的**起点**落在可见范围里就够了。
+     */
+    const flying: number = StoryCache.inflightStart(items);
+    if (flying >= 0 && flying >= start && flying <= start + 3) {
+      hilog.info(DOMAIN, TAG, 'ensure skip: inflight from=%{public}d start=%{public}d',
+        flying, start);
+      return;
+    }
     StoryCache.reset(items, start);
+  }
+
+  /** 同一代次里**在飞那批**在托盘顺序里的起点下标（没有给 -1）。 */
+  private static inflightStart(items: Array<StoryTrayItem>): number {
+    let best: number = -1;
+    for (let index: number = 0; index < StoryCache.inflight.length; index++) {
+      const one: InflightPage = StoryCache.inflight[index];
+      if (one.generation !== StoryCache.generation) {
+        continue;
+      }
+      const at: number = StoryCache.indexOf(items, one.userId);
+      if (at >= 0 && (best < 0 || at < best)) {
+        best = at;
+      }
+    }
+    return best;
+  }
+
+  /** 某一位是不是正在路上（只看当前代次）。 */
+  private static inFlight(userId: string): boolean {
+    for (let index: number = 0; index < StoryCache.inflight.length; index++) {
+      const one: InflightPage = StoryCache.inflight[index];
+      if (one.userId === userId && one.generation === StoryCache.generation) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** 从"在飞"名单里移除一条（响应回来时调，成败都要调）。 */
+  private static clearInflight(userId: string, generation: number): void {
+    for (let index: number = StoryCache.inflight.length - 1; index >= 0; index--) {
+      const one: InflightPage = StoryCache.inflight[index];
+      if (one.userId === userId && one.generation === generation) {
+        StoryCache.inflight.splice(index, 1);
+      }
+    }
   }
 
   /** 某位用户在托盘顺序里的下标（找不到给 -1）。 */
@@ -154,7 +228,13 @@ export class StoryCache {
    */
   static async fetch(userId: string, altIds: Array<string> = [],
                      username: string = ''): Promise<StoryReel | null> {
-    const reel: StoryReel | null = await NativeStories.reel(userId, altIds, username);
+    /*
+     * **交互优先级**：这一发是用户此刻点开的快拍 —— 排在预取/自检前面（见 ApiThrottle.acquire）。
+     * 不给的话，它要等在飞的那几发预取后面（最多 5 发 × 约 1 秒的间隔），
+     * 现象就是"点了快拍要等几秒才出来"。
+     */
+    const reel: StoryReel | null = await NativeStories.reel(userId, altIds, username,
+      ApiThrottle.interactive());
     if (reel !== null) {
       StoryCache.warmMedia(reel);
     }
@@ -168,8 +248,9 @@ export class StoryCache {
       && StoryCache.cursor < StoryCache.tray.length) {
       const item: StoryTrayItem = StoryCache.tray[StoryCache.cursor];
       StoryCache.cursor = StoryCache.cursor + 1;
-      // 已经在队列里的（同一个人可能被点到两次）不重复取。
-      if (StoryCache.inQueue(item.userId)) {
+      // 已经在队列里的（同一个人可能被点到两次）不重复取；**已经在路上的也不重复取**
+      // （后者是加了限速闸门之后才暴露出来的重复源，见 inflight 的说明）。
+      if (StoryCache.inQueue(item.userId) || StoryCache.inFlight(item.userId)) {
         continue;
       }
       StoryCache.loading = StoryCache.loading + 1;
@@ -182,7 +263,11 @@ export class StoryCache {
                          username: string = ''): void {
     // 发这一发时的代次：回来时对不上就整发丢弃（见 generation 的说明）。
     const gen: number = StoryCache.generation;
+    StoryCache.inflight.push(new InflightPage(userId, gen));
+    // 交互优先级**不在这里**：预取是后台行为，用户真点开那一发走 StoryCache.fetch（见那里）。
     NativeStories.reel(userId, altIds, username).then((reel: StoryReel | null): void => {
+      // **先从"在飞"名单里摘掉**（成败、代次对不对都要摘，否则那一页永远挡住重取）。
+      StoryCache.clearInflight(userId, gen);
       /*
        * **代次对不上 = 这一发是上一次 `reset()` 之前发的，结果属于旧队列**。
        *
@@ -210,6 +295,8 @@ export class StoryCache {
       // 补下一页（成功失败都继续，别让一次失败把队列饿住）。
       StoryCache.fill();
     }).catch((): void => {
+      // 抛异常这条路也要摘（否则那一页永久挡住重取）。
+      StoryCache.clearInflight(userId, gen);
       if (gen !== StoryCache.generation) {
         return;
       }

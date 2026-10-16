@@ -21,7 +21,8 @@
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { MobileRequest, MobileResult } from './MobileRequest';
+import { ApiThrottle } from '../ApiThrottle';
+import { MobileRequest, MobileResult, MobileOptions } from './MobileRequest';
 import { MobileSession, MobileIdentity } from './MobileSession';
 import { DirectInboxPage, DirectMapper, DirectThread, DirectThreadView } from '../../model/Direct';
 
@@ -77,7 +78,8 @@ export class MobileDirect {
     const query: string = 'visual_message_return_type=unseen'
       + `&thread_message_limit=${THREAD_MESSAGE_LIMIT}&persistentBadging=true&limit=${INBOX_PAGE_SIZE}`;
     const result: MobileResult = await MobileRequest.send(
-      'direct_v2/inbox/', MobileRequest.formOf(data), query, true);
+      'direct_v2/inbox/', MobileRequest.formOf(data), query, true, null,
+      new MobileOptions(ApiThrottle.DIRECT, ApiThrottle.warm()));
     if (!result.ok) {
       hilog.warn(DOMAIN, TAG, 'inbox failed: %{public}s', result.summary());
       return null;
@@ -119,7 +121,8 @@ export class MobileDirect {
       params += `&cursor=${encodeURIComponent(olderCursor)}`;
     }
     const result: MobileResult = await MobileRequest.send(
-      `direct_v2/threads/${id}/`, '', params, true);
+      `direct_v2/threads/${id}/`, '', params, true, null,
+      new MobileOptions(ApiThrottle.DIRECT, ApiThrottle.warm()));
     if (!result.ok) {
       hilog.warn(DOMAIN, TAG, 'thread failed id=%{public}s %{public}s', id, result.summary());
       return null;
