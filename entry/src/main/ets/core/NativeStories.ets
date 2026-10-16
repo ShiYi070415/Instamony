@@ -18,12 +18,25 @@ import { NativeFeed } from './NativeFeed';
 import { RestSession } from './RestSession';
 import { JsonRead } from './JsonRead';
 import { StoryItem, StoryReel, StoryTray, StoryTrayItem } from '../model/Story';
+import { MobileStories } from './mobileapi/MobileStories';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeStories';
 const CONNECT_TIMEOUT_MS: number = 8000;
 const READ_TIMEOUT_MS: number = 15000;
 const SITE: string = 'https://www.instagram.com';
+/**
+ * **先走移动端私有 API**（见 core/mobileapi/MobileStories）。
+ *
+ * 为什么放在最前（而不是当第四、第五条退路）：网页这条路在部分会话上被 IG 按**来源**拒
+ * —— 测试者的诊断里 `reels_media` 回 500、`feed/user/<id>/story/` 回 400 challenge，
+ * 而同一台设备换成移动端那套头（App-ID / UA / signed_body / Authorization）实测五发全通，
+ * 且**一发就把 213 条托盘全带回来**（比模板 + GQL 那条既少请求又少解析）。
+ *
+ * 保留成显式开关（本项目的一贯做法）：真机上一旦发现移动端那条在某些账号上更差，
+ * 把这个常量改成 false 就整条退回原来的路径，不用改任何调用点。
+ */
+const MOBILE_STORIES_FIRST: boolean = true;
 /**
  * 点开某个人快拍时那条私有 REST 用的是**手机 App 的身份**（安卓 UA + 安卓 app id）。
  *
@@ -626,6 +639,21 @@ export class NativeStories {
    * 请求体**原样重发**（模板就是网页自己发过的那一发，不动它的 variables —— 托盘没有分页需求）。
    */
   static async tray(): Promise<StoryTray | null> {
+    /*
+     * **移动端私有 API 优先**（见文件头 MOBILE_STORIES_FIRST）：
+     * 一发 `feed/reels_tray/` 就把整条托盘带回来（实测 213 条 / 425KB），
+     * 而且不依赖"网页抓到的模板"——模板缺失正是这条路上最常见的失败（`no-template`）。
+     * 失败**静默**落回下面那条老路：老路仍然是模板/GQL 的唯一入口，不该因为新路失败就丢功能。
+     */
+    if (MOBILE_STORIES_FIRST) {
+      const mobile: StoryTray | null = await MobileStories.tray();
+      if (mobile !== null && mobile.items.length > 0) {
+        NativeStories.detail = '-';
+        hilog.info(DOMAIN, TAG, 'tray via mobile n=%{public}d first=%{public}s',
+          mobile.items.length, mobile.items[0].username);
+        return mobile;
+      }
+    }
     const tpl: ApiTemplate | null = ApiRegistry.getInstance().storedForNative(OP_TRAY);
     if (tpl === null) {
       NativeStories.detail = 'no-template';
@@ -858,6 +886,26 @@ export class NativeStories {
     if (userId.length === 0) {
       NativeStories.detail = 'no-user';
       return null;
+    }
+    /*
+     * **移动端私有 API 优先**（见文件头 MOBILE_STORIES_FIRST）。
+     *
+     * 这里的候选顺序是**实测定的**（自检报告见 core/mobileapi/MobileStories 的文件头）：
+     *   ① `GET /api/v1/feed/user/{uid}/story/` —— 一发拿到这个人当前全部快拍（媒体在 `reel.items`）；
+     *   ② `GET /api/v1/feed/reels_media/?reel_ids=<裸 id>` —— 用户 pk 与 reel id 不一致时靠它；
+     *      注意 **JSON 数组形式回空**，所以是裸 id（网页那条用的正是数组形式）。
+     * 两条都不成，才落回下面那串"模板/换身份/换主机"的老候选。
+     */
+    if (MOBILE_STORIES_FIRST) {
+      const mobile: StoryReel | null = await MobileStories.reel(userId, altIds, username);
+      if (mobile !== null && mobile.items.length > 0) {
+        NativeStories.detail = '-';
+        hilog.info(DOMAIN, TAG, 'reel via mobile uid=%{public}s user=%{public}s n=%{public}d',
+          userId, mobile.username, mobile.items.length);
+        return mobile;
+      }
+      // 记一行轨迹：失败报告里要能看出"移动端这条也试过了、结果是什么"。
+      NativeStories.note(userId, `mobile=none user=${userId}`);
     }
     /*
      * 候选 = **一条 URL × 三种身份**（见文件头 ANDROID_UA 的说明）：

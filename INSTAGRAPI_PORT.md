@@ -264,14 +264,13 @@ MobileProbe  3) 结论：三发全通 / 部分通 / 全失败
 
 ## 5. 待办（下一步）
 
-1. ~~拿到一次编译通过~~ —— **已完成**（2026-10-16，见 3.1）；剩下的签名问题见 3.3。
-2. **跑自检**，把第 4 节那三行日志回报给用户 —— 这决定整条路线是否成立。
-3. **实现 stories 端点**（`core/mobileapi/MobileStories.ets`）：
-   - 参照 `instagrapi/mixins/story.py`：`get_reels_tray_feed` → `feed/reels_tray/`、
-     `user_stories` → `feed/user/{id}/story/`、`reels_media` → `feed/reels_media/`
-   - 响应模型对齐现有 `model/Story.ets`（`StoryReel` / `StoryItem`）；
-   - 现有实现 `core/NativeStories.ets`（1441 行）是硬试「一条 URL × 三种身份」，
-     新的作为**第一优先**、失败回退它。
+1. ~~拿到一次编译通过~~ —— **已完成**（2026-10-16，见 3.1）；签名也已解决（见第 9 节）。
+2. ~~**跑自检**，把第 4 节那三行日志回报给用户~~ —— **已完成**：`ok=7/7`（见第 9 节）。
+3. ~~**实现 stories 端点**（`core/mobileapi/MobileStories.ets`）~~ —— **已完成**：
+   - `tray()` → `feed/reels_tray/`（一发 213 条）；`reel()` → 先 `feed/user/{id}/story/`，
+     再 `feed/reels_media/?reel_ids=<裸 id>`（**JSON 数组形式回空**，见第 9 节）；
+   - 已接进 `core/NativeStories.tray()/reel()`，由 `MOBILE_STORIES_FIRST` 控制，
+     真机日志 `tray via mobile n=213` / `reel via mobile …` 为证；失败静默回退老路径。
 4. **实现 direct_v2 端点**（`core/mobileapi/MobileDirect.ets`）：
    - 参照 `instagrapi/mixins/direct.py`：`direct_threads` → `direct_v2/inbox/`、
      `direct_messages` → `direct_v2/threads/{id}/`、发送 → `direct_v2/threads/broadcast/text/`
@@ -283,8 +282,9 @@ MobileProbe  3) 结论：三发全通 / 部分通 / 全失败
    成熟得多，可作为参照把它救活。
 6. **接入调用方**：`StoriesTray.ets` / `Index.ets` 的快拍路径、`DirectPage.ets` /
    `DirectThreadViewModel.ets` 的私信路径 —— **先试新层、失败回退旧层**。
-7. **诊断面板接线**：把 `MobileProbe.lastSummary()` 挂到设置里的诊断项（现有机制见
-   `components/SettingsPanel.ets` 与 `core/StoryDiag.ets`）。
+7. ~~**诊断面板接线**：把 `MobileProbe.lastSummary()` 挂到设置里的诊断项~~ —— **已完成**：
+   设置 → 诊断新增「跑移动 API 自检（测试）」+ 结果行（点一下复制）；
+   同时自检结论与每一发的响应形状落盘到 `filesDir/Instarmony_mobile.txt`（`hdc file recv` 可取）。
 
 ---
 
@@ -325,14 +325,77 @@ MobileProbe  3) 结论：三发全通 / 部分通 / 全失败
 | 自检探针 `MobileProbe.ets` + `EntryAbility` 接线 | 完成，**编译通过** |
 | 命令行构建引导（`HVIGOR_USER_HOME` + 工程根 `node_modules` 完整性） | **已跑通**（见 3.1） |
 | 代码搬到 `C:\HMStudy\Instarmony`（用户指定） | 完成 |
-| 签名 | **阻塞**：证书 2026-10-10 过期（见 3.3，用户自行处理） |
-| 模拟器真机验证（跑自检看三行结论） | 未开始（等签名） |
-| stories / direct_v2 端点 | 未开始 |
+| 签名 | **已解决**（用户 2026-10-16 15:48 重新自动签名；`install -r` 原地覆盖成功，会话未丢） |
+| 模拟器真机验证（跑自检看三行结论） | **完成，全部通过**：`ok=7/7`（见第 9 节） |
+| stories 端点 `MobileStories.ets` + 接进 `NativeStories` | **完成并在真机跑通**：托盘 213 条、点开播放页有媒体（见第 9 节） |
+| direct_v2 端点 `MobileDirect.ets` | 未开始（收件箱那一发已验证 200 / 20 条线程） |
 
-### 下一步的最短路径
+### 下一步的最短路径（原计划，已完成）
 
-1. 把签名换掉（DevEco 自动签名 / 或 3.3 的手动重签）→ 出可安装的 HAP。
-2. `hdc install -r` 装上，启动，抓 `MobileProbe` 三行日志。
-3. 按第 4 节判读：**全通** → 继续做 stories / direct_v2；
-   **`login_required`/`challenge_required`** → 这条路线不成立，回去和用户讨论要不要做密码登录（L3）。
+1. ~~把签名换掉~~ → **已完成**（用户重新自动签名）。
+2. ~~`hdc install -r` 装上，启动，抓 `MobileProbe` 日志~~ → **已完成**，`ok=7/7`。
+3. ~~按第 4 节判读~~ → **结论：全通，这条路成立**（明细见第 9 节）。
+
+---
+
+## 9. 实测结论（2026-10-16，模拟器 + 已登录会话）
+
+设备：DevEco 模拟器 `127.0.0.1:5555`（Mate 80 镜像，已登录 IG 的 Instarmony 0.8.1）。
+取证方式：`MobileProbe` 自检报告落盘 →
+`hdc file recv /data/app/el2/100/base/com.fanha.instarmony/haps/entry/files/Instarmony_mobile.txt`。
+
+### 9.1 自检 `ok=7/7`（**这条路成立**）
+
+```
+结论 ok=7/7 info=ok(17358b) tray=ok(423408b) inbox=ok(832979b) self=ok(75b) user=ok(35271b) media=ok(36240b) mediaJson=ok(26b)
+身份 user=12345678901 mid=y claim=0 rur=y auth=173b dev=Pixel 8 Pro app=449.0.0.52.84 csrf=32
+主机 i.instagram.com
+```
+
+要点：
+- **`X-IG-WWW-Claim: 0` 也被接受**（读接口不校验 claim）；`auth=173b` 说明服务端下发的
+  `ig-set-authorization` 被捡回来并落盘了 —— 自举（`absorbResponseHeaders`）有效。
+- 网页那条 REST 在这台机器上**没有**被复现成 500（这里是"已经通的会话"），
+  所以 500 是否只由"来源/出口 IP"触发，仍需在测试者那边复测；但移动端这条路**至少多一条独立通路**。
+
+### 9.2 响应形状（写解析层的依据，全部实测）
+
+| 请求 | 形状 |
+| --- | --- |
+| `POST feed/reels_tray/`（表单带 `supported_capabilities_new`/`reason`/`timezone_offset`/`tray_session_id`/`request_id`/`page_size`/`_uuid`） | `{tray:[…213 条…], status:"ok"}`；**这一版不再带 `items`** |
+| 托盘条目 | `id`(= reel id)、`strong_id__`、`latest_reel_media`、`seen`(时刻，非布尔)、`media_count`、`media_ids`、`expiring_at`、`has_video`、`reel_type`、`user:{pk,id,username,full_name,profile_pic_url,is_private,is_verified}` |
+| `GET feed/user/{pk}/story/` | `{reel:{…27 键…}, status:"ok"}`，**媒体在 `reel.items`**（不在顶层 `items`）；自己没发快拍时 `reel:null` |
+| `GET feed/reels_media/?reel_ids=<裸 id>` | `{reels:{"<id>":{items:[…]}}}` ✓ 36KB |
+| `GET feed/reels_media/?reel_ids=["<id>"]`（**网页那条用的 JSON 数组形式**） | `{reels:{},status:"ok"}` ✗ **回空** —— 这很可能就是网页那条路拿不到东西的原因之一 |
+| media 条目 | `media_type`(1 图 / 2 视频)、`image_versions2.candidates[]`(实测 `2(640x1136)`)、`video_versions[]`、`original_width/height`、`taken_at`、`expiring_at`、`video_duration`、`pk`/`id`、`user` |
+| `POST direct_v2/inbox/` | `{inbox:{threads:[…20…], pinned_threads, unseen_count}, viewer:{…}, seq_id, has_pending_top_requests, status:"ok"}`；`threads[0]` 约 140 键（`thread_id`/`users`/`items[11]`/`last_activity_at`/`next_cursor`/`has_older`…）；`items[0]` 是消息（`item_id`/`item_type`/`text`/`timestamp`/`user_id`） |
+
+### 9.3 快拍已在真机跑通（不只是自检通过）
+
+- `NativeStories: tray via mobile n=213 first=peter928z`（老路径那一发**根本没发**，说明没有回退）；
+- `NativeStories: reel via mobile uid=… user=… n=1..3`（预热与点开都在走新路）；
+- 点第一个头像 → 播放页显示该用户的快拍媒体与文案（截图确认），转场/进度条正常。
+
+### 9.4 顺手修掉的两个身份稳定性缺陷（**不是这两个模块新引入的**）
+
+1. `MobileSession.loadSeed()` 用 `loaded` 布尔做闸门：**第一次读盘之后每次调用都掉进 `mint()`**
+   → 同一次运行里每发请求都换一套 phone_id / uuid / android_id（IG 视角就是"同一账号疯狂换设备"）。
+   已改为进程内缓存 `seed`，并让 `persist()` 同步更新缓存。
+2. `clearSession()` 先把 `this.identity = null` 再 `persist()`，而 `persist()` 见身份为空直接返回
+   → 盘上那份旧 `claim`/`rur`/`authorization`（**会话级**材料）会串到下一段会话。已改为显式落盘。
+
+### 9.5 复现命令（接手方照抄）
+
+```powershell
+# 构建（用户指定的原方法；注意它成功时也可能回 exit code 1，看 BUILD SUCCESSFUL）
+$env:DEVECO_SDK_HOME='C:\Program Files\Huawei\DevEco Studio\sdk'
+& 'C:\Program Files\Huawei\DevEco Studio\tools\node\node.exe' `
+  'C:\Program Files\Huawei\DevEco Studio\tools\hvigor\bin\hvigorw.js' `
+  --mode module -p product=default assembleHap --no-daemon
+
+# 装 + 跑 + 取自检报告
+hdc -t 127.0.0.1:5555 install -r entry\build\default\outputs\default\entry-default-signed.hap
+hdc shell "aa force-stop com.fanha.instarmony"; hdc shell "aa start -a EntryAbility -b com.fanha.instarmony"
+hdc file recv "/data/app/el2/100/base/com.fanha.instarmony/haps/entry/files/Instarmony_mobile.txt" .\Instarmony_mobile.txt
+```
 
