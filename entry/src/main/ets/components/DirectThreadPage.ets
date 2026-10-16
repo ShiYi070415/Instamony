@@ -8,7 +8,8 @@
  * **锚回加载前那条消息**（`scrollToIndex`），所以页面位置不变、不闪。
  */
 
-import { display } from '@kit.ArkUI';
+import { display, window, componentUtils } from '@kit.ArkUI';
+import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { DirectMessage, DirectThreadView } from '../model/Direct';
 import { DirectThreadViewModel } from '../viewmodel/DirectThreadViewModel';
@@ -35,6 +36,35 @@ const BUBBLE_MAX_RATIO: number = 0.72;
 const BUBBLE_GAP_VP: number = 2;
 const GROUP_GAP_VP: number = 12;
 const GROUP_GAP_MS: number = 2 * 60 * 1000;
+/**
+ * 顶部那行"加载中"动画的高度（vp）—— **始终占位**，不加载时高度为 0。
+ *
+ * 为什么要始终占一个 ListItem（而不是 `if (busy)` 才插进去）：列表用
+ * `scrollToIndex(added)` 锚回加载前那条消息，条数一变下标就全错位一格
+ * （"加载更老以后位置跳一条"）。留一个恒定下标就永远不会错。
+ */
+const LOADING_ROW_VP: number = 36;
+/**
+ * 贴底后再补几次"仍然贴底"的检查（毫秒）。
+ *
+ * 为什么需要：气泡里有图片/贴纸，它们是**异步解码**的 —— 解码完高度才变，
+ * 而那一刻列表不会自己重新贴底，于是"最新那条"被顶到输入框下面去（用户报的现象）。
+ * 这几次延迟检查覆盖"媒体在这段时间内落地"的常见情况；用户手动往上翻时不会抢（见 pinnedToBottom）。
+ */
+const REPIN_DELAYS_MS: Array<number> = [600, 1500, 3000];
+/**
+ * 输入条要落在**键盘顶边上方**多少 vp（自校正的目标间隙）。
+ *
+ * 取 12：比常规的 `COMMENT_INPUT_BOTTOM_VP`（28）小一点 —— 键盘弹起时屏幕已经很挤，
+ * 只要不贴着键盘、留一点呼吸就够了。
+ */
+const KEYBOARD_GAP_VP: number = 12;
+/** 自校正最多迭代几次（每次 130ms；近目标处 1:1，通常两三次就收敛）。 */
+const ALIGN_MAX_ATTEMPTS: number = 6;
+/** 自校正的容差（px）：差距在这个范围内就认为到位了。 */
+const ALIGN_TOLERANCE_PX: number = 8;
+/** 输入条的节点 id（自校正要靠它量实际位置）。 */
+const INPUT_BAR_ID: string = 'dm-thread-input-bar';
 
 @Component
 export struct DirectThreadPage {
@@ -62,8 +92,36 @@ export struct DirectThreadPage {
   /** 模拟"下拉"的下沉量（vp）：触顶时把内容弹下去一点再回来，做出原生下拉的过程。 */
   @State private pullVp: number = 0;
   @State private screenWidthVp: number = FALLBACK_WIDTH_VP;
+  /** 屏幕高度（vp）——只为诊断日志（对齐输入法坐标系用）。 */
+  private windowHeightVp: number = 0;
+  /** 屏幕高度（px）：与 `getRectangleById` 的窗口坐标同单位，自校正要用。 */
+  private screenHeightPx: number = 0;
+  /** 当前键盘高度（px，0 = 收起）——自校正用（避让区/回调给的都是 px）。 */
+  private keyboardPx: number = 0;
+  /** 自校正当前施加的抬升（px）。 */
+  private alignLiftPx: number = 0;
+  /**
+   * 输入法高度（vp，0 = 没弹起）。
+   *
+   * 为什么自己听这个：这一页是 `HdsNavDestination` 里的整屏内容，输入法弹起时
+   * **窗口那一层的避让没有作用到它**（真机实测：输入条被键盘整条盖住，见修复前的截图）。
+   * 所以这里自己听 `keyboardHeightChange`，把**输入条**和**列表**一起抬起来（见 build 里那两处）。
+   */
+  @State private keyboardVp: number = 0;
+  /** 输入法高度回调（销毁时要注销，否则组件没了还在写 @State）。 */
+  private keyboardHandler: ((height: number) => void) | null = null;
+  private keyboardWindow: window.Window | null = null;
   /** 当前"最新那条"的 id（区分"来新消息"和"往前插历史"）。 */
   private newestId: string = '';
+  /**
+   * 视图现在是不是贴着底部（用户在读最新的消息）。
+   *
+   * 用途：媒体晚一步解码、高度变化后要**再贴一次底**；但用户已经往上翻历史时**绝不能抢**
+   * （那会把他正在读的位置拽走）。判据放在 onDidScroll 里：向上滚过一小段就不再贴底，
+   * 下次"最新那条变了"时重新置回贴底。
+   */
+  private pinnedToBottom: boolean = true;
+  private lastOffsetY: number = 0;
   private readonly listScroller: Scroller = new Scroller();
   private readonly scrollDelta: ScrollDelta = new ScrollDelta();
 
@@ -71,8 +129,40 @@ export struct DirectThreadPage {
     try {
       const dsp: display.Display = display.getDefaultDisplaySync();
       this.screenWidthVp = this.getUIContext().px2vp(dsp.width);
+      this.windowHeightVp = this.getUIContext().px2vp(dsp.height);
+      this.screenHeightPx = dsp.height;
     } catch (error) {
       this.screenWidthVp = FALLBACK_WIDTH_VP;
+    }
+    // 输入法高度（见 keyboardVp 的说明）：弹起/收起时把输入条与列表一起抬/放。
+    try {
+      const context: common.Context = this.getUIContext().getHostContext() as common.Context;
+      window.getLastWindow(context).then((win: window.Window): void => {
+        this.keyboardWindow = win;
+        this.keyboardHandler = (height: number): void => {
+          this.keyboardPx = height > 0 ? height : 0;
+          if (height <= 0) {
+            // 键盘收起：抬升清零，输入条回到底部常规位置。
+            this.keyboardVp = 0;
+            return;
+          }
+          /*
+           * **从"不抬"开始**，让下面那次实测决定要抬多少。
+           *
+           * 为什么不直接按键盘高度抬：窗口层自己也可能已经避让（实测两种行为都见过），
+           * 直接抬就会叠成"输入条飘到屏幕中间"。从 0 起、只补实测差额，两种情况下都对。
+           */
+          this.keyboardVp = 0;
+          this.alignLiftPx = 0;
+          // 键盘顶起来以后可视区变了：贴底的那一屏要重新贴一次。
+          this.scrollToNewest(false);
+          this.alignInputBarToKeyboard(0);
+        };
+        win.on('keyboardHeightChange', this.keyboardHandler);
+      }).catch((): void => {
+      });
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'keyboard listener failed: %{public}s', (error as Error).message);
     }
     this.vm.onView = (view: DirectThreadView | null): void => {
       const before: string = this.newestId;
@@ -110,6 +200,15 @@ export struct DirectThreadPage {
 
   aboutToDisappear(): void {
     this.vm.stopPolling();
+    // 注销输入法监听（不注销的话组件没了回调还在跑，去写已释放的 @State）。
+    if (this.keyboardWindow !== null && this.keyboardHandler !== null) {
+      try {
+        this.keyboardWindow.off('keyboardHeightChange', this.keyboardHandler);
+      } catch (error) {
+      }
+      this.keyboardHandler = null;
+      this.keyboardWindow = null;
+    }
     // 滚动/收圈那几个 setTimeout（审计项 A2）：销毁后不能再碰 listScroller 与 @State。
     for (let index: number = 0; index < this.scrollTimers.length; index++) {
       clearTimeout(this.scrollTimers[index]);
@@ -118,6 +217,61 @@ export struct DirectThreadPage {
     if (this.settleTimer >= 0) {
       clearTimeout(this.settleTimer);
       this.settleTimer = -1;
+    }
+  }
+
+  /**
+   * 把输入条校正到"键盘顶边上方 `KEYBOARD_GAP_VP`"的位置（反馈式自校正，最多 `ALIGN_MAX_ATTEMPTS` 次）。
+   *
+   * ## 为什么不是"按键盘高度一次算准"
+   * 实测（本机 1280×2832px / 365.7×809.1vp）：输入条被键盘盖住 1043px 时按 1:1 补 1043px，
+   * 它会**跑到键盘上方 903px** —— "我补多少"和"它实际抬多少"在**大偏移**下约 1:1.87
+   * （窗口那层自己也避让，两者叠加），但在**目标附近是 1:1**（试过：559px→399px 这一段，
+   * 每减 160px 过冲就少 161px）。
+   *
+   * 所以这里用最简单的反馈：`抬升 += 还差多少`，量一次补一次。近目标处一步到位，
+   * 第一发的大过冲（130ms）用户看不见。**不用两点解直线**：那条线在大偏移处并不直
+   * （实测按它解出来的 559px 反而把过冲留在 -419px）。
+   */
+  private alignInputBarToKeyboard(attempt: number): void {
+    if (this.keyboardPx <= 0 || attempt > ALIGN_MAX_ATTEMPTS) {
+      return;
+    }
+    const need: number = this.measureAlignNeedPx();
+    if (Number.isNaN(need)) {
+      // 量不到（还没布局出来）：等下一次事件。
+      return;
+    }
+    hilog.info(DOMAIN, TAG, 'input bar align try=%{public}d need=%{public}dpx lift=%{public}dpx',
+      attempt, Math.round(need), Math.round(this.alignLiftPx));
+    if (Math.abs(need) <= ALIGN_TOLERANCE_PX) {
+      return;
+    }
+    const next: number = this.alignLiftPx + need;
+    this.alignLiftPx = next > 0 ? next : 0;
+    this.keyboardVp = this.getUIContext().px2vp(this.alignLiftPx);
+    const again: number = attempt + 1;
+    this.scrollTimers.push(setTimeout((): void => {
+      this.alignInputBarToKeyboard(again);
+    }, 130));
+  }
+
+  /**
+   * 还差多少 px 才到位（>0 = 被键盘盖住、要往上抬；<0 = 抬过头了）。
+   *
+   * 量不到（节点还没布局）给 NaN。单位统一成 **px**（`getRectangleById` 的窗口坐标就是 px）。
+   */
+  private measureAlignNeedPx(): number {
+    try {
+      const info: componentUtils.ComponentInfo =
+        this.getUIContext().getComponentUtils().getRectangleById(INPUT_BAR_ID);
+      const barBottomPx: number = info.windowOffset.y + info.size.height;
+      const keyboardTopPx: number = this.screenHeightPx - this.keyboardPx;
+      const density: number =
+        this.windowHeightVp > 0 ? this.screenHeightPx / this.windowHeightVp : 3.5;
+      return KEYBOARD_GAP_VP * density - (keyboardTopPx - barBottomPx);
+    } catch (error) {
+      return Number.NaN;
     }
   }
 
@@ -134,8 +288,21 @@ export struct DirectThreadPage {
     return this.view.messages.concat(this.pending);
   }
 
-  private scrollToNewest(): void {
+  /**
+   * 贴到最新那条（"最新消息显示在输入框上方"）。
+   *
+   * @param force true = 不管用户在哪都贴底（首屏 / 来了新消息 / 自己发出去时用）；
+   *              false = **只在用户本来就贴着底部时**才贴（媒体晚到、键盘顶起这类"顺带重排"用，
+   *              免得把正在翻历史的用户拽走）。
+   */
+  private scrollToNewest(force: boolean = true): void {
+    if (force) {
+      this.pinnedToBottom = true;
+    }
     const run: () => void = (): void => {
+      if (!this.pinnedToBottom) {
+        return;
+      }
       try {
         this.listScroller.scrollEdge(Edge.Bottom);
       } catch (error) {
@@ -144,6 +311,13 @@ export struct DirectThreadPage {
     this.scrollTimers.push(setTimeout(run, 0));
     this.scrollTimers.push(setTimeout(run, 60));
     this.scrollTimers.push(setTimeout(run, 200));
+    /*
+     * 再补几次"仍然贴底"的检查：气泡里的图片/贴纸是异步解码的，解码完高度才变，
+     * 那一刻列表不会自己重新贴底 —— 不补的话最新那条会被顶到输入框下面（用户报的现象）。
+     */
+    for (let index: number = 0; index < REPIN_DELAYS_MS.length; index++) {
+      this.scrollTimers.push(setTimeout(run, REPIN_DELAYS_MS[index]));
+    }
   }
 
   /**
@@ -203,7 +377,8 @@ export struct DirectThreadPage {
         const added: number = this.allMessages().length - before;
         if (added > 0) {
           try {
-            this.listScroller.scrollToIndex(added, false, ScrollAlign.START);
+            // **+1**：列表第 0 格是那行"加载中"占位（见 LOADING_ROW_VP），消息从下标 1 开始。
+            this.listScroller.scrollToIndex(added + 1, false, ScrollAlign.START);
           } catch (error) {
           }
         }
@@ -304,6 +479,16 @@ export struct DirectThreadPage {
             .borderRadius(14)
             .backgroundColor($r('app.color.field_background'))
             .alt($r('app.media.grid_placeholder'))
+            /*
+             * 图解码完 = 这一条的高度真正定下来了：如果用户还贴在底部，就再贴一次 ——
+             * 否则晚到的图会把"最新那条"顶到输入框下面去（用户报的正是这个）。
+             * 用户已经往上翻历史时 `pinnedToBottom` 是 false，这里不会抢他的位置。
+             */
+            .onComplete((): void => {
+              if (this.pinnedToBottom) {
+                this.scrollToNewest(false);
+              }
+            })
           if (message.isVideo) {
             SymbolGlyph($r('sys.symbol.play_fill'))
               .fontSize(18)
@@ -405,6 +590,29 @@ export struct DirectThreadPage {
         // 「查看更多消息」那颗按钮和"触顶自动加载"都按需求删掉了，只留这一个入口。
         Refresh({ refreshing: $$this.refreshing }) {
           List({ space: 0, scroller: this.listScroller }) {
+            /*
+             * **顶部"加载中"动画（始终占位、置中）**（用户："加载时在最顶部消息上方显示刷新动画，
+             * 置中显示"）。
+             *
+             * 为什么固定占一格（高度 0/36 切换）而不是 `if (busy)` 才插：见 LOADING_ROW_VP 的说明
+             * ——列表靠 `scrollToIndex(added + 1)` 锚位置，下标必须是恒定的。
+             * 那一圈**在原生的下拉指示器之外**：原生那颗只在"手动下拉"那一下看得见，
+             * 而"触顶自动加载""点开会话""媒体补齐重排"这些都不经过手势，用户看不到任何反馈。
+             */
+            ListItem() {
+              Row() {
+                if (this.busy) {
+                  LoadingProgress()
+                    .width(24)
+                    .height(24)
+                    .color($r('app.color.secondary_text'))
+                }
+              }
+              .width('100%')
+              .height(this.busy ? LOADING_ROW_VP : 0)
+              .justifyContent(FlexAlign.Center)
+            }
+
             ForEach(this.allMessages(), (message: DirectMessage, index: number): void => {
               ListItem() {
                 this.bubble(message, index)
@@ -449,8 +657,16 @@ export struct DirectThreadPage {
           .contentEndOffset(BOTTOM_OFFSET)
           .clip(false)
           .onDidScroll((scrollOffset: number, scrollState: ScrollState): void => {
-            this.scrollDelta.report(this.listScroller.currentOffset().yOffset, scrollState,
-              this.onFeedScroll);
+            const y: number = this.listScroller.currentOffset().yOffset;
+            /*
+             * 用户**往上翻**了（偏移在减小）：记成"不在贴底状态"，后面那几次延迟补贴底就不再抢位置
+             * （见 scrollToNewest(false) 与 pinnedToBottom 的说明）。往回滚到底部时照旧贴底。
+             */
+            if (y < this.lastOffsetY - 12) {
+              this.pinnedToBottom = false;
+            }
+            this.lastOffsetY = y;
+            this.scrollDelta.report(y, scrollState, this.onFeedScroll);
           })
           /*
            * **触顶自动加载**：滑到最上面就自动去取更老那批，但**不**自己去点亮刷新圈
@@ -477,7 +693,14 @@ export struct DirectThreadPage {
       }
       .width('100%')
       .height('100%')
+      /*
+       * **输入法避让（列表这一侧）**：键盘弹起时把整个内容区抬起来 `keyboardVp`，
+       * 这样列表的可视底边就是键盘顶边，最后几条消息不会被键盘压住。
+       * 输入条自己要再抬一次（它在下面那个 Stack 层里，见 inputOverlay）。
+       */
+      .padding({ bottom: this.keyboardVp })
 
+      // 悬浮输入条（在 Stack 的 Bottom 对齐层里，自己再抬一次输入法高度）。
       this.inputOverlay()
     }
     .width('100%')
@@ -489,22 +712,34 @@ export struct DirectThreadPage {
   @Builder
   inputOverlay() {
     Column() {
-      CommentInputBar({
-        hint: $r('app.string.direct_thread_hint'),
-        sideInset: 12,
-        bottomInset: 0,
-        onSend: (text: string): void => {
-          this.vm.send(text)
-            .then((): void => {
-              this.syncFromVm();
-              this.scrollToNewest();
-            })
-            .catch((): void => {
-            });
-        }
-      })
+      /*
+       * 里面再包一层：**id 必须挂在"不含底部留白"的那一层上**。
+       *
+       * 踩过的坑：id 与 `padding` 挂在同一个节点上时，`getRectangleById` 量到的是**含 padding 的外框**
+       * ——外框底部被 Stack 钉在页面底部、不会随 padding 变，于是自校正读到的永远是同一个位置
+       * （日志里 `need` 一直 238px 不动就是这么来的）。
+       */
+      Column() {
+        CommentInputBar({
+          hint: $r('app.string.direct_thread_hint'),
+          sideInset: 12,
+          bottomInset: 0,
+          onSend: (text: string): void => {
+            this.vm.send(text)
+              .then((): void => {
+                this.syncFromVm();
+                this.scrollToNewest();
+              })
+              .catch((): void => {
+              });
+          }
+        })
+      }
+      .width('100%')
+      .id(INPUT_BAR_ID)
     }
     .width('100%')
-    .padding({ bottom: COMMENT_INPUT_BOTTOM_VP })
+    // 常规留白 + **输入法抬升**：键盘弹起时输入条抬到键盘上方（抬多少由自校正量出来）。
+    .padding({ bottom: COMMENT_INPUT_BOTTOM_VP + this.keyboardVp })
   }
 }
