@@ -24,8 +24,6 @@ const RING_GAP_VP: number = 3;
 const RING_WIDTH_VP: number = 2.5;
 /** 每一项的宽度（含左右留白）。 */
 const ITEM_WIDTH_VP: number = 106;
-/** 横向列表两端的留白（vp，和 feeds 卡片对齐）。 */
-const SIDE_PADDING_VP: number = 8;
 /** 已读（全看完）时的灰色环。 */
 const SEEN_GREY: string = '#C7C7C7';
 /**
@@ -317,8 +315,9 @@ export struct StoriesTray {
     }
     .width('100%')
     .height(AVATAR_VP + RING_GAP_VP * 2 + 26)
-    // 和真托盘同一套左右留白（见 build 里 List 的 padding），占位与真内容左右对齐。
-    .padding({ left: SIDE_PADDING_VP, right: SIDE_PADDING_VP })
+    // 左右留白为零（与真托盘一致，见 build 里 List 那段"穿过屏幕"的说明）：占位与真内容
+    // 必须左右对齐，否则数据一到位整排会横向跳一下。
+    .padding({ left: 0, right: 0 })
     // 占位不接手指：它只是"还没到"的观感，别让它抢掉列表的滑动。
     .hitTestBehavior(HitTestMode.Transparent)
   }
@@ -356,17 +355,17 @@ export struct StoriesTray {
       .width('100%')
       .height(AVATAR_VP + RING_GAP_VP * 2 + 26)
       /*
-       * 首尾留白用**左右内边距**（回到最早那版、真机验证过能正常渲染的写法）。
+       * **左右不留白**（需求："我想让它穿过屏幕左右"；用户报的"屏幕边缘出现空隙"就是这里）。
        *
-       * 试过两步都翻车：
-       *   · 负 margin：只能撑大盒子，管不了内容两端 —— 现场是"左边贴住、右边不贴"；
-       *   · `contentStartOffset` / `contentEndOffset`：装上之后**整条快拍序列直接不渲染了**
+       * 三条路的实测记录，别再走回头路：
+       *   · **List 的左右 padding**（曾经这么写）：滑动区被一起缩窄 → 内容在离屏幕边
+       *     8vp 处就被裁掉，两端于是永远有一条**空带**（截图里左边那条黑边 +
+       *     被切一半的圆环就是这个）；
+       *   · **负 margin**：只能撑大盒子，管不了内容两端 —— 现场是"左边贴住、右边不贴"；
+       *   · **`contentStartOffset` / `contentEndOffset`**：装上之后整条快拍序列直接不渲染
        *     （日志里 `story queue n=136`、`story visible 0-3` 全正常，屏幕上一片空）。
-       * 所以回到 padding：第一位头像离左边、最后一位离右边各留 `SIDE_PADDING_VP`。
-       * 代价是滚动区也被缩了同样宽度（滑动时两端不会滑出屏幕外）—— 要"穿过屏幕"就得先解决
-       * 上面那两个写法为什么不工作。
+       * 所以最终就是**什么都不加**：行本身整屏宽，第一位紧贴左边、内容滑到两端时直接穿出屏幕。
        */
-      .padding({ left: SIDE_PADDING_VP, right: SIDE_PADDING_VP })
     } else if (!this.loaded) {
       // 正在拉：先摆一排灰色占位（而不是空一块），观感是"内容马上来"。
       this.skeletonRow()

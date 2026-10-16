@@ -180,6 +180,8 @@
 | `65e9e09` | **快拍 empty 修复** 托盘条目收全部候选 id（`StoryTrayItem.altIds`）；主 id 答空时**换备选 id 再问**；预取链同样带上；报告里写出备选 id |
 | `107ffb7` | **快拍 empty 诊断加强** `trayshape_<ts>.txt`（每条条目 `reel_type`/`besties`/`expiring_at`/`entryItems`/`node.id`/`user.pk`）+ `trayraw_<ts>.txt`；`storyfail` 加 `shape=`/`raw[node]=`；加"用托盘条目自带 items 兜底" |
 | `71a53dc` | **诊断汇总文件** `Instarmony_diag.txt`（固定名，覆盖写）：怎么读 + 当前状态 + 最近 8 条失败记录 + 全部托盘形状 + 前 40 条原始条目；首启落盘一次、每次失败追加；**重启前先捞回上一份的失败记录**（实测重启不丢） |
+| `4b5a6fb` | **私信会话页三处** 最新消息贴底（媒体晚到后补贴底，且不抢正在翻历史的人）+ 顶部居中加载动画（列表第 0 格恒占位）+ 输入法避让（量实测矩形自校正，`need` 三次收敛到 0） |
+| 本轮 | **快拍托盘左右不留白**（用户："屏幕边缘又出现空隙"）：`StoriesTray` 的 List 去掉左右 padding —— 它会把**滑动区一起缩窄**，内容在离屏幕边 8vp 处就被裁掉、两端永远有一条空带（截图里左边那条黑边 + 半个圆环）；负 margin 与 `contentStartOffset/EndOffset` 都试过不能用的原因写在代码注释里。改完第一位紧贴左边、内容滑到两端直接穿出屏幕 |
 
 ## 遗留 / 下一步（本轮未做）
 
