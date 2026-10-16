@@ -449,10 +449,17 @@ export class NativeProfile {
   static postsFromItems(items: Array<Object>): Array<ProfilePost> {
     const posts: Array<ProfilePost> = [];
     for (let index: number = 0; index < items.length; index++) {
-      const node: Record<string, Object> | null = NativeProfile.asRecord(items[index]);
-      if (node === null) {
+      const raw: Record<string, Object> | null = NativeProfile.asRecord(items[index]);
+      if (raw === null) {
         continue;
       }
+      /*
+       * **两种包装都要认**（真机实测：收藏那一发 `feed/saved/` 给的是 `{media:{…}}`，
+       * 而帖子 `feed/user/{pk}/` 给的是媒体对象本身）—— 只认后者时收藏 24 条会被解析成 0 条
+       * （2026-10-17 日志：`tab[saved] ok items=24` 紧跟着 `posts=0`）。
+       */
+      const wrapped: Record<string, Object> | null = NativeProfile.recordOf(raw, 'media');
+      const node: Record<string, Object> = wrapped === null ? raw : wrapped;
       const post: ProfilePost | null = NativeProfile.postOf(node);
       if (post !== null) {
         posts.push(post);

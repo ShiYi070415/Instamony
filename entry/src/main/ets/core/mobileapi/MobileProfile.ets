@@ -148,14 +148,51 @@ export class MobileProfile {
     return page;
   }
 
-  /** 一发 POST 网格（Reels 分页那条用：表单要 `target_user_id`）。 */
+  /**
+   * 一发 POST 网格（Reels 分页那条用：表单要 `target_user_id`）。
+   *
+   * ⚠️ 实测（2026-10-17）：把 `target_user_id` 只放进**签名体**时，IG 回
+   * `400 {"message":"target_user_id is required"}` —— 说明这条端点是从**查询串**读这个参数的
+   * （instagrapi 的 `user_clips` 传的也是 `params`）。所以先按查询串发，被拒再按签名体发一次
+   * （两条都留着：换版本时哪条通就用哪条，失败也只是多一发）。
+   */
   private static async gridPost(endpoint: string, userId: string, count: number, maxId: string,
                                 kind: string, priority: number): Promise<MobileGridPage | null> {
-    const started: number = Date.now();
-    const result: MobileResult | null = await MobileProfile.postForm(endpoint, userId, count, maxId,
-      priority);
-    if (result === null) {
+    const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
+    if (identity === null) {
       return null;
+    }
+    const data: Record<string, Object> = MobileRequest.withExtraData(identity);
+    data['page_size'] = count;
+    if (maxId.length > 0) {
+      data['max_id'] = maxId;
+    }
+    let params: string = `target_user_id=${encodeURIComponent(userId)}`;
+    let started: number = Date.now();
+    let result: MobileResult = await MobileRequest.send(endpoint, MobileRequest.formOf(data), params,
+      true, null, new MobileOptions(ApiThrottle.MOBILE, priority));
+    if (!result.ok) {
+      hilog.info(DOMAIN, TAG, 'tab[%{public}s] query form miss: %{public}s', kind, result.summary());
+      // 第二次：把 `target_user_id` 放进签名体（老写法）。
+      data['target_user_id'] = userId;
+      params = maxId.length > 0 ? `max_id=${encodeURIComponent(maxId)}` : '';
+      started = Date.now();
+      result = await MobileRequest.send(endpoint, MobileRequest.formOf(data), params, true, null,
+        new MobileOptions(ApiThrottle.MOBILE, priority));
+      if (!result.ok) {
+        /*
+         * 第三次：**不包 signed_body**（普通表单体）。
+         *
+         * 依据：两次都被判 `target_user_id is required`，说明 IG 这条端点读的是**裸表单字段**，
+         * 而签名体把整个体包成了一个 `signed_body=` 字段（其它端点认，这条不认）。
+         * instagrapi 里也有 `with_signature=False` 的先例（如 `interest_nux/list_all/`）。
+         */
+        hilog.info(DOMAIN, TAG, 'tab[%{public}s] signed body miss, retry unsigned: %{public}s',
+          kind, result.summary());
+        started = Date.now();
+        result = await MobileRequest.send(endpoint, MobileRequest.formOf(data), params, false, null,
+          new MobileOptions(ApiThrottle.MOBILE, priority));
+      }
     }
     if (!result.ok) {
       hilog.info(DOMAIN, TAG, 'tab[%{public}s] miss (%{public}s): %{public}s',
@@ -165,23 +202,6 @@ export class MobileProfile {
     const page: MobileGridPage | null = MobileProfile.gridOf(result, kind, started);
     MobileProfile.noteUsable(kind, page !== null);
     return page;
-  }
-
-  /** Reels 分页的表单（instagrapi 的 `user_clips` 语义：要 `target_user_id`）。 */
-  private static async postForm(endpoint: string, userId: string, count: number, maxId: string,
-                                priority: number): Promise<MobileResult | null> {
-    const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
-    if (identity === null) {
-      return null;
-    }
-    const data: Record<string, Object> = MobileRequest.withExtraData(identity);
-    data['target_user_id'] = userId;
-    data['page_size'] = count;
-    if (maxId.length > 0) {
-      data['max_id'] = maxId;
-    }
-    return await MobileRequest.send(endpoint, MobileRequest.formOf(data), '', true, null,
-      new MobileOptions(ApiThrottle.MOBILE, priority));
   }
 
   /** 网格响应 → 一页（`items` + 游标 + 还有没有）。 */
