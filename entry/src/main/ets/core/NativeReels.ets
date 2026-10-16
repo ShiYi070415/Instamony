@@ -17,6 +17,8 @@ import { Reel } from '../model/Reel';
 import { NativeFeed, NativeFetchResult } from './NativeFeed';
 import { MediaQuality, PickedMedia } from './MediaQuality';
 import { ApiThrottle } from './ApiThrottle';
+import { JsonRead } from './JsonRead';
+import { MobileDiscover, MobileMediaPage } from './mobileapi/MobileDiscover';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeReels';
@@ -145,6 +147,13 @@ export class NativeReels {
   private static followDiagDone: boolean = false;
   /** "载荷里有没有收藏状态"那条诊断只打一次（见 toReel）。 */
   private static saveDiagDone: boolean = false;
+  /**
+   * 这一轮的 reels 是不是**移动端探索流**给的（见 viaExplore）。
+   *
+   * 记它的唯一原因：两种路的游标互不通用，翻页必须回到"给游标的那条路"，
+   * 否则第二页要么空、要么被当成第一页反复请求。
+   */
+  private static exploreUsable: boolean = false;
 
   /**
    * app 启动时就发一发 reels 第一页，结果留在内存里等 Reels 页来取（幂等）。
@@ -191,9 +200,21 @@ export class NativeReels {
    * 要一页 reels 并解析好。失败一律 null（没模板 / 没登录 / HTTP 非 200 / 解析不出条目）。
    */
   static async fetchPage(first: number, cursor: string): Promise<NativeReelsPage | null> {
-    // **被限流期间不发**：这一段是白打（还会把冷却期越拖越长，见 core/ApiThrottle）。
+    /*
+     * **被限流期间**（见 core/ApiThrottle）：GraphQL 那条一发都不打，但**移动端探索流还能顶**
+     * （`discover/topical_explore/` 给的也是 clips 媒体，带 `video_versions`，可直接播）。
+     *
+     * 为什么要这条兜底：真机日志里 clips 那条被 IG 直接回
+     * `{"errors":[{"message":"Rate limit exceeded","code":1675004}]}`（12 分钟冷却）——
+     * 这段时间用户点进视频标签原来是"什么都没有"。换一条端点虽然个性化差一点，
+     * 但**有内容**远好过空着。
+     */
     if (ApiThrottle.blocked(ApiThrottle.CLIPS)) {
-      hilog.info(DOMAIN, TAG, 'reels skipped: rate limited, %{public}dmin left',
+      const viaExplore: NativeReelsPage | null = await NativeReels.viaExplore(cursor);
+      if (viaExplore !== null) {
+        return viaExplore;
+      }
+      hilog.info(DOMAIN, TAG, 'reels skipped: rate limited, %{public}dmin left (no explore fallback)',
         ApiThrottle.remainingMinutes(ApiThrottle.CLIPS));
       return null;
     }
@@ -209,7 +230,8 @@ export class NativeReels {
       hilog.warn(DOMAIN, TAG, 'reels rate limited → back off %{public}dmin body=%{public}s',
         ApiThrottle.remainingMinutes(ApiThrottle.CLIPS),
         result.body.substring(0, 160).replace(/[\r\n]+/g, ' '));
-      return null;
+      const viaExplore: NativeReelsPage | null = await NativeReels.viaExplore(cursor);
+      return viaExplore;
     }
     let parsed: NativeReelsPage | null = result.ok ? NativeReels.parse(result.body, result.ms) : null;
     if (parsed === null && cursor.length === 0) {
@@ -225,7 +247,7 @@ export class NativeReels {
         hilog.warn(DOMAIN, TAG, 'reels rate limited on retry → back off %{public}dmin body=%{public}s',
           ApiThrottle.remainingMinutes(ApiThrottle.CLIPS),
           result.body.substring(0, 160).replace(/[\r\n]+/g, ' '));
-        return null;
+        return await NativeReels.viaExplore(cursor);
       }
       parsed = result.ok ? NativeReels.parse(result.body, result.ms) : null;
     }
@@ -234,6 +256,54 @@ export class NativeReels {
         result.ok ? 'y' : 'n', result.bytes, NativeReels.diagnose(result.body));
     }
     return parsed;
+  }
+
+  /**
+   * **移动端探索流兜底**：clips 那条 GraphQL 被 IG 限流 / 不可用时，用
+   * `discover/topical_explore/`（见 core/mobileapi/MobileDiscover）里的 clips 媒体顶上。
+   *
+   * 为什么行得通：探索流那份 `sectional_items[].layout_content.medias[].media` 就是**媒体对象**
+   * （`code` / `pk` / `video_versions` / `image_versions2` / `user` / `like_count`…），
+   * 与 clips 那条同形状，所以直接喂给 `toReel` 即可（它本来就只认这几个键）。
+   *
+   * 代价说清楚：那是"推荐/探索"的排序，不是 Reels 标签那套个性化排序；封面/音乐字段也可能稀疏
+   * （探索流不一定给 `clips_metadata`）。所以这条路**只在主路不可用时**走，
+   * 而且游标与主路不通用 —— 第一页从哪条来的，翻页就继续走哪条（见 exploreUsable）。
+   */
+  private static async viaExplore(cursor: string): Promise<NativeReelsPage | null> {
+    if (cursor.length > 0 && !NativeReels.exploreUsable) {
+      return null;
+    }
+    const page: MobileMediaPage | null = await MobileDiscover.explore(cursor, ApiThrottle.interactive());
+    if (page === null) {
+      if (cursor.length === 0) {
+        NativeReels.exploreUsable = false;
+      }
+      hilog.info(DOMAIN, TAG, 'explore fallback miss cursor=%{public}d', cursor.length);
+      return null;
+    }
+    const reels: Array<Reel> = [];
+    for (let index: number = 0; index < page.medias.length; index++) {
+      const media: Record<string, Object> | null = JsonRead.asRecord(page.medias[index]);
+      if (media === null) {
+        continue;
+      }
+      // 只收有视频的（探索流里也夹着图片帖）：`toReel` 自己会剔除，这里不用重复判。
+      const reel: Reel | null = NativeReels.toReel(media as IgClipsMedia);
+      if (reel !== null) {
+        reels.push(reel);
+      }
+    }
+    if (reels.length === 0) {
+      hilog.info(DOMAIN, TAG, 'explore fallback: medias=%{public}d but no playable reel',
+        page.medias.length);
+      return null;
+    }
+    NativeReels.exploreUsable = true;
+    hilog.info(DOMAIN, TAG,
+      'reels via mobile explore n=%{public}d medias=%{public}d more=%{public}s ms=%{public}d',
+      reels.length, page.medias.length, `${page.hasMore}`, page.ms);
+    return new NativeReelsPage(reels, page.nextCursor, page.hasMore, page.ms);
   }
 
   /**

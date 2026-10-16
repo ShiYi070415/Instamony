@@ -641,8 +641,39 @@ use_sectional_payload=true & cluster_id=explore_all:0 & session_id=<设备 uuid>
   IG 的错误结构（`"message"`/`"error_type"`/`"errors"`/`"severity"` 附近）时才算；
   `NativeReels` 那两个分支同时把**响应开头 160 字**打进日志，便于下次一眼看出误判。
 
-### 12.4 还没做的
+### 12.4 reels：主路被限流时用探索流兜底（本轮实测后补上）
 
-- `clips/home/` 既然 404，reels **仍然是 GraphQL 模板回放**。它的速度提升靠：预热更早 +
-  模板落盘（已有）+ 不再被假的限流锁住 + 去掉不必要的重发。移动端那条路要等 IG 重新给出
-  等价端点（侦察脚本留着，随时可以再跑一遍看）。
+真机实测（2026-10-17 01:30）：clips 那条 GraphQL **确实被 IG 限流**了，响应就是
+`{"errors":[{"message":"Rate limit exceeded","severity":"CRITICAL","code":1675004}],...}`
+（severity=CRITICAL → 12 分钟冷却）。所以"把 reels 提速"在这条路上没有空间：它现在根本发不出去。
+
+于是加了兜底：`NativeReels.viaExplore()` 在被限流（或 clips 那发受限）时改用
+`discover/topical_explore/` —— 那一份 `sectional_items[].layout_content.medias[].media` 就是
+**clips 媒体对象**（`code`/`pk`/`video_versions`/`image_versions2`/`user`/计数），直接喂给
+现成的 `toReel` 即可。实测：`reels via mobile explore n=12 medias=16 more=true`，
+页面正常播放、作者行/计数/关注按钮都在。
+
+代价写在代码注释里：那是探索/推荐的排序，不是 Reels 标签那套个性化排序；封面/音乐字段可能稀疏。
+所以只在主路不可用时走，并且**游标不通用** —— 第一页从哪条路来，翻页就继续走哪条
+（`NativeReels.exploreUsable`）。`ReelsViewModel.loadFirst` 同时改成"先铺缓存、再试兜底"，
+而不是一被限流就直接认输（预取深度仍是 `NATIVE_CACHE_PAGES=2`，没有被这次改动放大）。
+
+另外 `clips/home/` 既然 404，reels 的**主路**仍然是 GraphQL 模板回放（预热更早 + 模板落盘 +
+不再被假的限流锁住 + 去掉不必要的重发）。侦察脚本留着（`ENDPOINT_SCOUT`），随时可以再跑一遍看
+IG 有没有给出等价端点。
+
+### 12.5 真机验证（2026-10-17 01:30，账号 `alice`）
+
+- 搜索推荐流：`MobileDiscover: explore ok sections=8 medias=16 more=true ms=6221 bytes=1261017`
+  → `NativeSearch: recommend mobile medias=16 posts=16`（16/16 全部映射成功），
+  搜索页截图为三列瀑布流、比例各异、视频格有播放角标；翻页也走探索流自己的游标。
+- 搜索账号：`discover/topical_explore/` 与 `fbsearch/account_serp/` 都不需要模板，
+  所以 `hasRecommendedSource()` 一为真就不再跑 `coldTemplateCapture()`（那一步要导航隐藏网页）。
+- 主页：`MobileProfile: info ok (users/12345678901/info/) user=alice` +
+  `medias ok items=8` → `NativeProfile: posts via mobile items=8 posts=8`（8/8），
+  视频/收藏/被标注三段仍走模板（`PolarisProfileReelsTabContentQuery` 等）。
+- reels：clips 被限流 → 立刻落探索流兜底，页面正常播放（截图可见作者 `carol`、
+  计数 2622/6/92、关注按钮、静音/下载按钮）。
+- 耗时说明：日志里的 `ms` 常常是 6~13 秒，那是**排队等待**（`paced … waited=…`）而不是网络 ——
+  启动那一轮快拍预取（5 位用户）+ 托盘 + 私信排在前面，交互优先级那一发会插队。
+

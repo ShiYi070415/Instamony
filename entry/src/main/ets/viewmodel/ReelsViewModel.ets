@@ -124,13 +124,22 @@ export class ReelsViewModel implements ReelStreamVm {
     const startedMs: number = Date.now();
     try {
       /*
-       * **被限流期间不发请求**（见 core/ApiThrottle）：先把上次落盘那一页铺出来
-       * （ReelsCache），让用户至少能刷上次的视频；实在没有缓存才如实说"被限流了、稍后再试"。
-       * 这一段以前是"接着猛打"：clips 那条一被限流，5 次回放 + 启动预热全都在打同一发，
-       * 冷却期只会越来越长。
+       * **被限流也不能直接认输**（见 core/ApiThrottle）：
+       *   ① 先把上次落盘那一页铺出来（ReelsCache）—— 用户立刻有内容；
+       *   ② **仍然试一次** `fetchPage`：它内部会走**移动端探索流**兜底
+       *      （`discover/topical_explore/`，见 NativeReels.viaExplore），那条端点不受 clips 那把锁管；
+       *      拿到新内容就整体替换（个性化差一点，但比"停在上次那几条"强）。
        */
       if (ApiThrottle.blocked(ApiThrottle.CLIPS)) {
         this.fromCacheOrSay(ApiThrottle.remainingMinutes(ApiThrottle.CLIPS));
+        const fallback: NativeReelsPage | null = await NativeReels.fetchPage(NATIVE_PAGE_COUNT, '');
+        if (fallback !== null) {
+          this.applyNativePage(fallback, false);
+          hilog.info(DOMAIN, TAG, 'reels first via explore fallback n=%{public}d ms=%{public}d',
+            fallback.reels.length, Date.now() - startedMs);
+          this.onStatus('已加载 ' + fallback.reels.length + ' 条（视频接口受限，先用推荐流顶上）');
+          this.prefetchNativePage();
+        }
         return;
       }
       // ---- 1) 启动预热那一页（app 一起来就发了，见 EntryAbility / NativeReels.warmStart）----
