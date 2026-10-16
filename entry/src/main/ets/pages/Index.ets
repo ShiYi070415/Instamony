@@ -2508,8 +2508,18 @@ struct Index {
     this.sessionChecked = true;
     this.lastSessionState = false;
     this.statusShown = false;
-    this.webVisible = true;
-    this.bridge.loadUrl(AppConfig.INSTAGRAM_LOGIN_URL);
+    /*
+     * ⑤ 停在**原生登录页**，而不是把网页顶上来。
+     *
+     * 这里原来是 `webVisible = true` + 跳 Instagram 登录页 —— 那是"还没有登录页"那版的走法
+     * （整个 app 只有网页这一条登录路）。现在 webVisible 一为 true，`build()` 就整块换成网页层、
+     * **`nativeShell` 连同登录页一起不建**，用户会被直接丢进网页登录页，等于把新登录页盖掉
+     * （用户要求的是"未登录状态会一直在这个页面…点击登录按钮才跳转网页登录"）。
+     *
+     * 所以退完留在这：网页保持隐藏（它现在停在信息流地址上，Cookie 已清，自己会转去登录页，
+     * 看不见也无所谓），用户点登录按钮时再由 openLoginWeb() 显式导航到登录地址。
+     */
+    this.webVisible = false;
     hilog.info(DOMAIN, TAG, 'signed out; account data cleared (%{public}s)', AccountScope.describe());
   }
 
