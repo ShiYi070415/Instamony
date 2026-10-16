@@ -677,3 +677,57 @@ IG 有没有给出等价端点。
 - 耗时说明：日志里的 `ms` 常常是 6~13 秒，那是**排队等待**（`paced … waited=…`）而不是网络 ——
   启动那一轮快拍预取（5 位用户）+ 托盘 + 私信排在前面，交互优先级那一发会插队。
 
+## 13. "我的"四个分页 + 搜索触底（2026-10-17 第二轮）
+
+用户要求："进入首页时要加载 reels/私信/搜索页/我的（及其下四个分页）。搜索功能和我的（及其下四个分页）
+尝试改为 instagrapi 的协议。切换分页无需重新加载。搜索推荐流无法触底刷新，修复一下。"
+
+### 13.1 搜索推荐流触底不加载（真凶）
+
+`SearchViewModel.loadMore` 里有一道"被限流就不发"的闸，判据是 `ApiThrottle.blocked(CLIPS)`。
+但推荐流现在走的是 `discover/topical_explore/`（**另一个端点**），而 `CLIPS` 记的是 clips 那条
+GraphQL 的冷却 —— reels 一打那条就会把 `CLIPS` 打到 12 分钟冷却，于是搜索推荐流滑到底
+**一声不响什么都不加载**（原来连状态行都不变，所以看起来像"功能坏了"）。
+
+修法：新增 `NativeSearch.usingMobileRecommended()`（= 当前这份推荐流是不是移动端给的），
+移动端来源时不再按 `CLIPS` 拦。`loadRecommendedOnce` 那处同一类判断上一轮已经改过。
+
+### 13.2 "我的"四个分页改走移动端
+
+`core/mobileapi/MobileProfile.tab(kind, pk, maxId)`：
+
+| 分页 | 端点 | 依据 |
+|---|---|---|
+| 帖子 | `GET /api/v1/feed/user/{pk}/?count=24[&max_id=]` | instagrapi `user_medias`，**已实测**（8/8 解析成功） |
+| Reels | `POST /api/v1/clips/user/`（表单 `target_user_id` / `page_size`） | instagrapi `user_clips`，**待实测** |
+| 被标注 | `GET /api/v1/usertags/{pk}/feed/[?max_id=]` | instagram-private-api `UsertagsFeed`，**待实测** |
+| 收藏 | `GET /api/v1/feed/saved/`（候选） | 无权威依据，**待实测** |
+
+乐观性分两级（`MobileProfile.tabOptimistic` / `tabUsable`）：**帖子与被标注**有据可查，直接乐观使用；
+**Reels 与收藏**是试出来的端点 —— 先按原来的模板路走，哪次真通了再把标记立起来。
+这样即使这一版 IG 不给，也不会把本来好用的分页弄坏。
+
+`core/NativeProfile.fetchPosts` 按操作名判 kind（**合成名** `mobile:<kind>` 或**真模板名**
+`PolarisProfileReelsTabContentQuery` 等都能认），移动端优先、模板路完整保留。
+新增 `mobileKindOf` / `mobileOpFor` / `isMobileOp`。
+
+### 13.3 切分页不再重新加载
+
+`ProfileViewModel.opNameOf(tab)` 以前在"没有模板"时返回空串 → `setTab` / `load` 于是去跑
+`captureTab()`：**导航隐藏网页 + 抓模板**（秒级），用户看到的就是"每次切到没抓过的分页都要等"。
+现在没有模板时返回**合成操作名**（`mobileOpFor(kind)`），四段都不需要模板。
+
+配合原有的分页缓存（`ProfileTabState.loaded` → 切回已加载分页只 `prefetchNext` 不重拉），
+"切换分页无需重新加载"就成立了；`preloadAllSegments` / `prefetchOthersSequential` 也因此
+在"没模板"时能把四段都预取上（对应用户第 1 条要求：进首页就把 reels/私信/搜索/我的四段都备好）。
+
+### 13.4 验证状态（本轮）
+
+- 编译通过（`BUILD SUCCESSFUL`），提交 `df78313`。
+- **装机与真机验证未完成**：收尾时设备再次从 hdc 掉线（`list targets` 为空、`tconn` 失败）。
+  已挂后台任务，设备回来会自动装包并重启 App。
+- 已实测过的（上一轮，同一批代码路径）：`feed/user/{pk}/`（帖子 8/8）、`users/{pk}/info/`（头部）、
+  `discover/topical_explore/`（推荐 16/16，截图确认三列瀑布流）。
+- 本轮新增的三条分页端点与触底修复**尚未在真机上跑**；`MobileProbe.ENDPOINT_SCOUT` 里已加了
+  `clips/user`（GET+POST）、`usertags/{pk}/feed`、`feed/saved`、`collections/list` 五条候选，
+  设备回来后从设定页那颗自检按钮跑一次即可拿到"通不通 + 结构树"。
