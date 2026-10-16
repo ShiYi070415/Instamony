@@ -29,6 +29,22 @@
       "value": "I’m signed in — recheck"
     },
     {
+      "name": "login_page_action",
+      "value": "Sign in to Instagram"
+    },
+    {
+      "name": "login_page_hint_account",
+      "value": "Your account and password are typed only on Instagram’s official web page — this app never stores or reads them."
+    },
+    {
+      "name": "login_page_hint_features",
+      "value": "Once signed in you can browse the feed, stories and direct messages; data is fetched through the normal load path."
+    },
+    {
+      "name": "login_page_hint_stuck",
+      "value": "If the web page already signed you in but this page stays, tap “I’m signed in — recheck” below."
+    },
+    {
       "name": "sign_out",
       "value": "Sign out"
     },
@@ -507,14 +523,6 @@
     {
       "name": "like_failed",
       "value": "Could not like"
-    },
-    {
-      "name": "login_hint",
-      "value": "Sign in to Instagram"
-    },
-    {
-      "name": "login_open_web",
-      "value": "Open web sign-in"
     },
     {
       "name": "media_saved",

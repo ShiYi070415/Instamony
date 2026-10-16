@@ -63,7 +63,6 @@ import { FeedList } from '../components/FeedList';
 import { FEED_START_OFFSET } from '../components/FeedList';
 import { FeedSkeleton } from '../components/FeedSkeleton';
 import { InstagramWebHost } from '../components/InstagramWebHost';
-import { LoginPanel } from '../components/LoginPanel';
 import { ProbePanel } from '../components/ProbePanel';
 import { WebChromeBar } from '../components/WebChromeBar';
 import { InstagramCookieJar, InstagramCookieSnapshot } from '../core/InstagramCookieJar';
@@ -118,6 +117,7 @@ import { DirectPage } from '../components/DirectPage';
 import { DirectThreadPage } from '../components/DirectThreadPage';
 import { SearchPage } from '../components/SearchPage';
 import { StoriesTray } from '../components/StoriesTray';
+import { LoginPage } from '../components/LoginPage';
 import { StoryViewer } from '../components/StoryViewer';
 import { ReelsPage } from '../components/ReelsPage';
 import { Reel } from '../model/Reel';
@@ -2368,6 +2368,19 @@ struct Index {
    * @param cookie Cookie 罐现读的那一串（可选）：有它才能判定"现在登的是谁" ——
    *   账号一分区，换人就要清内存、把上一个人的缓存搬去备份位（见 core/AccountScope）。
    */
+  /**
+   * 现在是不是"整页登录页"那一档（未登录）。
+   *
+   * 两处用它，必须同一个判据，否则会出现"登录页占满整屏、标题栏还挂在上头"这种半拉状态：
+   *   · `nativeShellContent` —— 决定建登录页还是建五个页签；
+   *   · `nativeShell` —— 决定标题栏收不收（见那里的 hideTitleBar）。
+   * `sessionChecked` 参与判断是为了**先别闪**：登录态还没核对完时按已登录渲染骨架屏，
+   * 核对完再切（启动时只差一次 Cookie 罐查询）。
+   */
+  private loginPageShown(): boolean {
+    return this.sessionChecked && !this.signedIn;
+  }
+
   private applySession(signedIn: boolean, cookie: string = ''): void {
     const changed: boolean = !this.sessionChecked || this.lastSessionState !== signedIn;
     this.sessionChecked = true;
@@ -2412,6 +2425,21 @@ struct Index {
       this.viewModel.reset();
       // 会话刚生效：把网页送回首页信息流，页面加载完成后再由 handlePageReady 读流。
       this.bridge.loadUrl(AppConfig.INSTAGRAM_HOME_URL);
+      /*
+       * **登录完成后立刻按正常加载流程取数**（用户要求："登录后立刻通过 http 请求按正常
+       * 加载流程获取数据（当前用户的 token）"）。
+       *
+       * 走的是既有那条链，不另起一套：
+       *   · 信息流首屏 = **原生 HTTP 直发**（core/NativeFeed，头里用的是 Cookie 罐里
+       *     **当前这个账号**的 session/csrf，见 applySession 上面刚做完的账号判定）；
+       *   · 其余页签交给预热链（托盘 → 通知 → reels → 搜索 → 我的 → 私信预取）。
+       * `warmStarted` 归零是为了让预热链在**这次登录之后重新跑一遍** —— 它在
+       * aboutToAppear 里已经跑过一次，那次多半还是未登录状态（等于白跑）。
+       */
+      this.warmStarted = false;
+      this.viewModel.loadFeed();
+      this.warmOtherTabs().catch((): void => {
+      });
       return;
     }
     this.viewModel.reset();
@@ -5362,23 +5390,13 @@ struct Index {
         // 还在核对登录态：先铺信息流骨架屏，别让用户对着白屏等。
         FeedSkeleton()
           .layoutWeight(1)
-      } else if (!this.signedIn) {
-        LoginPanel({
-          onOpenWeb: (): void => {
-            this.openLoginWeb();
-          },
-          onRecheck: (): void => {
-            this.refreshSessionFromJar();
-          }
-        })
-          .layoutWeight(1)
       } else {
         /*
-         * **限时快拍托盘已经搬进 FeedList 内部**（`showStories: true` + 三个回调），见
-         * components/FeedList 的说明：需求要的"置顶 + 跟随信息流滚动"只有放进 List 里才对
-         * ——摆在这一层的话它不跟着滚，而且会压在标题栏底下（内容区从屏幕顶开始）。
+         * 已登录才有这一支：**未登录走整页登录页**（见 nativeShellContent 的说明 ——
+         * 那个分支在更外层，未登录时连这一整个 tab 外壳都不建）。
          *
-         * 所以这里只剩两件事：把顺序/位置/点开这三个回调转进去，别的什么都不用做。
+         * 快拍托盘在 FeedList 内部（`showStories: true` + 三个回调），见 components/FeedList
+         * 的说明：需求要的"置顶 + 跟随信息流滚动"只有放进 List 里才对。
          */
         FeedList({
           posts: this.posts,
@@ -5532,7 +5550,24 @@ struct Index {
    */
   @Builder
   nativeShellContent() {
-    Stack({ alignContent: Alignment.Bottom }) {
+    if (this.loginPageShown()) {
+      /*
+       * **未登录 = 整页登录页**（见 components/LoginPage 的文件头）。
+       *
+       * 为什么放在这一层（而不是塞进首页那个 tab）：五个 tab 的内容层与底栏**都不建**，
+       * 于是"退出登录"与"换账号"时它们整批销毁重建 —— 主页 / Reels / 私信 / 搜索 / 我的
+       * 不会残留上一个人的任何一条数据（用户要求的第一条），登录页也自然占满整屏。
+       */
+      LoginPage({
+        onLogin: (): void => {
+          this.openLoginWeb();
+        },
+        onRecheck: (): void => {
+          this.refreshSessionFromJar();
+        }
+      })
+    } else {
+      Stack({ alignContent: Alignment.Bottom }) {
       // ---- 内容层：按 selectedIndex 切页（栏那层不参与切页）----
       Column() {
         if (this.selectedIndex === 0) {
@@ -5618,6 +5653,7 @@ struct Index {
     }
     .width('100%')
     .height('100%')
+    }
   }
 
   /**
@@ -7011,8 +7047,14 @@ struct Index {
     // 这是应用根页面，没有上一级可回，所以不显示返回键（示例里是 false）。
     .hideBackButton(true)
     .titleMode(HdsNavigationTitleMode.MINI)
-    // **不给标题栏绑 hideTitleBar**：需求"不需要隐藏 hdsnavigation"——下沉时收走标题栏那版已撤掉，
-    // 现在跟着底栏下沉的是 reels 页的动作区 / 资讯区（见 OVERLAY_SINK_DISTANCE 与 reelsTab）。
+    /*
+     * 登录页那一档要**把标题栏收掉**（见 loginPageShown）：未登录时右上角那两颗
+     * （通知 / 发帖）没有任何意义，留着还会把"整页登录页"顶掉一截。
+     *
+     * 已登录时**不绑** hideTitleBar：需求"不需要隐藏 hdsnavigation" —— 下沉时收走标题栏
+     * 那版已撤掉，现在跟着底栏下沉的是 reels 页的动作区 / 资讯区（见 OVERLAY_SINK_DISTANCE）。
+     */
+    .hideTitleBar(this.loginPageShown())
     // 让标题栏铺到系统栏下方，沉浸光感才有连续的底；内容下边距由各栏自己留。
     .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
     .zIndex(10)

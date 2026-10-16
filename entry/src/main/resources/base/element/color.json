@@ -77,6 +77,14 @@
       "value": "#E8EDF8"
     },
     {
+      "name": "login_glow_top",
+      "value": "#400095F6"
+    },
+    {
+      "name": "login_glow_bottom",
+      "value": "#FFFFFF"
+    },
+    {
       "name": "sheet_handle",
       "value": "#66000000"
     },

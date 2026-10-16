@@ -29,6 +29,22 @@
       "value": "我已登录，重新检查"
     },
     {
+      "name": "login_page_action",
+      "value": "登录 Instagram"
+    },
+    {
+      "name": "login_page_hint_account",
+      "value": "账号与密码只在 Instagram 官方网页里输入，本应用不保存、也读不到。"
+    },
+    {
+      "name": "login_page_hint_features",
+      "value": "登录后即可浏览信息流、快拍与私信；数据会按正常加载流程自动取回。"
+    },
+    {
+      "name": "login_page_hint_stuck",
+      "value": "若网页里已经登录成功、这里还停着，点下面的「我已登录，重新检查」。"
+    },
+    {
       "name": "sign_out",
       "value": "退出登录"
     },
@@ -535,14 +551,6 @@
     {
       "name": "like_failed",
       "value": "点赞失败"
-    },
-    {
-      "name": "login_hint",
-      "value": "登录 Instagram"
-    },
-    {
-      "name": "login_open_web",
-      "value": "打开网页登录"
     },
     {
       "name": "media_saved",
