@@ -2,8 +2,8 @@
   "app": {
     "bundleName": "com.fanha.instarmony",
     "vendor": "fanha",
-    "versionCode": 8001,
-    "versionName": "0.8.1",
+    "versionCode": 9000,
+    "versionName": "0.9",
     "icon": "$media:layered_image",
     "label": "$string:app_name"
   }
