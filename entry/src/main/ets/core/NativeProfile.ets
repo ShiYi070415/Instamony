@@ -145,6 +145,13 @@ export class NativeProfile {
   /** 帖子网格那条查询的操作名。 */
   static readonly OP_POSTS: string = 'PolarisProfilePostsQuery';
   /**
+   * **移动端合成操作名**的前缀（`mobile:posts` / `mobile:clips` / `mobile:saved` / `mobile:tagged`）。
+   *
+   * 用途：视图模型在"这一分页没有 GraphQL 模板"时也要能指出"用移动端那条"（见 mobileOpFor）。
+   * 它不是模板操作名，所以 `NativeProfile.post` 那条模板路不会去碰它。
+   */
+  static readonly MOBILE_OP_PREFIX: string = 'mobile:';
+  /**
    * **自己的数字 id**（Cookie 里的 `ds_user_id`），懒读一次。
    *
    * 用途只有一个：本人这一路的请求体里，把"目标用户"那几个 id 键**回正成自己**
@@ -348,30 +355,39 @@ export class NativeProfile {
   static async fetchPosts(op: string, after: string,
                           target: ProfileTarget = ProfileTarget.self()): Promise<ProfilePostsPage | null> {
     /*
-     * **① 移动端优先** —— 只对"帖子"这一段（`OP_POSTS`）。
+     * **① 移动端优先**（四个分页各有对应端点，见 core/mobileapi/MobileProfile.tab）：
+     *   帖子 `feed/user/{pk}/`、Reels `clips/user/`、被标注 `usertags/{pk}/feed/`、收藏 `feed/saved/`。
      *
-     * 为什么只认这一段：`feed/user/{pk}/` 给的就是**帖子网格**；视频 / 收藏 / 被标注那三段是另外
-     * 三条 GraphQL 查询（`PolarisProfileReelsTabContentQuery` 等），移动端没有等价物，
-     * 换了会拿错内容。目标 id 不知道时（别人主页只给了用户名、本人又还没读出 id）也不能走 ——
-     * 这条路的路径参数必须是真的数字 id。
+     * 为什么四个都走它（用户要求："我的（及其下四个分页）尝试改为 instagrapi 的协议"）：
+     * 模板那条路要么得先在隐藏网页上抓一次模板（秒级、还要导航共用网页），要么就是
+     * "这个分页的接口模板还没有"。移动端这四条同样是一次 GET/POST，且不需要任何模板。
+     *
+     * 退路完整保留：kind 认不出、没有目标 id、或者移动端这一发没通 → 原样走模板那条路。
+     * 用**乐观性**区分（见 MobileProfile.tabUsable）：帖子/被标注直接乐观用；
+     * Reels/收藏是试出来的端点，学到能用之后才在"没模板"时也敢用合成操作名。
      */
-    if (op === NativeProfile.OP_POSTS) {
+    const kind: string = NativeProfile.mobileKindOf(op);
+    if (kind.length > 0) {
       let uid: string = target.id;
       if (uid.length === 0 && target.isSelf()) {
         uid = await NativeProfile.ownId();
       }
       if (uid.length > 0) {
-        const page: MobileGridPage | null = await MobileProfile.medias(uid, after, undefined,
+        const page: MobileGridPage | null = await MobileProfile.tab(kind, uid, after, undefined,
           ApiThrottle.interactive());
         if (page !== null) {
           const posts: Array<ProfilePost> = NativeProfile.postsFromItems(page.items);
           hilog.info(DOMAIN, TAG,
-            'posts via mobile uid=%{public}s items=%{public}d posts=%{public}d more=%{public}s ms=%{public}d',
-            uid, page.items.length, posts.length, `${page.hasMore}`, page.ms);
-          // 移动端与 GraphQL 的游标互不通用，但**这一路我们只走移动端**（同一条路自己的游标），
-          // 所以直接把它的 `next_max_id` 交给上层即可。
+            'tab via mobile kind=%{public}s uid=%{public}s items=%{public}d posts=%{public}d more=%{public}s ms=%{public}d',
+            kind, uid, page.items.length, posts.length, `${page.hasMore}`, page.ms);
+          // 移动端与 GraphQL 的游标互不通用；这一路只走移动端，所以直接交它的 `next_max_id`。
           return new ProfilePostsPage(posts, page.nextCursor, page.hasMore);
         }
+      }
+      if (NativeProfile.isMobileOp(op)) {
+        // 合成操作名 = 调用方本来就没有模板，只有移动端这一条；这里再退也没得退。
+        hilog.warn(DOMAIN, TAG, 'mobile tab failed and no template op: kind=%{public}s', kind);
+        return null;
       }
     }
     const result: NativeProfileResult = await NativeProfile.post(op, after, target);
@@ -380,6 +396,48 @@ export class NativeProfile {
       return null;
     }
     return NativeProfile.postsOf(result.text);
+  }
+
+  /**
+   * 分页 → 移动端那一段的名字（`posts` / `clips` / `saved` / `tagged`；认不出一律空串）。
+   *
+   * 两种入参都要认：
+   *   · **合成操作名** `mobile:clips`（视图模型在"没有模板"时给的，见 `mobileOpFor`）；
+   *   · **真模板操作名**（`PolarisProfileReelsTabContentQuery` 等）—— 按名字片段判分页。
+   */
+  static mobileKindOf(op: string): string {
+    if (op.length === 0) {
+      return '';
+    }
+    if (NativeProfile.isMobileOp(op)) {
+      return op.substring(NativeProfile.MOBILE_OP_PREFIX.length);
+    }
+    const lower: string = op.toLowerCase();
+    if (lower.indexOf('reels') >= 0 || lower.indexOf('clips') >= 0) {
+      return 'clips';
+    }
+    if (lower.indexOf('saved') >= 0) {
+      return 'saved';
+    }
+    if (lower.indexOf('tagged') >= 0 || lower.indexOf('usertag') >= 0) {
+      return 'tagged';
+    }
+    if (lower.indexOf('postsquery') >= 0) {
+      return 'posts';
+    }
+    return '';
+  }
+
+  /** 这一分页在"没有模板"时能不能靠移动端（见 viewmodel/ProfileViewModel.opNameOf）。 */
+  static mobileOpFor(kind: string): string {
+    if (kind.length === 0) {
+      return '';
+    }
+    return MobileProfile.tabUsable(kind) ? `${NativeProfile.MOBILE_OP_PREFIX}${kind}` : '';
+  }
+
+  static isMobileOp(op: string): boolean {
+    return op.startsWith(NativeProfile.MOBILE_OP_PREFIX);
   }
 
   /**

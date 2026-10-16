@@ -28,6 +28,7 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ApiThrottle } from '../ApiThrottle';
 import { MobileRequest, MobileResult, MobileOptions } from './MobileRequest';
+import { MobileSession, MobileIdentity } from './MobileSession';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'MobileProfile';
@@ -66,6 +67,140 @@ export class MobileGridPage {
 }
 
 export class MobileProfile {
+  /**
+   * **某个分页端点到底通不通**（按 kind 记，学到就记住）。
+   *
+   * 为什么要"学过"这套：`feed/user/{pk}/`（帖子）与 `usertags/{pk}/feed/`（被标注）是
+   * 有据可查的私有端点，直接乐观使用；而 `clips/user/`（Reels 分页）与收藏那两条是**试出来的**
+   * —— 万一这一版 IG 不给，乐观使用会让分页直接报"读取失败"（原来靠模板那条路是好用的）。
+   * 所以那两条**先按原路走**，等哪次真通了再把标记立起来（见 core/NativeProfile.fetchPosts）。
+   */
+  private static usable: Map<string, boolean> = new Map<string, boolean>();
+
+  /** `feed/user/{pk}/` 与 `usertags/{pk}/feed/` 是稳的（见上面的说明）。 */
+  static tabOptimistic(kind: string): boolean {
+    return kind === 'posts' || kind === 'tagged';
+  }
+
+  /** 这一版试出来能不能用（`tabOptimistic` 为真时恒 true）。 */
+  static tabUsable(kind: string): boolean {
+    if (MobileProfile.tabOptimistic(kind)) {
+      return true;
+    }
+    return MobileProfile.usable.get(kind) === true;
+  }
+
+  private static noteUsable(kind: string, ok: boolean): void {
+    if (ok) {
+      MobileProfile.usable.set(kind, true);
+    }
+  }
+
+  /**
+   * 主页**四个分页**里的一段（"我的"页下面那四个分段按钮）。
+   *
+   * @param kind posts（帖子）/ clips（Reels）/ saved（收藏）/ tagged（被标注）
+   * @returns 原始媒体节点那一页；认不出 kind 或端点不可用给 null（调用方退回模板那条路）
+   */
+  static async tab(kind: string, userId: string, maxId: string = '', count: number = GRID_COUNT,
+                   priority: number = ApiThrottle.warm()): Promise<MobileGridPage | null> {
+    if (kind === 'posts') {
+      return await MobileProfile.medias(userId, maxId, count, priority);
+    }
+    if (kind === 'tagged') {
+      // instagram-private-api 的 `UsertagsFeed`：`GET /api/v1/usertags/{pk}/feed/`
+      const page: MobileGridPage | null = await MobileProfile.gridGet(
+        `usertags/${encodeURIComponent(userId)}/feed/`, maxId, 'tagged', priority);
+      return page;
+    }
+    if (kind === 'clips') {
+      // instagrapi 的 `user_clips`：`POST /api/v1/clips/user/`（表单带 target_user_id）。
+      const page: MobileGridPage | null = await MobileProfile.gridPost(
+        'clips/user/', userId, count, maxId, 'clips', priority);
+      return page;
+    }
+    if (kind === 'saved') {
+      // 收藏：候选 `feed/saved/`（通了就记住，之后这个分页也走移动端）。
+      const page: MobileGridPage | null = await MobileProfile.gridGet('feed/saved/', maxId, 'saved',
+        priority);
+      return page;
+    }
+    return null;
+  }
+
+  /** 一发 GET 网格（被标注 / 收藏那两条用）。 */
+  private static async gridGet(endpoint: string, maxId: string, kind: string,
+                               priority: number): Promise<MobileGridPage | null> {
+    let params: string = 'count=24';
+    if (maxId.length > 0) {
+      params += `&max_id=${encodeURIComponent(maxId)}`;
+    }
+    const started: number = Date.now();
+    const result: MobileResult = await MobileRequest.send(endpoint, '', params, true, null,
+      new MobileOptions(ApiThrottle.MOBILE, priority));
+    if (!result.ok) {
+      hilog.info(DOMAIN, TAG, 'tab[%{public}s] miss (%{public}s): %{public}s',
+        kind, endpoint, result.summary());
+      return null;
+    }
+    const page: MobileGridPage | null = MobileProfile.gridOf(result, kind, started);
+    MobileProfile.noteUsable(kind, page !== null);
+    return page;
+  }
+
+  /** 一发 POST 网格（Reels 分页那条用：表单要 `target_user_id`）。 */
+  private static async gridPost(endpoint: string, userId: string, count: number, maxId: string,
+                                kind: string, priority: number): Promise<MobileGridPage | null> {
+    const started: number = Date.now();
+    const result: MobileResult | null = await MobileProfile.postForm(endpoint, userId, count, maxId,
+      priority);
+    if (result === null) {
+      return null;
+    }
+    if (!result.ok) {
+      hilog.info(DOMAIN, TAG, 'tab[%{public}s] miss (%{public}s): %{public}s',
+        kind, endpoint, result.summary());
+      return null;
+    }
+    const page: MobileGridPage | null = MobileProfile.gridOf(result, kind, started);
+    MobileProfile.noteUsable(kind, page !== null);
+    return page;
+  }
+
+  /** Reels 分页的表单（instagrapi 的 `user_clips` 语义：要 `target_user_id`）。 */
+  private static async postForm(endpoint: string, userId: string, count: number, maxId: string,
+                                priority: number): Promise<MobileResult | null> {
+    const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
+    if (identity === null) {
+      return null;
+    }
+    const data: Record<string, Object> = MobileRequest.withExtraData(identity);
+    data['target_user_id'] = userId;
+    data['page_size'] = count;
+    if (maxId.length > 0) {
+      data['max_id'] = maxId;
+    }
+    return await MobileRequest.send(endpoint, MobileRequest.formOf(data), '', true, null,
+      new MobileOptions(ApiThrottle.MOBILE, priority));
+  }
+
+  /** 网格响应 → 一页（`items` + 游标 + 还有没有）。 */
+  private static gridOf(result: MobileResult, kind: string, started: number): MobileGridPage | null {
+    const parsed: Record<string, Object> | null = MobileProfile.parse(result.body);
+    if (parsed === null) {
+      hilog.info(DOMAIN, TAG, 'tab[%{public}s] non-json bytes=%{public}d', kind, result.bytes);
+      return null;
+    }
+    const items: Array<Object> = MobileProfile.objectsOf(parsed['items']);
+    const cursor: string = MobileProfile.firstText(parsed, ['next_max_id', 'max_id']);
+    const more: boolean = MobileProfile.boolOf(parsed, 'more_available');
+    const ms: number = Date.now() - started;
+    hilog.info(DOMAIN, TAG,
+      'tab[%{public}s] ok items=%{public}d more=%{public}s ms=%{public}d bytes=%{public}d',
+      kind, items.length, `${more}`, ms, result.bytes);
+    return new MobileGridPage(items, cursor, more, ms, result.bytes);
+  }
+
   /**
    * 头部：优先按数字 id（`users/{pk}/info/`），没有 id 时按用户名（`users/{username}/usernameinfo/`）。
    *

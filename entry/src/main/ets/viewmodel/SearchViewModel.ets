@@ -493,8 +493,15 @@ export class SearchViewModel {
     if (this.loadingMore || !this.hasMore || this.query.length > 0) {
       return;
     }
-    // 被限流期间不再往下要（发了也是白挨一发，见 core/ApiThrottle）。
-    if (ApiThrottle.blocked(ApiThrottle.CLIPS)) {
+    /*
+     * 被限流期间不再往下要（发了也是白挨一发，见 core/ApiThrottle）。
+     *
+     * ⚠️ **但移动端探索流不受这把锁管**（用户报："搜索推荐流无法触底刷新"）：`CLIPS` 记的是
+     * clips 那条 GraphQL 的冷却，而现在的推荐流走的是 `discover/topical_explore/`
+     * （见 core/mobileapi/MobileDiscover）。这里原来无条件按 CLIPS 拦，于是只要 reels 把
+     * clips 打到冷却，搜索推荐流滑到底就**一声不响地什么都不加载**（连状态行都不变）。
+     */
+    if (!NativeSearch.usingMobileRecommended() && ApiThrottle.blocked(ApiThrottle.CLIPS)) {
       /*
        * **把限流写到状态行上**（审计 C1 的现场结论）。
        *

@@ -326,6 +326,16 @@ export class NativeSearch {
   }
 
   /**
+   * **当前这份推荐流是不是移动端探索流给的**（见 recommendedViaMobile 的 mobileUsable）。
+   *
+   * 调用方拿它决定"要不要按 clips 那把限流锁停手"：探索流是**另一个端点**，clips 被限流
+   * 不代表它也被限流（用户报的"搜索推荐流无法触底刷新"就是被这把锁误拦的）。
+   */
+  static usingMobileRecommended(): boolean {
+    return NativeSearch.mobileUsable;
+  }
+
+  /**
    * 搜账号（原生直发）。
    *
    * @param query 这次要搜的词。

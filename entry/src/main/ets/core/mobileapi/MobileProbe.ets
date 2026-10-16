@@ -1052,6 +1052,42 @@ export class MobileProbe {
       lines.push('users/{username}/usernameinfo 跳过（没从 user_info 里读到自己的用户名）');
     }
 
+    // ⑧ 主页**另外三个分页**（"我的"下面那四个）：被标注 / Reels / 收藏。
+    //    目标是让它们也走移动端，不再依赖 GraphQL 模板（用户要求）。
+    //    被标注：instagram-private-api 的 `UsertagsFeed` → `usertags/{pk}/feed/`（GET）。
+    const tagged: MobileResult = await MobileRequest.send(
+      `usertags/${selfId}/feed/`, '', '', true, null, MobileProbe.opts());
+    tries.push(MobileProbe.scoutLine('usertags/{pk}/feed', tagged));
+    MobileProbe.scoutBody(lines, 'usertags/{pk}/feed', tagged);
+
+    //    Reels 分页：instagrapi 的 `user_clips`（`clips/user/`，表单带 target_user_id）。
+    //    GET 与 POST 都试一发 —— 这条端点本项目从没打过，哪种被接受让服务端说话。
+    const clipsByUserGet: MobileResult = await MobileRequest.send(
+      'clips/user/', '', `target_user_id=${encodeURIComponent(selfId)}&page_size=12`,
+      true, null, MobileProbe.opts());
+    tries.push(MobileProbe.scoutLine('clips/user[GET]', clipsByUserGet));
+    MobileProbe.scoutBody(lines, 'clips/user[GET]', clipsByUserGet);
+
+    const clipsByUserData: Record<string, Object> = MobileRequest.withExtraData(identity);
+    clipsByUserData['target_user_id'] = selfId;
+    clipsByUserData['page_size'] = 12;
+    const clipsByUserPost: MobileResult = await MobileRequest.send(
+      'clips/user/', MobileRequest.formOf(clipsByUserData), '', true, null, MobileProbe.opts());
+    tries.push(MobileProbe.scoutLine('clips/user[POST]', clipsByUserPost));
+    MobileProbe.scoutBody(lines, 'clips/user[POST]', clipsByUserPost);
+
+    //    收藏：候选两条（`feed/saved/` 与 `collections/list/`——后者列的是"合集"而不是媒体，
+    //    但如果它通、`feed/collection/{id}/` 也就有戏）。
+    const saved: MobileResult = await MobileRequest.send(
+      'feed/saved/', '', '', true, null, MobileProbe.opts());
+    tries.push(MobileProbe.scoutLine('feed/saved', saved));
+    MobileProbe.scoutBody(lines, 'feed/saved', saved);
+
+    const collections: MobileResult = await MobileRequest.send(
+      'collections/list/', '', '', true, null, MobileProbe.opts());
+    tries.push(MobileProbe.scoutLine('collections/list', collections));
+    MobileProbe.scoutBody(lines, 'collections/list', collections);
+
     lines.push('');
     lines.push('== 结论一览 ==');
     for (let index: number = 0; index < tries.length; index++) {

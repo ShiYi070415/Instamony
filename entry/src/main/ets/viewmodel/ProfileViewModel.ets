@@ -124,6 +124,15 @@ const EXTRACT_RETRY_GAP_MS: number = 2000;
 const TAB_PATTERNS: Array<string> = ['posts', 'reel', 'saved', 'tag'];
 
 /**
+ * 四个分页在**移动端**那套端点里的名字（见 core/mobileapi/MobileProfile.tab）。
+ *
+ * 与 `TAB_PATTERNS` 一一对应：posts（帖子）/ clips（Reels）/ saved（收藏）/ tagged（被标注）。
+ * 有了它，"没有 GraphQL 模板"时也能给出 `mobile:<kind>` 这个合成操作名，切分页不再去抓模板。
+ */
+const PROFILE_TAB_KINDS: Array<string> = ['posts', 'clips', 'saved', 'tagged'];
+
+
+/**
  * 一个分页的取数状态。
  *
  * 四个分页各自独立存一份：切到某个分页时**先把这一份铺出来**（有内容就是"秒显示"），
@@ -847,9 +856,13 @@ export class ProfileViewModel {
 
   /** 某个分页对应的操作名（认不出返回空串）。 */
   private opNameOf(tab: number): string {
+    const kind: string = PROFILE_TAB_KINDS[tab];
     if (tab === PROFILE_TAB_POSTS) {
-      // 帖子这条是**已知**的：抓到的模板就是它。
-      return NativeProfile.hasTemplate(NativeProfile.OP_POSTS) ? NativeProfile.OP_POSTS : '';
+      // 帖子这条是**已知**的：抓到的模板就是它；没有模板但移动端那条能用时给合成名。
+      if (NativeProfile.hasTemplate(NativeProfile.OP_POSTS)) {
+        return NativeProfile.OP_POSTS;
+      }
+      return NativeProfile.mobileOpFor(kind);
     }
     const keys: Array<string> = [TAB_PATTERNS[tab]];
     const names: Array<string> = this.registry.storedNames();
@@ -871,7 +884,14 @@ export class ProfileViewModel {
         return name;
       }
     }
-    return '';
+    /*
+     * **没有模板也给移动端一个机会**（用户要求："我的（及其下四个分页）尝试改为 instagrapi 的协议"）。
+     *
+     * 这一句是"切分页不再卡"的关键：原来这里返回空串，`setTab`/`load` 于是去跑
+     * `captureTab()`（导航隐藏网页、抓模板，秒级）—— 用户看到的就是"每次切到没抓过的分页都要等"。
+     * 移动端那四条端点不需要模板，`tabUsable` 为真（帖子/被标注乐观、Reels/收藏学到的）就返回合成名。
+     */
+    return NativeProfile.mobileOpFor(kind);
   }
 
   /**
