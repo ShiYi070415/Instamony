@@ -21,6 +21,7 @@ import { MobileRequest, MobileResult } from './MobileRequest';
 import { MobileSession, MobileIdentity } from './MobileSession';
 import { SUPPORTED_CAPABILITIES } from './MobileConfig';
 import { InstagramProbe } from '../../probe/InstagramProbe';
+import { DirectInboxPage, DirectMapper, DirectThreadView } from '../../model/Direct';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'MobileProbe';
@@ -40,7 +41,7 @@ const MAX_KEYS: number = 14;
 /** 摘要里每个值最多留多少字符。 */
 const MAX_VALUE: number = 60;
 /** 落盘时最多留几行形状（够写解析层就行，别把文件撑大）。 */
-const MAX_SHAPE_LINES: number = 60;
+const MAX_SHAPE_LINES: number = 160;
 
 export class MobileProbe {
   /** 上一次自检的结论（一行；给诊断面板用）。 */
@@ -62,6 +63,15 @@ export class MobileProbe {
   private static firstReelId: string = '';
   /** 托盘里第一条那个人的数字 id（给 ⑤「某个人的快拍」用；同样现取，不写死）。 */
   private static firstTrayUserId: string = '';
+  /** 收件箱里第一条会话的 thread_id（给 ⑧「会话消息」用；现取，不写死）。 */
+  private static firstThreadId: string = '';
+  /** ⑧ 要试的 thread_id（前两条；对比用 —— 见 run() 里的说明）。 */
+  private static threadIds: Array<string> = [];
+  /** 收件箱响应里给出的翻页游标（给 ⑨ 的传参实验用）。 */
+  private static inboxCursor: string = '';
+  /** 收件箱响应里的 `prev_cursor` / `prev_cursor_v2`（同样是翻页材料）。 */
+  private static inboxPrevCursor: string = '';
+  private static inboxPrevCursorV2: string = '';
   /**
    * 启动自检的延迟（毫秒）。
    *
@@ -168,10 +178,32 @@ export class MobileProbe {
     } else {
       MobileProbe.shape.push('reels_media 跳过（托盘里没取到 reel id）');
     }
+    // ⑧ 一条会话的消息（instagrapi 的 `direct_messages`）——私信能不能"看得全"就看这一发。
+    //    **前两条都试**：实测有一条会话（1:1）解析出 0 条消息，而第一条（群聊）有 15 条 ——
+    //    两发对比才能分清是"服务端没给"还是"某类会话的解析不一样"。
+    let thread: MobileResult | null = null;
+    for (let index: number = 0; index < MobileProbe.threadIds.length; index++) {
+      total++;
+      const one: MobileResult = await MobileProbe.directThread(identity, MobileProbe.threadIds[index]);
+      if (index === 0) {
+        thread = one;
+      }
+      if (one.ok) {
+        ok++;
+      }
+    }
+    if (MobileProbe.threadIds.length === 0) {
+      MobileProbe.shape.push('direct thread 跳过（收件箱里没取到 thread_id）');
+    }
+    // ⑨ 收件箱翻页传参实验（**不计入分母**：它是诊断，不是"这条路通不通"的一部分）。
+    if (MobileProbe.inboxCursor.length > 0) {
+      await MobileProbe.inboxPageVariants(identity, MobileProbe.inboxCursor,
+        MobileProbe.firstThreadId);
+    }
     MobileProbe.last = `ok=${ok}/${total} info=${MobileProbe.tip(info)} tray=${MobileProbe.tip(tray)}`
       + ` inbox=${MobileProbe.tip(inbox)} self=${MobileProbe.tip(story)}`
       + ` user=${MobileProbe.tipOrSkip(other)} media=${MobileProbe.tipOrSkip(mediaBare)}`
-      + ` mediaJson=${MobileProbe.tipOrSkip(mediaJson)}`;
+      + ` mediaJson=${MobileProbe.tipOrSkip(mediaJson)} thread=${MobileProbe.tipOrSkip(thread)}`;
     hilog.info(DOMAIN, TAG, 'selftest done %{public}s', MobileProbe.last);
     if (announce) {
       hilog.info(DOMAIN, TAG, '1) 会话与身份：%{public}s', identity.isComplete() ? '就绪' : '不完整');
@@ -398,6 +430,52 @@ export class MobileProbe {
     const first: Record<string, Object> = list[0] as Record<string, Object>;
     MobileProbe.shape.push(`threads[0] keys=[${Object.keys(first).join(' ')}]`);
     MobileProbe.describeMediaList(first['items'], 'threads[0].items');
+    // 第一条会话的 thread_id：⑧ 要用（`thread_id` 是 19~20 位数字，取值时不能过 double，
+    // 所以这里只做"有没有"的判断，真正的精确取值交给 JsonRead.parseWithBigIds 那条解析路径）。
+    const threadId: Object | undefined = first['thread_id'];
+    if (threadId !== undefined && threadId !== null) {
+      MobileProbe.firstThreadId = `${threadId}`;
+      MobileProbe.shape.push(`threads[0].thread_id=${MobileProbe.firstThreadId}`);
+    }
+    // 前两条会话都记下（⑧ 各试一发：一条是群聊、一条是 1:1，实测解析结果不同）。
+    MobileProbe.threadIds = [];
+    for (let at: number = 0; at < list.length && MobileProbe.threadIds.length < 2; at++) {
+      const one: Record<string, Object> = list[at] as Record<string, Object>;
+      const idValue: Object | undefined = one['thread_id'];
+      if (idValue === undefined || idValue === null) {
+        continue;
+      }
+      const text: string = `${idValue}`;
+      if (text.length > 0 && MobileProbe.threadIds.indexOf(text) < 0) {
+        MobileProbe.threadIds.push(text);
+      }
+    }
+    MobileProbe.shape.push(`threads[0] is_group=${MobileProbe.preview(first['is_group'])}`
+      + ` title=${MobileProbe.preview(first['thread_title'])}`
+      + ` activity=${MobileProbe.preview(first['last_activity_at'])}`
+      + ` last_seen=${MobileProbe.preview(first['last_seen_at'])}`
+      + ` img=${first['thread_image'] !== undefined ? 'y' : 'n'}`);
+    // 顺手用**现成的**收件箱解析器（网页那条路也在用）解一遍：形状兼容就一行 `parser inbox=ok`。
+    MobileProbe.verifyInboxParser(result.body);
+    // 收件箱自己这一层的键名（翻页游标到底叫什么、长什么样，就看这几行）。
+    const cursorBox: Record<string, Object> | null = MobileProbe.objectOf(parsed['inbox']);
+    if (cursorBox !== null) {
+      MobileProbe.shape.push(`inbox keys=[${Object.keys(cursorBox).join(' ')}]`);
+      const nc: Object | undefined = cursorBox['next_cursor'];
+      if (nc !== undefined && nc !== null) {
+        // 形状（不是值）：是个结构还是字符串，决定了翻页参数怎么传。
+        const shape: Record<string, Object> | null = MobileProbe.objectOf(nc);
+        const shapeKeys: string = shape === null ? '-' : Object.keys(shape).join(' ');
+        MobileProbe.shape.push(`inbox next_cursor type=${Array.isArray(nc) ? 'array' : typeof nc}`
+          + ` keys=[${shapeKeys}]`);
+        MobileProbe.inboxCursor = JSON.stringify(nc);
+      }
+      MobileProbe.shape.push(`inbox next_cursor raw=${MobileProbe.preview(nc)}`
+        + ` has_older=${MobileProbe.preview(cursorBox['has_older'])}`
+        + ` prev_cursor_type=${MobileProbe.preview(cursorBox['prev_cursor_type'])}`);
+      MobileProbe.inboxPrevCursor = MobileProbe.firstText(cursorBox, ['prev_cursor']);
+      MobileProbe.inboxPrevCursorV2 = MobileProbe.firstText(cursorBox, ['prev_cursor_v2']);
+    }
   }
 
   /** 快拍条目那层（`items[0]`）：media_type / 图片与视频字段在不在。 */
@@ -465,6 +543,255 @@ export class MobileProbe {
   }
 
   /**
+   * ⑧ `GET /api/v1/direct_v2/threads/{id}/?limit=…`（instagrapi 的 `direct_messages`）。
+   *
+   * 用户报的"会话只显示 4~5 条"要么是服务端就只给了这么多，要么是我们解析丢了几条 ——
+   * 这一发把**服务端到底给了几条**（`items` 条数）如实写进报告，二分法立刻见效。
+   * 同时用**现成的** `DirectMapper.threadFromJson` 解析一遍：解析层与网页那条路共用，
+   * 通了就说明新路径的响应形状与老解析器完全兼容（`parser=` 那几行）。
+   */
+  static async directThread(identity: MobileIdentity, threadId: string,
+                            limit: number = 20): Promise<MobileResult> {
+    const params: string = `limit=${limit}`;
+    const result: MobileResult = await MobileRequest.send(
+      `direct_v2/threads/${threadId}/`, '', params, true);
+    MobileProbe.logShape('direct_thread', result);
+    MobileProbe.describeThread(result, threadId);
+    return result;
+  }
+
+  /**
+   * ⑨ 收件箱**翻页**的传参实验（只做诊断，不计入自检分母）。
+   *
+   * 为什么非做不可：实测把 `inbox.next_cursor` 放进 `cursor` 参数会被 IG 回
+   * `400 Invalid Inbox Cursor: The cursor parameter passed in the Inbox API must be …`，
+   * 而"加载更多"翻不动时界面会连打四发再退到模板那条老路（真机日志 16:12:20）。
+   *
+   * 第一次实验暴露了两件事：
+   *   1. `inbox.next_cursor` **不是字符串**，是个结构
+   *      `{cursor_thread_v2_id, cursor_timestamp_seconds, cursor_relevancy_score}`；
+   *   2. `max_id=…` / 表单体里带 `cursor=…` 都回 **200** —— 但那**不能说明翻页成功了**：
+   *      参数不认识时 IG 会**原样再给第一页**（本项目在 `inboxRest` 注释里专门警告过这个坑）。
+   *      所以这次每种传法都要比对"回来的第一会话 id 与上一页是否不同"才算数。
+   *
+   * @param cursorJson `next_cursor` 结构的 JSON 串
+   * @param firstId 上一页第一条会话的 id（用来判断"是不是又给了第一页"）
+   */
+  static async inboxPageVariants(identity: MobileIdentity, cursorJson: string,
+                                 firstId: string): Promise<string> {
+    if (cursorJson.length === 0) {
+      return 'no-cursor';
+    }
+    const cursorObj: Record<string, Object> | null = MobileProbe.parse(cursorJson);
+    // 只取结构里的 id 字段再试一种（IG 有些接口只认这一半）。
+    const threadV2: string = cursorObj === null ? ''
+      : MobileProbe.firstText(cursorObj, ['cursor_thread_v2_id']);
+    const base: string = 'visual_message_return_type=unseen'
+      + '&thread_message_limit=10&persistentBadging=true&limit=20';
+    const data: Record<string, Object> = MobileRequest.withExtraData(identity);
+    data['visual_message_return_type'] = 'unseen';
+    data['thread_message_limit'] = 10;
+    data['persistentBadging'] = 'true';
+    data['limit'] = 20;
+    const forms: Array<string> = ['cursor', 'cursor_v2', 'max_id'];
+    const out: Array<string> = [];
+    let cursorDetail: string = '-';
+    for (let index: number = 0; index < forms.length; index++) {
+      const one: MobileResult = await MobileRequest.send('direct_v2/inbox/',
+        MobileRequest.formOf(data), `${base}&${forms[index]}=${encodeURIComponent(cursorJson)}`, true);
+      out.push(`${forms[index]}=${MobileProbe.pageVerdict(one, firstId)}`);
+      // 400 的**响应体原话**一定要留下：IG 那条 "Invalid Inbox Cursor…" 后面接着的就是
+      // "这个参数应该长什么样"（本次唯一的官方说明来源）。
+      if (!one.ok && cursorDetail === '-') {
+        cursorDetail = one.detail;
+      }
+    }
+    if (threadV2.length > 0) {
+      const half: MobileResult = await MobileRequest.send('direct_v2/inbox/',
+        MobileRequest.formOf(data), `${base}&cursor=${encodeURIComponent(threadV2)}`, true);
+      out.push(`cursor-id-only=${MobileProbe.pageVerdict(half, firstId)}`);
+    }
+    // `prev_cursor` / `prev_cursor_v2` 也试一发：响应里专门带 `prev_cursor_type=PAGING`，
+    // 说明这两个字段与翻页有关，值可能是"上一页游标"的正确形态。
+    const prevKeys: Array<string> = ['prev_cursor', 'prev_cursor_v2'];
+    const prevValues: Array<string> = [MobileProbe.inboxPrevCursor, MobileProbe.inboxPrevCursorV2];
+    for (let index: number = 0; index < prevKeys.length; index++) {
+      const text: string = prevValues[index];
+      if (text.length === 0) {
+        continue;
+      }
+      const one: MobileResult = await MobileRequest.send('direct_v2/inbox/',
+        MobileRequest.formOf(data), `${base}&cursor=${encodeURIComponent(text)}`, true);
+      out.push(`${prevKeys[index]}-as-cursor=${MobileProbe.pageVerdict(one, firstId)}`);
+    }
+    const summary: string = out.join(' ');
+    hilog.info(DOMAIN, TAG, 'inbox page variants → %{public}s', summary);
+    MobileProbe.shape.push(`inbox 翻页实验(比对首页 id) ${summary}`);
+    MobileProbe.shape.push(`inbox 翻页 400 原话=${cursorDetail.substring(0, 300)}`);
+    return summary;
+  }
+
+  /**
+   * 一发翻页请求的判读：**只有"回来了且第一会话与上一页不同"才算翻页成功**。
+   *
+   * 这一条判据是本项目踩过的坑换来的（`inboxRest` 的注释）：IG 对不认识的翻页参数
+   * 不报错，而是**再给一遍第一页** —— 只看状态码会把"原地打转"当成成功。
+   */
+  private static pageVerdict(result: MobileResult, previousFirstId: string): string {
+    if (!result.ok) {
+      return `${result.code}/${result.error}`;
+    }
+    const page: DirectInboxPage | null = DirectMapper.inboxFromRestJson(result.body);
+    if (page === null || page.threads.length === 0) {
+      return `${result.code}/empty`;
+    }
+    const same: boolean = previousFirstId.length > 0 && page.threads[0].id === previousFirstId;
+    return `${result.code}/${same ? 'SAME-page1' : 'NEW'}(n=${page.threads.length})`;
+  }
+
+  /** 会话深处的形状（`thread.items[]` / `users[]` / 游标），并跑一遍现成解析器。 */
+  private static describeThread(result: MobileResult, threadId: string): void {
+    const parsed: Record<string, Object> | null = MobileProbe.parse(result.body);
+    if (parsed === null) {
+      return;
+    }
+    // 标签带上 id 尾部：两发（群聊 / 1:1）的形状要能对得上号。
+    const tag: string = `thread[${threadId.substring(Math.max(0, threadId.length - 6))}]`;
+    const thread: Record<string, Object> | null = MobileProbe.objectOf(parsed['thread']);
+    if (thread === null) {
+      MobileProbe.shape.push(`${tag} thread 缺失 keys=[${Object.keys(parsed).join(' ')}]`);
+      return;
+    }
+    MobileProbe.describeMediaList(thread['items'], `${tag}.items`);
+    MobileProbe.shape.push(`${tag} is_group=${MobileProbe.preview(thread['is_group'])}`
+      + ` has_older=${MobileProbe.preview(thread['has_older'])}`
+      + ` users=[${MobileProbe.objectsOfCount(thread['users'])}]`
+      + ` title=${MobileProbe.preview(thread['thread_title'])}`);
+    // 第一条消息的 `item_type`：解析层丢条目时，靠它判断"丢的是哪一类"。
+    const items: Object | undefined = thread['items'];
+    if (items !== undefined && items !== null && Array.isArray(items)) {
+      const list: Array<Object> = items as Array<Object>;
+      MobileProbe.shape.push(`${tag}.item_types=${MobileProbe.itemTypes(list)}`);
+      // **每种类型的第一条**把键名摊开：解析层要认的字段名（尤其 xma_clip / generic_xma
+      // 这类"分享"消息，图片挂在哪个子对象上）只能从真实响应里看出来。
+      MobileProbe.describeFirstOfEachType(list, tag);
+    }
+    // 现成解析器（网页那条路也在用）跑一遍：形状兼容与否一句话说清。
+    const view: DirectThreadView | null = DirectMapper.threadFromJson(result.body, '');
+    MobileProbe.shape.push(`parser ${tag}=${view === null ? 'null' : `ok msgs=${view.messages.length}`
+      + ` with=${view.withUsername} older=${view.hasOlder}`}`);
+  }
+
+  /** 数组字段的条数（不是数组给 0）。 */
+  private static objectsOfCount(value: Object | undefined): number {
+    if (value === undefined || value === null || !Array.isArray(value)) {
+      return 0;
+    }
+    return (value as Array<Object>).length;
+  }
+
+  /** 前几条消息的 `item_type` 汇总（形如 `text=3,media=1`）——看解析层丢了哪一类。 */
+  private static itemTypes(items: Array<Object>): string {
+    const counts: Map<string, number> = new Map<string, number>();
+    for (let index: number = 0; index < items.length; index++) {
+      const one: Record<string, Object> | null = MobileProbe.objectOf(items[index]);
+      if (one === null) {
+        continue;
+      }
+      const type: string = MobileProbe.firstText(one, ['item_type', 'content_type']);
+      const key: string = type.length > 0 ? type : '(none)';
+      const had: number | undefined = counts.get(key);
+      counts.set(key, had === undefined ? 1 : had + 1);
+    }
+    const parts: Array<string> = [];
+    counts.forEach((value: number, key: string): void => {
+      parts.push(`${key}=${value}`);
+    });
+    return parts.join(',');
+  }
+
+  /**
+   * 每种 `item_type` 的**第一条**：把它自己与几个可疑子对象的键名摊开。
+   *
+   * 为什么必须看这一眼：`DirectMapper` 现在只认 `text` / `media` / `media_share` / `clip` /
+   * `reel_share` / `link`，而真机上 1:1 会话里整条线程可以是 `xma_clip` / `xma_media_share` /
+   * `generic_xma`（实测 21 条全部是这三类，解析出来 0 条消息 → 界面报"读取失败"）。
+   * 图片到底挂在哪一层，只能从响应里读出来。
+   */
+  private static describeFirstOfEachType(items: Array<Object>, tag: string): void {
+    const seen: Array<string> = [];
+    const holders: Array<string> = ['xma_clip', 'xma_media_share', 'generic_xma', 'animated_media',
+      'xma_share', 'clip', 'media_share', 'media', 'reel_share', 'link'];
+    for (let index: number = 0; index < items.length && seen.length < 6; index++) {
+      const one: Record<string, Object> | null = MobileProbe.objectOf(items[index]);
+      if (one === null) {
+        continue;
+      }
+      const type: string = MobileProbe.firstText(one, ['item_type', 'content_type']);
+      if (type.length === 0 || seen.indexOf(type) >= 0) {
+        continue;
+      }
+      seen.push(type);
+      MobileProbe.shape.push(`${tag} type=${type} keys=[${Object.keys(one).join(' ')}]`);
+      for (let at: number = 0; at < holders.length; at++) {
+        const value: Object | undefined = one[holders[at]];
+        if (value === undefined || value === null) {
+          continue;
+        }
+        // 数组也要能看出来：`xma_*` 这类附件可能是**数组**（objectOf 会把数组判成 null，
+        // 只靠键名看不出这一点，于是这一行专门标出容器类型）。
+        const asArray: Array<Object> | null = Array.isArray(value) ? value as Array<Object> : null;
+        if (asArray !== null) {
+          MobileProbe.shape.push(`${tag}   ${type}.${holders[at]} 是数组 len=${asArray.length}`);
+          if (asArray.length > 0) {
+            const inner: Record<string, Object> | null = MobileProbe.objectOf(asArray[0]);
+            MobileProbe.shape.push(`${tag}   ${type}.${holders[at]}[0] keys=[`
+              + `${inner === null ? '-' : Object.keys(inner).join(' ')}]`);
+          }
+          continue;
+        }
+        const sub: Record<string, Object> | null = MobileProbe.objectOf(value);
+        if (sub !== null) {
+          MobileProbe.shape.push(`${tag}   ${type}.${holders[at]} keys=[${Object.keys(sub).join(' ')}]`);
+        }
+      }
+      /*
+       * **看不懂的那几类直接留原始 JSON**（截断）。
+       *
+       * 为什么不再靠"猜键名"：`xma_clip` / `xma_media_share` / `generic_xma` 是"分享帖子/Reel"
+       * 那类消息，`DirectMapper` 现在完全不认它们 —— 1:1 会话里整条线程都是这三类时，
+       * 解析出来 0 条消息，界面就报"读取失败"（用户报的"会话只显示几条"就是这个）。
+       * 要写这层映射，必须看清真实结构，而键名列表已经不够用了。
+       */
+      if (type !== 'text') {
+        MobileProbe.shape.push(`${tag} raw(${type})=${MobileProbe.rawOf(one, 900)}`);
+      }
+    }
+  }
+
+  /** 一条 item 的原始 JSON（截断；诊断用）。 */
+  private static rawOf(value: Object, limit: number): string {
+    try {
+      const text: string = JSON.stringify(value);
+      return text.length > limit ? `${text.substring(0, limit)}…` : text;
+    } catch (error) {
+      return '(unserializable)';
+    }
+  }
+
+  /** 收件箱解析器验证（在 describeInbox 里调，报告里给一行 `parser inbox=…`）。 */
+  private static verifyInboxParser(body: string): void {
+    const page: DirectInboxPage | null = DirectMapper.inboxFromRestJson(body);
+    if (page === null) {
+      MobileProbe.shape.push('parser inbox=null');
+      return;
+    }
+    MobileProbe.shape.push(`parser inbox=ok n=${page.threads.length}`
+      + ` first=${page.threads.length > 0 ? page.threads[0].title : '-'}`
+      + ` cursor=${page.endCursor.length}b more=${page.hasMore}`);
+  }
+
+  /**
    * 把响应的**形状**打进日志（键名 + 值预览，最多 MAX_KEYS 个）。
    *
    * 只打形状不打全文：搬评论那条路时吃过教训 —— 几百 KB 的响应灌进日志，
@@ -518,6 +845,32 @@ export class MobileProbe {
     } catch (error) {
       return null;
     }
+  }
+
+  /** 取一个对象字段（不是对象 / 不存在给 null）。 */
+  private static objectOf(value: Object | undefined): Record<string, Object> | null {
+    if (value === undefined || value === null || Array.isArray(value)) {
+      return null;
+    }
+    if (typeof value !== 'object') {
+      return null;
+    }
+    return value as Record<string, Object>;
+  }
+
+  /** 取第一个非空字符串字段（键名新旧不一，容错比精确重要）。 */
+  private static firstText(holder: Record<string, Object>, names: Array<string>): string {
+    for (let index: number = 0; index < names.length; index++) {
+      const value: Object | undefined = holder[names[index]];
+      if (value === undefined || value === null) {
+        continue;
+      }
+      const text: string = typeof value === 'string' ? value as string : `${value}`;
+      if (text.length > 0 && text !== 'null' && text !== 'undefined') {
+        return text;
+      }
+    }
+    return '';
   }
 
   /** 一发结果的短标签（`ok/…`、`err/http`）。 */

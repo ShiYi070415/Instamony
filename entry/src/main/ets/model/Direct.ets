@@ -938,7 +938,9 @@ export class DirectMapper {
    *   `media_share`  —— 转发一条帖子；
    *   `clip`         —— 分享一条 reel（里面再套一层 `clip`）；
    *   `reel_share`   —— 分享一条动态；
-   *   `link`         —— 链接卡片（缩略图在 `link_context.link_image_url`）。
+   *   `link`         —— 链接卡片（缩略图在 `link_context.link_image_url`）；
+   *   `xma_*`        —— **新版"分享"消息**（见 xmaImageUrl 的说明）；
+   *   `animated_media` —— 贴纸 / GIF。
    */
   private static mediaUrlOf(item: Record<string, Object>): string {
     const direct: string = DirectMapper.imageUrlOf(JsonRead.recordOf(item, 'media'));
@@ -977,6 +979,96 @@ export class DirectMapper {
         }
       }
     }
+    const xma: string = DirectMapper.xmaImageUrl(item);
+    if (xma.length > 0) {
+      return xma;
+    }
+    return DirectMapper.animatedImageUrl(item);
+  }
+
+  /**
+   * **XMA 那类"分享"消息**的预览图（拿不到给空串）。
+   *
+   * 为什么单独写一段（实测依据，2026-10-16 真机响应）：
+   * 1:1 会话里整条线程可以是 `xma_clip`(18) + `xma_media_share`(2) + `generic_xma`(1)，
+   * 而上面那串老字段名（`media` / `media_share` / `clip` …）**一个都不匹配** ——
+   * 于是 21 条消息全被当成"既没文字也没画面"丢掉，界面报"读取失败"、
+   * 用户看到的就是"这条会话只有几条/打不开"。
+   *
+   * 形状（实测键清单）：
+   *   `item.xma_clip` / `item.xma_media_share` / `item.generic_xma` 都是**数组**（通常 1 个元素），
+   *   元素里有 `preview_url`（+ `preview_width/height`、`preview_url_mime_type`）、
+   *   `playable_url`（视频时）、`title_text` / `caption_body_text` / `target_url` 等。
+   * 键名就是 `item_type` 本身 —— 所以这里按 `item_type` 取，再退回三个已知键名。
+   */
+  private static xmaImageUrl(item: Record<string, Object>): string {
+    const type: string = JsonRead.strOf(item, 'item_type');
+    const holders: Array<string> = [];
+    if (type.length > 0) {
+      holders.push(type);
+    }
+    const known: Array<string> = ['xma_clip', 'xma_media_share', 'generic_xma', 'xma_share'];
+    for (let index: number = 0; index < known.length; index++) {
+      if (holders.indexOf(known[index]) < 0) {
+        holders.push(known[index]);
+      }
+    }
+    for (let index: number = 0; index < holders.length; index++) {
+      const attachments: Array<Object> = JsonRead.arrayOf(item, holders[index]);
+      for (let at: number = 0; at < attachments.length && at < 2; at++) {
+        const one: Record<string, Object> | null = JsonRead.asRecord(attachments[at]);
+        if (one === null) {
+          continue;
+        }
+        const direct: string = JsonRead.strOf(one, 'preview_url');
+        if (direct.length > 0) {
+          return direct;
+        }
+        // 另外两种"预览图"挂法（不同模板给的不一样，依次试）。
+        const holdersInfo: Array<string> =
+          ['preview_url_info', 'accessory_preview_url_info', 'parent_post_preview_url_info'];
+        for (let info: number = 0; info < holdersInfo.length; info++) {
+          const host: Record<string, Object> | null = JsonRead.recordOf(one, holdersInfo[info]);
+          if (host === null) {
+            continue;
+          }
+          const url: string = JsonRead.strOf(host, 'url');
+          if (url.length > 0) {
+            return url;
+          }
+        }
+      }
+    }
+    return '';
+  }
+
+  /**
+   * **贴纸 / GIF**（`animated_media`）的图片地址。
+   *
+   * 形状是 Giphy 那套：`animated_media.images.{fixed_height,downsized,original,…}.url`。
+   * 键名不固定，所以按优先级试几个常见档位，再兜底遍历（只取有 `url` 的第一个）。
+   */
+  private static animatedImageUrl(item: Record<string, Object>): string {
+    const media: Record<string, Object> | null = JsonRead.recordOf(item, 'animated_media');
+    if (media === null) {
+      return '';
+    }
+    const images: Record<string, Object> | null = JsonRead.recordOf(media, 'images');
+    if (images === null) {
+      return '';
+    }
+    const sizes: Array<string> = ['fixed_height', 'downsized', 'original', 'fixed_height_small',
+      'preview'];
+    for (let index: number = 0; index < sizes.length; index++) {
+      const one: Record<string, Object> | null = JsonRead.recordOf(images, sizes[index]);
+      if (one === null) {
+        continue;
+      }
+      const url: string = JsonRead.strOf(one, 'url');
+      if (url.length > 0) {
+        return url;
+      }
+    }
     return '';
   }
 
@@ -993,6 +1085,28 @@ export class DirectMapper {
       }
       if (JsonRead.strOf(host, 'media_type') === '2') {
         return true;
+      }
+    }
+    /*
+     * XMA 那类：视频在 `playable_url`，`preview_url_mime_type` 也会写成 `video/mp4`
+     * （实测 `xma_clip` 就是这种）。两条都认，界面上才盖得住那颗播放标记。
+     */
+    const type: string = JsonRead.strOf(item, 'item_type');
+    const xmaHolders: Array<string> = type.length > 0
+      ? [type, 'xma_clip', 'xma_media_share'] : ['xma_clip', 'xma_media_share'];
+    for (let index: number = 0; index < xmaHolders.length; index++) {
+      const attachments: Array<Object> = JsonRead.arrayOf(item, xmaHolders[index]);
+      for (let at: number = 0; at < attachments.length && at < 2; at++) {
+        const one: Record<string, Object> | null = JsonRead.asRecord(attachments[at]);
+        if (one === null) {
+          continue;
+        }
+        if (JsonRead.strOf(one, 'playable_url').length > 0) {
+          return true;
+        }
+        if (JsonRead.strOf(one, 'preview_url_mime_type').indexOf('video') >= 0) {
+          return true;
+        }
       }
     }
     return false;

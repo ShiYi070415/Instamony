@@ -328,7 +328,7 @@ MobileProbe  3) 结论：三发全通 / 部分通 / 全失败
 | 签名 | **已解决**（用户 2026-10-16 15:48 重新自动签名；`install -r` 原地覆盖成功，会话未丢） |
 | 模拟器真机验证（跑自检看三行结论） | **完成，全部通过**：`ok=7/7`（见第 9 节） |
 | stories 端点 `MobileStories.ets` + 接进 `NativeStories` | **完成并在真机跑通**：托盘 213 条、点开播放页有媒体（见第 9 节） |
-| direct_v2 端点 `MobileDirect.ets` | 未开始（收件箱那一发已验证 200 / 20 条线程） |
+| direct_v2 端点 `MobileDirect.ets` + 接进 `NativeDirect` | **完成（只读）**：收件箱 20 条会话、会话消息 21 条；顺手修掉 `DirectMapper` 丢 `xma_*` 消息的缺陷（见 9.6） |
 
 ### 下一步的最短路径（原计划，已完成）
 
@@ -384,9 +384,7 @@ MobileProbe  3) 结论：三发全通 / 部分通 / 全失败
 2. `clearSession()` 先把 `this.identity = null` 再 `persist()`，而 `persist()` 见身份为空直接返回
    → 盘上那份旧 `claim`/`rur`/`authorization`（**会话级**材料）会串到下一段会话。已改为显式落盘。
 
-### 9.5 复现命令（接手方照抄）
-
-```powershell
+### 9.5 复现命令（接手方照抄）```powershell
 # 构建（用户指定的原方法；注意它成功时也可能回 exit code 1，看 BUILD SUCCESSFUL）
 $env:DEVECO_SDK_HOME='C:\Program Files\Huawei\DevEco Studio\sdk'
 & 'C:\Program Files\Huawei\DevEco Studio\tools\node\node.exe' `
@@ -398,4 +396,51 @@ hdc -t 127.0.0.1:5555 install -r entry\build\default\outputs\default\entry-defau
 hdc shell "aa force-stop com.fanha.instarmony"; hdc shell "aa start -a EntryAbility -b com.fanha.instarmony"
 hdc file recv "/data/app/el2/100/base/com.fanha.instarmony/haps/entry/files/Instarmony_mobile.txt" .\Instarmony_mobile.txt
 ```
+
+### 9.6 私信（direct_v2）也已接上（只读）
+
+新文件 `core/mobileapi/MobileDirect.ets`，接进 `NativeDirect.inbox / inboxRest / thread`
+（常量 `MOBILE_DIRECT_FIRST`，同样可一处整体回退）。**发送不做**（写接口的握手与风控判据不同，
+既有 `probeSendShape` 那套先留着）。
+
+实测（模拟器 + 已登录会话，16:27）：
+
+```
+MobileDirect: inbox ok n=20 more=true             → NativeDirect: inboxRest via mobile n=20
+MobileDirect: thread ok id=…363010 msgs=20 raw=21 older=true with=meowlok0w0
+              → NativeDirect: thread via mobile … msgs=20     （没有回退到模板/网页）
+```
+
+解析层**复用** `model/Direct.ets` 的两个映射（`inboxFromRestJson` / `threadFromJson`），
+自检报告里可见 `parser inbox=ok n=20`、`parser thread=ok` —— 移动端响应与老解析器兼容。
+
+**顺手修掉一个真缺陷（用户报的"会话只显示 4~5 条"就是它）**：
+
+- `DirectMapper.threadFromJson` 原本只认 `text` / `media` / `media_share` / `clip` / `reel_share` / `link`；
+- 真机 1:1 会话里**整条线程可以是** `xma_clip`(18) + `xma_media_share`(2) + `generic_xma`(1)
+  → 21 条全被当成"既没文字也没画面"丢掉 → 解析出 **0 条**，界面报「读取失败: http-404/non-json」；
+- 形状（实测）：`item.xma_clip` / `item.xma_media_share` / `item.generic_xma` 都是**数组**（通常 1 个元素），
+  元素里有 `preview_url`(+`preview_width/height`)、`playable_url`（视频）、`title_text`/`caption_body_text`；
+- 已补 `xmaImageUrl` / `animatedImageUrl`（贴纸 GIF：`animated_media.images.{fixed_height,…}.url`）
+  与 XMA 的 `hasVideoMedia`（`playable_url` / `preview_url_mime_type` 含 `video`）；
+- 修完同一会话 `msgs=20 raw=21`，界面正常显示分享的 Reel 预览与文字消息。
+- 顺带说明：会话页每 4 秒轮询一次（`DirectThreadViewModel.THREAD_POLL_MS`）是**既有设计**，
+  不是新路径引入的循环。
+
+**未解（留给下一步）：收件箱翻页游标。**
+`inbox.next_cursor` **不是字符串**，是结构
+`{cursor_thread_v2_id, cursor_timestamp_seconds, cursor_relevancy_score, cursor_primary_sort_id}`
+（旁边还有 `prev_cursor` / `prev_cursor_v2` / `prev_cursor_type=PAGING`）。四种传法实测：
+
+| 传法 | 结果 |
+| --- | --- |
+| `?cursor=<JSON>` | **400** `Invalid Inbox Cursor: The cursor parameter passed in the Inbox API is not valid. Please refresh your Inbox.` |
+| `?cursor=<cursor_thread_v2_id>` | **400**（同上） |
+| `?cursor=<prev_cursor>` / `<prev_cursor_v2>` | **400**（同上） |
+| `?cursor_v2=<JSON>` / `?max_id=<JSON>` | 200，但**又是第一页**（比对首页 thread_id 完全一致）→ 参数被忽略 |
+
+所以在解出正确形态之前：`MobileDirect.inbox` **只做第一页**（`cursor` 非空直接让位给老路径），
+并把 `hasMore` 报成 false —— 不让界面拿着不合法游标连打四发（16:12 的日志就是这么打的），
+也不把"原地打转"当成翻页成功。实验本身留在探针里（`MobileProbe.inboxPageVariants`），
+下次有想法直接改那里再跑一遍即可。
 

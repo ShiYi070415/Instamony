@@ -29,12 +29,24 @@ import { NativeFeed } from './NativeFeed';
 import { NativeProfile } from './NativeProfile';
 import { RestSession } from './RestSession';
 import { DirectInboxPage, DirectMapper, DirectThread, DirectThreadView } from '../model/Direct';
+import { MobileDirect } from './mobileapi/MobileDirect';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeDirect';
 const CONNECT_TIMEOUT_MS: number = 8000;
 const READ_TIMEOUT_MS: number = 15000;
 const SITE: string = 'https://www.instagram.com';
+/**
+ * **先走移动端私有 API**（见 core/mobileapi/MobileDirect 的文件头）。
+ *
+ * 理由与快拍那边同源：私信这几条 `/api/v1/direct_v2/…` 本来就是 App 接口，
+ * 既有实现是"把头的 UA/app-id 临时改成安卓"来凑半套移动身份；
+ * 新的这条用**整套**移动身份（含 `signed_body` 与 `Authorization: Bearer IGT:2:`），
+ * 实测收件箱 200 / 20 条会话、会话消息 200 / 21 条，而且解析层与老路**共用同一个映射**。
+ *
+ * 同样留成显式开关：真机上若发现某些账号走新路更差，改这一个常量即可整体回退。
+ */
+const MOBILE_DIRECT_FIRST: boolean = true;
 
 /** 收件箱那条查询的操作名（网页侧实际发的就是它，见 DirectViewModel 的说明）。 */
 const OP_INBOX: string = 'PolarisDirectInboxMobileQuery';
@@ -284,6 +296,20 @@ export class NativeDirect {
         ApiThrottle.remainingMinutes(ApiThrottle.DIRECT));
       return null;
     }
+    /*
+     * **移动端私有 API 优先**（见文件头 MOBILE_DIRECT_FIRST）：一发 `direct_v2/inbox/`
+     * 就带回整页会话（含每个会话最近 10 条消息），不依赖"抓到过网页模板"。
+     * 失败静默落回下面的模板那条路。
+     */
+    if (MOBILE_DIRECT_FIRST) {
+      const mobile: DirectInboxPage | null = await MobileDirect.inbox(after);
+      if (mobile !== null && mobile.threads.length > 0) {
+        NativeDirect.detail = '-';
+        hilog.info(DOMAIN, TAG, 'inbox via mobile n=%{public}d first=%{public}s',
+          mobile.threads.length, mobile.threads[0].title);
+        return mobile;
+      }
+    }
     const result: DirectFetchResult = await NativeDirect.post(OP_INBOX, after);
     if (!result.ok) {
       return null;
@@ -326,6 +352,16 @@ export class NativeDirect {
       hilog.warn(DOMAIN, TAG, 'inboxRest skipped: direct family throttled %{public}dmin left',
         ApiThrottle.remainingMinutes(ApiThrottle.DIRECT));
       return null;
+    }
+    // ---- 移动端私有 API 优先（见文件头 MOBILE_DIRECT_FIRST；翻页游标由它自己按响应里真实存在的键取）----
+    if (MOBILE_DIRECT_FIRST) {
+      const mobile: DirectInboxPage | null = await MobileDirect.inbox(cursor);
+      if (mobile !== null && mobile.threads.length > 0) {
+        NativeDirect.detail = '-';
+        hilog.info(DOMAIN, TAG, 'inboxRest via mobile n=%{public}d more=%{public}s',
+          mobile.threads.length, `${mobile.hasMore}`);
+        return mobile;
+      }
     }
     const headers: Record<string, string> = await NativeDirect.restHeaders();
     if (Object.keys(headers).length === 0) {
@@ -1022,6 +1058,22 @@ export class NativeDirect {
       hilog.warn(DOMAIN, TAG, 'thread skipped: direct family throttled %{public}dmin left',
         ApiThrottle.remainingMinutes(ApiThrottle.DIRECT));
       return null;
+    }
+    /*
+     * **移动端私有 API 优先**（见文件头 MOBILE_DIRECT_FIRST）。
+     *
+     * 放在模板前面：模板那条要先"抓到过会话模板"（真机上是唯一能通的那条，但它依赖抓取时机），
+     * 而移动端这一发**不需要模板**、直接给 `thread.items`，实测 21 条 / 65KB，
+     * 且解析用的是同一个 `DirectMapper.threadFromJson`。
+     */
+    if (MOBILE_DIRECT_FIRST) {
+      const mobile: DirectThreadView | null = await MobileDirect.thread(id, olderCursor);
+      if (mobile !== null && mobile.messages.length > 0) {
+        NativeDirect.detail = '-';
+        hilog.info(DOMAIN, TAG, 'thread via mobile id=%{public}s msgs=%{public}d older=%{public}s',
+          id, mobile.messages.length, `${mobile.hasOlder}`);
+        return mobile;
+      }
     }
     // ① 模板回放（抓到过会话模板时这条最快，也是真机上唯一能通的那条）。
     const viaTemplate: DirectThreadView | null =

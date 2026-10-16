@@ -222,8 +222,17 @@
   现场一律进 `Instarmony_diag.txt`（测试同学截图 `（原因 …）` 或直接发那个文件即可）；
   按 `detail` 分档处理：`empty`（见上一条）、`http-4xx`（会话或身份）、`throttled-Nmin`（节流）、
   `no-session`、`throw:`（网络）。
-- **私信"会话只显示 4~5 条"**：本轮实测 `threadViaTemplate ok … msgs=19`，需要用户侧再复核
-  是否还复现（若复现，看 `graphql raw edges=N` 是"服务端就给了几条"还是"解析丢了几条"）。
+- **私信"会话只显示 4~5 条"**：**已定案并修掉**（`f048071`/`5c4ad73` 之后的私信那一提交）。
+  根因不在请求，而在**解析层漏了整类消息**：`DirectMapper.threadFromJson` 只认
+  `text`/`media`/`media_share`/`clip`/`reel_share`/`link`，而新版分享消息是
+  `xma_clip` / `xma_media_share` / `generic_xma` —— 附件是**数组**（预览图 `preview_url`、
+  视频 `playable_url`）。1:1 会话里整条线程可以是这三类，于是 21 条全被丢成 **0 条**，
+  界面报「读取失败: http-404/non-json」（真机 16:19 复现，`xma_clip=18,xma_media_share=2,
+  generic_xma=1`）。补上映射后同一会话 `msgs=20 raw=21`，分享的 Reel 预览正常显示。
+  顺带：`animated_media`（贴纸/GIF，`images.{fixed_height,…}.url`）也补了。
+  私信取数同时改走移动端私有 API（`core/mobileapi/MobileDirect`，见 `INSTAGRAPI_PORT.md` 第 9.6 节），
+  收件箱 20 条会话 / 会话 21 条消息；**收件箱翻页游标仍未解**（四种传法均被拒或忽略），
+  目前只做第一页并如实报 `hasMore=false`。
 - **Reels 视频宽高诊断**（`reel aspect w=… h=… ratio=…`）与**信息流高视频黑底占位**两项没动。
 - **`WebScripts.commentsByReplayScript`**（只在注释里被提到）删前要确认没有按名字间接调用。
 
