@@ -42,6 +42,15 @@ const MAX_KEYS: number = 14;
 const MAX_VALUE: number = 60;
 /** 落盘时最多留几行形状（够写解析层就行，别把文件撑大）。 */
 const MAX_SHAPE_LINES: number = 160;
+/**
+ * 是否在自检里跑**收件箱翻页传参实验**（`inboxPageVariants`）。
+ *
+ * 默认关：这个实验一发就是 6 条请求，而它的结论**已经跑出来了**（四种传法全被拒或被忽略，
+ * 见 `MobileDirect.withCursor` 与 `INSTAGRAPI_PORT.md` 第 9.6 节）。留在自检里每次启动都白打
+ * 六发、白白把 DIRECT 家族的限流窗口往前推 —— 要再研究时把它打开（或从设置页那个自检入口
+ * 触发一次）即可，代码路径一直都在。
+ */
+const INBOX_CURSOR_EXPERIMENT: boolean = false;
 
 export class MobileProbe {
   /** 上一次自检的结论（一行；给诊断面板用）。 */
@@ -195,8 +204,8 @@ export class MobileProbe {
     if (MobileProbe.threadIds.length === 0) {
       MobileProbe.shape.push('direct thread 跳过（收件箱里没取到 thread_id）');
     }
-    // ⑨ 收件箱翻页传参实验（**不计入分母**：它是诊断，不是"这条路通不通"的一部分）。
-    if (MobileProbe.inboxCursor.length > 0) {
+    // ⑨ 收件箱翻页传参实验（**不计入分母**；默认关闭，见 INBOX_CURSOR_EXPERIMENT 的说明）。
+    if (INBOX_CURSOR_EXPERIMENT && MobileProbe.inboxCursor.length > 0) {
       await MobileProbe.inboxPageVariants(identity, MobileProbe.inboxCursor,
         MobileProbe.firstThreadId);
     }

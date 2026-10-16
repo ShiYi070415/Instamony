@@ -440,7 +440,8 @@ MobileDirect: thread ok id=…363010 msgs=20 raw=21 older=true with=meowlok0w0
 | `?cursor_v2=<JSON>` / `?max_id=<JSON>` | 200，但**又是第一页**（比对首页 thread_id 完全一致）→ 参数被忽略 |
 
 所以在解出正确形态之前：`MobileDirect.inbox` **只做第一页**（`cursor` 非空直接让位给老路径），
-并把 `hasMore` 报成 false —— 不让界面拿着不合法游标连打四发（16:12 的日志就是这么打的），
-也不把"原地打转"当成翻页成功。实验本身留在探针里（`MobileProbe.inboxPageVariants`），
-下次有想法直接改那里再跑一遍即可。
+并把 `hasMore` 报成 false（常量 `MOBILE_INBOX_CURSOR_USABLE`）—— 不让界面拿着不合法游标连打四发
+（16:12 的日志就是这么打的），也不把"原地打转"当成翻页成功。
+实验本身留在探针里（`MobileProbe.inboxPageVariants`，由 `INBOX_CURSOR_EXPERIMENT` 控制，**默认关**：
+它的结论已经拿到，留在自检里每次启动都白打六发、白推限流窗口）。下次有想法把它打开、加一种传法再跑一遍即可。
 

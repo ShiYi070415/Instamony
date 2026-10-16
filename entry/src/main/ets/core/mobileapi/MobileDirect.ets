@@ -36,6 +36,12 @@ const THREAD_MESSAGE_LIMIT: number = 10;
 const THREAD_PAGE_SIZE: number = 20;
 /** 翻页游标的候选键（顺序即优先级）；**只看 `inbox` 自己这一层**，别钻进 threads 里。 */
 const CURSOR_KEYS: Array<string> = ['next_max_id', 'next_cursor', 'cursor', 'oldest_cursor'];
+/**
+ * 移动端收件箱的翻页游标**是否已解出可用形态**（见 `withCursor` 里的实测表）。
+ *
+ * 解出之前保持 false：移动端只给第一页，界面不会去点"加载更多"白打请求。
+ */
+const MOBILE_INBOX_CURSOR_USABLE: boolean = false;
 
 export class MobileDirect {
   /**
@@ -178,6 +184,21 @@ export class MobileDirect {
     if (page.endCursor.length > 0 || !page.hasMore) {
       return page;
     }
+    /*
+     * 移动端收件箱的游标**目前一个都不能用**（见上面那段实测表），所以这里直接如实收尾：
+     * `hasMore=false`。
+     *
+     * 为什么不留着 `oldest_cursor`（它确实是字符串，105 字符，看着像游标）：
+     * 界面拿到它就会去发"加载更多" —— 移动端这条路又拒（游标未解）、老路那条 REST 用
+     * 安卓身份是 **404 not-logged-in**，等于每次点"加载更多"白打一发、还把 DIRECT 家族的
+     * 限流窗口往前推（`ApiThrottle` 那条设计就是为这个存在的）。宁可这次先"没有更多"。
+     *
+     * 等哪天把游标形态解开了（探针 `MobileProbe.inboxPageVariants` 里加一种传法再跑一遍即可），
+     * 把 `MOBILE_INBOX_CURSOR_USABLE` 打开就恢复翻页 —— 不用改别的任何地方。
+     */
+    if (!MOBILE_INBOX_CURSOR_USABLE) {
+      return new DirectInboxPage(page.threads, '', false);
+    }
     let parsed: Record<string, Object> | null = null;
     try {
       parsed = JSON.parse(body) as Record<string, Object>;
@@ -205,10 +226,6 @@ export class MobileDirect {
         return new DirectInboxPage(page.threads, text, true);
       }
     }
-    /*
-     * 响应里只有"结构化游标"（当前解不开）：**别把它交给界面**。
-     * 这里只留一行日志说明拿不到，`hasMore=false` 让界面安安静静停下。
-     */
     hilog.info(DOMAIN, TAG, 'inbox cursor unreadable (structural) keys=%{public}s',
       Object.keys(box).join(','));
     return new DirectInboxPage(page.threads, '', false);
