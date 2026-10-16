@@ -46,6 +46,7 @@ import { MATERIAL_PILL_HEIGHT, SelectSurfaceModifier, SurfaceModifier } from './
 import { PlatformCap } from '../core/PlatformCap';
 import { StoryDiag } from '../core/StoryDiag';
 import { NativeStories } from '../core/NativeStories';
+import { MobileProbe } from '../core/mobileapi/MobileProbe';
 import { fileIo, picker } from '@kit.CoreFileKit';
 import { pasteboard, BusinessError } from '@kit.BasicServicesKit';
 import { promptAction } from '@kit.ArkUI';
@@ -100,6 +101,23 @@ export struct SettingsPanel {
   @StorageLink(SETTING_MATERIAL_THICKNESS) materialThickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
   /** 底栏行为（@StorageLink：这里切，栏的滚动行为换一套）。 */
   @StorageLink(SETTING_BAR_HIDE) barHideMode: string = BAR_HIDE_SINK;
+  /**
+   * 移动 API 自检的结论（见 core/mobileapi/MobileProbe）。
+   *
+   * 为什么要在这里显示：启动 6 秒后那次自检的结论**只进日志**，而真机上 chromium 的日志
+   * 会把 hilog 冲掉（本项目在网页那条路上已经吃过这个亏）—— 测试者手上也没有 hdc。
+   * 所以结论必须能**在 App 里直接看到**：进设置页读一眼，需要发回来就点一下复制。
+   * 初值取 `-` 表示"还没跑过"（启动自检没跑或没登录）。
+   */
+  @State mobileProbeResult: string = MobileProbe.lastSummary();
+
+  /**
+   * 进设置页时把已经跑过的那次自检结论捞进来（启动自检是定时跑的，多半这时已经有结果）。
+   * 只读一次、不重发请求：要看最新的点那一行。
+   */
+  aboutToAppear(): void {
+    this.mobileProbeResult = MobileProbe.lastSummary();
+  }
 
   /**
    * 诊断行的通用外观（左文案 + 右箭头）：和系统设置里"能点进去"的行一致。
@@ -222,6 +240,50 @@ export struct SettingsPanel {
     }
   }
 
+  /**
+   * **跑一次移动 API 自检**（见 core/mobileapi/MobileProbe；需求：换到 instagrapi 那条私有 API 路）。
+   *
+   * 三发请求：`users/{uid}/info/` → `feed/reels_tray/` → `direct_v2/inbox/`。
+   * 这个入口的意义和「抓故事页模板（测试）」一样：**当场**验证"IG 认不认我们这套身份"，
+   * 不用等某条业务路径自己踩坑才发现会话不可用。
+   *
+   * 自检只读、不改状态；异常一律吞掉只报一句，绝不影响设置页本身。
+   */
+  private runMobileProbe(): void {
+    this.mobileProbeResult = MobileProbe.lastSummary();
+    this.toast($r('app.string.diag_mobile_running'));
+    MobileProbe.run(true).then((ok: number): void => {
+      this.mobileProbeResult = MobileProbe.lastSummary();
+      this.toast($r('app.string.diag_mobile_done', ok));
+    }).catch((error: Error): void => {
+      const message: string = error.message ?? '-';
+      this.mobileProbeResult = `threw: ${message}`;
+      hilog.warn(DOMAIN, TAG, 'mobile probe threw: %{public}s', message);
+      this.toast($r('app.string.diag_mobile_failed', message));
+    });
+  }
+
+  /** 把移动 API 自检结论复制走（和「复制诊断摘要」同一条路：剪贴板不需要权限）。 */
+  private copyMobileProbe(): void {
+    const text: string = MobileProbe.lastSummary();
+    this.mobileProbeResult = text;
+    try {
+      const data: pasteboard.PasteData =
+        pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text);
+      pasteboard.getSystemPasteboard().setData(data, (err: BusinessError | undefined) => {
+        if (err !== undefined && err !== null) {
+          hilog.warn(DOMAIN, TAG, 'mobile probe copy failed: %{public}s', err.message);
+          this.toast($r('app.string.diag_export_failed', err.message));
+          return;
+        }
+        this.toast($r('app.string.diag_copied'));
+      });
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'mobile probe copy threw: %{public}s', (error as Error).message);
+      this.toast($r('app.string.diag_export_failed', (error as Error).message));
+    }
+  }
+
   /** 分组标题。 */
   @Builder
   groupHeader(text: ResourceStr) {
@@ -240,6 +302,32 @@ export struct SettingsPanel {
       .fontColor($r('app.color.secondary_text'))
       .width('100%')
       .padding({ left: SIDE_PADDING, right: SIDE_PADDING, top: 8, bottom: 4 })
+  }
+
+  /**
+   * 移动 API 自检结论行：标题 + 结论正文，整行可点（点一下复制）。
+   *
+   * 正文**从 `this.mobileProbeResult` 内部读**，不按值传参：@Builder 的按值参数不参与状态观察，
+   * 传进来的话自检跑完这一行不会重绘（同 fileDeep 那条注释里的教训）。
+   */
+  @Builder
+  mobileProbeRow() {
+    Column({ space: 4 }) {
+      Text($r('app.string.diag_mobile_result'))
+        .fontSize(13)
+        .fontColor($r('app.color.secondary_text'))
+        .width('100%')
+      Text(this.mobileProbeResult)
+        .fontSize(13)
+        .fontColor($r('app.color.primary_text'))
+        .width('100%')
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding({ left: SIDE_PADDING, right: SIDE_PADDING, top: 8, bottom: 8 })
+    .onClick((): void => {
+      this.copyMobileProbe();
+    })
   }
 
   /**
@@ -555,6 +643,22 @@ export struct SettingsPanel {
         this.actionRow($r('app.string.settings_capture_story'), (): void => {
           this.captureStoryTemplateForDiag();
         })
+      }
+      ListItem() {
+        /*
+         * **跑一次移动 API 自检**（新路径：instagrapi 那套私有移动 API，见 core/mobileapi）。
+         *
+         * 和上一行同源：网页那条路被 IG 按来源拒（reels_media 回 500 / challenge）之后，
+         * 我们在试"复用同一个 Cookie 罐、改用移动端私有 API"。这条链路的失败点很多
+         * （会话读不到、claim 不对、challenge、限流），所以给一个当场能跑的入口：
+         * 结论直接显示在下面那行，不依赖 hdc 也不依赖 hilog。
+         */
+        this.actionRow($r('app.string.settings_run_mobile_probe'), (): void => {
+          this.runMobileProbe();
+        })
+      }
+      ListItem() {
+        this.mobileProbeRow()
       }
       ListItem() {
         this.groupHint($r('app.string.settings_diag_hint'))

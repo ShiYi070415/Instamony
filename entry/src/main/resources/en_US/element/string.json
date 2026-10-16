@@ -633,6 +633,26 @@
       "value": "Story page template not captured: %s"
     },
     {
+      "name": "settings_run_mobile_probe",
+      "value": "Run mobile API self-test (test)"
+    },
+    {
+      "name": "diag_mobile_running",
+      "value": "Running mobile API self-test (3 requests, a few seconds)…"
+    },
+    {
+      "name": "diag_mobile_done",
+      "value": "Mobile API self-test done: %d requests succeeded — result below"
+    },
+    {
+      "name": "diag_mobile_failed",
+      "value": "Mobile API self-test threw: %s"
+    },
+    {
+      "name": "diag_mobile_result",
+      "value": "Mobile API self-test result (tap to copy)"
+    },
+    {
       "name": "story_need_challenge",
       "value": "Instagram wants this account verified first: sign in / complete the check on the web, then try stories again"
     }

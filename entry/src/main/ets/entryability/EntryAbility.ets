@@ -27,6 +27,8 @@ import { ReelsCache } from '../core/ReelsCache';
 import { NetworkState } from '../core/NetworkState';
 import { PlatformCap } from '../core/PlatformCap';
 import { ApiRegistry } from '../bridge/ApiRegistry';
+import { MobileSession } from '../core/mobileapi/MobileSession';
+import { MobileProbe } from '../core/mobileapi/MobileProbe';
 import { webview } from '@kit.ArkWeb';
 import { AppConfig } from '../config/AppConfig';
 import { DeepLink, DeepLinkIntent } from '../core/DeepLink';
@@ -121,6 +123,9 @@ export default class EntryAbility extends UIAbility {
       // reels 第一页的落盘缓存（见 core/ReelsCache）：clips 那条查询被 IG 限流时，
       // 视频标签靠它"至少还能看上次那批"，而不是一片空白。
       ReelsCache.init(this.context);
+      // 移动 API 的设备身份（见 core/mobileapi/MobileSession）：**只开落盘文件**，
+      // 不读 Cookie 罐、不发请求。身份必须跨重启稳定，所以这里同步把上次那份读回内存。
+      MobileSession.init(this.context);
       NativeFeed.warmStart(WARM_FEED_COUNT);
       // reels 的预热**只在 Wi-Fi/不计费网络**下做：它是一次完整的 Clips 请求（响应比信息流那条
       // 更大），而用户开 app 未必会点进 Reels —— 蜂窝网下这笔钱不值得先花（见 core/NetworkState）。
@@ -132,6 +137,13 @@ export default class EntryAbility extends UIAbility {
       hilog.warn(DOMAIN, 'testTag', 'feed warmup failed: %{public}s', JSON.stringify(err));
     }
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
+    // ---- 移动 API 自检（移植确认用，见 core/mobileapi/MobileProbe）----
+    // 为什么延迟：Cookie 罐里要有 IG 的会话，得等 Web 内核把持久化的 Cookie 载进来（上面才
+    // initializeWebEngine）；onCreate 这一刻读往往是空的。所以等几秒再跑，**不挡 UI**。
+    // 探针只报告形状，不解析、不改任何界面状态；失败也不影响任何既有路径。
+    // 传 context 是为了把结论**落盘**（`filesDir/Instarmony_mobile.txt`）：真机上 chromium 的
+    // 日志会把 hilog 环形缓冲冲掉，只有落盘能用 `hdc file recv` 取到（同 core/StoryDiag）。
+    MobileProbe.scheduleSelfTest(this.context);
     // ---- 深链：冷启动这次是不是被 instarmony:// 唤起的 ----
     // 放在最后：预热那几条都是"只提前、不改行为"的优化，深链才是这次启动的**真实原因**，
     // 它需要的数据（解析）只是一次字符串处理，不依赖上面任何一步。

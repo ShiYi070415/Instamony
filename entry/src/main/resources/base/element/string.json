@@ -633,6 +633,26 @@
       "value": "没抓到故事页模板：%s"
     },
     {
+      "name": "settings_run_mobile_probe",
+      "value": "跑移动 API 自检（测试）"
+    },
+    {
+      "name": "diag_mobile_running",
+      "value": "正在跑移动 API 自检（三发请求，约几秒）…"
+    },
+    {
+      "name": "diag_mobile_done",
+      "value": "移动 API 自检完成：成功 %d 发，结果见下方"
+    },
+    {
+      "name": "diag_mobile_failed",
+      "value": "移动 API 自检异常：%s"
+    },
+    {
+      "name": "diag_mobile_result",
+      "value": "移动 API 自检结果（点一下复制）"
+    },
+    {
       "name": "story_need_challenge",
       "value": "IG 要求这个账号先完成安全验证：请到网页里登录 / 验证一次再回来看快拍"
     }
