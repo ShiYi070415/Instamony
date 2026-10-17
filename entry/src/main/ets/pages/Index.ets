@@ -7636,6 +7636,8 @@ struct Index {
         // 标题栏那两颗按钮（静音 / 下载）按**来源**取用（见 core/ReelsAction）：
         // 三个 reels 类页面各存一份，免得下载下到另一条视频。
         source: source,
+        // 正文/作者行贴着下方评论输入框的上沿 + 10vp（见 ReelOverlay.infoBottomVp）。
+        infoBottomVp: 82,
         // 我自己的账号名：作者是我时不画关注按钮（"我的"页视频分页那一页就是这样）。
         ownAuthor: this.profileVm.ownAccountName(),
         // 这一页没有浮动底栏，所以"手指一动就沉栏"这件事这里什么都不用做；回调留着是为了

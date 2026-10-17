@@ -291,6 +291,14 @@ struct ReelOverlay {
    * 天然同步；而且这两层本来就是"钉在屏幕底部"的浮层，挪一段最省事。
    */
   @Prop overlaySink: number = 0;
+  /**
+   * 信息层（作者行 / 关注按钮 / 正文）的**底部留白**（vp；0 = 用默认 INFO_BOTTOM）。
+   *
+   * 为什么要能从外面给：默认的 112 是"只避开底栏胶囊"算出来的，而这两页底部还压着一条
+   * 评论输入框（44 + 28），于是正文和输入框之间空出一大截（用户："留白太多，正文要和输入框
+   * 保持适当距离"）。宿主按输入框实际高度算一个值传进来即可。
+   */
+  @Prop infoBottomVp: number = 0;
   /** 材质厚度（和全 app 的材质组件同一份设定）。 */
   @StorageProp(SETTING_MATERIAL_THICKNESS) materialThickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
   /** 关注状态是会话级覆盖表说了算（别处点过也要跟着变，见 core/FollowState）。 */
@@ -367,6 +375,11 @@ struct ReelOverlay {
    *
    * 载荷给了 `has_saved` 就用它当兜底值，没给就是 false（真机上基本都没给）。
    */
+  /** 信息层底部留白：宿主给了就用它，没给用默认值（见 infoBottomVp）。 */
+  private infoPadding(): number {
+    return this.infoBottomVp > 0 ? this.infoBottomVp : INFO_BOTTOM;
+  }
+
   private syncSaved(): void {
     this.saved = SaveState.resolve(this.reel.mediaId, this.reel.saved);
   }
@@ -1039,7 +1052,7 @@ struct ReelOverlay {
       // 右边给动作栏让出位置（两者都在底部，重叠起来会互相压住）。
       .width('100%')
       .alignItems(HorizontalAlign.Start)
-      .padding({ left: SIDE_PADDING, right: ACTION_COLUMN_WIDTH, bottom: INFO_BOTTOM })
+      .padding({ left: SIDE_PADDING, right: ACTION_COLUMN_WIDTH, bottom: this.infoPadding() })
       // 跟着底栏下沉（需求："动作区和资讯区跟随 tabbar 下沉"）：整块往下挪，和栏同一条曲线。
       .translate({ y: this.overlaySink })
       // 文字不吃手势：竖向滑动照旧交给 Swiper。
@@ -1058,7 +1071,7 @@ struct ReelOverlay {
       .height('100%')
       .justifyContent(FlexAlign.End)
       .alignItems(VerticalAlign.Bottom)
-      .padding({ right: ACTION_RIGHT_PADDING, bottom: INFO_BOTTOM })
+      .padding({ right: ACTION_RIGHT_PADDING, bottom: this.infoPadding() })
       // 和左边那块同一个位移：一起沉、一起回来（见 overlaySink）。
       .translate({ y: this.overlaySink })
       // 不吃手势（按钮自己要能点，见 actionColumn 里的材质按钮）。
@@ -1088,6 +1101,8 @@ export struct ReelsPage {
    * 不分来源的话，"从用户主页那页返回"会让底栏那页的下载地址被覆盖（下到另一条视频）。
    */
   @Prop source: string = ReelsAction.HOME;
+  /** 信息层底部留白（vp；0 = 用 ReelOverlay 的默认值 INFO_BOTTOM，见那里的说明）。 */
+  @Prop infoBottomVp: number = 0;
   /**
    * **我自己的账号名**（宿主传进来，见 ReelOverlay.ownAuthor）。
    */
@@ -1462,6 +1477,7 @@ export struct ReelsPage {
         screenWidthVp: this.screenWidthVp,
         // 动作区 / 资讯区跟着底栏下沉（外壳那页传得进来，整屏页是 0，见 overlaySink）。
         overlaySink: this.overlaySink,
+        infoBottomVp: this.infoBottomVp,
         // 当前这条才去单独问关注状态（见 ReelOverlay.ensureFollowState）。
         active: index === this.activeIndex,
         onLike: this.onLike,
