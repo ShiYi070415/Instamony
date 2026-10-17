@@ -101,6 +101,11 @@
   （`strong_id__` → `id` 的 `_` 前段 → 字符串 `pk`），拿不到就用短码问一次 `oembed/`
   （`MobileEngage.mediaPkFor`）—— 这四段的点赞/收藏/补视频地址全靠它，
   否则 19 位 `pk` 丢精度的值会打到一条不存在的媒体上。
+- **"我是谁"不再缓存整场会话**（0.9 修复"我的页面显示成别人"）：`NativeProfile.ownId()`
+  每次现读 Cookie 的 `ds_user_id`（只在读不到时用旧值兜底），头部那一发还会核对
+  `users/{pk}/info/` 回来的 `user.pk` 与它是否一致，不一致就按失败处理；
+  `ProfileViewModel.ensureSelfScope()` 在换账号时把 `ownName` / 头部 / `target.selfName`
+  一并作废。退出登录那条统一清理（`forgetAccountMemory`）里也加了 `NativeProfile.clearCache()`。
 
 ### 1.8 帖子页 / 评论 / 互动
 
