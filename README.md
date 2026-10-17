@@ -1,109 +1,109 @@
 # Instarmony
 
-一个 **HarmonyOS NEXT（ArkTS / ArkUI）** 的 Instagram 客户端：界面全部原生实现，数据来自
-**Instagram 私有移动 API（instagrapi 那套协议）+ 一个隐藏的 WebView 会话**。
+原生 HarmonyOS（ArkTS / ArkUI）的 Instagram 客户端：界面全部用 ArkUI 实现，
+数据来自**隐藏 WebView 持有的会话 + instagrapi 那套私有移动 API**。
 
-> 个人自用 / 学习项目。不是 Instagram 官方客户端，与 Meta 无关。
-> 它调用的是**非公开接口**，随时可能失效；用真实账号高频使用**有被限流甚至被判异常的风险**，
-> 请自己拿主意（置顶提醒见下面的「风险」一节）。
+个人自用 / 学习项目，与 Instagram / Meta 无关。
 
----
+## 功能概览
 
-## 它是怎么工作的（一句话）
+| | |
+|:--|:--|
+| **完整的信息流体验** | 首页时间线（下拉刷新 / 触底翻页 / 骨架屏）、快拍托盘与播放器、Reels 全屏竖滑、帖子页与评论浮层。 |
+| **私信** | 收件箱、会话页（文本 / 媒体 / 分享帖 / Reel / 贴纸 / 语音等 XMA 类型）、发送文本、预取与快照缓存。 |
+| **搜索** | 关键词搜账号、空关键词的三列推荐瀑布流、点开进 Reels。 |
+| **个人主页** | 帖子 / 视频 / 收藏 / 被标注四个分页，别人主页复用同一套页面，视频分页可进 Reels。 |
+| **通知** | 按 今天 / 昨天 / 过去 7 天 / 过去 30 天 / 更早 / 为你推荐 分段，过期分段折叠在「显示更多」后。 |
+| **互动** | 点赞、收藏、转发、关注、评论、评论点赞全部走 HTTP 直发；状态有会话级覆盖表，跨页面一致。 |
+| **原生 HarmonyOS 设计** | ArkUI 组件、系统符号、沉浸光感材质（HDS）与降级路径、明暗主题、深浅两种材质厚度。 |
+| **诚实的降级** | 接口被限流 / 模板过期 / 会话失效时，界面显示具体原因，并按"移动端 → 模板回放 → 网页驱动"逐级回退。 |
+
+## 工作原理
 
 隐藏 WebView 负责**登录**并持有会话（Cookie 罐），原生侧把这份会话包装成"官方 Android App"
-的身份去打 `i.instagram.com/api/v1/...`，界面用 ArkUI 重画。所以：
+的身份去请求 `i.instagram.com/api/v1/...`。所以：
 
-- **不用**抓网页 DOM 来渲染界面（早期版本那样做过，脆、慢）；
-- 大部分数据源都是**一发私有 REST**（快拍 / 私信 / 主页 / 通知 / 点赞 / 收藏 / 关注都在这条路上）；
-- 少数没有 REST 等价物的接口（信息流时间线、reels 首屏、转发、评论点赞等）走
-  **模板回放**：让页面自己发一次、把请求存成模板、之后原生照着发，失败再退回网页驱动。
+- 界面**不**依赖抓网页 DOM 渲染（早期版本那样做过，慢且脆）；
+- 绝大多数数据源是一发私有 REST：快拍、私信、主页、通知、点赞、收藏、关注、搜索；
+- 少数没有 REST 等价物的（信息流时间线、Reels 首屏、转发、评论点赞）走**模板回放**：
+  让页面自己发一次请求、存成模板，之后原生照着重发，失败再退回网页驱动。
 
-## 已实现
+## 工程配置
 
-| 页面 | 数据来源 |
-|---|---|
-| 首页信息流 | 模板回放（`PolarisFeedTimelineRootV2Query`）+ 网页兜底 |
-| 快拍 | `feed/reels_tray/`、`feed/user/{pk}/story/`、`feed/reels_media/` |
-| Reels | clips GraphQL 模板 + 移动端 `discover/topical_explore/` 兜底 |
-| 私信 | `direct_v2/inbox/`、`direct_v2/threads/{id}/` |
-| 搜索 | `fbsearch/account_serp/`、`users/search/`、`fbsearch/top_serp/`、`discover/topical_explore/` |
-| 我的 / 他人主页 | `users/{pk}/info/`、`feed/user/{pk}/`、`clips/user/`、`feed/saved/`、`usertags/{pk}/feed/` |
-| 帖子页 / 评论 | 模板回放 + 移动端写接口（`media/{pk}/like|save|comment` 等） |
-| 通知 | `news/inbox/`（instagrapi 协议）+ 网页 REST 兜底 |
-| 翻译 | 在线接口三级兜底（gtx → clients5 → MyMemory），只翻非中文正文 |
-
-更细的功能清单、已知问题与未实现项：[`RELEASE_0.9.md`](RELEASE_0.9.md)。
-协议移植的实测记录（端点表 / 参数 / 判据 / 限速结论）：[`INSTAGRAPI_PORT.md`](INSTAGRAPI_PORT.md)。
-"为什么会被 IG 判成自动化"的分析与降噪措施：[`FINGERPRINT_ANALYSIS.md`](FINGERPRINT_ANALYSIS.md)。
-审计待办： [`AUDIT_TODO.md`](AUDIT_TODO.md)。
-
-## 目录结构
-
-```
-AppScope/                     应用级配置（包名 com.fanha.instarmony、图标、版本）
-entry/src/main/ets/
-  entryability/               入口 Ability：引擎初始化、预热、深链
-  pages/                      页面（Index 是主壳 + 各个 NavDestination）
-  components/                 原生组件（FeedList / ReelsPage / CommentsPanel / MaterialSurface …）
-  viewmodel/                  各页面的状态与游标链
-  core/                       协议层：取数 / 互动 / 缓存 / 限速 / 身份
-    mobileapi/                **instagrapi 私有 API 端口**（会话、签名、各端点）
-  bridge/                     隐藏 WebView 的脚本注入与模板抓取
-  model/                      UI 用的数据模型
-  probe/                      网页探针面板（诊断用）
-entry/src/main/resources/     字符串 / 颜色 / 媒体资源
-tools/                        构建与校验脚本（见下）
-legacy/unwired/               早期未接线的分层（已归档，仅供追溯）
-```
+| 项目 | 当前配置 |
+|:--|:--|
+| 应用 | `Instarmony` · `com.fanha.instarmony` · 版本 `0.9`（`versionCode` 9000） |
+| 模块 | `entry` · Stage 模型 |
+| SDK | 目标 SDK `26.0.0` · **兼容 SDK `6.0.0 (API 20)`** |
+| 设备 | `phone`、`tablet` · 全屏 `EntryAbility` |
+| 权限 | `ohos.permission.INTERNET` |
+| 构建 | DevEco Studio 6.x / hvigor `6.26.4` |
 
 ## 构建
 
-**用 DevEco Studio（推荐）**
+**DevEco Studio（推荐）**
 
-1. 装 DevEco Studio（本项目用 6.x）+ HarmonyOS SDK **API 20 起**（`compatibleSdkVersion 6.0.0(20)`）；
+1. 安装 DevEco Studio 6.x 与 HarmonyOS SDK（API 20 起）；
 2. 复制签名模板并配置签名：
    ```powershell
    copy build-profile.example.json5 build-profile.json5
    ```
-   然后 File > Project Structure > Signing Configs > "Automatically generate signature"；
-3. 直接 Run。
+   File > Project Structure > Signing Configs > "Automatically generate signature"；
+3. Run。
 
-**命令行（不用 IDE 打开工程）**
+**命令行（不用打开 IDE）**
 
 ```powershell
-# 编译出 debug HAP
-.\tools\build.ps1
-# 编译 + 安装 + 启动 + 抓 8 秒日志（需要 hdc 与已连接的设备）
-.\tools\build.ps1 -Install
-# 路径不在默认位置时显式给（DevEco 装在别处 / 换了 SDK）
-.\tools\build.ps1 -Hvigor '<DevEco>\tools\hvigor\bin\hvigorw.bat' -SdkHome '<DevEco>\sdk'
+.\tools\build.ps1            # 编译 debug HAP
+.\tools\build.ps1 -Install   # 编译 + 安装 + 启动 + 抓 8 秒日志
 ```
-
-脚本会把 hvigor / npm 的缓存重定向到工程内的 `.hvigor-home`（沙箱里 `~/.hvigor` 不可写时
-必需），并在 hvigor 引擎没被正确引导时从 DevEco 自带的那份补进去 —— 细节写在脚本注释里。
 
 产物：`entry\build\default\outputs\default\entry-default-signed.hap`
 
-## 运行时需要什么
+> `build-profile.json5` 是**本机签名配置**（含本机路径与签名口令），不随仓库提交；
+> 仓库里只有 `build-profile.example.json5`。脚本会把 hvigor / npm 缓存重定向到工程内的
+> `.hvigor-home`（沙箱里 `~/.hvigor` 不可写时必需），细节见脚本注释。
 
-- 一台 HarmonyOS NEXT 设备或模拟器（API 20+）；
-- 首次启动后用**你自己的 Instagram 账号**在 App 内登录（登录发生在隐藏 WebView 里，
-  会话留在本机 Cookie 罐中，不会外传）。
+## 使用
+
+1. 安装后在 App 内用**自己的 Instagram 账号**登录（登录发生在隐藏 WebView 里，
+   会话留在本机 Cookie 罐，不上传任何地方）；
+2. 首次进入某些页面时，App 可能让隐藏网页"跑一趟"把请求模板抓下来（日志里会写原因）。
 
 ## 风险（请先读）
 
-- 用的是**非公开接口**，IG 随时会改；本项目对失败路径都做了降级与提示，但功能可能突然不好用；
+- 用的是**非公开接口**，IG 随时会改；本项目对失败路径都有降级与提示，但功能可能突然不好用；
 - 高频请求会触发 `feedback_required` / `rate limit`（代码里有限速闸门与冷却，仍有概率）；
 - **翻译**功能会把待翻译正文发到第三方在线翻译接口（见 `core/Translator.ets` 文件头）；
-- 账号安全自负：不要拿主账号做压测；本项目不做点赞/关注自动化爬取，但**任何非官方客户端都存在风险**。
+- 不要拿主账号做压测；任何非官方客户端都有账号风险，自负。
 
-## 未实现 / 半接线
+## 目录
 
-见 [`RELEASE_0.9.md`](RELEASE_0.9.md) 第 3 节。几个大头：信息流首屏仍依赖网页模板、
-Reels 主路常被限流、通知的推荐位只能走网页兜底、快拍"已看"不上报。
+```
+AppScope/                应用级配置（包名、图标、版本）
+entry/src/main/ets/
+  entryability/          入口 Ability：引擎初始化、预热、深链
+  pages/                 页面（Index 是主壳 + 各 NavDestination）
+  components/            原生组件（FeedList / ReelsPage / CommentsPanel / MaterialSurface …）
+  viewmodel/             各页面的状态与游标链
+  core/                  协议层：取数 / 互动 / 缓存 / 限速 / 身份 / 翻译
+    mobileapi/           instagrapi 私有 API 端口（会话、签名、各端点）
+  bridge/                隐藏 WebView 的脚本注入与模板抓取
+  model/                 UI 用的数据模型
+  probe/                 网页探针面板（诊断）
+entry/src/main/resources/  字符串 / 颜色 / 媒体 / 预置请求模板
+tools/                   构建与校验脚本
+legacy/unwired/          早期未接线的分层（已归档）
+```
 
-## 许可
+## 文档
 
-仓库暂未附开源许可文件。若要允许他人使用 / 修改 / 分发，请自行添加（例如 MIT / Apache-2.0）；
-在此之前默认保留所有权利。
+- [`RELEASE_0.9.md`](RELEASE_0.9.md) —— 功能清单、已知问题、未实现项
+- [`INSTAGRAPI_PORT.md`](INSTAGRAPI_PORT.md) —— 移动端协议移植记录：端点表、参数、判据、限速结论
+- [`FINGERPRINT_ANALYSIS.md`](FINGERPRINT_ANALYSIS.md) —— "为什么会被判成自动化"的分析与降噪措施
+- [`AUDIT_TODO.md`](AUDIT_TODO.md) —— 审计待办与遗留项
+
+## 许可证
+
+尚未选择开源许可证，默认保留所有权利。若要允许他人使用 / 修改 / 分发，
+建议补一个 `LICENSE`（例如 Apache-2.0，和多数 HarmonyOS 客户端项目一致）。
