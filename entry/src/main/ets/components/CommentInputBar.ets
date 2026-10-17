@@ -96,6 +96,12 @@ export struct CommentInputBar {
   onSend: (text: string) => void = (text: string): void => {
   };
   /**
+   * 输入法高度（vp；0 = 收起）。宿主拿它给**整页**加底部留白 —— 输入框连同画面一起上移，
+   * 而不是只把这一条往上顶（那样要么盖一半、要么飞上天）。
+   */
+  onKeyboard: (vp: number) => void = (vp: number): void => {
+  };
+  /**
    * 草稿变化时回报（可选）。宿主用它做两件事：评论面板打开时把已输入的内容**带过去**
    * （不然用户在页面那条输入框里写了字、点「评论」后内容就没了）。
    */
@@ -137,11 +143,9 @@ export struct CommentInputBar {
         this.kbWindow = win;
         this.kbHandler = (height: number): void => {
           this.kbPx = height > 0 ? height : 0;
-          if (height <= 0) {
-            this.liftVp = 0;
-            return;
-          }
-          this.alignToKeyboard();
+          // 只把高度报给宿主：**整页**一起避让，输入条自己不再位移（见 onKeyboard）。
+          this.onKeyboard(this.kbPx > 0 ? this.getUIContext().px2vp(this.kbPx) : 0);
+          this.liftVp = 0;
         };
         win.on('keyboardHeightChange', this.kbHandler);
       }).catch((): void => {
@@ -275,7 +279,5 @@ export struct CommentInputBar {
     .padding({ left: this.sideInset, right: this.sideInset, bottom: this.bottomInset })
     // 量自己矩形要用它（见 alignToKeyboard）；位移只补"被键盘挡住的那一截"。
     .id(BAR_ID)
-    .translate({ y: -this.liftVp })
-    .animation({ duration: 220, curve: curves.springMotion(0.4, 0.9) })
   }
 }

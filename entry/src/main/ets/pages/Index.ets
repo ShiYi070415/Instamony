@@ -7756,8 +7756,13 @@ struct Index {
             this.toast($r('app.string.comment_pending'));
             hilog.info(DOMAIN, TAG, 'reels draft comment len=%{public}d (not sent)', text.length);
           },
-          // 键盘顶起来时跟着上移（见 reelsKbVp）。
-          bottomInset: 28
+          // 位置固定：**整页**避让由外层 padding 负责（见 onKeyboard 与根 Stack 的说明）。
+          bottomInset: 28,
+          onKeyboard: (vp: number): void => {
+            if (Math.abs(vp - this.reelsKbVp) > 1) {
+              this.reelsKbVp = vp;
+            }
+          }
         })
           .zIndex(2)
           .transition(TransitionEffect.OPACITY
@@ -7767,6 +7772,15 @@ struct Index {
     }
     .width('100%')
     .height('100%')
+    /*
+     * **整页一起避让输入法**（用户要求："输入框连同页面一起避让"）。
+     *
+     * 底边留出键盘高度：布局盒变矮 → 画面居中上移、输入条被顶到键盘上方。
+     * 不再做单条 translate —— 那正是前几版"盖一半 / 飞上天"的来源
+     * （框架自己也会抬一部分，再叠加就过量）。
+     */
+    .padding({ bottom: this.reelsKbVp })
+    .animation({ duration: 200, curve: curves.springMotion(0.4, 0.9) })
     .backgroundColor(Color.Black)
   }
 
