@@ -6,6 +6,15 @@ instagrapi**.
 
 Personal project for learning and daily use. Not affiliated with Instagram or Meta.
 
+[中文](README.md) · Released under [Apache-2.0](LICENSE).
+
+<p align="center">
+  <img src="https://img.shields.io/badge/version-1.0.0-1677FF?style=flat-square" alt="version 1.0.0">
+  <img src="https://img.shields.io/badge/HarmonyOS-API%2020-1677FF?style=flat-square" alt="HarmonyOS API 20">
+  <img src="https://img.shields.io/badge/ArkTS-Stage-0B0B0D?style=flat-square" alt="ArkTS Stage model">
+  <img src="https://img.shields.io/badge/License-Apache--2.0-2EA44F?style=flat-square" alt="Apache-2.0">
+</p>
+
 ## Features
 
 | | |
