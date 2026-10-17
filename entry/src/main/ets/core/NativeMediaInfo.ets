@@ -26,6 +26,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { MediaQuality, PickedMedia } from './MediaQuality';
 import { RestSession } from './RestSession';
 import { ApiThrottle } from './ApiThrottle';
+import { MobileEngage } from './mobileapi/MobileEngage';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeMediaInfo';
@@ -205,14 +206,31 @@ export class NativeMediaInfo {
     return NativeMediaInfo.detail;
   }
 
+  /** 纯数字 id？（这条端点只认数字 pk，短码 / `profile-<code>` 占位串都不行） */
+  private static numeric(raw: string): boolean {
+    if (raw.length === 0) {
+      return false;
+    }
+    for (let index: number = 0; index < raw.length; index++) {
+      const ch: string = raw.charAt(index);
+      if (ch < '0' || ch > '9') {
+        return false;
+      }
+    }
+    return true;
+  }
+
   /**
    * 取一条媒体的视频地址。
    *
    * @param mediaId 媒体数字 id（`ProfilePost.mediaId` / ReelsPage 那条的 `Reel.mediaId`）。
+   * @param shortcode 这条的短码（可选）。**个人页那几个分页要带**：那些载荷里的 id 可能只是
+   *                短码本身，`/media/{id}/info/` 只认数字 pk —— 这时用短码换一个
+   *                （见 core/mobileapi/MobileEngage.mediaPkFor）。
    * @returns 取不到给 null（调用方保持封面、不假装能播）。
    */
-  static async videoFor(mediaId: string): Promise<MediaVideo | null> {
-    const detail: MediaDetail | null = await NativeMediaInfo.detailFor(mediaId);
+  static async videoFor(mediaId: string, shortcode: string = ''): Promise<MediaVideo | null> {
+    const detail: MediaDetail | null = await NativeMediaInfo.detailFor(mediaId, shortcode);
     if (detail === null || !detail.hasVideo()) {
       return null;
     }
@@ -226,8 +244,12 @@ export class NativeMediaInfo {
    * 这是这条端点的主入口（`videoFor` 只是它的一层薄包装）。帖子页用它一次补齐四样东西，
    * 原因见 MediaDetail 的说明。
    */
-  static async detailFor(mediaId: string): Promise<MediaDetail | null> {
-    const id: string = mediaId.trim();
+  static async detailFor(mediaId: string, shortcode: string = ''): Promise<MediaDetail | null> {
+    let id: string = mediaId.trim();
+    if (!NativeMediaInfo.numeric(id) && shortcode.trim().length > 0) {
+      // 短码 → 真 pk（个人页 / 视频分页那种"只有短码"的条目走这里）。
+      id = await MobileEngage.mediaPkFor(shortcode);
+    }
     if (id.length === 0) {
       NativeMediaInfo.detail = 'no-media-id';
       return null;

@@ -942,12 +942,16 @@ export class NativeProfile {
     if (repostCount <= 0) {
       repostCount = NativeProfile.numOf(node, 'repost_count');
     }
-    // 媒体数字 id：`pk` 优先（GraphQL 都用它），退回 `id`。帖子页点赞/转发要拿它发请求。
-    // 媒体 id 优先 `strong_id__`（字符串、精确）；理由见 NativeReels 里同一段说明。
-    const strongMediaId: string = NativeProfile.strOf(node, 'strong_id__');
-    const rawMediaId: Object = strongMediaId.length > 0
-      ? strongMediaId : (node['pk'] ?? node['id'] ?? '');
-    const mediaId: string = `${rawMediaId}`.trim();
+    // 媒体数字 id：见 `mediaIdOfNode`（这里最容易出"点赞打到不存在的媒体"那个坑）。
+    const mediaId: string = NativeProfile.mediaIdOfNode(node);
+    /*
+     * 点赞态：**载荷里本来就有**（移动端 REST 是 `has_liked`，GraphQL 是 `viewer_has_liked`）。
+     * 以前这里压根没读，于是"我的页面四个分页 → feeds 页 / reels 页"里所有卡片都画成未点赞
+     * （用户报的"没有正确读取点赞状态"）。会话覆盖表仍然优先，见 model/Profile 的 toMediaPost。
+     */
+    const liked: boolean = NativeProfile.boolOf(node, 'has_liked')
+      || NativeProfile.boolOf(node, 'viewer_has_liked')
+      || NativeProfile.boolOf(node, 'liked');
     const displayImages: Array<string> = display.url.length > 0 ? [display.url] : [];
 
     /*
@@ -1031,14 +1035,59 @@ export class NativeProfile {
           originalList.length > 0 ? originalList : displayList,
           firstVideo, firstVideoOriginal,
           caption, username, avatar, ownerId, following, takenAt, mediaId,
-          displayList.length > 1 ? minAspect : 0, repostCount);
+          displayList.length > 1 ? minAspect : 0, repostCount, liked);
       }
     }
     return new ProfilePost(code, isVideoNode, cover, width, height,
       NativeProfile.numOf(node, 'like_count'), NativeProfile.numOf(node, 'comment_count'),
       display.url, displayImages, original.url.length > 0 ? [original.url] : displayImages,
       displayVideo, originalVideo, caption, username, avatar, ownerId, following, takenAt,
-      mediaId, 0, repostCount);
+      mediaId, 0, repostCount, liked);
+  }
+
+  /**
+   * 媒体节点 → **精确的数字媒体 id**（拿不到给空串）。
+   *
+   * 三条来源的可信度不一样，顺序不能乱：
+   *   ① `strong_id__`：GraphQL 专门为"19 位 id 超出 f64 精度"给的那个**字符串**字段，最准；
+   *   ② `id`：移动端 REST 给的是 `"<媒体id>_<作者id>"` **字符串** —— 取 `_` 前面那段就是媒体 id；
+   *   ③ `pk`：**只有它本身是字符串时才敢用**。它是 19 位数字，`JSON.parse` 之后已经丢精度
+   *      （`1234567890123456789` → `1234567890123456800`），拿它发点赞会打到一条**不存在**的媒体上
+   *      （真机现象：从个人页那几个分页点赞"没反应/失败"，而信息流点赞是好的）。
+   *
+   * 三条都没有就返回空串：调用方会拿 shortcode 去换一个（见 MobileEngage.mediaPkFor），
+   * 那比拿一个错 id 硬发要靠谱得多。
+   */
+  private static mediaIdOfNode(node: Record<string, Object>): string {
+    const strong: string = NativeProfile.strOf(node, 'strong_id__').trim();
+    if (NativeProfile.isDigits(strong)) {
+      return strong;
+    }
+    const rawId: string = NativeProfile.strOf(node, 'id').trim();
+    const cut: number = rawId.indexOf('_');
+    const head: string = cut > 0 ? rawId.substring(0, cut) : rawId;
+    if (NativeProfile.isDigits(head)) {
+      return head;
+    }
+    const pk: Object | undefined = node['pk'];
+    if (typeof pk === 'string' && NativeProfile.isDigits((pk as string).trim())) {
+      return (pk as string).trim();
+    }
+    return '';
+  }
+
+  /** 纯数字串？（空串算否） */
+  private static isDigits(text: string): boolean {
+    if (text.length === 0) {
+      return false;
+    }
+    for (let index: number = 0; index < text.length; index++) {
+      const ch: string = text.charAt(index);
+      if (ch < '0' || ch > '9') {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**

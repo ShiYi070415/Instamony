@@ -35,7 +35,75 @@ const TAG: string = 'MobileEngage';
 
 export class MobileEngage {
   /**
-   * 点赞 / 取消点赞（`media_id` 必须是**纯数字的 pk**）。
+   * shortcode → 媒体数字 pk 的缓存（见 `mediaPkFor`）。
+   *
+   * 为什么需要这张表：从**个人页那几个分页**（帖子 / 视频 / 收藏 / 被标注）进来的条目，
+   * 载荷里常常没有可用的媒体 id —— 移动端 REST 给的是 `pk`（19 位 number，JSON.parse 之后
+   * **已经丢精度**）和 `id`（`<媒体id>_<作者id>` 字符串，这个才是精确的），而模板/网页那条
+   * 更惨，只有 `shortcode`。用户报的"我的页面四个分页的 feeds 页和 reels 页点赞状态不对 /
+   * 点赞没绑定"就是这个：拿不到数字 id 时点赞**根本没发出去**。
+   * shortcode 在每种载荷里都有，所以用它去问一次 oembed 把 pk 换回来，换到的记在这里。
+   */
+  private static pks: Map<string, string> = new Map<string, string>();
+
+  /**
+   * 一条媒体的短码链接（`oembed` 与网页都认这个形状）。
+   *
+   * 视频帖子在 IG 的规范链接是 `/reel/<code>/`，图片/多图是 `/p/<code>/`；
+   * 两个在 oembed 那边都能解析，这里统一用 `/p/`（不必知道是不是视频）。
+   */
+  static linkOf(shortcode: string): string {
+    const code: string = (shortcode ?? '').trim();
+    return code.length === 0 ? '' : `https://www.instagram.com/p/${encodeURIComponent(code)}/`;
+  }
+
+  /**
+   * shortcode → 媒体数字 pk（`GET oembed/?url=<短码链接>`，instagrapi 的 `media_pk_from_code`）。
+   *
+   * 成功就缓存；失败返回空串（调用方当成"这条没有 id"，照旧回滚并如实提示）。
+   */
+  static async mediaPkFor(shortcode: string): Promise<string> {
+    const code: string = (shortcode ?? '').trim();
+    if (code.length === 0) {
+      return '';
+    }
+    const known: string | undefined = MobileEngage.pks.get(code);
+    if (known !== undefined) {
+      return known;
+    }
+    const link: string = MobileEngage.linkOf(code);
+    const result: MobileResult = await MobileRequest.send('oembed/', '', `url=${encodeURIComponent(link)}`,
+      true, null, new MobileOptions(ApiThrottle.MOBILE, ApiThrottle.interactive()));
+    if (!result.ok) {
+      hilog.info(DOMAIN, TAG, 'oembed code=%{public}s failed %{public}s', code, result.summary());
+      return '';
+    }
+    const id: string = MobileEngage.parseOembedId(result.body);
+    if (id.length === 0) {
+      hilog.info(DOMAIN, TAG, 'oembed code=%{public}s no media_id body=%{public}s',
+        code, result.body.substring(0, 120));
+      return '';
+    }
+    MobileEngage.pks.set(code, id);
+    hilog.info(DOMAIN, TAG, 'oembed code=%{public}s → pk=%{public}s', code, id);
+    return id;
+  }
+
+  /**
+   * 已经给的 id 能用就用它，不能（空 / 带前缀 / 非数字）再按 shortcode 换一个。
+   *
+   * 这是**所有写操作统一的前置**：个人页那几个分页的 id 多半是 `profile-<code>` 这种占位串
+   * 或者整段缺失，先换回真 pk 才发得出去。
+   */
+  static async mediaIdOf(raw: string, shortcode: string): Promise<string> {
+    const direct: string = MobileEngage.numericId(raw);
+    if (direct.length > 0) {
+      return direct;
+    }
+    return await MobileEngage.mediaPkFor(shortcode);
+  }
+
+  /** 点赞 / 取消点赞（`media_id` 必须是**纯数字的 pk**）。
    *
    * @returns 成功（服务端已接受这次变更）返回 true；任何不确定的情况都返回 false，
    *          让调用方回滚界面并如实提示 —— 绝不假装成功。
@@ -119,6 +187,21 @@ export class MobileEngage {
   }
 
   // ------------------------------------------------------------------ 内部
+
+  /** oembed 返回里的 `media_id`（字符串，个别情况下是 number）。 */
+  private static parseOembedId(body: string): string {
+    try {
+      const root: Object = JSON.parse(body);
+      const box: Record<string, Object> = root as Record<string, Object>;
+      const value: Object | undefined = box['media_id'];
+      if (value === undefined || value === null) {
+        return '';
+      }
+      return MobileEngage.numericId(`${value}`);
+    } catch (error) {
+      return '';
+    }
+  }
 
   /** 点赞/收藏这类"媒体级"写操作的表单（instagrapi 用 with_action_data + media_id）。 */
   private static mediaForm(mediaId: string): string {

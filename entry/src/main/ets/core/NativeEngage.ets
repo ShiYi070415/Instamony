@@ -219,9 +219,11 @@ export class NativeEngage {
    *
    * @param mediaId 帖子 id（信息流里的 `pk`，形如 `3991085364986982562_7419457815` 的第一段）。
    * @param like    true = 点赞，false = 取消赞。
+   * @param shortcode 这条的短码（**个人页那几个分页必须给**：那些载荷里的媒体 id 常常是
+   *                占位串或者干脆缺失，只有短码一定在 —— 见 MobileEngage.mediaPkFor）。
    */
-  static async setLiked(mediaId: string, like: boolean): Promise<EngageResult> {
-    const id: string = NativeEngage.mediaIdOf(mediaId);
+  static async setLiked(mediaId: string, like: boolean, shortcode: string = ''): Promise<EngageResult> {
+    const id: string = await NativeEngage.mediaId(mediaId, shortcode);
     if (id.length === 0) {
       return new EngageResult(false, like, 'no-media-id');
     }
@@ -288,8 +290,9 @@ export class NativeEngage {
    *
    * 取消转发需要 `note_id`：有就用原生，没有就回 `no-note-id`（调用方回退网页路径）。
    */
-  static async setReposted(mediaId: string, repost: boolean): Promise<EngageResult> {
-    const id: string = NativeEngage.mediaIdOf(mediaId);
+  static async setReposted(mediaId: string, repost: boolean,
+                           shortcode: string = ''): Promise<EngageResult> {
+    const id: string = await NativeEngage.mediaId(mediaId, shortcode);
     if (id.length === 0) {
       return new EngageResult(false, repost, 'no-media-id');
     }
@@ -378,6 +381,35 @@ export class NativeEngage {
     const one: string = raw.trim();
     const cut: number = one.indexOf('_');
     return cut > 0 ? one.substring(0, cut) : one;
+  }
+
+  /**
+   * 归一化 + **必须全是数字**；不数字就按 shortcode 换一个真 pk（见 MobileEngage.mediaPkFor）。
+   *
+   * 为什么"数字"这道闸非要过：`ProfilePost.mediaId` 拿不到真 id 时塞的是**短码本身**
+   * （见 model/Profile 的构造函数），而移动端 REST 那边的 `pk` 是 19 位 number ——
+   * `JSON.parse` 之后精度已经丢了。拿这两种值去发 `media/{id}/like/`，打到的是一条
+   * **不存在的媒体**（真机上就是"点了没反应 / 点赞失败"）。所以：**能用短码换到真 id 就换**。
+   */
+  private static async mediaId(raw: string, shortcode: string): Promise<string> {
+    const one: string = NativeEngage.mediaIdOf(raw);
+    if (one.length > 0) {
+      let digits: boolean = true;
+      for (let index: number = 0; index < one.length; index++) {
+        const ch: string = one.charAt(index);
+        if (ch < '0' || ch > '9') {
+          digits = false;
+          break;
+        }
+      }
+      if (digits) {
+        return one;
+      }
+    }
+    if (shortcode.trim().length === 0) {
+      return '';
+    }
+    return await MobileEngage.mediaPkFor(shortcode);
   }
 
   /** 成不成功：HTTP 200 + 响应是 JSON 且里面没有 errors。 */

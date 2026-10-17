@@ -143,6 +143,14 @@ export class ProfilePost {
   readonly imageAspectMin: number;
   /** 转发数（`media_repost_count`；载荷没给就是 0）。见 ProfileMapper.toMediaPost。 */
   readonly repostCount: number;
+  /**
+   * 载荷里给的**点赞态**（移动端 REST 是 `has_liked`，GraphQL 是 `viewer_has_liked`）。
+   *
+   * 网格用不到，但"我的页面四个分页 → feeds 页 / reels 页"要用：那两页的卡片就是这些条目
+   * 转出来的 —— 不带上这一位，所有卡片都画成未点赞（用户报的"没有正确读取点赞状态"）。
+   * 权威顺序仍是"会话覆盖表 > 这里"，见 ProfileMapper.toMediaPost。
+   */
+  readonly liked: boolean;
 
   constructor(shortcode: string, isVideo: boolean, coverUrl: string, width: number, height: number,
               likeCount: number, commentCount: number, displayUrl: string = '',
@@ -150,7 +158,7 @@ export class ProfilePost {
               videoUrl: string = '', originalVideoUrl: string = '', caption: string = '',
               ownerUsername: string = '', ownerAvatarUrl: string = '', ownerId: string = '',
               ownerFollowing: boolean = false, takenAtMs: number = 0, mediaId: string = '',
-              imageAspectMin: number = 0, repostCount: number = 0) {
+              imageAspectMin: number = 0, repostCount: number = 0, liked: boolean = false) {
     this.shortcode = shortcode;
     this.mediaId = mediaId.length > 0 ? mediaId : shortcode;
     this.isVideo = isVideo;
@@ -172,6 +180,7 @@ export class ProfilePost {
     this.takenAtMs = takenAtMs;
     this.imageAspectMin = imageAspectMin;
     this.repostCount = repostCount;
+    this.liked = liked;
   }
 
   /** 真实宽高比；没给尺寸就退回正方形（网格用固定 4:5 裁切，这个值留给详情页用）。 */
@@ -228,7 +237,7 @@ export class ProfilePost {
       this.likeCount, this.commentCount, display, images, this.originalImageUrls,
       this.videoUrl, this.originalVideoUrl, this.caption, this.ownerUsername,
       this.ownerAvatarUrl, this.ownerId, this.ownerFollowing, this.takenAtMs,
-      this.mediaId, this.imageAspectMin, this.repostCount);
+      this.mediaId, this.imageAspectMin, this.repostCount, this.liked);
   }
 }
 
@@ -302,10 +311,10 @@ export class ProfileMapper {
       videoUrl: post.videoUrl,
       imageUrls: images,
       // **本机点过的赞 / 转发以会话台账为准**（见 core/NativeEngage.EngageState 的说明）：
-      // 那两段的载荷不带这两个状态，帖子页翻页又会用视图模型那份重建列表 ——
-      // 不查台账的话，用户刚点的赞会被下一次翻页抹掉（"点赞功能失效"）。
-      // 先按 shortcode 查（视频分页这条经常拿不到媒体 id，只有短码），再退回媒体 id。
-      liked: EngageState.likedOfByCode(post.shortcode, EngageState.likedOf(post.mediaId, false)),
+      // 帖子页翻页又会用视图模型那份重建列表 —— 不查台账的话，用户刚点的赞会被下一次翻页
+      // 抹掉（"点赞功能失效"）。顺序：短码台账 → 媒体 id 台账 → **载荷里那份**（`has_liked`）。
+      liked: EngageState.likedOfByCode(post.shortcode,
+        EngageState.likedOf(post.mediaId, post.liked)),
       viewCount: 0,
       reposted: EngageState.repostedOfByCode(post.shortcode,
         EngageState.repostedOf(post.mediaId, false)),

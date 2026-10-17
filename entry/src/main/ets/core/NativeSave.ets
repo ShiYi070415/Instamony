@@ -344,22 +344,29 @@ export class NativeSave {
    *
    * @param mediaId 媒体数字 id（`Reel.mediaId` / `MediaPost.id` 的那一段数字）。
    * @param save    true = 收藏，false = 取消收藏。
+   * @param shortcode 这条的短码（**个人页那几个分页必须给**：那些载荷里的媒体 id 常常是
+   *                占位串 / 丢精度的 number / 干脆缺失，只有短码一定在 ——
+   *                见 MobileEngage.mediaPkFor）。
    */
-  static async setSaved(mediaId: string, save: boolean): Promise<SaveResult> {
+  static async setSaved(mediaId: string, save: boolean, shortcode: string = ''): Promise<SaveResult> {
     /*
      * **移动端 REST 优先**（见 core/mobileapi/MobileEngage）：一发
      * media/{pk}/save|unsave/，不需要任何网页模板；模板回放那条路会因为 doc_id / claim
      * 过期而回 "200 + errors"（被当成成功、服务端其实没收到）。失败再走原路。
      */
+    let resolved: string = '';
     try {
-      const mobileOk: boolean = await MobileEngage.setSaved(mediaId, save);
-      if (mobileOk) {
-        return new SaveResult(true, save, 'mobile');
+      resolved = await MobileEngage.mediaIdOf(mediaId, shortcode);
+      if (resolved.length > 0) {
+        const mobileOk: boolean = await MobileEngage.setSaved(resolved, save);
+        if (mobileOk) {
+          return new SaveResult(true, save, 'mobile');
+        }
       }
     } catch (error) {
     }
     NativeSave.detail = '-';
-    const id: string = NativeSave.mediaIdOf(mediaId);
+    const id: string = resolved.length > 0 ? resolved : NativeSave.mediaIdOf(mediaId);
     if (id.length === 0) {
       return new SaveResult(false, save, 'no-media-id');
     }

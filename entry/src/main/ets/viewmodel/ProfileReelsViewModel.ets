@@ -175,7 +175,9 @@ export class ProfileReelsViewModel implements ReelStreamVm {
       return;
     }
     const reel: Reel = this.reels[index];
-    if (reel.videoUrl.length > 0 || reel.mediaId.length === 0) {
+    // 短码也算"能定位"：这一页（个人页的视频分页）的条目常常只有短码，
+    // 没有数字 id —— 交给 NativeMediaInfo 用短码去换真 pk（见它的 detailFor）。
+    if (reel.videoUrl.length > 0 || (reel.mediaId.length === 0 && reel.shortcode.length === 0)) {
       return;
     }
     if (this.fetching.has(reel.shortcode)) {
@@ -183,7 +185,7 @@ export class ProfileReelsViewModel implements ReelStreamVm {
     }
     this.fetching.add(reel.shortcode);
     const shortcode: string = reel.shortcode;
-    NativeMediaInfo.videoFor(reel.mediaId).then((video: MediaVideo | null): void => {
+    NativeMediaInfo.videoFor(reel.mediaId, shortcode).then((video: MediaVideo | null): void => {
       this.fetching.delete(shortcode);
       if (video === null || !video.ok()) {
         hilog.warn(DOMAIN, TAG, 'video missing code=%{public}s why=%{public}s',

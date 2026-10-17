@@ -1666,11 +1666,16 @@ struct Index {
    */
   private async likeReel(reel: Reel, like: boolean): Promise<boolean> {
     const id: string = reel.mediaId;
-    if (id.length === 0) {
+    /*
+     * **没有媒体 id 不等于不能点赞**（用户报的"我的页面四个分页点进 reels 页点赞没反应"）：
+     * 那些分页的载荷常常只给短码，`reel.mediaId` 是空的。NativeEngage 收到短码会去 oembed
+     * 换一个真 pk（见 core/mobileapi/MobileEngage.mediaPkFor），所以这里只要求"有一个能定位的键"。
+     */
+    if (id.length === 0 && reel.shortcode.length === 0) {
       this.toast($r('app.string.like_failed'));
       return false;
     }
-    const result: EngageResult = await NativeEngage.setLiked(id, like);
+    const result: EngageResult = await NativeEngage.setLiked(id, like, reel.shortcode);
     /*
      * **以服务端回报的状态为准**（用户报："点赞只有 app 端显示，没有落实到请求上"）。
      *
@@ -1701,11 +1706,11 @@ struct Index {
   /** Reels 页那颗转发按钮的动作：同样 HTTP 直发（取消转发要 note_id，见 core/NativeEngage）。 */
   private async repostReel(reel: Reel, repost: boolean): Promise<boolean> {
     const id: string = reel.mediaId;
-    if (id.length === 0) {
+    if (id.length === 0 && reel.shortcode.length === 0) {
       this.toast($r('app.string.repost_unsupported'));
       return false;
     }
-    const result: EngageResult = await NativeEngage.setReposted(id, repost);
+    const result: EngageResult = await NativeEngage.setReposted(id, repost, reel.shortcode);
     if (!result.ok) {
       hilog.info(DOMAIN, TAG, 'reel repost failed (%{public}s) id=%{public}s', result.detail, id);
       this.toast($r('app.string.repost_unsupported'));
@@ -1752,7 +1757,11 @@ struct Index {
   private async saveMedia(mediaId: string, shortcode: string, isVideo: boolean,
                           save: boolean): Promise<boolean> {
     const id: string = mediaId.trim();
-    if (id.length === 0) {
+    /*
+     * **只有短码也照样收藏**（同 likeReel 的理由）：个人页那几个分页的条目经常没有媒体 id，
+     * NativeSave 会用短码去换真 pk（见 MobileEngage.mediaPkFor）。
+     */
+    if (id.length === 0 && shortcode.trim().length === 0) {
       this.toast($r('app.string.save_failed'));
       return false;
     }
@@ -1766,7 +1775,7 @@ struct Index {
       return true;
     }
     // ② App 主机的 route。
-    const direct: SaveResult = await NativeSave.setSaved(id, save);
+    const direct: SaveResult = await NativeSave.setSaved(id, save, shortcode);
     if (direct.ok) {
       SaveState.remember(id, save);
       this.profileVm.refreshSavedTab();
@@ -3125,10 +3134,12 @@ struct Index {
             if (known !== undefined) {
               // 以前取过（同一个 shortcode）：**直接用，不再发请求**。
               detail = known;
-            } else if (id.length > 0 && !this.videoTried.has(post.shortcode)) {
+            } else if (!this.videoTried.has(post.shortcode)) {
+              // 不再要求 `id` 非空：个人页那几个分页的条目可能只有短码，
+              // detailFor 会用它换真 pk（见 core/mobileapi/MobileEngage.mediaPkFor）。
               this.videoTried.add(post.shortcode);
               requests++;
-              detail = await NativeMediaInfo.detailFor(id);
+              detail = await NativeMediaInfo.detailFor(id, post.shortcode);
               if (detail !== null) {
                 this.mediaDetails.set(post.shortcode, detail);
               } else {
@@ -4484,7 +4495,9 @@ struct Index {
     this.setLikedEverywhere(key, !before);
     try {
       // ① **HTTP 直发**（core/NativeEngage）：模板回放那条 GraphQL 变更，不发网页、不等 DOM。
-      const native: EngageResult = await NativeEngage.setLiked(current.id, !before);
+      //    短码一并带上：个人页那几个分页的 `id` 可能是丢精度的 pk 甚至就是短码本身，
+      //    NativeEngage 会用它去换真 pk（见 core/mobileapi/MobileEngage.mediaPkFor）。
+      const native: EngageResult = await NativeEngage.setLiked(current.id, !before, current.shortcode);
       if (native.ok) {
         this.setLikedEverywhere(key, !before);
         return;
@@ -4616,8 +4629,8 @@ struct Index {
     // 先翻转，点下去立刻有反馈（对勾出现 / 消失）；下面再用真实结果校正。
     this.setRepostedEverywhere(key, !before);
     try {
-      // ① HTTP 直发。
-      const native: EngageResult = await NativeEngage.setReposted(current.id, !before);
+      // ① HTTP 直发（短码一并带上，理由同 likePost）。
+      const native: EngageResult = await NativeEngage.setReposted(current.id, !before, current.shortcode);
       if (native.ok) {
         this.setRepostedEverywhere(key, !before);
         this.setLocalStatus(!before
