@@ -199,7 +199,16 @@ export class NativeReels {
   /**
    * 要一页 reels 并解析好。失败一律 null（没模板 / 没登录 / HTTP 非 200 / 解析不出条目）。
    */
-  static async fetchPage(first: number, cursor: string): Promise<NativeReelsPage | null> {
+  /**
+   * @param allowExplore 允许用**移动端探索流**兜底吗（见 viaExplore）。
+   *
+   *   · `true` = 调用方是**用户驱动**的（进 reels 页 / 上滑翻页，见 ReelsViewModel）；
+   *   · `false`（默认）= 启动预热（`warmStart`）与后台预取 —— 这时**不发**这一发 0.8~1.3MB 的
+   *     探索流。降噪（`FINGERPRINT_ANALYSIS.md` 阶段一）：没人看视频页时替用户拉一兆多，
+   *     既浪费流量，也正是"请求密度像脚本"的主要来源。
+   */
+  static async fetchPage(first: number, cursor: string,
+                         allowExplore: boolean = false): Promise<NativeReelsPage | null> {
     /*
      * **被限流期间**（见 core/ApiThrottle）：GraphQL 那条一发都不打，但**移动端探索流还能顶**
      * （`discover/topical_explore/` 给的也是 clips 媒体，带 `video_versions`，可直接播）。
@@ -210,7 +219,8 @@ export class NativeReels {
      * 但**有内容**远好过空着。
      */
     if (ApiThrottle.blocked(ApiThrottle.CLIPS)) {
-      const viaExplore: NativeReelsPage | null = await NativeReels.viaExplore(cursor);
+      const viaExplore: NativeReelsPage | null = allowExplore
+        ? await NativeReels.viaExplore(cursor) : null;
       if (viaExplore !== null) {
         return viaExplore;
       }
@@ -230,7 +240,8 @@ export class NativeReels {
       hilog.warn(DOMAIN, TAG, 'reels rate limited → back off %{public}dmin body=%{public}s',
         ApiThrottle.remainingMinutes(ApiThrottle.CLIPS),
         result.body.substring(0, 160).replace(/[\r\n]+/g, ' '));
-      const viaExplore: NativeReelsPage | null = await NativeReels.viaExplore(cursor);
+      const viaExplore: NativeReelsPage | null = allowExplore
+        ? await NativeReels.viaExplore(cursor) : null;
       return viaExplore;
     }
     let parsed: NativeReelsPage | null = result.ok ? NativeReels.parse(result.body, result.ms) : null;
@@ -247,7 +258,7 @@ export class NativeReels {
         hilog.warn(DOMAIN, TAG, 'reels rate limited on retry → back off %{public}dmin body=%{public}s',
           ApiThrottle.remainingMinutes(ApiThrottle.CLIPS),
           result.body.substring(0, 160).replace(/[\r\n]+/g, ' '));
-        return await NativeReels.viaExplore(cursor);
+        return allowExplore ? await NativeReels.viaExplore(cursor) : null;
       }
       parsed = result.ok ? NativeReels.parse(result.body, result.ms) : null;
     }

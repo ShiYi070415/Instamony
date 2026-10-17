@@ -132,7 +132,7 @@ export class ReelsViewModel implements ReelStreamVm {
        */
       if (ApiThrottle.blocked(ApiThrottle.CLIPS)) {
         this.fromCacheOrSay(ApiThrottle.remainingMinutes(ApiThrottle.CLIPS));
-        const fallback: NativeReelsPage | null = await NativeReels.fetchPage(NATIVE_PAGE_COUNT, '');
+        const fallback: NativeReelsPage | null = await NativeReels.fetchPage(NATIVE_PAGE_COUNT, '', true);
         if (fallback !== null) {
           this.applyNativePage(fallback, false);
           hilog.info(DOMAIN, TAG, 'reels first via explore fallback n=%{public}d ms=%{public}d',
@@ -152,7 +152,7 @@ export class ReelsViewModel implements ReelStreamVm {
         return;
       }
       // ---- 2) 原生直发（有落盘模板 + 登录态时可走）----
-      const native: NativeReelsPage | null = await NativeReels.fetchPage(NATIVE_PAGE_COUNT, '');
+      const native: NativeReelsPage | null = await NativeReels.fetchPage(NATIVE_PAGE_COUNT, '', true);
       if (native !== null) {
         this.applyNativePage(native, false);
         hilog.info(DOMAIN, TAG, 'reels first native n=%{public}d ms=%{public}d ms=%{public}d',
@@ -276,7 +276,7 @@ export class ReelsViewModel implements ReelStreamVm {
       return;
     }
     this.nativeFetching = true;
-    NativeReels.fetchPage(NATIVE_PAGE_COUNT, cursor).then((page: NativeReelsPage | null): void => {
+    NativeReels.fetchPage(NATIVE_PAGE_COUNT, cursor, true).then((page: NativeReelsPage | null): void => {
       this.nativeFetching = false;
       if (page === null) {
         return;

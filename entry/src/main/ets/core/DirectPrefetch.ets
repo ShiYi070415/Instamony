@@ -27,8 +27,15 @@ const DOMAIN: number = 0xFF00;
 const TAG: string = 'DirectPrefetch';
 /** 快照多久算新鲜（毫秒）：这个窗口内不再为同一条会话发预取请求。 */
 const FRESH_MS: number = 10 * 60 * 1000;
-/** 一轮最多预取几条（列表很长时别把后台占满；多出来的等下一轮/滚动时再补）。 */
-const MAX_PER_ROUND: number = 24;
+/**
+ * 一轮最多预取几条（列表很长时别把后台占满；多出来的等下一轮/滚动时再补）。
+ *
+ * **从 24 降到 5**（降噪，见 `FINGERPRINT_ANALYSIS.md` 阶段一）：24 条 = 24 发
+ * `direct_v2/threads/{id}/`，每条几十 KB 起，而且是按闸门的最快速度连续打出去 ——
+ * 真机日志里"启动 1 分钟内请求最多的一条链"就是它。5 条正好覆盖首屏能看到的会话，
+ * 其余的等用户滚到那里（`seed` 在滚动时会再补）。
+ */
+const MAX_PER_ROUND: number = 5;
 
 export class DirectPrefetch {
   private static queue: Array<DirectThread> = [];

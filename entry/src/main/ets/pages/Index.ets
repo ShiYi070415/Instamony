@@ -2196,27 +2196,25 @@ struct Index {
           if (tray !== null && tray.items.length > 0) {
             this.rememberStoryQueue(tray.items);
             /*
-             * **只调 `ensure`，不要再先 `reset` 一遍**。
+             * **启动不再预取快拍内容**（降噪，见 `FINGERPRINT_ANALYSIS.md` 阶段一）。
              *
-             * 这里原来写成 `reset(items, 0)` + `ensure(items, 0)`：而 `ensure` 在队列为空时
-             * **自己就会 reset**，于是同一个起点被 reset 了两次 —— 前一批 5 发预取整批作废
-             * （代次变了），可请求**已经发出去了**（真机日志里同一秒出现 5 位用户各两发）。
-             * 以前这只是白打 5 发；现在每一发之间还有约 1 秒的限速闸门，白打那批会把真正要用的
-             * 那批往后顶好几秒（"点开要等"这类观感问题就会来自这里）。
+             * 以前这里 `StoryCache.ensure(tray.items, 0)` 会在启动时按"可见的头几位用户"
+             * 各发 1~2 发 `feed/user/{pk}/story/` —— 真机日志里是**一秒内 5 位用户**一起打出去。
+             * 托盘本身已经有 219 条（环 + 头像 + 计数齐全），用户点开某一位时
+             * `StoriesTray`/`StoryViewer` 自己会 `ensure` —— 那才是"有人动作才发请求"。
              */
-            StoryCache.ensure(tray.items, 0);
-            hilog.info(DOMAIN, TAG, 'warm stories n=%{public}d cached=%{public}d',
+            hilog.info(DOMAIN, TAG, 'warm stories n=%{public}d cached=%{public}d (prefetch deferred)',
               tray.items.length, StoryCache.size());
           }
         }).catch((): void => {
         });
       });
-    // 1) 通知页（原生一条链：news/inbox → show_many → ayml）。
-    //    预热这一轮传 warmOnly：模板缺失时**不**导航隐藏网页去抓 ayml（见 loadNotifications）。
-    await this.warmStep('notify', (): boolean => this.notifications.length > 0,
-      (): Promise<void> => {
-        return this.loadNotifications(true);
-      });
+    /*
+     * 1) 通知页：**启动不预热**（降噪，同上）。
+     *
+     * 它启动时那 2~3 发（news/inbox → show_many → ayml）对首屏没有任何帮助，
+     * 纯粹抬高请求密度；用户点标题栏那颗爱心时 `loadNotifications` 自己会拉。
+     */
     // 2) Reels（有模板时是毫秒级回放；没有才导航一次）。
     await this.warmStep('reels', (): boolean => this.reelsVm.list().length > 0,
       (): Promise<void> => {
@@ -5541,7 +5539,12 @@ struct Index {
              * 托盘组件挂载后再 `reset` 就是**同一批预取再来一遍** —— `ensure` 在"队列起点已覆盖
              * 可见范围"时直接返回，正好把这次重复省掉（见它上面那段注释）。
              */
-            StoryCache.ensure(items, 0);
+            /*
+             * **不再自动预取**（降噪，见 FINGERPRINT_ANALYSIS.md 阶段一）：托盘一到就热 5 位用户，
+             * 真机日志里是"一秒内 5 发 feed/user/{pk}/story/"。现在只在用户**真的滑动托盘/点开**时
+             * 才预取（见下面 onStoryVisible），这才是"人有动作才发请求"。
+             */
+            hilog.info(DOMAIN, TAG, 'story prefetch deferred (tray ready)');
           },
           // 每一项头像的当前位置：收起时要朝"现在这一位"的托盘头像收缩（见 storyRects）。
           onStoryRect: (userId: string, rect: StoryHeroRect): void => {

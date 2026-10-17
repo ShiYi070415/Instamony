@@ -28,7 +28,15 @@ const DOMAIN: number = 0xFF00;
 const TAG: string = 'ApiThrottle';
 
 /** 撞上限流之后，多久之内不再发这个家族的请求（毫秒）。 */
-const BACKOFF_MS: number = 12 * 60 * 1000;
+export const BACKOFF_MS: number = 12 * 60 * 1000;
+/**
+ * 撞上 **`feedback_required`** 之后要停多久（毫秒，45 分钟）。
+ *
+ * 为什么比普通限流长得多：`429` / `rate_limit_error` 多是"这一条打太密了"，
+ * 而 `feedback_required`（"We limit how often you can do certain things…"）是 IG 对**整类行为**
+ * 的判定 —— 12 分钟就再去试只会把窗口重新拉长。
+ */
+export const FEEDBACK_BACKOFF_MS: number = 45 * 60 * 1000;
 
 /**
  * **两次请求之间至少隔多久**（毫秒）。见 `ApiThrottle.acquire` 的说明。

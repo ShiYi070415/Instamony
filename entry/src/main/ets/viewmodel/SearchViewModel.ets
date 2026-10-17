@@ -56,8 +56,14 @@ const TYPE_ATTEMPTS: number = 3;
 const TYPE_RETRY_GAP_MS: number = 1500;
 /** 抓不到自己用户名时，冷路径用它去打一次字（能搜出结果就行）。 */
 const FALLBACK_PROBE_QUERY: string = 'instagram';
-/** 预取队列深度（页数）：连续上滑时手上一直有存货，又不至于提前把流量花光。 */
-const PREFETCH_DEPTH: number = 3;
+/**
+ * 预取队列深度（页数）：**1 页**。
+ *
+ * 降噪（见 `FINGERPRINT_ANALYSIS.md` 阶段一）：原来是 3 页 —— 而探索流一页 0.8~1.3MB，
+ * "进搜索页就预取三页"约等于 4MB / 3 发连打，是账号被判"太吵"的主要来源之一。
+ * 留 1 页仍能保证滑到底立刻有内容，代价只是滑得更深时偶尔等一下。
+ */
+const PREFETCH_DEPTH: number = 1;
 /**
  * 首屏至少要有几条（三列瀑布流 ≈ 四行）。
  *
@@ -252,10 +258,14 @@ export class SearchViewModel {
   async warm(): Promise<void> {
     // 缓存先在后台铺上：这样"启动预热"和"用户切到搜索页"谁先发生都不影响首屏。
     this.hydrateFromCache();
-    if (this.recommendLoaded || !NativeSearch.hasRecommendedSource()) {
-      return;
-    }
-    await this.loadRecommended();
+    /*
+     * **启动预热不再发推荐流那一发**（降噪，见 `FINGERPRINT_ANALYSIS.md` 阶段一）。
+     *
+     * 探索流一页 0.8~1.3MB，而"进首页就预取"意味着用户还没看搜索页就先花掉一兆多 ——
+     * 加上后面的连发，这是最像爬虫的一段。现在启动只吃落盘缓存（读盘几十毫秒），
+     * 真正的第一页等用户**切到搜索页**时再拉（`open()` → `loadRecommended()`）。
+     */
+    hilog.info(DOMAIN, TAG, 'warm: cache only (%{public}d cached post(s))', this.posts.length);
   }
 
   /**

@@ -24,12 +24,13 @@
 import { http } from '@kit.NetworkKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { InstagramCookieJar, InstagramCookieSnapshot } from '../InstagramCookieJar';
-import { ApiThrottle } from '../ApiThrottle';
+import { ApiThrottle, BACKOFF_MS, FEEDBACK_BACKOFF_MS } from '../ApiThrottle';
 import { MobileSession, MobileIdentity } from './MobileSession';
 import { signedBody } from './MobileSign';
 import {
   API_DOMAIN,
   APP_ID,
+  COHERENT_FINGERPRINT,
   CONNECT_TIMEOUT_MS,
   FB_HTTP_ENGINE,
   FixedHeaders,
@@ -152,7 +153,10 @@ export class MobileRequest {
     out['X-IG-Bandwidth-Speed-KBPS'] = `${Math.round(MobileRequest.randInt(2500000, 3000000)) / 1000}`;
     out['X-IG-Bandwidth-TotalBytes-B'] = `${MobileRequest.randInt(5000000, 90000000)}`;
     out['X-IG-Bandwidth-TotalTime-MS'] = `${MobileRequest.randInt(2000, 9000)}`;
-    out['X-IG-App-Startup-Country'] = identity.country.toUpperCase();
+    // 国家：自洽模式下**拿不到就不发**（谎报 US 与真实 IP 矛盾，比缺省更可疑）。
+    if (identity.country.length > 0) {
+      out['X-IG-App-Startup-Country'] = identity.country.toUpperCase();
+    }
     out['X-Bloks-Version-Id'] = identity.app.bloksVersioningId;
     out['X-IG-WWW-Claim'] = identity.wwwClaim.length > 0 ? identity.wwwClaim : '0';
     out['X-Bloks-Is-Layout-RTL'] = 'false';
@@ -198,16 +202,30 @@ export class MobileRequest {
     out['X-FB-Client-IP'] = 'True';
     out['X-FB-Server-Cluster'] = 'True';
     out['IG-INTENDED-USER-ID'] = identity.userId.length > 0 ? identity.userId : '0';
-    out['X-IG-Nav-Chain'] = NAV_CHAIN;
+    /*
+     * 身份自洽（见 MobileConfig.COHERENT_FINGERPRINT）：
+     *   · 恒定 `X-IG-Nav-Chain` 去掉 —— 真实客户端的导航链随页面变化，不会每条请求都停在
+     *     "self_profile → following"（连 explore / clips / direct 都是这一串，一眼假）。
+     *   · `IG-U-SHBID` / `IG-U-SHBTS` / `IG-U-RUR` / 区域提示**只发服务端真下发的**
+     *     （`identity.igURur` 是 `absorbResponseHeaders` 从响应头捡到的）。
+     *     以前是拿 userId + 假 HMAC + now+1y 现造：`SHBTS` 那种签名字段校验不过，
+     *     比"不发"更像自动化。（instagrapi 也硬编码这几个，所以它同样容易被判。）
+     */
+    if (!COHERENT_FINGERPRINT) {
+      out['X-IG-Nav-Chain'] = NAV_CHAIN;
+    }
     if (identity.userId.length > 0) {
-      const nextYear: number = Math.floor(Date.now() / 1000) + 31536000;
       out['IG-U-DS-USER-ID'] = identity.userId;
-      out['IG-U-IG-DIRECT-REGION-HINT'] = FixedHeaders.directRegionHint(identity.userId);
-      out['IG-U-SHBID'] = FixedHeaders.shbid(identity.userId);
-      out['IG-U-SHBTS'] = FixedHeaders.shbts(identity.userId);
-      // 真实 rur 优先；没有就给固定串（instagrapi 同位置也是硬编码串）。
-      out['IG-U-RUR'] = identity.igURur.length > 0
-        ? identity.igURur : FixedHeaders.rur(identity.userId);
+      if (identity.igURur.length > 0) {
+        out['IG-U-RUR'] = identity.igURur;
+      }
+      if (!COHERENT_FINGERPRINT) {
+        out['IG-U-IG-DIRECT-REGION-HINT'] = FixedHeaders.directRegionHint(identity.userId);
+        out['IG-U-SHBID'] = FixedHeaders.shbid(identity.userId);
+        out['IG-U-SHBTS'] = FixedHeaders.shbts(identity.userId);
+        out['IG-U-RUR'] = identity.igURur.length > 0
+          ? identity.igURur : FixedHeaders.rur(identity.userId);
+      }
     }
     return out;
   }
@@ -307,9 +325,17 @@ export class MobileRequest {
        */
       if (outcome.error === MOBILE_RATE_LIMIT || outcome.error === MOBILE_THROTTLED
         || outcome.error === MOBILE_FEEDBACK) {
-        ApiThrottle.note(opts.family);
+        /*
+         * `feedback_required` 是 IG 最明确的一种"你太吵了"信号（"We limit how often you can do
+         * certain things…"），比单端点 429 更重：它通常意味着**整类行为**被盯上。
+         * 所以给它更长的冷却（45 分钟，见 ApiThrottle.FEEDBACK_BACKOFF_MS），
+         * 而且各模块的可选流量（预取 / 轮询）都会读 `blocked(family)` 从而一起停手。
+         */
+        const ms: number = outcome.error === MOBILE_FEEDBACK
+          ? FEEDBACK_BACKOFF_MS : BACKOFF_MS;
+        ApiThrottle.note(opts.family, ms);
         hilog.warn(DOMAIN, TAG, 'throttled %{public}s family=%{public}s → backoff %{public}dmin',
-          endpoint, opts.family, 12);
+          endpoint, opts.family, Math.round(ms / 60000));
       }
       hilog.info(DOMAIN, TAG, 'recv %{public}s -> %{public}s', endpoint, outcome.summary());
       return outcome;
@@ -435,6 +461,20 @@ export class MobileRequest {
       if (name === 'path' || name === 'domain' || name === 'expires'
         || name === 'max-age' || name === 'secure' || name === 'httponly'
         || name === 'samesite') {
+        continue;
+      }
+      /*
+       * **网页专属 cookie 不带给 App 端点**（身份自洽，见 MobileConfig.COHERENT_FINGERPRINT）。
+       *
+       * 这几条是浏览器侧的东西：`dpr`（设备像素比）、`wd`（窗口尺寸）、`ig_nrcb`、
+       * `ps_l`/`ps_n`（页面状态）。官方安卓 App 的 cookie 罐里没有它们 ——
+       * 带着它们打 `i.instagram.com` 等于自报"我是从浏览器导出的会话"。
+       * `ig_did` / `mid` / `rur` / `sessionid` / `csrftoken` / `ds_user_id` **保留**：
+       * App 侧同样有这几条（缺了反而过不了鉴权）。
+       */
+      if (COHERENT_FINGERPRINT
+        && (name === 'dpr' || name === 'wd' || name === 'ig_nrcb'
+          || name === 'ps_l' || name === 'ps_n')) {
         continue;
       }
       keep.push(one);

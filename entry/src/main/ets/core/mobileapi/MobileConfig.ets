@@ -12,6 +12,9 @@
  * 不同账号上轮换、降低指纹一致性；我们这里保留同样的多组，默认用最新的那组。
  */
 
+// 系统语言（`deviceLocale` 用）；i18n 是 ArkTS 标准能力，这里只读一个语言 tag。
+import { i18n } from '@kit.LocalizationKit';
+
 /** 私有 API 的主机（instagrapi 的 `API_DOMAIN`）——**不是** www.instagram.com。 */
 export const API_DOMAIN: string = 'i.instagram.com';
 
@@ -180,3 +183,52 @@ export const DEFAULT_COUNTRY: string = 'US';
  */
 export const DEFAULT_TIMEZONE_OFFSET: number = -14400;
 export const DEFAULT_TIMEZONE_NAME: string = 'GMT-04:00';
+
+/**
+ * **身份自洽**开关（阶段二，见仓库根目录 `FINGERPRINT_ANALYSIS.md` 第 4 节）。
+ *
+ * 打开后这几件事会变：
+ *   1. 时区 / 语言**跟随系统**（不再是恒定纽约 + en_US —— 那和真实 IP 矛盾，
+ *      是最廉价、也最稳定的自动化判据之一）；国家拿不到就**不发**，而不是谎报 `US`；
+ *   2. 不再**伪造**服务端下发的 `IG-U-SHBID` / `IG-U-SHBTS` / `IG-U-RUR` / 区域提示
+ *      （伪造的 `SHBTS` 校验不过，比"不发"更可疑；真值能从响应头捡到就照用）；
+ *   3. 去掉恒定的 `X-IG-Nav-Chain`（真实客户端的导航链不会每条请求都停在同一页）；
+ *   4. App 请求不再夹带网页专属 cookie（`dpr` / `wd` / `ig_nrcb` / `ps_l` / `ps_n`）。
+ *
+ * 留开关是为了**可回退**：万一某台设备/某个 IG 版本对这几条敏感，改回 false 即可。
+ */
+export const COHERENT_FINGERPRINT: boolean = true;
+
+/**
+ * 时区偏移（秒，东为正）—— `X-IG-Timezone-Offset` 与表单里的 `timezone_offset` 都用它。
+ *
+ * JS 的 `getTimezoneOffset()` 给的是"UTC − 本地"的分钟数（东八区是 -480），所以取反再乘 60。
+ * instagrapi 里这个值是可配置项（默认 -14400 = 纽约）；本项目以前**硬抄默认值**，
+ * 于是香港/内地的设备也报纽约时区。
+ */
+export function deviceTimezoneOffset(): number {
+  try {
+    const minutes: number = new Date().getTimezoneOffset();
+    return -minutes * 60;
+  } catch (error) {
+    return DEFAULT_TIMEZONE_OFFSET;
+  }
+}
+
+/**
+ * 系统语言（`zh-Hans` / `en-US` 那种 tag）→ IG 要的 `zh_CN` 形式。
+ *
+ * 用 `i18n.System.getSystemLanguage()`；拿不到就退回 `DEFAULT_LOCALE`（不硬编码某个国家）。
+ */
+export function deviceLocale(): string {
+  try {
+    const raw: string = `${i18n.System.getSystemLanguage()}`.trim();
+    if (raw.length === 0) {
+      return DEFAULT_LOCALE;
+    }
+    return raw.replace('-', '_');
+  } catch (error) {
+    return DEFAULT_LOCALE;
+  }
+}
+

@@ -32,13 +32,16 @@ import {
   API_DOMAIN,
   APP_SETTINGS,
   AppProfile,
+  COHERENT_FINGERPRINT,
   DEFAULT_APP_VERSION,
   DEFAULT_COUNTRY,
   DEFAULT_LOCALE,
   DEFAULT_TIMEZONE_NAME,
   DEFAULT_TIMEZONE_OFFSET,
   DeviceProfile,
-  USER_AGENT_BASE
+  USER_AGENT_BASE,
+  deviceLocale,
+  deviceTimezoneOffset
 } from './MobileConfig';
 import { androidDeviceId, base64UrlNoPad, genToken, utf8, uuid4 } from './MobileSign';
 
@@ -129,10 +132,11 @@ export class MobileIdentity {
     this.device = DeviceProfile.DEFAULT;
     const known: AppProfile | undefined = APP_SETTINGS.get(seed.appVersion);
     this.app = known !== undefined ? known : MobileSession.appProfileOrDefault(seed.appVersion);
-    this.locale = DEFAULT_LOCALE;
-    this.country = DEFAULT_COUNTRY;
-    this.timezoneOffset = DEFAULT_TIMEZONE_OFFSET;
-    this.timezoneName = DEFAULT_TIMEZONE_NAME;
+    // 身份自洽（见 MobileConfig.COHERENT_FINGERPRINT）：时区/语言跟系统走，国家拿不到就不发。
+    this.locale = COHERENT_FINGERPRINT ? deviceLocale() : DEFAULT_LOCALE;
+    this.country = COHERENT_FINGERPRINT ? '' : DEFAULT_COUNTRY;
+    this.timezoneOffset = COHERENT_FINGERPRINT ? deviceTimezoneOffset() : DEFAULT_TIMEZONE_OFFSET;
+    this.timezoneName = COHERENT_FINGERPRINT ? '' : DEFAULT_TIMEZONE_NAME;
     this.pushDisabled = true;
   }
 

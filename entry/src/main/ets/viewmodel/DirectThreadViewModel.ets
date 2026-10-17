@@ -36,8 +36,12 @@ import { DirectMessage, DirectThreadView } from '../model/Direct';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'DirectThreadViewModel';
-/** 实时接收的轮询间隔（毫秒，见 startPolling 里为什么用轮询）。 */
-const THREAD_POLL_MS: number = 4000;
+/** 实时接收的轮询间隔（毫秒，见 startPolling 里为什么用轮询）。
+ *
+ * **从 4 秒放宽到 25 秒**（降噪，见 `FINGERPRINT_ANALYSIS.md` 阶段一）：4 秒一发私有请求是最容易
+ * 被 IG 判成脚本的固定节奏之一；人在会话页里 25 秒的延迟完全可接受（自己发消息后会主动拉一次）。
+ */
+const THREAD_POLL_MS: number = 25000;
 /**
  * 翻页"卡住"（去重后没多出任何一条）之后的冷却：这段时间内不再翻，过了允许再试一次。
  *
