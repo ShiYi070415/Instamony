@@ -1,0 +1,16 @@
+# 让 GitHub 的 linguist 正确统计这个仓库的语言占比。
+#
+# 背景：`.ets`（ArkTS 源码，本仓库 111 个文件、约 2.8 MB）**不在 linguist 的默认扩展名表里**，
+# 于是被整体忽略；结果"Languages"一栏只剩下 tools/ 里的两个 .ps1、三个 .js 和两个
+# hvigorfile.ts —— 于是显示成 PowerShell 61% / JavaScript 37% / TypeScript 1.7%，
+# 而真正的项目主体（ArkTS）一个字节都没算进去。
+#
+# ArkTS 是 TypeScript 的超集，官方文档也把 .ets 当作 TypeScript 方言，所以这里映射成 TypeScript。
+*.ets linguist-language=TypeScript
+*.ets linguist-detectable=true
+
+# 构建 / 图标生成 / 页面脚本校验这些是**开发工具**，不是项目主体语言，不参与占比统计。
+tools/* linguist-detectable=false
+
+# 预置的请求模板是从网页抓下来的数据样本，不是源码。
+entry/src/main/resources/rawfile/api_templates.json linguist-detectable=false
