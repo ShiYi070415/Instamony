@@ -1264,7 +1264,18 @@ export class NativeSearch {
     }
     const display: PickedMedia = MediaQuality.displayVideo(videoUrls, videoWidths, videoHeights);
     const original: PickedMedia = MediaQuality.originalVideo(videoUrls, videoWidths, videoHeights);
-    const rawId: Object = node['pk'] ?? node['id'] ?? '';
+    /*
+     * 媒体数字 id：**优先 `strong_id__`**（它是**字符串**，原样可信）。
+     *
+     * 为什么不能直接用 `pk` / `id`：IG 的 pk 是 19 位的（1234567890123456789），超过 IEEE754 的
+     * 精确整数范围，`JSON.parse` 之后会变成 `3.7932390810409974e+18` 这种带指数的数；
+     * 而 `ProfileReelsViewModel.mediaIdOf` 有一道"必须全是数字"的校验，指数形式过不了 →
+     * 返回空 id → 推荐流那页的**点赞直接判为不可用**（用户报的"推荐流的 reels 页面无法点赞"，
+     * 其它页面正常是因为它们的 id 来自 GraphQL 的字符串字段或 `pk_id`）。
+     * `strong_id__` 在这几份载荷里一直是字符串，取它最稳；没有才退回 `pk` / `id`。
+     */
+    const strongId: string = JsonRead.strOf(node, 'strong_id__');
+    const rawId: Object = strongId.length > 0 ? strongId : (node['pk'] ?? node['id'] ?? '');
     const user: Record<string, Object> | null = JsonRead.recordOf(node, 'user');
     const username: string = user === null ? '' : JsonRead.strOf(user, 'username');
     const avatar: string = user === null ? '' : JsonRead.strOf(user, 'profile_pic_url');
