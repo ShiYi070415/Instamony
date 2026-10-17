@@ -5,6 +5,8 @@
 
 个人自用 / 学习项目，与 Instagram / Meta 无关。
 
+[English](README.en.md) · 采用 [Apache-2.0](LICENSE) 许可证。
+
 ## 功能概览
 
 | | |
@@ -105,5 +107,6 @@ legacy/unwired/          早期未接线的分层（已归档）
 
 ## 许可证
 
-尚未选择开源许可证，默认保留所有权利。若要允许他人使用 / 修改 / 分发，
-建议补一个 `LICENSE`（例如 Apache-2.0，和多数 HarmonyOS 客户端项目一致）。
+本项目采用 [Apache License 2.0](LICENSE)。
+
+第三方说明：Instagram、Meta 等名称与商标归其各自所有者所有；本项目与它们无关联。
