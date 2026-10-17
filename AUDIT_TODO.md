@@ -88,8 +88,13 @@
 - [ ] **E7 `core/NativeSearch.pageSizeRejected`** 任何失败都记成"页数被拒"→ 一次网络抖动就永久
       关掉大页数这条优化（进程内）。→ 只在 detail 明确为 `400/noncoercible_variable_value` 时置位。
 - [ ] **E8 `core/NativeStories`** try 列表的第 4 个候选与第 1 个同 URL 同身份（纯重复请求，多打一发）。
-- [ ] **E9 `core/Translator`** 缓存键只有原文、不含目标语言 → 切系统语言后返回旧语种译文。
-      → 键改 `target + '\u0000' + source`。
+- [x] **E9 `core/Translator`** 缓存键只有原文、不含目标语言 → 切系统语言后返回旧语种译文。
+      → 键改 `target + '\u0000' + source`。（`88402bc`）
+      追加修复（`BUG`：用户报"全部文本点翻译都失败"）：真机自检落盘证明 gtx 回 **`http-429`**
+      ——只备一个端点等于功能随时整体挂掉。现在 ①gtx → ②`clients5.google.com/translate_a/t`
+      → ③MyMemory 三级兜底，每发都带浏览器 UA/Accept-Language，成功的那个钉成本会话首选；
+      自检（`Translator.scheduleSelfTest`）启动 5 秒后三发各打一次并落盘
+      `filesDir/Instarmony_translate.txt`。
 - [ ] **E10 `core/WebTokens`** 并发等待用 30×100ms 忙等（最多 3 秒），失败无重试入口。
       → 等待同一个 in-flight Promise。
 - [ ] **E11 `core/MediaDownloader`** 只 `on('complete'/'fail')` 从不 `off()`、也无超时 → 任务既不完成

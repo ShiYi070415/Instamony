@@ -103,6 +103,13 @@
 - 互动状态有会话级覆盖表（`FollowState` / `SaveState` / `EngageState`），避免翻页把状态顶回去。
 - **点赞态跨页面一致**（0.9 修复）：`engage` 台账同时按**媒体 id** 和 **shortcode** 记一份，
   Reels 页（底栏 / 视频分页 / 搜索推荐）点赞后退出重进、切底栏回来，那颗心都保持红色；取消赞同理。
+- **正文翻译**（发布时间旁 / 评论"回复"旁 / Reels 正文最后那一颗）：只对非中文文本出现，
+  点了翻成**系统语言**、再点回原文。0.9 修复"全部文本点翻译都失败"：
+  gtx 那条被 Google 按 IP 限流（`http-429`），现在 ①gtx → ②`clients5.google.com`
+  → ③MyMemory **三级兜底**，每发都带浏览器请求头，成功的那个钉成本会话首选；
+  译文等于原文（MyMemory 常见）按失败处理。启动 5 秒后会打一次三发自检并落盘
+  `filesDir/Instarmony_translate.txt`（`Translator.scheduleSelfTest`，可关）。
+  ⚠️ 待翻译的正文会发到第三方接口。
 
 ### 1.9 通知页
 

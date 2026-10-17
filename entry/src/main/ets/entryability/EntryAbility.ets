@@ -34,6 +34,7 @@ import { AccountScope } from '../core/AccountScope';
 import { webview } from '@kit.ArkWeb';
 import { AppConfig } from '../config/AppConfig';
 import { DeepLink, DeepLinkIntent } from '../core/DeepLink';
+import { Translator } from '../core/Translator';
 
 const DOMAIN = 0x0000;
 /**
@@ -162,6 +163,11 @@ export default class EntryAbility extends UIAbility {
     // 传 context 是为了把结论**落盘**（`filesDir/Instarmony_mobile.txt`）：真机上 chromium 的
     // 日志会把 hilog 环形缓冲冲掉，只有落盘能用 `hdc file recv` 取到（同 core/StoryDiag）。
     MobileProbe.scheduleSelfTest(this.context);
+    // ---- 翻译自检（诊断用，见 core/Translator 的 SELF_TEST_ON_START）----
+    // 用户报"全部文本点翻译都失败"：界面里点不出结论，这里启动后翻一句固定英文并落盘
+    // `filesDir/Instarmony_translate.txt`（原因码 / 端点 / 耗时），取回来就能分清是网络不通
+    // 还是端点拒绝。不影响任何用户路径。
+    Translator.scheduleSelfTest(this.context);
     // ---- 深链：冷启动这次是不是被 instarmony:// 唤起的 ----
     // 放在最后：预热那几条都是"只提前、不改行为"的优化，深链才是这次启动的**真实原因**，
     // 它需要的数据（解析）只是一次字符串处理，不依赖上面任何一步。
