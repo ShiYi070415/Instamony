@@ -19,6 +19,7 @@ import { MediaQuality, PickedMedia } from './MediaQuality';
 import { ApiThrottle } from './ApiThrottle';
 import { JsonRead } from './JsonRead';
 import { MobileDiscover, MobileMediaPage } from './mobileapi/MobileDiscover';
+import { EngageState } from './NativeEngage';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeReels';
@@ -429,7 +430,10 @@ export class NativeReels {
         Object.keys(user).slice(0, 14).join(','), mediaId);
     }
     const caption: string = (media.caption ?? {}).text ?? '';
-    const liked: boolean = media.has_liked === true || media.viewer_has_liked === true;
+    // 本机点过的赞以**会话台账**为准（短码优先）：clips 首页这份是缓存/翻页复用的旧载荷，
+    // 不查台账的话"点赞 → 退出 → 重进"心会回到灰的（用户报的问题）。
+    const liked: boolean = EngageState.likedOfByCode(code,
+      media.has_liked === true || media.viewer_has_liked === true);
     /*
      * 收藏状态：载荷给了就带上（`has_saved` / `viewer_has_saved`）。
      *
