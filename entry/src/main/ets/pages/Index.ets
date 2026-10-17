@@ -3811,7 +3811,8 @@ struct Index {
     for (let i: number = 0; i < raw.length; i++) {
       const one: NotifyPayloadItem = raw[i];
       const isSuggested: boolean = (one.group ?? '') === 'suggested';
-      // 推荐项直接按 suggested 归组；通知项按时间戳算今天 / 本月 / 更早。
+      // 推荐项直接按 suggested 归组；通知项按时间戳算 今天 / 昨天 / 过去 7 天 / 过去 30 天 / 更早
+      // （见 groupOf 的说明：按日历天分桶）。
       const group: NotifyGroup = isSuggested ? 'suggested' : this.groupOf(one.ts ?? 0);
       // 关注状态同样以**本地点过的**为准（core/FollowState）：信息流里刚关注过的人，
       // 通知页这次取回来的旧快照不该再显示成"未关注"。
@@ -3845,21 +3846,40 @@ struct Index {
   }
 
   /**
-   * 时间戳 → 分组。
+   * 时间戳 → 分组（需求："今天 / 昨天 / 过去7天 / 过去30天 / 更早"）。
    *
-   * 今天的算"今天"，同一自然月内的算"本月"，其余算"更早" —— 和参考图一致。
+   * **按日历天算，不按秒差**：凌晨 1 点看昨天 23 点的通知，应该落"昨天"而不是"今天"；
+   * 用 `(now - then) / 86400000` 那种算法会把它算成 0 天前 → 归到"今天"。
+   * 分桶：0 天 = 今天；1 天 = 昨天；2~7 天 = 过去 7 天；8~30 天 = 过去 30 天；其余更早。
    * 时间戳拿不到（0）就落到"更早"，至少不会丢。
    */
   private groupOf(ts: number): NotifyGroup {
     if (ts <= 0) {
       return 'earlier';
     }
-    const now: Date = new Date();
-    const then: Date = new Date(ts);
-    if (now.getFullYear() === then.getFullYear() && now.getMonth() === then.getMonth()) {
-      return now.getDate() === then.getDate() ? 'today' : 'month';
+    const days: number = Index.daysAgo(ts);
+    if (days <= 0) {
+      return 'today';
+    }
+    if (days === 1) {
+      return 'yesterday';
+    }
+    if (days <= 7) {
+      return 'past7';
+    }
+    if (days <= 30) {
+      return 'past30';
     }
     return 'earlier';
+  }
+
+  /** 那个时间戳是**多少个日历天前**（今天 = 0，昨天 = 1）——两个日期都先归到当天 00:00。 */
+  private static daysAgo(ts: number): number {
+    const now: Date = new Date();
+    const then: Date = new Date(ts);
+    const nowStart: number = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const thenStart: number = new Date(then.getFullYear(), then.getMonth(), then.getDate()).getTime();
+    return Math.round((nowStart - thenStart) / 86400000);
   }
 
   /** 时间戳 → "9月19日"（网页给了现成文案就优先用它）。 */

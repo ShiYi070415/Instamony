@@ -3,14 +3,27 @@
  *
  * 字段与网页侧抓取脚本一一对应（见 bridge/WebScripts 的 NOTIFICATIONS_SCRIPT）。
  * 设计原则：**一条结构装两种卡片**——
- *   - 通知项（今天 / 本月 / 更早）：avatars + usernames + text + dateText
+ *   - 通知项（今天 / 昨天 / 过去 7 天 / 过去 30 天 / 更早）：avatars + usernames + text + dateText
  *     +（右侧二选一）thumbUrl 或 buttonLabel；
  *   - 推荐项（为你推荐）：avatar + username + displayName + socialText + buttonLabel。
  * 抓不到的字段一律留空/空数组，由 UI 决定显不显示，而不是在映射阶段猜一个默认值。
  */
 
-/** 通知分组。字符串而不是数字枚举：网页侧返回的也是字符串，省一层映射，日志里也直白。 */
-export type NotifyGroup = 'today' | 'month' | 'earlier' | 'suggested';
+/**
+ * 通知分组。字符串而不是数字枚举：网页侧返回的也是字符串，省一层映射，日志里也直白。
+ *
+ * 分组按**日历天**切（需求："通知需要区分今天/昨天/过去7天/过去30天/更早/为你推荐"）：
+ *   today     = 今天
+ *   yesterday = 昨天
+ *   past7     = 过去 7 天（2~7 天前；昨天已经单独成组，不再重复）
+ *   past30    = 过去 30 天（8~30 天前）
+ *   earlier   = 更早（超过 30 天，以及拿不到时间戳的）
+ *   suggested = 为你推荐（ayml / 未回关用户那一段）
+ *
+ * 以前只有 `today / month / earlier` 三档，一个月里的东西全挤在一组（"本月"），
+ * 昨天的和三十天前的看起来一样新。
+ */
+export type NotifyGroup = 'today' | 'yesterday' | 'past7' | 'past30' | 'earlier' | 'suggested';
 
 /** 网页侧抓回来的一条（原始形状，字段名与脚本里的键一致）。 */
 export interface NotifyPayloadItem {
@@ -194,8 +207,9 @@ export class NotifyItem {
   }
 }
 
-/** 分组顺序 = 界面从上到下的顺序（和 IG 活动页一致）。 */
-export const NOTIFY_GROUPS: NotifyGroup[] = ['today', 'month', 'earlier', 'suggested'];
+/** 分组顺序 = 界面从上到下的顺序（需求给的顺序，见 NotifyGroup 的说明）。 */
+export const NOTIFY_GROUPS: NotifyGroup[] =
+  ['today', 'yesterday', 'past7', 'past30', 'earlier', 'suggested'];
 
 /** 网页侧的分组字符串 → 枚举；认不出来就落到"更早"。 */
 export function toNotifyGroup(raw: string | undefined): NotifyGroup {
@@ -203,8 +217,15 @@ export function toNotifyGroup(raw: string | undefined): NotifyGroup {
   if (value === 'today') {
     return 'today';
   }
-  if (value === 'month') {
-    return 'month';
+  if (value === 'yesterday') {
+    return 'yesterday';
+  }
+  if (value === 'past7' || value === 'week' || value === 'lastweek') {
+    return 'past7';
+  }
+  // 老接口把整月那一档叫 `month`：现在语义是"过去 30 天"。
+  if (value === 'past30' || value === 'month') {
+    return 'past30';
   }
   if (value === 'suggested') {
     return 'suggested';

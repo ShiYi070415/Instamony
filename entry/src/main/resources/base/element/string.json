@@ -157,8 +157,20 @@
       "value": "今天"
     },
     {
+      "name": "notify_yesterday",
+      "value": "昨天"
+    },
+    {
+      "name": "notify_past_7d",
+      "value": "过去 7 天"
+    },
+    {
+      "name": "notify_past_30d",
+      "value": "过去 30 天"
+    },
+    {
       "name": "notify_suggested",
-      "value": "推荐关注"
+      "value": "为你推荐"
     },
     {
       "name": "notify_follow",
