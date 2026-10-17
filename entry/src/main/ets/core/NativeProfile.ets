@@ -943,7 +943,10 @@ export class NativeProfile {
       repostCount = NativeProfile.numOf(node, 'repost_count');
     }
     // 媒体数字 id：`pk` 优先（GraphQL 都用它），退回 `id`。帖子页点赞/转发要拿它发请求。
-    const rawMediaId: Object = node['pk'] ?? node['id'] ?? '';
+    // 媒体 id 优先 `strong_id__`（字符串、精确）；理由见 NativeReels 里同一段说明。
+    const strongMediaId: string = NativeProfile.strOf(node, 'strong_id__');
+    const rawMediaId: Object = strongMediaId.length > 0
+      ? strongMediaId : (node['pk'] ?? node['id'] ?? '');
     const mediaId: string = `${rawMediaId}`.trim();
     const displayImages: Array<string> = display.url.length > 0 ? [display.url] : [];
 

@@ -74,6 +74,8 @@ interface IgClipsMetadata {
 
 interface IgClipsMedia {
   code?: string | null;
+  /** 字符串形式的媒体 id（19 位数字的精确形式，见 mediaId 的说明）。 */
+  strong_id__?: string | null;
   /** 媒体数字 id（cliploader 与点赞/转发都要它，见 Reel.mediaId）。 */
   pk?: string | number | null;
   id?: string | number | null;
@@ -401,7 +403,15 @@ export class NativeReels {
     const user: IgUser = media.user ?? {};
     const metadata: IgClipsMetadata = media.clips_metadata ?? {};
     const sound: IgSoundInfo = metadata.original_sound_info ?? {};
-    const mediaId: string = `${media.pk ?? media.id ?? ''}`.trim();
+    /*
+     * 媒体 id：**优先 strong_id__**（它是字符串，原样可信）。
+     * IG 的 pk 是 19 位数字，超出 IEEE754 精度，JSON.parse 之后会变成 3.79e+18 这种带指数
+     * 的形式 —— 点赞/收藏那边有"必须是纯数字"的校验，指数形式会被拒，表现为"点了没反应"
+     * （用户报的点赞失败，根因就在这里；搜索推荐流那条已经在 readPost 里修过）。
+     */
+    const strongId: string = `${media.strong_id__ ?? ''}`.trim();
+    const mediaId: string = strongId.length > 0
+      ? strongId : `${media.pk ?? media.id ?? ''}`.trim();
     let authorId: string = `${user.pk ?? user.id ?? ''}`.trim();
     if (authorId.length === 0) {
       // 二次来源：媒体 id 常是 `<媒体id>_<作者id>` 的组合（信息流那条就是，见 NativeEngage.mediaIdOf）——
