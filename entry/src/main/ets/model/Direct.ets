@@ -816,7 +816,7 @@ export class DirectMapper {
        * 用户名 / 名字**独立于头像**收集（这一条是"标题栏第二行退成数字 id"的修复）：
        * 原来只把 username/full_name 放在"挑中头像"的分支里赋值，挑中的那个用户对象恰好
        * 没有 profile_pic_url 时，标题栏就拿不到用户名、一路退到数字 id（真机现象：
-       * 第一行 XingLi、第二行一串数字）。名字/用户名跟头像是两件事，各收各的。
+       * 第一行 Alice、第二行一串数字）。名字/用户名跟头像是两件事，各收各的。
        */
       if (name.length > 0 && withUsername.length === 0) {
         withUsername = name;

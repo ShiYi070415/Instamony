@@ -112,7 +112,7 @@ interface NewsStoryArgs {
    * 文案里被 IG 标出来的片段（用户名 / 话题…）。
    *
    * 用户名要**单独加粗**渲染，靠的就是这里：每条 `{start,end,type:"user",username}` 指出了
-   * 文案里的哪一段是账号名（"carol 和 bob 赞了你的快拍。" 里的两个名字）。
+   * 文案里的哪一段是账号名（"bob 和 carol 赞了你的快拍。" 里的两个名字）。
    */
   links?: Array<NewsLink> | null;
   inline_follow?: NewsInlineFollow | null;
