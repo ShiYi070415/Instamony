@@ -7882,7 +7882,12 @@ struct Index {
     const anchor: string = posts[index].code;
     // 进一次 = 一副新牌（需求要的就是"下一条随机"）；同一次浏览里滑到末尾再要一页**不重洗**
     // （那会让当前正看着的那条当场跳掉，见 orderSearchReels）。
-    this.searchReelsOrder = [];
+    // 同一次会话内**保持已洗好的顺序**（原来每次进都重洗，返回再进就换成另一条，
+    // 看起来像"刚才那条没点上"）。清空只在首次进入时做。
+    const keepOrder: boolean = this.searchReelsOrder.length > 0;
+    if (!keepOrder) {
+      this.searchReelsOrder = [];
+    }
     const ordered: Array<SearchPost> = this.orderSearchReels(posts, anchor);
     const list: Array<MediaPost> = Index.searchPostsToMedia(ordered);
     if (list.length === 0) {
@@ -7998,7 +8003,9 @@ struct Index {
         ownerUsername: post.ownerUsername,
         ownerAvatarUrl: post.ownerAvatarUrl,
         ownerId: post.ownerId,
-        liked: post.liked,
+        // 点赞状态以**会话覆盖表**为准：缓存里那份 `liked` 是抓取当时的旧值，
+        // 否则"点赞→退出→重进"会显示成未点赞（用户报的问题）。
+        liked: EngageState.likedOf(post.mediaId, post.liked),
         // 关注状态：推荐流那条载荷给了就带上，Reels 页那颗按钮照它画
         // （没给时 followKnown=false → 界面自己问一次，见 model/Search 的 following）。
         ownerFollowing: post.following === true,

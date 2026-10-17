@@ -23,6 +23,7 @@
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { EngageState } from '../core/NativeEngage';
 import { Reel, ReelStreamVm } from '../model/Reel';
 import { MediaPost } from '../model/MediaPost';
 import { ProfileStreamPage } from '../model/Profile';
@@ -245,7 +246,7 @@ export class ProfileReelsViewModel implements ReelStreamVm {
         // （见 ProfilePage.streamPosts 的 owner/avatar 回填 → MediaPost.ownerId）。
         post.ownerId,
         post.caption,
-        post.liked,
+        EngageState.likedOf(ProfileReelsViewModel.mediaIdOf(post), post.liked),
         post.reposted,
         // 转发数：搜索推荐流那条响应带着 `media_repost_count`（见 core/NativeSearch.readPost
         // → MediaPost.repostCount）；个人主页那条没有这个字段，那就是 0。
