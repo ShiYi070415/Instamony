@@ -95,7 +95,6 @@ entry/src/main/ets/
   probe/                 网页探针面板（诊断）
 entry/src/main/resources/  字符串 / 颜色 / 媒体 / 预置请求模板
 tools/                   构建与校验脚本
-legacy/unwired/          早期未接线的分层（已归档）
 ```
 
 ## 文档

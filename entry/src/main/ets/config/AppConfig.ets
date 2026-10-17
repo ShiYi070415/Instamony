@@ -6,8 +6,8 @@
  *
  * 原先的 APP_ID / APP_VERSION / LOCALE / GRAPH_BASE_URL / MEDIA_FIELDS 以及
  * clientProfile() / oauthProfile() / credentialProfile() / feedQuery() 四个工厂方法，
- * 属于未接线的 OAuth + Graph API 分层，已随该分层一起归档到 legacy/unwired/，
- * 且没有任何运行路径调用它们。重新接线时请照 legacy/unwired/README.md 补回。
+ * 属于未接线的 OAuth + Graph API 分层，**已从仓库移除**（那套路线已被
+ * `core/mobileapi/` 的私有 API 取代），没有任何运行路径引用它们。
  */
 
 export class AppConfig {

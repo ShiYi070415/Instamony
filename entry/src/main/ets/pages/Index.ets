@@ -7251,7 +7251,7 @@ struct Index {
    * 原生壳：标题栏改用 HDS 的 HdsNavigation（HarmonyOS Design System 的导航容器）。
    *
    * 标题与右上角动作都由 titleBar 配置，字号、点击热区、配色跟随系统设计规范；
-   * 原来自绘的 NativeTopBar 已归档到 legacy/unwired（未接线）。
+   * 原来自绘的 NativeTopBar 已移除（未接线的旧分层一并删掉了）。
    * titleMode 取 MINI（固定 56vp）：FREE 模式下大标题会随滚动变大缩小，
    * 那需要额外绑定滚动容器，这里不引入这个变数。
    */

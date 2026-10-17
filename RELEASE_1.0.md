@@ -10,6 +10,8 @@
 
 - 版本号升到 `1.0.0`（`versionCode 1000000`）；
 - 补 **Apache-2.0 许可证**（`LICENSE`）与**英文版 README**（`README.en.md`）；
+- 删掉早期那套**未接线的 OAuth / Graph API 分层**（`legacy/unwired/`，16 个文件）：
+  它早就没有任何运行路径引用，留着只会误导读代码的人；相关注释里的引用一并清掉。
 - 公开发布前的清理：去掉私人截图；预置请求模板
   （`resources/rawfile/api_templates.json`）里的账号标识与会话期令牌换成占位值；
   `build-profile.json5`（本机签名配置）移出仓库，只保留 `build-profile.example.json5`；
@@ -289,4 +291,4 @@ hdc -t <ip:port> install -r entry\build\default\outputs\default\entry-default-si
 
 - `INSTAGRAPI_PORT.md` —— 移动端协议移植全过程：实测端点表、参数、判据、限速与"会话过期"结论（第 1~13 节）。
 - `AUDIT_TODO.md` —— 审计待办与遗留项（A~G 分类 + 已完成表 + 遗留清单）。
-- `legacy/unwired/README.md` —— 早期 OAuth / Graph API 分层（未接线，已归档）。
+- `LICENSE` —— Apache License 2.0；英文版说明见 `README.en.md`。

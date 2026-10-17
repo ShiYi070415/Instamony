@@ -103,7 +103,6 @@ entry/src/main/ets/
   probe/                 web probe panel (diagnostics)
 entry/src/main/resources/ strings / colors / media / bundled request templates
 tools/                   build and check scripts
-legacy/unwired/          early unwired layers (archived)
 ```
 
 ## Documentation

@@ -15,7 +15,7 @@
 
 `Instarmony` 是一个**鸿蒙 ArkTS 应用**（`com.fanha.instarmony`），取数路线是：
 把 Instagram 自己的移动版网页跑在常驻 WebView 里，原生层通过页面桥读页面渲染出的数据、
-并回放网页自己发出的同源请求（见 `legacy/unwired/README.md` 对既有路线的说明）。
+并回放网页自己发出的同源请求。
 
 本次要做的：**把 instagrapi 的私有移动 API 协议逻辑移植到 ArkTS 侧**，
 与现有 `Native*` 取数路径**并行新增**、失败自动回退，用来解决现有网页路线最痛的两块 ——
@@ -293,8 +293,8 @@ MobileProbe  3) 结论：三发全通 / 部分通 / 全失败
 - **不在原生侧保存账号密码**；登录一律走 IG 网页（`components/LoginPanel.ets`）。
   这是项目既有路线的核心，也是本次选「复用 Cookie 罐」的原因。
 - **不删现有 `Native*` / 网页取数路径**：新层是并行的，旧层是回退。
-- **`legacy/unwired/` 里的 OAuth / Graph API 分层已归档且不可用**（其 README 列了 4 个已知缺陷），
-  不要把它当参考实现。
+- **早期那套 OAuth / Graph API 分层已从仓库移除**（未接线、已被这里的私有 API 路线取代），
+  不要按它的思路实现。
 - 代码注释请沿用本项目风格：中文、解释「为什么这么做」、引证据（真机日志 / 提交号）。
 - 改动 `README`/文档时，本文件（`INSTAGRAPI_PORT.md`）是这次移植的权威说明。
 
@@ -307,8 +307,7 @@ MobileProbe  3) 结论：三发全通 / 部分通 / 全失败
 - PyPI 说明（版本与路线、`login_by_sessionid` 的官方提醒）：
   <https://pypi.org/project/instagrapi/>
 - 鸿蒙 HMAC 计算文档（`crypto-compute-hmac`，`@kit.CryptoArchitectureKit`）
-- 项目内证据：`AUDIT_TODO.md`（尤其「快拍 500」那一节与 E 类「静默失败」）、
-  `legacy/unwired/README.md`（路线变更的来龙去脉）
+- 项目内证据：`AUDIT_TODO.md`（尤其「快拍 500」那一节与 E 类「静默失败」）
 
 ---
 
@@ -316,7 +315,7 @@ MobileProbe  3) 结论：三发全通 / 部分通 / 全失败
 
 | 事项 | 状态 |
 | --- | --- |
-| 读通现有取数链路（`bridge/`、`core/Native*`、`core/RestSession`、`legacy/unwired`、`AUDIT_TODO`） | 完成 |
+| 读通现有取数链路（`bridge/`、`core/Native*`、`core/RestSession`、`AUDIT_TODO`） | 完成 |
 | 查清 instagrapi 协议要点（签名/会话/自举/异常表） | 完成 |
 | 与用户确认四条约束 | 完成 |
 | L0 工具层 `MobileSign.ets` | 完成，**编译通过** |
