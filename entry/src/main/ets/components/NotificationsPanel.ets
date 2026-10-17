@@ -3,7 +3,9 @@
  *
  * 结构（对照 IG 活动页）：
  *   标题栏 由 HdsNavDestination 提供（标题「通知」+ 返回键 + 沉浸光感材质）
- *   正文   List，分段：今天 / 本月 / 更早 / 为你推荐（空的分段不显示）
+ *   正文   List，分段：今天 / 昨天 / 过去 7 天 / 过去 30 天 / 更早 / 为你推荐（空的分段不显示）
+ *          - 默认只展示到「过去 7 天」；「过去 30 天」与「更早」折叠在末尾那颗
+ *            「显示更多」后面（展开后整段放出来，**不截断条数**）。
  *          - 通知项：头像（1~2 张叠放）+ 富文本（用户名加粗、动作文案、灰色日期）
  *                    + 右侧二选一：缩略图 或 关注状态按钮
  *          - 推荐项：头像 + 用户 id / 用户名称 / 粉丝文案 + 右侧「关注」按钮
@@ -73,6 +75,15 @@ export struct NotificationsPanel {
   @State messageSuggested: boolean = false;
   /** 输入框里的草稿（当前只留在本地，发送还没接）。 */
   @State messageDraft: string = '';
+  /**
+   * 「显示更多」展开过没有（需求："过去7天后面会折叠起来，显示更多会展开过去30天，
+   * 而且会显示全部过去30天的通知"）。
+   *
+   * 默认只展示到「过去 7 天」；`past30` / `earlier` 两段折叠在按钮后面，
+   * 点一下整段放出来（**不截断条数**：那两组里有多少条就画多少条）。
+   * 「为你推荐」不在折叠区里 —— 它是独立的一段，随时可见。
+   */
+  @State private showAll: boolean = false;
 
   /** 某个分组下面的条目（保持原顺序）。 */
   private groupItems(group: NotifyGroup): NotifyItem[] {
@@ -83,6 +94,44 @@ export struct NotificationsPanel {
       }
     }
     return out;
+  }
+
+  /** 折叠区里的分组（见 showAll 的说明）：「过去 30 天」与「更早」。 */
+  private static readonly FOLDED: Array<NotifyGroup> = ['past30', 'earlier'];
+
+  /**
+   * 时间分段（**不含** suggested）：折叠时只到「过去 7 天」，展开后接上 30 天与更早。
+   *
+   * 为什么把 suggested 单独拿出来：它要画在「显示更多」按钮**之后**，
+   * 而折叠时按钮又是列表里紧跟「过去 7 天」那条 —— 两者顺序不同，只能分开渲染。
+   */
+  private visibleTimeGroups(): Array<NotifyGroup> {
+    const out: Array<NotifyGroup> = [];
+    for (let index: number = 0; index < NOTIFY_GROUPS.length; index++) {
+      const one: NotifyGroup = NOTIFY_GROUPS[index];
+      if (one === 'suggested') {
+        continue;
+      }
+      if (!this.showAll && NotificationsPanel.FOLDED.indexOf(one) >= 0) {
+        continue;
+      }
+      out.push(one);
+    }
+    return out;
+  }
+
+  /** 折叠区里到底有没有东西（没有就不画「显示更多」，免得点了什么都不发生）。 */
+  private foldedCount(): number {
+    if (this.showAll) {
+      return 0;
+    }
+    let count: number = 0;
+    for (let index: number = 0; index < this.items.length; index++) {
+      if (NotificationsPanel.FOLDED.indexOf(this.items[index].group) >= 0) {
+        count++;
+      }
+    }
+    return count;
   }
 
   /**
@@ -163,25 +212,25 @@ export struct NotificationsPanel {
           // 用户自己下拉时 Refresh 会把它置 true 并回调 onRefresh，页面再跑一次取数。
           Refresh({ refreshing: $$this.refreshing }) {
             List() {
-              ForEach(NOTIFY_GROUPS, (group: NotifyGroup): void => {
+              /*
+               * 顺序（需求："过去7天后面会折叠起来，显示更多会展开过去30天"）：
+               *   今天 → 昨天 → 过去 7 天 →〔显示更多〕→〔过去 30 天 / 更早〕→ 为你推荐
+               * 也就是说「显示更多」那颗按钮插在**时间分段中间**（而不是列表最底下），
+               * 点开之后 30 天与更早两段整段插进来，「为你推荐」被顶到最下面（它本来就该在最后）。
+               */
+              ForEach(this.visibleTimeGroups(), (group: NotifyGroup): void => {
                 if (this.groupItems(group).length > 0) {
-                  ListItemGroup({ header: this.sectionHeader(group) }) {
-                    ForEach(this.groupItems(group), (item: NotifyItem, index: number): void => {
-                      ListItem() {
-                        if (item.isSuggested()) {
-                          this.suggestRow(item)
-                        } else {
-                          this.notifyRow(item)
-                        }
-                      }
-                      // key 里必须带上 following：点了关注之后换回来的是一条"只有关注状态变了"
-                      // 的新对象，key 不变的话 ForEach 认成同一项、直接复用旧节点，按钮文案就
-                      // 永远停在"回关"。
-                    }, (item: NotifyItem, index: number): string =>
-                    `${group}-${index}-${item.username}-${item.text}-${item.following ? 1 : 0}`)
-                  }
+                  this.groupSection(group)
                 }
-              }, (group: NotifyGroup): string => group)
+              }, (group: NotifyGroup): string => `${group}-${this.showAll ? 1 : 0}`)
+              if (this.foldedCount() > 0) {
+                ListItem() {
+                  this.showMoreRow()
+                }
+              }
+              if (this.groupItems('suggested').length > 0) {
+                this.groupSection('suggested')
+              }
             }
             .width('100%')
             .height('100%')
@@ -216,7 +265,26 @@ export struct NotificationsPanel {
     })
   }
 
-  /** 分段标题（今天 / 本月 / 更早 / 为你推荐）。 */
+  /** 一个分段：标题 + 它下面的行（通知行 / 推荐行按条目自己判断）。 */
+  @Builder
+  groupSection(group: NotifyGroup) {
+    ListItemGroup({ header: this.sectionHeader(group) }) {
+      ForEach(this.groupItems(group), (item: NotifyItem, index: number): void => {
+        ListItem() {
+          if (item.isSuggested()) {
+            this.suggestRow(item)
+          } else {
+            this.notifyRow(item)
+          }
+        }
+        // key 里必须带上 following：点了关注之后换回来的是一条"只有关注状态变了"的新对象，
+        // key 不变的话 ForEach 认成同一项、直接复用旧节点，按钮文案就永远停在"回关"。
+      }, (item: NotifyItem, index: number): string =>
+      `${group}-${index}-${item.username}-${item.text}-${item.following ? 1 : 0}`)
+    }
+  }
+
+  /** 分段标题（今天 / 昨天 / 过去 7 天 / 过去 30 天 / 更早 / 为你推荐）。 */
   @Builder
   sectionHeader(group: NotifyGroup) {
     Text(this.groupLabel(group))
@@ -226,6 +294,33 @@ export struct NotificationsPanel {
       .width('100%')
       .padding({ left: SIDE_PADDING, right: SIDE_PADDING, top: 18, bottom: 8 })
       .backgroundColor($r('app.color.page_background'))
+  }
+
+  /**
+   * 列表末尾那颗「显示更多」（需求：折叠区展开）。
+   *
+   * 样式上没有用材质按钮：它是一条**列表行**，跟上面的通知行同一套留白，
+   * 点起来不会像一颗浮在内容上的胶囊。箭头朝下 = 展开，展开后这一行整条消失。
+   */
+  @Builder
+  showMoreRow() {
+    Row() {
+      Text($r('app.string.notify_show_more'))
+        .fontSize(14)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.secondary_text'))
+      SymbolGlyph($r('sys.symbol.chevron_down'))
+        .fontSize(14)
+        .fontColor([$r('app.color.secondary_text')])
+        .margin({ left: 4 })
+    }
+    .width('100%')
+    .height(48)
+    .justifyContent(FlexAlign.Center)
+    .onClick((): void => {
+      // 展开一次就够：展开后两组全在列表里了，「显示更多」这一行自己消失。
+      this.showAll = true;
+    })
   }
 
   /**

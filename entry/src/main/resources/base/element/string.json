@@ -169,6 +169,10 @@
       "value": "过去 30 天"
     },
     {
+      "name": "notify_show_more",
+      "value": "显示更多"
+    },
+    {
       "name": "notify_suggested",
       "value": "为你推荐"
     },
