@@ -304,9 +304,11 @@ export class ProfileMapper {
       // **本机点过的赞 / 转发以会话台账为准**（见 core/NativeEngage.EngageState 的说明）：
       // 那两段的载荷不带这两个状态，帖子页翻页又会用视图模型那份重建列表 ——
       // 不查台账的话，用户刚点的赞会被下一次翻页抹掉（"点赞功能失效"）。
-      liked: EngageState.likedOf(post.mediaId, false),
+      // 先按 shortcode 查（视频分页这条经常拿不到媒体 id，只有短码），再退回媒体 id。
+      liked: EngageState.likedOfByCode(post.shortcode, EngageState.likedOf(post.mediaId, false)),
       viewCount: 0,
-      reposted: EngageState.repostedOf(post.mediaId, false),
+      reposted: EngageState.repostedOfByCode(post.shortcode,
+        EngageState.repostedOf(post.mediaId, false)),
       repostCount: post.repostCount,
       shareCount: 0,
       mediaWidth: post.width,

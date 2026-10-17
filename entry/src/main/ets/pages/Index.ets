@@ -1686,7 +1686,15 @@ struct Index {
       this.toast($r('app.string.like_failed'));
       return false;
     }
-    this.setLikedEverywhere(`sc:${reel.shortcode}`, result.state);
+    /*
+     * 台账**必须直接记 id**（"退出重进心还是灰的"就是这里出的问题）：
+     * setLikedEverywhere 是靠"在信息流/帖子页里按 shortcode 找到这条"才记得下媒体 id 的，
+     * 而 Reels 页这条**不在那两份列表里**（它来自 clips 首页 / 推荐流自己的视图模型）——
+     * 于是以前什么都没记住，重进时查不到，心就回到灰的。
+     * 短码那份由 setLikedEverywhere 顺手写下（见那里）。
+     */
+    EngageState.rememberLiked(id, result.state);
+    this.setLikedEverywhere(reel.shortcode.length > 0 ? reel.shortcode : id, result.state);
     return true;
   }
 
@@ -1703,7 +1711,9 @@ struct Index {
       this.toast($r('app.string.repost_unsupported'));
       return false;
     }
-    this.setRepostedEverywhere(`sc:${reel.shortcode}`, result.state);
+    // 台账：媒体 id 必须直接记（同 likeReel，见那里的说明），短码那份由 setRepostedEverywhere 写。
+    EngageState.rememberReposted(id, result.state);
+    this.setRepostedEverywhere(reel.shortcode.length > 0 ? reel.shortcode : id, result.state);
     return true;
   }
 
@@ -8005,7 +8015,8 @@ struct Index {
         ownerId: post.ownerId,
         // 点赞状态以**会话覆盖表**为准：缓存里那份 `liked` 是抓取当时的旧值，
         // 否则"点赞→退出→重进"会显示成未点赞（用户报的问题）。
-        liked: EngageState.likedOf(post.mediaId, post.liked),
+        // 先问 shortcode 那份台账（Reels 页写入时就是按它记的），再退回媒体 id。
+        liked: EngageState.likedOfByCode(post.code, EngageState.likedOf(post.mediaId, post.liked)),
         // 关注状态：推荐流那条载荷给了就带上，Reels 页那颗按钮照它画
         // （没给时 followKnown=false → 界面自己问一次，见 model/Search 的 following）。
         ownerFollowing: post.following === true,
@@ -8054,6 +8065,9 @@ struct Index {
     if (id.length > 0) {
       EngageState.rememberLiked(id, liked);
     }
+    // 再按 shortcode 记一份：Reels 页重建列表时是按短码来查的
+    // （它那条往往拿不到媒体 id，见 EngageState.likedCodes 的说明）。
+    EngageState.rememberLikedByCode(key, liked);
     const updated: Array<MediaPost> | null = FeedMapper.withLiked(this.postPagePosts, key, liked);
     if (updated !== null) {
       this.postPagePosts = updated;
@@ -8073,6 +8087,7 @@ struct Index {
     if (id.length > 0) {
       EngageState.rememberReposted(id, reposted);
     }
+    EngageState.rememberRepostedByCode(key, reposted);
     const updated: Array<MediaPost> | null = FeedMapper.withReposted(this.postPagePosts, key, reposted);
     if (updated !== null) {
       this.postPagePosts = updated;

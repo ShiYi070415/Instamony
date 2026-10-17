@@ -246,8 +246,13 @@ export class ProfileReelsViewModel implements ReelStreamVm {
         // （见 ProfilePage.streamPosts 的 owner/avatar 回填 → MediaPost.ownerId）。
         post.ownerId,
         post.caption,
-        EngageState.likedOf(ProfileReelsViewModel.mediaIdOf(post), post.liked),
-        post.reposted,
+        // 点赞状态：shortcode 台账优先（Reels 页写入时就按它记，见 EngageState.likedCodes），
+        // 再退回媒体 id 台账，最后才是载荷里的旧值。否则"点赞→退出→重进"心会回到灰的。
+        EngageState.likedOfByCode(post.shortcode,
+          EngageState.likedOf(ProfileReelsViewModel.mediaIdOf(post), post.liked)),
+        // 转发同理：按短码那份台账优先（载荷里的 reposted 也是抓取当时的旧值）。
+        EngageState.repostedOfByCode(post.shortcode,
+          EngageState.repostedOf(ProfileReelsViewModel.mediaIdOf(post), post.reposted)),
         // 转发数：搜索推荐流那条响应带着 `media_repost_count`（见 core/NativeSearch.readPost
         // → MediaPost.repostCount）；个人主页那条没有这个字段，那就是 0。
         // 以前这里没传，于是推荐流那页的"转发数量"是空的（用户报的问题之一）。

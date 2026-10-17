@@ -82,6 +82,22 @@ export class EngageState {
    */
   private static readonly likedIds: Map<string, boolean> = new Map<string, boolean>();
   private static readonly repostedIds: Map<string, boolean> = new Map<string, boolean>();
+  /**
+   * 同一张台账，**按 shortcode** 再记一份。
+   *
+   * 为什么单纯按媒体 id 不够（用户报："推荐流进 reels 点赞，退出重进心还是灰的"）：
+   * 媒体 id 在两条数据源里的写法不统一 —— 推荐流那条给的是 `strong_id__`（纯数字），
+   * clips 首页给的是 `pk`（`<媒体id>_<作者id>`），个人页/收藏给的是纯 id，拿不到时甚至
+   * 只能塞 `search-<code>` 这样的占位串；而**写入那一刻**（Reels 页那颗心）手里往往压根
+   * 没有 id（见 ProfileReelsViewModel.mediaIdOf 的说明），只有 shortcode。
+   * 于是"写进去的键"和"重建时来查的键"永远对不上 —— 状态就丢了。
+   *
+   * shortcode 是 IG 全局唯一的短码，两条数据源都一定给，所以用它兜底。
+   * 这里**不做 normalize**：shortcode 的字母表里本来就有 `_` 和 `-`
+   * （normalize 会在第一个 `_` 处截断，把短码切坏）。
+   */
+  private static readonly likedCodes: Map<string, boolean> = new Map<string, boolean>();
+  private static readonly repostedCodes: Map<string, boolean> = new Map<string, boolean>();
 
   static rememberNote(mediaId: string, noteId: string): void {
     const key: string = EngageState.normalize(mediaId);
@@ -109,6 +125,20 @@ export class EngageState {
     return one === undefined ? fallback : one;
   }
 
+  /** 同上，按 shortcode 记（键不归一，见 likedCodes 的说明）。 */
+  static rememberLikedByCode(shortcode: string, liked: boolean): void {
+    const key: string = shortcode.trim();
+    if (key.length > 0) {
+      EngageState.likedCodes.set(key, liked);
+    }
+  }
+
+  /** 这条 shortcode 被本机赞过没有（没记过就给 `fallback`）。 */
+  static likedOfByCode(shortcode: string, fallback: boolean): boolean {
+    const one: boolean | undefined = EngageState.likedCodes.get(shortcode.trim());
+    return one === undefined ? fallback : one;
+  }
+
   /** 同上，转发。 */
   static rememberReposted(mediaId: string, reposted: boolean): void {
     const key: string = EngageState.normalize(mediaId);
@@ -119,6 +149,18 @@ export class EngageState {
 
   static repostedOf(mediaId: string, fallback: boolean): boolean {
     const one: boolean | undefined = EngageState.repostedIds.get(EngageState.normalize(mediaId));
+    return one === undefined ? fallback : one;
+  }
+
+  static rememberRepostedByCode(shortcode: string, reposted: boolean): void {
+    const key: string = shortcode.trim();
+    if (key.length > 0) {
+      EngageState.repostedCodes.set(key, reposted);
+    }
+  }
+
+  static repostedOfByCode(shortcode: string, fallback: boolean): boolean {
+    const one: boolean | undefined = EngageState.repostedCodes.get(shortcode.trim());
     return one === undefined ? fallback : one;
   }
 
@@ -140,6 +182,8 @@ export class EngageState {
     EngageState.notes.clear();
     EngageState.likedIds.clear();
     EngageState.repostedIds.clear();
+    EngageState.likedCodes.clear();
+    EngageState.repostedCodes.clear();
   }
 }
 
