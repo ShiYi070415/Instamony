@@ -1671,8 +1671,18 @@ struct Index {
       return false;
     }
     const result: EngageResult = await NativeEngage.setLiked(id, like);
-    if (!result.ok) {
-      hilog.info(DOMAIN, TAG, 'reel like failed (%{public}s) id=%{public}s', result.detail, id);
+    /*
+     * **以服务端回报的状态为准**（用户报："点赞只有 app 端显示，没有落实到请求上"）。
+     *
+     * 只在 ok=false 时回滚是不够的：回放/兜底那几条路出现过"HTTP 200 但响应里带 errors"的
+     * 情况 —— 那种会被当成成功，界面红了、服务端其实没收到。这里补一道状态校验：
+     * 服务端回报的 liked 必须与目标一致，否则按失败处理（回滚 + 提示），现场同时打进日志。
+     */
+    hilog.info(DOMAIN, TAG, 'reel like id=%{public}s want=%{public}s ok=%{public}s got=%{public}s %{public}s',
+      id, like ? 'y' : 'n', result.ok ? 'y' : 'n', result.state ? 'y' : 'n', result.detail);
+    if (!result.ok || result.state !== like) {
+      hilog.info(DOMAIN, TAG, 'reel like failed (%{public}s) id=%{public}s got=%{public}s',
+        result.detail, id, result.state ? 'y' : 'n');
       this.toast($r('app.string.like_failed'));
       return false;
     }
