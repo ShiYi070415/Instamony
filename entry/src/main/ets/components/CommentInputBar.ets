@@ -145,6 +145,9 @@ export struct CommentInputBar {
           setTimeout((): void => {
             this.alignToKeyboard();
           }, 260);
+          setTimeout((): void => {
+            this.alignToKeyboard();
+          }, 620);
         };
         win.on('keyboardHeightChange', this.kbHandler);
       }).catch((): void => {
@@ -172,8 +175,16 @@ export struct CommentInputBar {
       const keyboardTop: number = dsp.height - this.kbPx;
       const gapPx: number = ui.vp2px(KEYBOARD_GAP_VP);
       const need: number = barBottom + gapPx - keyboardTop;
-      if (need > LIFT_TOLERANCE_PX) {
-        this.liftVp = this.liftVp + ui.px2vp(need);
+      /*
+       * **双向校正**（这是"还是弹得很高"的修复点）。
+       *
+       * 只往上补是不够的：键盘动画还没结束时量到的差额偏大，抬多了之后、
+       * 第二次测量算出来是**负数**（已经高过键盘），而旧代码对负数什么都不做 ——
+       * 于是永久停在高处。现在负差额也照做（往下放回），并且结果不为负。
+       */
+      if (need > LIFT_TOLERANCE_PX || need < -LIFT_TOLERANCE_PX) {
+        const next: number = this.liftVp + ui.px2vp(need);
+        this.liftVp = next > 0 ? next : 0;
         hilog.info(DOMAIN, TAG, 'keyboard align: need=%{public}dpx lift=%{public}dvp',
           Math.round(need), Math.round(this.liftVp));
       }
