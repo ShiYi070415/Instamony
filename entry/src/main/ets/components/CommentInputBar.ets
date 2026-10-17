@@ -71,8 +71,26 @@ export struct CommentInputBar {
   /** 点「发送」：内容交给宿主（这一版宿主只当"还没接"处理，见文件头）。 */
   onSend: (text: string) => void = (text: string): void => {
   };
+  /**
+   * 草稿变化时回报（可选）。宿主用它做两件事：评论面板打开时把已输入的内容**带过去**
+   * （不然用户在页面那条输入框里写了字、点「评论」后内容就没了）。
+   */
+  onDraft: (text: string) => void = (text: string): void => {
+  };
+  /**
+   * 初始草稿（只在**首次创建**时读，见 draft 的初始化）。
+   * 面板打开时把页面那条的草稿传进来，用户就能接着写。
+   */
+  @Prop initialDraft: string = '';
 
   /** 有内容才让发送可点（空的按下去没有任何意义）。 */
+  aboutToAppear(): void {
+    // 宿主给的初始草稿（面板接手页面输入框时用，见 initialDraft）。
+    if (this.initialDraft.length > 0 && this.draft.length === 0) {
+      this.draft = this.initialDraft;
+    }
+  }
+
   private canSend(): boolean {
     return this.draft.trim().length > 0;
   }
@@ -132,6 +150,7 @@ export struct CommentInputBar {
             .enterKeyType(EnterKeyType.Send)
             .onChange((value: string): void => {
               this.draft = value;
+      this.onDraft(value);
             })
             .onSubmit((): void => {
               this.submit();

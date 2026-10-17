@@ -238,6 +238,11 @@ export struct CommentsPanel {
    */
   @Prop diag: string = '';
   /**
+   * **从页面那条输入框带过来的草稿**（reels 页底部那条）。面板里的输入框用它初始化，
+   * 用户在页面里写了字点「评论」，内容不会丢（见 CommentInputBar.initialDraft）。
+   */
+  @Prop initialDraft: string = '';
+  /**
    * "图片评论"那句提示文案。
    *
    * 为什么要先在 aboutToAppear 里取成**字符串**：句子里那个 `Span` 只吃字符串，

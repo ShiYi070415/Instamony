@@ -1251,10 +1251,15 @@ struct Index {
 
   /** 信息层底部留白：有输入条时贴它上沿 +10vp；评论面板打开时（页面输入条隐藏）回默认。 */
   private reelsInfoBottom(): number {
-    if (this.commentsVisible) {
-      return 112;
-    }
-    return 82 + this.reelsKbVp;
+    /*
+     * **恒 82，不随键盘 / 面板变化**。
+     *
+     *   · 不再加键盘高度：实测窗口层自己已经避让输入法，我们再抬一次就是"一下子跳得很高"
+     *     （用户报的现象）。输入条本身也不用额外抬 —— 框架会把整页顶上去。
+     *   · 不再在评论面板打开时回 112：那会让背景的作者行 / 正文 / 关注**闪回原位**
+     *     （用户报的"又闪回修改前的位置"）。面板是浮层，背景留在原处最稳。
+     */
+    return 82;
   }
 
   /** 进 reels 类页面时开始听键盘。 */
@@ -7752,12 +7757,12 @@ struct Index {
             hilog.info(DOMAIN, TAG, 'reels draft comment len=%{public}d (not sent)', text.length);
           },
           // 键盘顶起来时跟着上移（见 reelsKbVp）。
-          bottomInset: 28 + this.reelsKbVp
+          bottomInset: 28
         })
           .zIndex(2)
           .transition(TransitionEffect.OPACITY
             .combine(TransitionEffect.translate({ y: 60 }))
-            .animation({ duration: 160, curve: Curve.EaseOut }))
+            .animation({ duration: 320, curve: curves.springMotion(0.45, 0.88) }))
       }
     }
     .width('100%')

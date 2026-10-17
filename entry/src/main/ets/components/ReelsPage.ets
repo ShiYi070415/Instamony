@@ -1071,7 +1071,7 @@ struct ReelOverlay {
       .height('100%')
       .justifyContent(FlexAlign.End)
       .alignItems(VerticalAlign.Bottom)
-      .padding({ right: ACTION_RIGHT_PADDING, bottom: this.infoPadding() })
+      .padding({ right: ACTION_RIGHT_PADDING, bottom: INFO_BOTTOM })
       // 和左边那块同一个位移：一起沉、一起回来（见 overlaySink）。
       .translate({ y: this.overlaySink })
       // 不吃手势（按钮自己要能点，见 actionColumn 里的材质按钮）。
