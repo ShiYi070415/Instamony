@@ -1,17 +1,30 @@
 {
+  /*
+   * 公开仓库里的**模板**：真正的 `build-profile.json5` 不进版本库（见 .gitignore）。
+   *
+   * 用法：把它复制成同目录的 `build-profile.json5`，然后
+   *   ① 用 DevEco Studio 打开工程 → File > Project Structure > Signing Configs →
+   *      "Automatically generate signature"（登录华为账号后一键生成，会自己把本地路径与
+   *      密码写进 `build-profile.json5` 的 `signingConfigs` 里 —— 那些不该进仓库）；
+   *   ② 或者手工把下面 `signingConfigs` 里的路径 / 别名 / 密码换成你自己的。
+   *
+   * 没有签名配置时 `assembleHap` 会停在签名那一步（编译本身是通的），
+   * 命令行构建见 tools/build.ps1 与 README 的「构建」一节。
+   */
   "app": {
     "signingConfigs": [
       {
         "name": "default",
         "type": "HarmonyOS",
         "material": {
-          "certpath": "C:\\Users\\ShiYi\\.ohos\\config\\default_Instarmony_xdBfzhVo_HdK1AuBYDE0AvxUW8aPPEsEcPxKsIhgmog=.cer",
+          // 这三份由 DevEco 的签名向导生成在 ~/.ohos/config/ 下（绝对路径按你的机器写）。
+          "certpath": "C:\\Users\\<you>\\.ohos\\config\\default_<Project>_<hash>.cer",
+          "profile": "C:\\Users\\<you>\\.ohos\\config\\default_<Project>_<hash>.p7b",
+          "storeFile": "C:\\Users\\<you>\\.ohos\\config\\default_<Project>_<hash>.p12",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001BCD16A9860E84BDD15B9715779581EC5ACB8AB53D9AB0C79D153F3040078D6F069ECE6CB5BA6769",
-          "profile": "C:\\Users\\ShiYi\\.ohos\\config\\default_Instarmony_xdBfzhVo_HdK1AuBYDE0AvxUW8aPPEsEcPxKsIhgmog=.p7b",
-          "signAlg": "SHA256withECDSA",
-          "storeFile": "C:\\Users\\ShiYi\\.ohos\\config\\default_Instarmony_xdBfzhVo_HdK1AuBYDE0AvxUW8aPPEsEcPxKsIhgmog=.p12",
-          "storePassword": "0000001BDDE2B2C209D6943181C4B3EB5426B859B71101F9EA43BE6CC808AF14D496C796FDC33428F3C723"
+          "keyPassword": "<由 DevEco 写入，是一串加密后的值>",
+          "storePassword": "<同上>",
+          "signAlg": "SHA256withECDSA"
         }
       }
     ],
