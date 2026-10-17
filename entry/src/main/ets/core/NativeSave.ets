@@ -31,6 +31,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { RestSession } from './RestSession';
 import { ApiThrottle } from './ApiThrottle';
 import { ApiRegistry, ApiTemplate } from '../bridge/ApiRegistry';
+import { MobileEngage } from './mobileapi/MobileEngage';
 import { NativeFeed } from './NativeFeed';
 
 const DOMAIN: number = 0xFF00;
@@ -345,6 +346,18 @@ export class NativeSave {
    * @param save    true = 收藏，false = 取消收藏。
    */
   static async setSaved(mediaId: string, save: boolean): Promise<SaveResult> {
+    /*
+     * **移动端 REST 优先**（见 core/mobileapi/MobileEngage）：一发
+     * media/{pk}/save|unsave/，不需要任何网页模板；模板回放那条路会因为 doc_id / claim
+     * 过期而回 "200 + errors"（被当成成功、服务端其实没收到）。失败再走原路。
+     */
+    try {
+      const mobileOk: boolean = await MobileEngage.setSaved(mediaId, save);
+      if (mobileOk) {
+        return new SaveResult(true, save, 'mobile');
+      }
+    } catch (error) {
+    }
     NativeSave.detail = '-';
     const id: string = NativeSave.mediaIdOf(mediaId);
     if (id.length === 0) {

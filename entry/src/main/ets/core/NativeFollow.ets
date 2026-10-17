@@ -23,6 +23,7 @@
  */
 
 import { http } from '@kit.NetworkKit';
+import { MobileEngage } from './mobileapi/MobileEngage';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ApiTemplate } from '../bridge/ApiRegistry';
 import { RestSession } from './RestSession';
@@ -57,6 +58,17 @@ export class NativeFollow {
    * @param follow true = 关注，false = 取关。
    */
   static async setFollowing(userId: string, follow: boolean): Promise<FollowResult> {
+    /*
+     * **移动端 REST 优先**（见 core/mobileapi/MobileEngage）：
+     * friendships/create|destroy/{pk}/，不需要网页模板。失败再走原路。
+     */
+    try {
+      const mobileOk: boolean = await MobileEngage.setFollowing(userId, follow);
+      if (mobileOk) {
+        return new FollowResult(true, follow, 'mobile');
+      }
+    } catch (error) {
+    }
     const id: string = userId.trim();
     if (id.length === 0) {
       return new FollowResult(false, follow, 'no-user-id');

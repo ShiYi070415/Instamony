@@ -22,6 +22,7 @@
  */
 
 import { http } from '@kit.NetworkKit';
+import { MobileEngage } from './mobileapi/MobileEngage';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { CommentsPayload, CommentItem } from '../model/Comment';
 import { RestSession } from './RestSession';
@@ -408,6 +409,17 @@ export class NativeComments {
    * @returns 真的成功了给 true；全都失败给 false（调用方据此回滚乐观状态）。
    */
   static async like(commentPk: string, like: boolean, mediaId: string = ''): Promise<boolean> {
+    /*
+     * **移动端 REST 优先**（见 core/mobileapi/MobileEngage）：
+     * media/{pk}/comment_like|comment_unlike/，不需要网页模板。失败再走原路。
+     */
+    try {
+      const mobileOk: boolean = await MobileEngage.setCommentLiked(mediaId, commentPk, like);
+      if (mobileOk) {
+        return true;
+      }
+    } catch (error) {
+    }
     const id: string = commentPk.trim();
     if (id.length === 0) {
       NativeComments.likeVia = 'no-comment-id';
