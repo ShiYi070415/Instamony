@@ -142,12 +142,6 @@ export struct CommentInputBar {
             return;
           }
           this.alignToKeyboard();
-          setTimeout((): void => {
-            this.alignToKeyboard();
-          }, 260);
-          setTimeout((): void => {
-            this.alignToKeyboard();
-          }, 620);
         };
         win.on('keyboardHeightChange', this.kbHandler);
       }).catch((): void => {
@@ -157,39 +151,36 @@ export struct CommentInputBar {
   }
 
   /**
-   * 按**实测差额**补抬：输入条现在被键盘挡住多少，就抬多少。
+   * 按键盘高度抬，仅此而已。
    *
-   * 为什么能自己收敛：框架自己抬的那部分已经体现在"实测矩形"里了，所以这里算出来的
-   * 永远只是**还差的那一截**；抬完之后 260ms 再算一次，把动画期间的中间态也修正掉。
+   * 前两版都用实测矩形自校正，两次都出问题（一次盖住一半、一次飞到屏幕顶）—— 根因是
+   * getRectangleById 的坐标系/单位与 display.getDefaultDisplaySync().height 不一致，
+   * 混算出来的差额是荒谬的大数。这里退回最朴素、最不可能错的规则：
+   *   liftVp = min(键盘高度, 屏高 * 0.6)
+   * 上限 60% 屏高只是防呆（任何输入法都不会超过它），所以不可能再飞到屏幕顶部。
+   * 用户也确认过：让框架一起多抬一点没问题，只要别盖住、别飞走。
    */
   private alignToKeyboard(): void {
     if (this.kbPx <= 0) {
+      this.liftVp = 0;
       return;
     }
     try {
-      const ui: UIContext = this.getUIContext();
-      const util: ComponentUtils = ui.getComponentUtils();
-      const rect = util.getRectangleById(BAR_ID);
-      const barBottom: number = rect.screenOffset.y + rect.size.height;
-      const dsp: display.Display = display.getDefaultDisplaySync();
-      const keyboardTop: number = dsp.height - this.kbPx;
-      const gapPx: number = ui.vp2px(KEYBOARD_GAP_VP);
-      const need: number = barBottom + gapPx - keyboardTop;
-      /*
-       * **双向校正**（这是"还是弹得很高"的修复点）。
-       *
-       * 只往上补是不够的：键盘动画还没结束时量到的差额偏大，抬多了之后、
-       * 第二次测量算出来是**负数**（已经高过键盘），而旧代码对负数什么都不做 ——
-       * 于是永久停在高处。现在负差额也照做（往下放回），并且结果不为负。
-       */
-      if (need > LIFT_TOLERANCE_PX || need < -LIFT_TOLERANCE_PX) {
-        const next: number = this.liftVp + ui.px2vp(need);
-        this.liftVp = next > 0 ? next : 0;
-        hilog.info(DOMAIN, TAG, 'keyboard align: need=%{public}dpx lift=%{public}dvp',
-          Math.round(need), Math.round(this.liftVp));
+      let vp: number = this.getUIContext().px2vp(this.kbPx);
+      if (!(vp > 0)) {
+        return;
       }
+      const dsp: display.Display = display.getDefaultDisplaySync();
+      const screenVp: number = this.getUIContext().px2vp(dsp.height);
+      const cap: number = screenVp * 0.6;
+      if (vp > cap) {
+        vp = cap;
+      }
+      this.liftVp = vp;
+      hilog.info(DOMAIN, TAG,
+        'keyboard lift=%{public}dvp (kb=%{public}dpx screen=%{public}dvp)',
+        Math.round(vp), Math.round(this.kbPx), Math.round(screenVp));
     } catch (error) {
-      // 量不到（组件还没布局）：下一次键盘事件再试，不影响可用性。
     }
   }
 
