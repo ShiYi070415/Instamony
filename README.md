@@ -34,7 +34,7 @@
 
 | 项目 | 当前配置 |
 |:--|:--|
-| 应用 | `Instarmony` · `com.fanha.instarmony` · 版本 `0.9`（`versionCode` 9000） |
+| 应用 | `Instarmony` · `com.fanha.instarmony` · 版本 `1.0.0`（`versionCode` 1000000） |
 | 模块 | `entry` · Stage 模型 |
 | SDK | 目标 SDK `26.0.0` · **兼容 SDK `6.0.0 (API 20)`** |
 | 设备 | `phone`、`tablet` · 全屏 `EntryAbility` |
@@ -100,7 +100,7 @@ legacy/unwired/          早期未接线的分层（已归档）
 
 ## 文档
 
-- [`RELEASE_0.9.md`](RELEASE_0.9.md) —— 功能清单、已知问题、未实现项
+- [`RELEASE_1.0.md`](RELEASE_1.0.md) —— 功能清单、已知问题、未实现项
 - [`INSTAGRAPI_PORT.md`](INSTAGRAPI_PORT.md) —— 移动端协议移植记录：端点表、参数、判据、限速结论
 - [`FINGERPRINT_ANALYSIS.md`](FINGERPRINT_ANALYSIS.md) —— "为什么会被判成自动化"的分析与降噪措施
 - [`AUDIT_TODO.md`](AUDIT_TODO.md) —— 审计待办与遗留项

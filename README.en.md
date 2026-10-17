@@ -35,7 +35,7 @@ that session in an official-Android-app identity and calls `i.instagram.com/api/
 
 | Item | Value |
 |:--|:--|
-| App | `Instarmony` · `com.fanha.instarmony` · version `0.9` (`versionCode` 9000) |
+| App | `Instarmony` · `com.fanha.instarmony` · version `1.0.0` (`versionCode` 1000000) |
 | Module | `entry` · Stage model |
 | SDK | target `26.0.0` · **compatible `6.0.0 (API 20)`** |
 | Devices | `phone`, `tablet` · full-screen `EntryAbility` |
@@ -108,7 +108,7 @@ legacy/unwired/          early unwired layers (archived)
 
 ## Documentation
 
-- [`RELEASE_0.9.md`](RELEASE_0.9.md) — feature list, known issues, not implemented yet
+- [`RELEASE_1.0.md`](RELEASE_1.0.md) — feature list, known issues, not implemented yet
 - [`INSTAGRAPI_PORT.md`](INSTAGRAPI_PORT.md) — mobile API port log: endpoint table, parameters, criteria, rate limits
 - [`FINGERPRINT_ANALYSIS.md`](FINGERPRINT_ANALYSIS.md) — why IG may treat the client as automation, and the countermeasures
 - [`AUDIT_TODO.md`](AUDIT_TODO.md) — audit todos and leftovers

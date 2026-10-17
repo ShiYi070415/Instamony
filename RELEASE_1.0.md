@@ -1,8 +1,21 @@
-# Instarmony 0.9 —— 功能 / 已知问题 / 未实现
+# Instarmony 1.0.0 —— 功能 / 已知问题 / 未实现
 
-> 版本：`versionName 0.9`（`versionCode 9000`，见 `AppScope/app.json5`）
+> 版本：`versionName 1.0.0`（`versionCode 1000000`，见 `AppScope/app.json5`）
 > 形态：HarmonyOS NEXT 原生 ArkUI + **一个常驻隐藏 Web 组件**（`components/InstagramWebHost`）
 > 包名：`com.fanha.instarmony`　设备类型：phone / tablet　最低 API：6.0.0(20)
+
+## 1.0.0 相对 0.9 的变化
+
+功能与问题清单沿用 0.9 的核对结果（下面第 1~3 节），1.0.0 只有工程侧变化：
+
+- 版本号升到 `1.0.0`（`versionCode 1000000`）；
+- 补 **Apache-2.0 许可证**（`LICENSE`）与**英文版 README**（`README.en.md`）；
+- 公开发布前的清理：去掉私人截图；预置请求模板
+  （`resources/rawfile/api_templates.json`）里的账号标识与会话期令牌换成占位值；
+  `build-profile.json5`（本机签名配置）移出仓库，只保留 `build-profile.example.json5`；
+- 近期修掉的用户可见问题（提交记录里有细节）：点赞态跨页面一致（`EngageState` 双键台账）、
+  翻译三级端点兜底（gtx 被 429）、「我的」页面的账号作用域（`ds_user_id` 不再缓存整场会话）、
+  通知页接入 instagrapi 协议并按 今天/昨天/过去 7 天/过去 30 天 分段。
 
 ---
 
