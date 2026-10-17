@@ -25,6 +25,11 @@
 
 import { SETTING_MATERIAL_THICKNESS, MATERIAL_THICKNESS_ULTRA_THIN } from '../core/AppSettings';
 import { SurfaceModifier } from './MaterialSurface';
+// 键盘避让：监听 + 量自己的矩形（见 alignToKeyboard）。
+import { common } from '@kit.AbilityKit';
+import { curves, display, window, UIContext } from '@kit.ArkUI';
+import { ComponentUtils } from '@kit.ArkUI';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 
 /** 玻璃条高度（vp）。 */
 const BAR_HEIGHT: number = 44;
@@ -33,7 +38,15 @@ const INNER_LEFT: number = 16;
 /** 发送按钮的宽度（vp）。 */
 const SEND_WIDTH: number = 52;
 /** 整条相对屏幕左右的外边距（vp）。 */
+const DOMAIN: number = 0xFF00;
+const TAG: string = 'CommentInputBar';
 const SIDE_MARGIN: number = 12;
+/** 实测矩形用的组件 id（自校正键盘避让，见 alignToKeyboard）。 */
+const BAR_ID: string = 'instarmonyCommentBar';
+/** 输入条底边与键盘顶之间留多少（vp）。 */
+const KEYBOARD_GAP_VP: number = 10;
+/** 实测差额的容差（px）：小于它就不动，免得来回抖。 */
+const LIFT_TOLERANCE_PX: number = 6;
 /**
  * 整条离屏幕底边的高度（vp）。
  *
@@ -68,6 +81,17 @@ export struct CommentInputBar {
   @StorageProp(SETTING_MATERIAL_THICKNESS) thickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
   /** 正在输入的内容（受控：发送后清空）。 */
   @State private draft: string = '';
+  /**
+   * **自校正**的键盘抬升量（vp）。
+   *
+   * 为什么不用"键盘高度"直接抬：整屏 NavDestination 底部这一条，框架自身也会抬一部分
+   * （实测抬一半：用户报"被输入法盖住一半"），再按全高度加一次就会**跳得很高**。
+   * 所以照 components/DirectThreadPage 的做法：量自己的真实矩形，只补**差额**。
+   */
+  @State private liftVp: number = 0;
+  private kbWindow: window.Window | null = null;
+  private kbHandler: ((height: number) => void) | null = null;
+  private kbPx: number = 0;
   /** 点「发送」：内容交给宿主（这一版宿主只当"还没接"处理，见文件头）。 */
   onSend: (text: string) => void = (text: string): void => {
   };
@@ -85,9 +109,76 @@ export struct CommentInputBar {
 
   /** 有内容才让发送可点（空的按下去没有任何意义）。 */
   aboutToAppear(): void {
+    this.watchKeyboard();
     // 宿主给的初始草稿（面板接手页面输入框时用，见 initialDraft）。
     if (this.initialDraft.length > 0 && this.draft.length === 0) {
       this.draft = this.initialDraft;
+    }
+  }
+
+  aboutToDisappear(): void {
+    const win: window.Window | null = this.kbWindow;
+    const handler: ((height: number) => void) | null = this.kbHandler;
+    if (win !== null && handler !== null) {
+      try {
+        win.off('keyboardHeightChange', handler);
+      } catch (error) {
+      }
+    }
+    this.kbWindow = null;
+    this.kbHandler = null;
+  }
+
+  /** 听键盘高度：收起时归零，弹出时量一次再校正一次（两步收敛，见 alignToKeyboard）。 */
+  private watchKeyboard(): void {
+    try {
+      const context: common.Context = this.getUIContext().getHostContext() as common.Context;
+      window.getLastWindow(context).then((win: window.Window): void => {
+        this.kbWindow = win;
+        this.kbHandler = (height: number): void => {
+          this.kbPx = height > 0 ? height : 0;
+          if (height <= 0) {
+            this.liftVp = 0;
+            return;
+          }
+          this.alignToKeyboard();
+          setTimeout((): void => {
+            this.alignToKeyboard();
+          }, 260);
+        };
+        win.on('keyboardHeightChange', this.kbHandler);
+      }).catch((): void => {
+      });
+    } catch (error) {
+    }
+  }
+
+  /**
+   * 按**实测差额**补抬：输入条现在被键盘挡住多少，就抬多少。
+   *
+   * 为什么能自己收敛：框架自己抬的那部分已经体现在"实测矩形"里了，所以这里算出来的
+   * 永远只是**还差的那一截**；抬完之后 260ms 再算一次，把动画期间的中间态也修正掉。
+   */
+  private alignToKeyboard(): void {
+    if (this.kbPx <= 0) {
+      return;
+    }
+    try {
+      const ui: UIContext = this.getUIContext();
+      const util: ComponentUtils = ui.getComponentUtils();
+      const rect = util.getRectangleById(BAR_ID);
+      const barBottom: number = rect.screenOffset.y + rect.size.height;
+      const dsp: display.Display = display.getDefaultDisplaySync();
+      const keyboardTop: number = dsp.height - this.kbPx;
+      const gapPx: number = ui.vp2px(KEYBOARD_GAP_VP);
+      const need: number = barBottom + gapPx - keyboardTop;
+      if (need > LIFT_TOLERANCE_PX) {
+        this.liftVp = this.liftVp + ui.px2vp(need);
+        hilog.info(DOMAIN, TAG, 'keyboard align: need=%{public}dpx lift=%{public}dvp',
+          Math.round(need), Math.round(this.liftVp));
+      }
+    } catch (error) {
+      // 量不到（组件还没布局）：下一次键盘事件再试，不影响可用性。
     }
   }
 
@@ -180,5 +271,9 @@ export struct CommentInputBar {
     }
     .width('100%')
     .padding({ left: this.sideInset, right: this.sideInset, bottom: this.bottomInset })
+    // 量自己矩形要用它（见 alignToKeyboard）；位移只补"被键盘挡住的那一截"。
+    .id(BAR_ID)
+    .translate({ y: -this.liftVp })
+    .animation({ duration: 220, curve: curves.springMotion(0.4, 0.9) })
   }
 }
