@@ -1236,6 +1236,61 @@ struct Index {
   @State probeText: string = '';
   /** 评论面板：是否可见、是否还在等网页渲染、读回来的评论、以及读不到的原因。 */
   @State commentsVisible: boolean = false;
+  /**
+   * reels 类页面当前的**输入法高度**（vp；0 = 键盘收起）。
+   *
+   * 为什么要自己听：这两页底部是一条自绘的输入条（CommentInputBar），外层还是整屏
+   * Stack/NavDestination —— 框架的自动避让在这个结构里不生效，键盘会直接盖住输入条。
+   * 做法照搬 DirectThreadPage 那套已验证的经验：**从 0 起、只补实测差额**，
+   * 因为窗口层有时自己已经避让了，按键盘高度硬抬会抬两次。
+   */
+  @State private reelsKbVp: number = 0;
+  /** reels 页的键盘监听句柄（页面隐藏时摘掉，见 onPageHidden）。 */
+  private reelsKbWindow: window.Window | null = null;
+  private reelsKbHandler: ((height: number) => void) | null = null;
+
+  /** 信息层底部留白：有输入条时贴它上沿 +10vp；评论面板打开时（页面输入条隐藏）回默认。 */
+  private reelsInfoBottom(): number {
+    if (this.commentsVisible) {
+      return 112;
+    }
+    return 82 + this.reelsKbVp;
+  }
+
+  /** 进 reels 类页面时开始听键盘。 */
+  private startReelsKeyboard(): void {
+    if (this.reelsKbWindow !== null) {
+      return;
+    }
+    try {
+      const context: common.Context = this.getUIContext().getHostContext() as common.Context;
+      window.getLastWindow(context).then((win: window.Window): void => {
+        this.reelsKbWindow = win;
+        this.reelsKbHandler = (height: number): void => {
+          this.reelsKbVp = height > 0 ? this.getUIContext().px2vp(height) : 0;
+          hilog.info(DOMAIN, TAG, 'reels keyboard vp=%{public}d', this.reelsKbVp);
+        };
+        win.on('keyboardHeightChange', this.reelsKbHandler);
+      }).catch((): void => {
+      });
+    } catch (error) {
+    }
+  }
+
+  /** 离开 reels 类页面：摘监听并把高度归零（下次进来重新量）。 */
+  private stopReelsKeyboard(): void {
+    const win: window.Window | null = this.reelsKbWindow;
+    const handler: ((height: number) => void) | null = this.reelsKbHandler;
+    if (win !== null && handler !== null) {
+      try {
+        win.off('keyboardHeightChange', handler);
+      } catch (error) {
+      }
+    }
+    this.reelsKbWindow = null;
+    this.reelsKbHandler = null;
+    this.reelsKbVp = 0;
+  }
   @State commentsLoading: boolean = false;
   @State comments: CommentItem[] = [];
   /**
@@ -7513,9 +7568,12 @@ struct Index {
       // 压上来/被关掉：首页信息流据此停播（和其它整屏页面同一条路，见 onPageShown）。
       .onShown((): void => {
         this.onPageShown(PROFILE_REELS_PAGE);
+        this.startReelsKeyboard();
       })
       .onHidden((): void => {
         this.onPageHidden(PROFILE_REELS_PAGE);
+      this.stopReelsKeyboard();
+        this.stopReelsKeyboard();
       })
       // 返回键：**评论浮层开着就先收评论**（需求："返回优先收起面板"），不再 pop 页面。
       .onBackPressed((): boolean => this.handleDestinationBack())
@@ -7547,9 +7605,12 @@ struct Index {
       .clip(false)
       .onShown((): void => {
         this.onPageShown(SEARCH_REELS_PAGE);
+        this.startReelsKeyboard();
       })
       .onHidden((): void => {
         this.onPageHidden(SEARCH_REELS_PAGE);
+      this.stopReelsKeyboard();
+        this.stopReelsKeyboard();
       })
       // 返回键：**评论浮层开着就先收评论**（需求："返回优先收起面板"），不再 pop 页面。
       .onBackPressed((): boolean => this.handleDestinationBack())
@@ -7637,7 +7698,7 @@ struct Index {
         // 三个 reels 类页面各存一份，免得下载下到另一条视频。
         source: source,
         // 正文/作者行贴着下方评论输入框的上沿 + 10vp（见 ReelOverlay.infoBottomVp）。
-        infoBottomVp: 82,
+        infoBottomVp: this.reelsInfoBottom(),
         // 我自己的账号名：作者是我时不画关注按钮（"我的"页视频分页那一页就是这样）。
         ownAuthor: this.profileVm.ownAccountName(),
         // 这一页没有浮动底栏，所以"手指一动就沉栏"这件事这里什么都不用做；回调留着是为了
@@ -7682,13 +7743,22 @@ struct Index {
       // 只提示一句，不假装发布成功。
       // 提示走**系统 toast**（不是 setLocalStatus）：那条横幅画在主页外壳里，而这一页是整屏
       // NavDestination，横幅根本露不出来 —— 用户会以为"点了没反应"（同 toast 的说明）。
-      CommentInputBar({
-        onSend: (text: string): void => {
-          this.toast($r('app.string.comment_pending'));
-          hilog.info(DOMAIN, TAG, 'reels draft comment len=%{public}d (not sent)', text.length);
-        }
-      })
-        .zIndex(2)
+      // 评论面板打开时**收起**这条：否则面板里那条和它同时在场，两个输入框打架。
+      // 用 transition 而不是 animateTo —— 插入/移除自带动画，面板开关代码一行都不用改。
+      if (!this.commentsVisible) {
+        CommentInputBar({
+          onSend: (text: string): void => {
+            this.toast($r('app.string.comment_pending'));
+            hilog.info(DOMAIN, TAG, 'reels draft comment len=%{public}d (not sent)', text.length);
+          },
+          // 键盘顶起来时跟着上移（见 reelsKbVp）。
+          bottomInset: 28 + this.reelsKbVp
+        })
+          .zIndex(2)
+          .transition(TransitionEffect.OPACITY
+            .combine(TransitionEffect.translate({ y: 60 }))
+            .animation({ duration: 160, curve: Curve.EaseOut }))
+      }
     }
     .width('100%')
     .height('100%')
