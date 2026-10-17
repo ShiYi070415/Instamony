@@ -70,6 +70,16 @@ export struct VideoSurface {
   /** 播放出错（父组件弹提示 / 也要撤封面）。 */
   onError: () => void = (): void => {
   };
+  /**
+   * **真实视频尺寸**（prepared 那一刻从播放器读，w/h 都 > 0 才回调）。
+   *
+   * 为什么要它：接口给的宽高不一定是**视频**的（搜索推荐流那批 SearchPost 的宽高是
+   * **封面图**的尺寸，见 model/Search 的说明）—— 16:9 的视频配上 4:5 的封面尺寸，
+   * 画面盒子就是竖的，视频只能被拉伸或留大黑边。播放器自己知道真实尺寸，
+   * 交给上层用来纠正盒子比例（见 ReelsPage 的 ReelSlide）。
+   */
+  onVideoSize: (w: number, h: number) => void = (w: number, h: number): void => {
+  };
 
   private readonly xController: XComponentController = new XComponentController();
   private player: media.AVPlayer | null = null;
@@ -136,6 +146,20 @@ export struct VideoSurface {
       });
       player.on('error', (error: BusinessError): void => {
         this.reportError(`player error code=${error.code} msg=${error.message}`);
+      });
+      /*
+       * **真实视频尺寸**（见 onVideoSize 的说明）。
+       *
+       * 不能用 `player.videoWidth/videoHeight` —— 这个版本的 `AVPlayer` 没有那两个属性，
+       * 尺寸只在 `videoSizeChange` 事件里给；事件可能早于 prepared，所以在这里注册。
+       */
+      player.on('videoSizeChange', (width: number, height: number): void => {
+        try {
+          if (width > 0 && height > 0) {
+            this.onVideoSize(width, height);
+          }
+        } catch (error) {
+        }
       });
       this.applyUrl();
     }).catch((error: BusinessError): void => {

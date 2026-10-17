@@ -153,50 +153,91 @@ struct ReelSlide {
   };
   /** 这一条的首帧出来了没有（没出来时封面压在上面，避免黑闪）。 */
   @State private ready: boolean = false;
+  /**
+   * **播放器量到的真实视频比例**（宽/高；0 = 还没量到）。
+   *
+   * 为什么需要：接口给的宽高不一定是**视频**的 —— 搜索推荐流那批 `SearchPost` 的宽高是
+   * **封面图**的（见 model/Search 的头注释）。16:9 的视频配上 4:5 的封面尺寸，外层盒子就是竖的，
+   * 视频于是被竖向拉伸（用户报的就是这个）。播放器 prepared 时会回调真实尺寸
+   * （见 VideoSurface.onVideoSize），这里据此把画面盒子改回视频自己的比例。
+   */
+  @State private measuredAspect: number = 0;
+
+  /** 画面盒子该用的比例：**实测优先** > 接口给的 > 9:16 兜底。 */
+  private aspect(): number {
+    if (this.measuredAspect > 0) {
+      return this.measuredAspect;
+    }
+    const w: number = this.reel.width;
+    const h: number = this.reel.height;
+    return (w > 0 && h > 0) ? w / h : 9 / 16;
+  }
 
   build() {
     Stack({ alignContent: Alignment.Center }) {
-      // 封面先铺底：视频起播前不会黑屏，滑过去也立刻有画面。**和播放器同一个盒子**，
-      // 所以撤封面时不会有任何错位。
-      Image(this.reel.coverUrl.length > 0 ? this.reel.coverUrl : $r('app.media.startIcon'))
-        .draggable(false)
-        .width('100%')
-        .height('100%')
-        .objectFit(ImageFit.Cover)
-        .backgroundColor(Color.Black)
-      if (this.reel.playable() && (this.playing || this.preload)) {
-        // 播放器换成 AVPlayer + XComponent 的共用组件，理由见 VideoSurface 的说明：
-        // 它能在 prepare 阶段就把首帧送到表面上（showFirstFrameOnPrepare），
-        // 所以下面那层封面是在"首帧真的上屏"之后才撤的，不再有黑闪。
-        VideoSurface({
-          url: this.reel.videoUrl,
-          playing: this.playing,
-          preload: this.preload,
-          muted: this.muted,
-          // 盒子的比例已经等于视频比例，所以用 FIT（完整显示）就正好铺满这个盒子；
-          // 再开 FIT_CROP 反而会二次裁切（把本该看到的画面切掉）。
-          cover: false,
-          onFirstFrame: (): void => {
-            this.ready = true;
-            this.onFirstFrame();
-          },
-          onError: (): void => {
-            // 放不出来也要撤封面：不然用户看到的是一张永远不动的图，不知道发生了什么。
-            this.ready = true;
-          }
-        })
-          .width('100%')
-          .height('100%')
-      }
-      // 首帧还没上屏：再盖一层同样大小的封面（同一个盒子，不会错位），且**不吃手势**。
-      if (this.playing && this.reel.playable() && !this.ready) {
+      /*
+       * **画面盒子**：宽度永远铺满屏幕，高度按**视频自己的比例**（实测优先，见 aspect()）。
+       *
+       * 需求："视频填充逻辑用视频宽度按比例填满" —— 所以既不能靠整屏 Cover 裁（16:9 会切掉左右），
+       * 也不能让播放器撑满一个比例不对的盒子（那就是"竖向拉伸"）。盒子比例对上之后，
+       * Cover 与 Contain 等价：画面既不变形也不被裁。
+       */
+      Stack({ alignContent: Alignment.Center }) {
+        // 封面先铺底：视频起播前不会黑屏，滑过去也立刻有画面。**和播放器同一个盒子**，
+        // 所以撤封面时不会有任何错位。
         Image(this.reel.coverUrl.length > 0 ? this.reel.coverUrl : $r('app.media.startIcon'))
           .draggable(false)
           .width('100%')
           .height('100%')
-          .objectFit(ImageFit.Cover)
-          .hitTestBehavior(HitTestMode.None)
+          .objectFit(ImageFit.Contain)
+          .backgroundColor(Color.Black)
+        if (this.reel.playable() && (this.playing || this.preload)) {
+          // 播放器换成 AVPlayer + XComponent 的共用组件，理由见 VideoSurface 的说明：
+          // 它能在 prepare 阶段就把首帧送到表面上（showFirstFrameOnPrepare），
+          // 所以下面那层封面是在"首帧真的上屏"之后才撤的，不再有黑闪。
+          VideoSurface({
+            url: this.reel.videoUrl,
+            playing: this.playing,
+            preload: this.preload,
+            muted: this.muted,
+            // 盒子比例已经等于视频比例，所以用 FIT（完整显示）就正好铺满这个盒子；
+            // 再开 FIT_CROP 反而会二次裁切（把本该看到的画面切掉）。
+            cover: false,
+            onFirstFrame: (): void => {
+              this.ready = true;
+              this.onFirstFrame();
+            },
+            onError: (): void => {
+              // 放不出来也要撤封面：不然用户看到的是一张永远不动的图，不知道发生了什么。
+              this.ready = true;
+            },
+            // 真实尺寸一到就纠正盒子比例（见 measuredAspect 的说明）。
+            onVideoSize: (w: number, h: number): void => {
+              if (w > 0 && h > 0) {
+                const ratio: number = w / h;
+                if (Math.abs(ratio - this.measuredAspect) > 0.01) {
+                  this.measuredAspect = ratio;
+                }
+              }
+            }
+          })
+            .width('100%')
+            .height('100%')
+        }
+        // 首帧还没上屏：再盖一层同样大小的封面（同一个盒子，不会错位），且**不吃手势**。
+        if (this.playing && this.reel.playable() && !this.ready) {
+          Image(this.reel.coverUrl.length > 0 ? this.reel.coverUrl : $r('app.media.startIcon'))
+            .draggable(false)
+            .width('100%')
+            .height('100%')
+            .objectFit(ImageFit.Contain)
+            .hitTestBehavior(HitTestMode.None)
+        }
       }
+      .width('100%')
+      .aspectRatio(this.aspect())
+      // 竖屏视频（高 > 屏高）超出的部分在**外层**被裁掉，而不是把画面压扁。
+      .clip(true)
     }
     .width('100%')
     .height('100%')
