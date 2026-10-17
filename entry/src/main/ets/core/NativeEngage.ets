@@ -34,6 +34,7 @@ import { InstagramCookieJar, InstagramCookieSnapshot } from './InstagramCookieJa
 import { WebTokens } from './WebTokens';
 import { EngageSkeleton } from './EngageSkeleton';
 import { ApiRegistry, ApiTemplate } from '../bridge/ApiRegistry';
+import { MobileEngage } from './mobileapi/MobileEngage';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeEngage';
@@ -179,6 +180,15 @@ export class NativeEngage {
     const id: string = NativeEngage.mediaIdOf(mediaId);
     if (id.length === 0) {
       return new EngageResult(false, like, 'no-media-id');
+    }
+    /*
+     * **移动端 REST 优先**（见 core/mobileapi/MobileEngage）：点赞只需要一发
+     * media/{id}/like/，完全不依赖网页模板。原来那条模板回放遇到 doc_id / claim 过期会回
+     * "200 + errors"（被当成成功），于是界面红了、服务端其实没收到（用户报的现象）。
+     */
+    const mobileOk: boolean = await MobileEngage.setLiked(id, like);
+    if (mobileOk) {
+      return new EngageResult(true, like, 'mobile');
     }
     const op: string = like ? LIKE_OP : UNLIKE_OP;
     const tpl: ApiTemplate | null = ApiRegistry.getInstance().storedForNative(op);
