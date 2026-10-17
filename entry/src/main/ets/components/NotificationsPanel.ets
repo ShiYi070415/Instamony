@@ -91,12 +91,35 @@ export struct NotificationsPanel {
       return $r('app.string.notify_today');
     }
     if (group === 'month') {
-      return $r('app.string.notify_month');
+      /*
+       * 「本月」这一段的标题是 **"N月"**（资源串是 `%d月`），必须把月份填进去 ——
+       * 以前直接把资源串当文案画，界面上就是字面量 `%d月`。
+       * 月份取这一组第一条的时间戳（拿不到就退回资源串本身，至少不再出现 `%d`）。
+       */
+      const month: number = this.monthOfGroup('month');
+      return month > 0 ? $r('app.string.notify_month', month) : $r('app.string.notify_this_month');
     }
     if (group === 'suggested') {
       return $r('app.string.notify_suggested');
     }
     return $r('app.string.notify_earlier');
+  }
+
+  /** 某个分组里**第一条**的月份（1~12）；拿不到给 0。 */
+  private monthOfGroup(group: NotifyGroup): number {
+    for (let index: number = 0; index < this.items.length; index++) {
+      const one: NotifyItem = this.items[index];
+      if (one.group !== group) {
+        continue;
+      }
+      // 日期文案形如 "10月17日"（见 Index.dateTextOf）：月份直接从它取，
+      // 不必给 NotifyItem 再加一个时间戳字段。
+      const match: RegExpMatchArray | null = one.dateText.match(/(\d{1,2})月/);
+      if (match !== null && match.length > 1) {
+        return Number(match[1]);
+      }
+    }
+    return 0;
   }
 
   build() {

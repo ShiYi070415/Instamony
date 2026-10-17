@@ -3555,20 +3555,24 @@ struct Index {
     this.notificationsRefreshing = true;
     const started: number = Date.now();
     try {
-      // 「为你推荐」（ayml）那条接口的原生请求需要网页专有令牌（x-ig-www-claim / fb_dtsg），
-      // 那只有"页面自己发过一次 ayml"才有 → 第一次（或模板过期后）先去抓一次模板。
-      //
-      // **预热时跳过这一步**（warmOnly）：抓模板会把**共用的隐藏网页**导航到活动页再回来，
-      // 启动那几秒正是信息流的网页补充那条路在用同一个网页 —— 预热不该把它抢走。
-      // 跳过之后通知主体（news/inbox → show_many）照样是原生取回来的，只是"为你推荐"那一段
-      // 空着；用户真的点开通知页时再按正常那条路抓模板（那时网页也不忙）。
-      if (warmOnly && ApiRegistry.getInstance().storedForNative(AYML_OP) === null) {
-        hilog.info(DOMAIN, TAG, 'notify warm: ayml template missing → skip cold path');
-      } else {
+      /*
+       * **先直接取**（用户需求："通知页面接入 instagrapi 协议"）：core/NativeNotifications 现在
+       * 首选移动端私有 API（`i.instagram.com/api/v1/news/inbox/` + `discover/ayml/` +
+       * `friendships/show_many/`），那一趟**不需要任何网页模板**。
+       * 以前这里会先 `ensureAymlTemplate()`（把隐藏网页导航到活动页抓一条 REST 模板）——
+       * 那是网页兜底那条路才需要的东西，移动端成了就纯属白跑一趟（还是秒级的）。
+       */
+      let fresh: NotifyItem[] = await this.readNotificationsFast();
+      /*
+       * 空结果 + 走的是网页兜底 + 模板还没有 → 才去抓一次模板再试（抓模板会让共用网页
+       * 导航一跳，所以**预热时不做**：启动那几秒网页正被信息流补充那条路用着）。
+       */
+      if (fresh.length === 0 && !warmOnly && NativeNotifications.lastVia() !== 'mobile'
+        && ApiRegistry.getInstance().storedForNative(AYML_OP) === null) {
+        hilog.info(DOMAIN, TAG, 'notify web fallback empty → capture ayml template then retry');
         await this.ensureAymlTemplate();
+        fresh = await this.readNotificationsFast();
       }
-      // **一趟到底**：原生一条链（news/inbox → show_many → ayml），不再有第二段网页流程。
-      const fresh: NotifyItem[] = await this.readNotificationsFast();
       if (fresh.length > 0) {
         // 整份替换：fresh 已经是"通知 + 关注状态 + 为你推荐"的完整集合。
         this.notifications = fresh;
@@ -3576,8 +3580,8 @@ struct Index {
       } else if (this.notifications.length === 0) {
         this.notificationsState = 'failed';
       }
-      hilog.info(DOMAIN, TAG, 'notify done items=%{public}d src=%{public}s %{public}dms',
-        this.notifications.length, this.notifySrc, Date.now() - started);
+      hilog.info(DOMAIN, TAG, 'notify done items=%{public}d src=%{public}s via=%{public}s %{public}dms',
+        this.notifications.length, this.notifySrc, NativeNotifications.lastVia(), Date.now() - started);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'notify error: %{public}s', (error as Error).message);
       if (this.notifications.length === 0) {

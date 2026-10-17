@@ -173,6 +173,10 @@
       "value": "更早"
     },
     {
+      "name": "notify_this_month",
+      "value": "本月"
+    },
+    {
       "name": "notify_empty",
       "value": "没能从网页里读到通知。"
     },
