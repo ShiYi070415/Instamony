@@ -209,6 +209,15 @@ export class ProfileViewModel {
    */
   private headerVerified: boolean = false;
   /**
+   * 上面这些"本人"状态**属于哪个账号**（`ds_user_id`）。
+   *
+   * 为什么必须有：视图模型是长寿命对象（页面只建一次），而 `ownName` / `header` 都是
+   * "我"的缓存。换账号之后它们还在，于是"头部按新账号的 id 取、核对却拿旧账号的名字比"
+   * —— 要么把别人的资料当成自己的画上去，要么莫名其妙报"头部读取异常"。
+   * 每次进本人这条链先比一次 id，变了就把这几样**全部作废**（见 ensureSelfScope）。
+   */
+  private selfId: string = '';
+  /**
    * **分段按钮与内部分页的对应关系**（第 n 段 = 哪个分页）。
    *
    * 本人 4 段：[帖子, 视频, 收藏, 被标注]；别人主页 3 段（需求："移除收藏分页"）：
@@ -574,6 +583,8 @@ export class ProfileViewModel {
     this.onBusy(true);
     try {
       // 本人：网格请求体的目标键也要回正（见 ensureOwnName），所以发请求前先落实"我是谁"。
+      // 同样先确认这份本人状态属于当前账号（换账号后必须作废，见 ensureSelfScope）。
+      await this.ensureSelfScope();
       await this.ensureOwnName();
       /*
        * 头部与网格**并发**拉（原来是先把头部拉完再拉网格）。
@@ -1408,6 +1419,38 @@ export class ProfileViewModel {
     return NativeProfile.hasTemplate(NativeProfile.OP_POSTS);
   }
 
+  /**
+   * 确保"本人这份状态"属于**当前登录的账号**（见 selfId 的说明）。
+   *
+   * 换账号时把 `ownName` / `headerVerified` / `header` / `target` 全部作废：
+   * 接下来会按新账号重新解析自己是谁、重新取头部 —— 宁可多跑一次，也不许把上一个人的资料
+   * 当成"我的"（用户报的"我的页面会出现拿到的不是本账号头部数据"）。
+   */
+  private async ensureSelfScope(): Promise<void> {
+    if (!this.target.isSelf()) {
+      return;
+    }
+    const id: string = await NativeProfile.ownId();
+    if (id.length === 0) {
+      return;
+    }
+    if (this.selfId.length === 0) {
+      this.selfId = id;
+      return;
+    }
+    if (this.selfId === id) {
+      return;
+    }
+    hilog.info(DOMAIN, TAG, 'self account changed %{public}s → %{public}s → reset 本人缓存',
+      this.selfId, id);
+    this.selfId = id;
+    this.ownName = '';
+    this.headerVerified = false;
+    this.header = null;
+    // selfName 也要清：它被塞进请求体当目标用户名（见 ProfileTarget）。
+    this.target = ProfileTarget.self();
+  }
+
   private async loadHeader(): Promise<void> {
     // 目标用户是"别人"、但我们只有用户名（没有数字 id）时**不发头部这条**：它的请求体里
     // 目标是用 `id` 表示的，没有 id 就只能原样重发 —— 那会把我自己的资料显示成他的
@@ -1417,6 +1460,8 @@ export class ProfileViewModel {
       return;
     }
     // 本人：先把"我是谁"落实（请求体里的目标键要按它回正，见 ensureOwnName）。
+    // 顺序不能反：先确认这份状态属于当前账号（换账号时作废），再去解析账号名。
+    await this.ensureSelfScope();
     await this.ensureOwnName();
     // 原生优先：模板在就直发（见 NativeProfile）。
     if (NativeProfile.hasTemplate(NativeProfile.OP_HEADER)) {

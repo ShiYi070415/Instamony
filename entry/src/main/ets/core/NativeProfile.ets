@@ -159,11 +159,17 @@ export class NativeProfile {
    */
   private static ownIdCache: string = '';
 
-  /** 读一次自己的数字 id（读不到就给空串；调用方按"不改"处理）。 */
+  /**
+   * 自己的数字 id（Cookie 里的 `ds_user_id`），**每次调用都重新读一次**。
+   *
+   * ⚠️ 这里以前是"读一次就缓存到进程结束"，那是个真 bug：换账号 / 重新登录之后
+   * `ds_user_id` 变了、缓存还是旧值 —— 于是"我的"页面按**上一个账号的 id** 去取
+   * `users/{pk}/info/`，拿回来的是**别人的头部**（用户报的"我的页面会出现拿到的不是
+   * 本账号头部数据"）。读 Cookie 罐很便宜（`MobileRequest` 每一发请求也在读它），
+   * 所以别再缓存"结果"，只在读失败时用上一次的值兜底。
+   */
   static async ownId(): Promise<string> {
-    if (NativeProfile.ownIdCache.length > 0) {
-      return NativeProfile.ownIdCache;
-    }
+    let fresh: string = '';
     try {
       const jar: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
       const cookie: string = jar.cookie ?? '';
@@ -171,19 +177,60 @@ export class NativeProfile {
       for (let index: number = 0; index < parts.length; index++) {
         const one: string = parts[index].trim();
         if (one.indexOf('ds_user_id=') === 0) {
-          NativeProfile.ownIdCache = one.substring('ds_user_id='.length).trim();
+          fresh = one.substring('ds_user_id='.length).trim();
           break;
         }
       }
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'own id read failed: %{public}s', (error as Error).message);
     }
-    return NativeProfile.ownIdCache;
+    if (fresh.length === 0) {
+      // 读不到（Cookie 罐还没起来 / 已退出登录）：用上一次读到的兜底，空就空。
+      return NativeProfile.ownIdCache;
+    }
+    if (NativeProfile.ownIdCache.length > 0 && NativeProfile.ownIdCache !== fresh) {
+      /*
+       * 账号换了（或者网页那边重新登录了）。这里必须说出来：之后所有"本人"的请求都会
+       * 用新 id，而视图模型里缓存的 ownName / header 还是上一个账号的 —— 不清就会
+       * **自洽地显示错的人**（头部按新 id 取、核对却拿旧名字比，比不出来）。
+       */
+      hilog.info(DOMAIN, TAG, 'own id changed %{public}s → %{public}s (account switched)',
+        NativeProfile.ownIdCache, fresh);
+    }
+    NativeProfile.ownIdCache = fresh;
+    return fresh;
+  }
+
+  /** 清掉进程内的账号相关缓存（退出登录 / 换账号时调，见 ownId 的说明）。 */
+  static clearCache(): void {
+    NativeProfile.ownIdCache = '';
+    NativeProfile.detail = '-';
   }
 
   /** 已经读到的自己的数字 id（同步；没读过给空串，见 ownId）。 */
   static ownIdCached(): string {
     return NativeProfile.ownIdCache;
+  }
+
+  /**
+   * 用户节点里的数字 id（`pk` 优先，退回 `id`）。
+   *
+   * 用途：核对 `users/{pk}/info/` 回来的到底是不是**我要的那个人**。登录账号的 id 是
+   * 十一位量级，`pk` 在 JSON 里是 number 也不会丢精度（19 位的媒体 id 才需要 `strong_id__`）。
+   */
+  static userIdOf(user: Record<string, Object> | null): string {
+    if (user === null) {
+      return '';
+    }
+    const pk: string = NativeProfile.strOf(user, 'pk').trim();
+    if (pk.length > 0) {
+      return pk;
+    }
+    const asNumber: number = NativeProfile.numOf(user, 'pk');
+    if (asNumber > 0) {
+      return `${asNumber}`;
+    }
+    return NativeProfile.strOf(user, 'id').trim();
   }
 
   /**
@@ -335,6 +382,25 @@ export class NativeProfile {
     const mobile: MobileUserBody | null = await MobileProfile.info(uid, target.username,
       ApiThrottle.interactive());
     if (mobile !== null) {
+      /*
+       * **本人这一发一定要核对"回来的是不是我自己"**（用户报的"我的页面会出现拿到的不是
+       * 本账号头部数据"）。
+       *
+       * 判据用**数字 id**，不用账号名：id 是从当前会话的 Cookie（`ds_user_id`）现读的，
+       * 服务端回的 `user.pk` 必须与它一致。以前没有这道校验，只要 id 读旧了（换账号后
+       * 缓存没清），`users/{旧id}/info/` 顺顺当当返回**上一个账号**的资料，界面上就是
+       * "我的页面显示成别人"。
+       */
+      if (target.isSelf() && uid.length > 0) {
+        const got: string = NativeProfile.userIdOf(mobile.user);
+        if (got.length > 0 && got !== uid) {
+          hilog.warn(DOMAIN, TAG, 'header mobile is another account asked=%{public}s got=%{public}s → ignore',
+            uid, got);
+          // 账已换：把缓存清掉，下一次调用会按新的 Cookie 重新取。
+          NativeProfile.ownIdCache = '';
+          return null;
+        }
+      }
       const mapped: ProfileHeader | null = NativeProfile.headerFromUser(mobile.user);
       if (mapped !== null) {
         hilog.info(DOMAIN, TAG, 'header via mobile user=%{public}s ms=%{public}d bytes=%{public}d',

@@ -70,6 +70,7 @@ import { JsonRead } from '../core/JsonRead';
 import { MediaPrefetch } from '../core/MediaPrefetch';
 import { MediaDownloader } from '../core/MediaDownloader';
 import { NativeFollow, FollowResult } from '../core/NativeFollow';
+import { NativeProfile } from '../core/NativeProfile';
 import { FollowState, FOLLOW_VERSION_KEY } from '../core/FollowState';
 import { SaveState } from '../core/SaveState';
 import { NativeSave, SaveResult } from '../core/NativeSave';
@@ -2718,6 +2719,9 @@ struct Index {
     DirectCache.clear();
     // 设备侧会话材料（claim / rur / mid / authorization）：设备身份留着，会话材料作废。
     MobileSession.getInstance().clearSession();
+    // "我是谁"那份缓存（`ds_user_id`）：不清的话换账号后"我的"页面会按上一个人的 id 取头部
+    // （用户报的"我的页面拿到不是本账号的头部数据"就是这么来的）。
+    NativeProfile.clearCache();
     // 网页抓来的请求模板带着**当时那条会话的头**，跨账号复用等于拿上一个人的身份打接口。
     ApiRegistry.getInstance().forgetTemplates();
     // 图片缓存 / 预下载 / 译文缓存。
