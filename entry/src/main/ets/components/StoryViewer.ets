@@ -1508,6 +1508,16 @@ export struct StoryViewer {
       }, (one: StoryItem, position: number): string => `${one.id}-${position}`)
     }
     .width('100%')
+    /*
+     * **高度从第一帧就固定**（需求："进度条需要优先加载，不然头像会错位"）。
+     *
+     * 资讯栏头像的落点是算出来的：`infoY() = 卡片顶 + PROGRESS_TOP + SEG_H + INFO_GAP`。
+     * 而进度条是 `ForEach(reel.items)` —— 数据没到时一个子节点都没有，Row 的内容高就是 0，
+     * 整条只有 PROGRESS_TOP 那么高，资讯栏于是比"算出来的位置"高 SEG_H（2.5vp），
+     * 头像就落偏了；数据一到又跳回原位。
+     * 这里把高度钉成 `PROGRESS_TOP_VP + SEG_H`：不管有没有数据、分成几段，排版高度都一样。
+     */
+    .height(PROGRESS_TOP_VP + SEG_H)
     // 需求："媒体区顶部显示进度条，和媒体顶部保持 5vp 距离"。
     .padding({ left: PROGRESS_SIDE_VP, right: PROGRESS_SIDE_VP, top: PROGRESS_TOP_VP })
   }
