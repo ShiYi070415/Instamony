@@ -1350,6 +1350,18 @@ export struct ProfilePage {
           // 需求：这颗按钮暂时不做功能。
         }
       })
+      /*
+       * 「推荐关注」（圆形）——需求："将…推荐关注按钮接入其他用户主页"。
+       * 本人主页那颗画在功能区（见 actionRow），别人主页就挂在关注 / 发消息这一行的末尾。
+       */
+      MaterialIconButton({
+        symbol: $r('sys.symbol.person_badge_plus'),
+        buttonSize: FOLLOW_BUTTON_HEIGHT,
+        iconSize: 20,
+        onTap: (on: boolean): void => {
+          hilog.info(DOMAIN, TAG, 'PF suggest follow tap (not wired)');
+        }
+      })
     }
     .width('100%')
     .justifyContent(FlexAlign.Center)
@@ -1361,10 +1373,14 @@ export struct ProfilePage {
     return this.segmentMode !== SEGMENT_MODE_USER;
   }
 
-  /** 一颗按钮的宽度：让"两颗 + 中间间距"正好等于分段按钮那条胶囊的宽度。 */
+  /**
+   * 一颗按钮的宽度：让"两颗 + 中间间距 + 那颗圆按钮"正好等于分段按钮那条胶囊的宽度。
+   *
+   * 圆按钮和药丸同高（`FOLLOW_BUTTON_HEIGHT`），所以宽度上要把它和它两侧的间距一起扣掉。
+   */
   private followButtonWidth(): number {
     const capsule: number = this.screenWidthVp - SEGMENT_SIDE * 2;
-    const one: number = (capsule - FOLLOW_GAP) / 2;
+    const one: number = (capsule - FOLLOW_GAP * 2 - FOLLOW_BUTTON_HEIGHT) / 2;
     return one > 48 ? one : 48;
   }
 
@@ -1507,12 +1523,13 @@ export struct ProfilePage {
              * 需求："包括 meta 旗下软件的主页：软件图标 + 用户名称 / 音乐（要做播放功能，
              * 点击暂停/播放）/ 添加（先不用做功能）"，样式全部用沉浸光感组件。
              *
-             * 只在**本人**页面画：别人的主页没有"编辑主页/添加"这些入口，画上去反而奇怪。
+             * 后来还要求"接入其他用户主页"——所以**本人/别人都画**；
+             * 只有「编辑主页 / 分享主页」是本人的动作，留在 actionRow 里按身份判断。
              */
-            if (this.isSelfPage()) {
-              this.bannerChips()
+            this.bannerChips()
 
-              // ---- 功能区：编辑主页 / 分享主页（椭圆）+ 推荐关注（圆形）----
+            // ---- 功能区：编辑主页 / 分享主页（椭圆）+ 推荐关注（圆形）----
+            if (this.isSelfPage()) {
               this.actionRow()
             }
           }
