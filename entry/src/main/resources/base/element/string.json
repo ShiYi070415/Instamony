@@ -45,6 +45,18 @@
       "value": "新账号还没有可推送的内容，关注一些人后下拉刷新即可看到信息流"
     },
     {
+      "name": "challenge_title",
+      "value": "账号需要安全验证"
+    },
+    {
+      "name": "challenge_hint",
+      "value": "Instagram 要求完成真人或设备验证，点右侧按钮在网页里完成后回来即可"
+    },
+    {
+      "name": "challenge_action",
+      "value": "去验证"
+    },
+    {
       "name": "login_page_action",
       "value": "登录 Instagram"
     },

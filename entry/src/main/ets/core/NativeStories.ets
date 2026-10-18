@@ -19,6 +19,7 @@ import { RestSession } from './RestSession';
 import { JsonRead } from './JsonRead';
 import { StoryItem, StoryReel, StoryTray, StoryTrayItem } from '../model/Story';
 import { MobileStories } from './mobileapi/MobileStories';
+import { MobileChallenge } from './mobileapi/MobileChallenge';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeStories';
@@ -1273,6 +1274,12 @@ export class NativeStories {
         if (text.indexOf('challenge_required') >= 0) {
           NativeStories.detail = 'challenge';
           NativeStories.note(uid, '    → 服务端要求 challenge（安全验证），不是请求写错');
+          /*
+           * 同时记进**全局的验证台账**（见 core/mobileapi/MobileChallenge）：
+           * 托盘这边也能撞上挑战（真机证据就是 `reels_media` 回的），而界面上的
+           * 「去验证」横幅只认那个台账 —— 不记的话用户只会看到"托盘一直转圈"。
+           */
+          MobileChallenge.note(text);
         }
         /*
          * 非 200 时把**头名清单 + cookie 名清单**也记进轨迹。

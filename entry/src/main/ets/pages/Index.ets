@@ -130,6 +130,8 @@ import { EMPTY_REEL, StoryHeroRect, StoryItem, StoryReel, StoryTray, StoryTrayIt
 import { NativeStories } from '../core/NativeStories';
 // 首页「为你推荐」复用搜索页那条探索流（见 loadHomeRecommended）。
 import { NativeSearch, SearchPostPage } from '../core/NativeSearch';
+// 账号安全验证（challenge_required）的台账：界面据此给「去验证」入口。
+import { MobileChallenge } from '../core/mobileapi/MobileChallenge';
 import { StoryCache } from '../core/StoryCache';
 import { AccountChange, AccountScope } from '../core/AccountScope';
 import { StoryDiag } from '../core/StoryDiag';
@@ -856,6 +858,14 @@ struct Index {
    * 显示一行「为你推荐 · 关注后会变成信息流」；关注了人之后下拉刷新会自动切回来。
    */
   @State feedRecommended: boolean = false;
+  /**
+   * 账号被要求**安全验证**时的网页地址（空 = 没有待处理的验证）。
+   *
+   * IG 回 `challenge_required` 时（新注册账号最常见）重试多少次都没用 —— 必须让用户在
+   * 隐藏网页里过人机/设备验证。这个地址来自响应体的 `challenge.api_path`
+   * （见 core/mobileapi/MobileChallenge），界面上给一条横幅 + 「去验证」按钮。
+   */
+  @State challengeUrl: string = '';
   @State statusText: ResourceStr = '';
   /** 状态行是否显示。ResourceStr 是联合类型，没法直接取 .length 判空，所以单独记。 */
   @State statusShown: boolean = false;
@@ -2067,6 +2077,8 @@ struct Index {
     };
     this.viewModel.onStatus = (kind: FeedStatus, detail: string): void => {
       this.applyStatus(kind, detail);
+      // 这一轮里可能刚撞上 `challenge_required`（见 refreshChallengeState）。
+      this.refreshChallengeState();
       // 首屏还没内容 + 失败/未就绪 → 排一次自动重试（见 scheduleFeedRetry）：
       // 用户要的是"一直刷新到 IG 页面准备好"，而不是自己反复下拉。
       if (this.posts.length === 0
@@ -2079,11 +2091,18 @@ struct Index {
     this.viewModel.onSettled = (): void => {
       // 一轮加载（无论成功失败）就此结束，首屏骨架屏该让位给空态了。
       this.loadedOnce = true;
+      // 这一轮里可能刚撞上 `challenge_required`（见 refreshChallengeState）。
+      this.refreshChallengeState();
       // 只落轻量报告（同步、毫秒级）。重脚本改到探针面板手动触发。
       this.dumpProbeSilently();
       // 顺带看一眼接口登记表有没有新东西（有 TTL，过桥不频繁）。
       this.syncApiIndex();
     };
+    /*
+     * 账号安全验证的界面状态**只由 MobileChallenge 台账驱动**（见 refreshChallengeState 与
+     * core/mobileapi/MobileChallenge 的文件头）：不在这里另接一套回调，
+     * 也不去抢 `profileVm.onStatus`（那个是 ProfilePage 页内状态行用的）。
+     */
     /*
      * 「为你推荐」：新号没关注任何人时 IG 的时间线是空的，这时铺探索流的内容
      * （和官方 App 一样），并让页面上显示那行提示（见 FeedViewModel.mode 的说明）。
@@ -2587,6 +2606,17 @@ struct Index {
     }
     // 换了登录态 = 列表会清空重来，首屏骨架屏要重新生效。
     this.loadedOnce = false;
+    /*
+     * **换账号要连"现在停在哪一页"一起复位**（用户报的"退出登录后注册新账号，直接跳进我的
+     * 页面"）：`selectedIndex` 是底栏与内容层真正用来切页的那个状态，它不会因为 selectedTab
+     * 被改而跟着变 —— 退出前停在「我的」（index 4），注册完进来还是 index 4。
+     * 另外把导航栈也清掉：登录前可能正停在帖子页 / 设置页 / 别人的主页上。
+     */
+    this.selectedIndex = 0;
+    if (this.navStack.getAllPathName().length > 0) {
+      this.navStack.clear();
+      hilog.info(DOMAIN, TAG, 'session changed → nav stack cleared');
+    }
     if (signedIn) {
       this.selectedTab = AppTab.Home;
       // 直接改 selectedTab 会绕过 selectTab 里的可见性同步：搜索页已经不是当前页了，
@@ -2722,6 +2752,9 @@ struct Index {
   private forgetAccountMemory(): void {
     // 通知 + 关注 / 收藏 / 互动覆盖表（按人抓的，见 forgetNotifications）。
     this.forgetNotifications();
+    // 账号安全验证的台账也属于"这个人"：换账号后必须清（见 MobileChallenge）。
+    MobileChallenge.clear();
+    this.refreshChallengeState();
     // 限流冷却按账号记：换人之后额度要重新算。
     ApiThrottle.clear();
     // 各页面的列表与游标。
@@ -4245,11 +4278,22 @@ struct Index {
     });
     this.webVisible = false;
     this.selectedTab = AppTab.Home;
+    // 和 applySession 里同理：切页真正看的是 selectedIndex，必须一起复位到首页。
+    this.selectedIndex = 0;
     // 同上（审计 C1）：绕过 selectTab 时要显式同步搜索页的可见性闸门。
     this.searchVm.setActive(false);
     const signedBefore: boolean = this.signedIn;
     const snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
     this.applySession(snapshot.signedIn);
+    /*
+     * 从网页回来时，用户很可能刚完成**账号安全验证**（见 MobileChallenge 的说明）：
+     * 验证通过的话 Cookie 罐已经更新，清掉台账、重新取数即可；没通过的话下一发请求会把
+     * 挑战重新记一遍，横幅会再出现。
+     */
+    if (snapshot.signedIn) {
+      MobileChallenge.clear();
+      this.refreshChallengeState();
+    }
     if (!snapshot.signedIn) {
       return;
     }
@@ -4326,6 +4370,8 @@ struct Index {
     // 换页面就把底栏复位（上一页可能把它沉下去/藏起来了；新页面还没滚过，
     // 栏沉在那儿会很怪）。系统显隐那支也一样收干净（见 restoreBar / showBar）。
     this.restoreBar();
+    // 切页时顺带看一眼"账号是不是被要求验证了"（见 refreshChallengeState）。
+    this.refreshChallengeState();
     // 搜索框每次进「搜索」页都从**展开**开始（上一轮可能滚着滚着收起来了；
     // 新进来还没滚过，右上角只挂一颗放大镜会很莫名）。只改状态，**不要**顺带弹输入法。
     AppStorage.setOrCreate(SEARCH_BOX_COLLAPSED, false);
@@ -5655,6 +5701,82 @@ struct Index {
     }
   }
 
+  /**
+   * 把「账号安全验证」台账同步到界面状态（见 core/mobileapi/MobileChallenge 的文件头）。
+   *
+   * 什么时候调：任何一次移动接口取数之后（信息流 onStatus/onSettled、快拍失败、切 tab、
+   * 网页关闭）。台账里一旦有地址，**内容层顶部**（见 nativeShellContent）就会出现一条横幅 +
+   * 「去验证」按钮 —— 那类挑战（真人验证 / 自拍 / reCAPTCHA / Bloks 原生流程）
+   * **只能**在网页里过，重试没有意义。
+   */
+  private refreshChallengeState(): void {
+    const url: string = MobileChallenge.urlNow();
+    if (url === this.challengeUrl) {
+      return;
+    }
+    this.challengeUrl = url;
+    if (url.length > 0) {
+      hilog.info(DOMAIN, TAG, 'challenge pending: %{public}s', MobileChallenge.summary());
+    } else {
+      hilog.info(DOMAIN, TAG, 'challenge cleared');
+    }
+  }
+
+  /** 横幅上那颗「去验证」：在本 App 自己的隐藏网页里打开 IG 的验证页（会话是同一个）。 */
+  private openChallengeWeb(): void {
+    const url: string = MobileChallenge.urlNow();
+    if (url.length === 0) {
+      return;
+    }
+    hilog.info(DOMAIN, TAG, 'open challenge web %{public}s', url);
+    this.openWeb(url);
+  }
+
+  /**
+   * 「账号需要安全验证」横幅（需求：新号注册后可能弹真人验证）。
+   *
+   * IG 回 `challenge_required` 时，这类挑战（真人 / 自拍 / reCAPTCHA / Bloks 原生流程）
+   * **只能在网页里完成** —— instagrapi 对它们同样是"请人工处理"（见 MobileChallenge 的文件头）。
+   * 所以这里给出网页入口：点「去验证」在我们的隐藏网页里打开 IG 的验证页（同一个会话），
+   * 验证完点网页上的「关闭」回来，会自动重新取数。
+   */
+  @Builder
+  challengeBanner() {
+    Row({ space: 10 }) {
+      SymbolGlyph($r('sys.symbol.lock_shield'))
+        .fontSize(18)
+        .fontColor([$r('app.color.accent')])
+      Column({ space: 2 }) {
+        Text($r('app.string.challenge_title'))
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.primary_text'))
+          .width('100%')
+        Text($r('app.string.challenge_hint'))
+          .fontSize(11)
+          .fontColor($r('app.color.secondary_text'))
+          .width('100%')
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+
+      Button($r('app.string.challenge_action'))
+        .height(30)
+        .fontSize(13)
+        .backgroundColor($r('app.color.accent'))
+        .fontColor($r('app.color.on_accent'))
+        .borderRadius(15)
+        .onClick((): void => {
+          this.openChallengeWeb();
+        })
+    }
+    .width('100%')
+    .padding({ left: 16, right: 12, top: 10, bottom: 10 })
+    .backgroundColor($r('app.color.field_background'))
+  }
+
   private async refreshFeed(): Promise<void> {
     this.refreshing = true;
     try {
@@ -5683,6 +5805,14 @@ struct Index {
     Column() {
       if (!this.sessionChecked) {
         // 还在核对登录态：先铺信息流骨架屏，别让用户对着白屏等。
+        FeedSkeleton()
+          .layoutWeight(1)
+      } else if (this.challengeUrl.length > 0) {
+        /*
+         * 账号被要求安全验证（新号最常见）：横幅在**内容层顶部**（见 nativeShellContent），
+         * 这里就不再重复铺它了；此时时间线 / 推荐流都取不到东西，铺内容只会让人以为
+         * "加载失败"，所以给骨架屏。点「去验证」进网页，验完回来再取数。
+         */
         FeedSkeleton()
           .layoutWeight(1)
       } else {
@@ -5875,27 +6005,40 @@ struct Index {
       Stack({ alignContent: Alignment.Bottom }) {
       // ---- 内容层：按 selectedIndex 切页（栏那层不参与切页）----
       Column() {
-        if (this.selectedIndex === 0) {
-          this.homeTab()
-        } else if (this.currentTab() === AppTab.Profile) {
-          // 「我的」有原生实现，不走占位页。
-          this.profilePage()
-        } else if (this.currentTab() === AppTab.Reels) {
-          // Reels 现在只做视频流（见 ReelsPage 的说明）。
-          this.reelsTab()
-        } else if (this.currentTab() === AppTab.Direct) {
-          // 私信：原生收件箱（只读，不做发送，见 DirectPage 的说明）。
-          this.directPage()
-        } else {
-          // 搜索：原生搜索框 + 账号结果（见 SearchPage 的说明）。
-          this.searchPage()
+        /*
+         * **账号安全验证横幅放在这一层**（五个页签共用）：挑战不是"首页才有的问题" ——
+         * 我的 / Reels / 搜索 / 私信 走同一套私有接口，日志里 `reels_media` 与
+         * `feed/user/<id>/story/` 都撞过 `challenge_required`。挂在内容层顶部，
+         * 用户在哪个页签都能看到「去验证」入口（见 MobileChallenge 的文件头）。
+         */
+        if (this.challengeUrl.length > 0) {
+          this.challengeBanner()
         }
+        Column() {
+          if (this.selectedIndex === 0) {
+            this.homeTab()
+          } else if (this.currentTab() === AppTab.Profile) {
+            // 「我的」有原生实现，不走占位页。
+            this.profilePage()
+          } else if (this.currentTab() === AppTab.Reels) {
+            // Reels 现在只做视频流（见 ReelsPage 的说明）。
+            this.reelsTab()
+          } else if (this.currentTab() === AppTab.Direct) {
+            // 私信：原生收件箱（只读，不做发送，见 DirectPage 的说明）。
+            this.directPage()
+          } else {
+            // 搜索：原生搜索框 + 账号结果（见 SearchPage 的说明）。
+            this.searchPage()
+          }
+        }
+        .width('100%')
+        .layoutWeight(1)
+        // 给一个 id：BackdropTone 要定时给**这一层**拍低分辨率快照，用来侦测底栏/叠字
+        // 背后的画面明暗（不含底栏本身，所以拍它而不是拍整页）。
+        .id(SHELL_CONTENT_ID)
       }
       .width('100%')
       .height('100%')
-      // 给一个 id：BackdropTone 要定时给**这一层**拍低分辨率快照，用来侦测底栏/叠字
-      // 背后的画面明暗（不含底栏本身，所以拍它而不是拍整页）。
-      .id(SHELL_CONTENT_ID)
 
       // ---- 底栏那一层：栏单独待在这一层里，内容层是它的兄弟节点 ----
       Stack({ alignContent: Alignment.Bottom }) {
@@ -7081,6 +7224,8 @@ struct Index {
     this.toast(why === 'challenge'
       ? $r('app.string.story_need_challenge')
       : $r('app.string.story_load_failed', why));
+    // 撞上挑战时横幅要立刻出现（台账刚被 NativeStories 记上，见 MobileChallenge）。
+    this.refreshChallengeState();
   }
 
   /**

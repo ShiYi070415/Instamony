@@ -26,6 +26,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { InstagramCookieJar, InstagramCookieSnapshot } from '../InstagramCookieJar';
 import { ApiThrottle, BACKOFF_MS, FEEDBACK_BACKOFF_MS } from '../ApiThrottle';
 import { MobileSession, MobileIdentity } from './MobileSession';
+import { MobileChallenge } from './MobileChallenge';
 import { signedBody } from './MobileSign';
 import {
   API_DOMAIN,
@@ -389,8 +390,13 @@ export class MobileRequest {
     if (message === MOBILE_LOGIN_REQUIRED || code === 403) {
       error = message === MOBILE_LOGIN_REQUIRED ? MOBILE_LOGIN_REQUIRED : MOBILE_FORBIDDEN;
     }
-    if (message === MOBILE_CHALLENGE) {
+    if (message === MOBILE_CHALLENGE || errorType === MOBILE_CHALLENGE) {
+      /*
+       * **账号安全验证**：把挑战地址记进台账（见 core/mobileapi/MobileChallenge），
+       * 界面据此提示"去网页里验证"。这一支**重试没有意义** —— 必须真人/设备验证通过。
+       */
       error = MOBILE_CHALLENGE;
+      MobileChallenge.note(text);
     } else if (message === MOBILE_FEEDBACK) {
       error = MOBILE_FEEDBACK;
     } else if (errorType === MOBILE_RATE_LIMIT || MobileRequest.looksLimited(text)) {
