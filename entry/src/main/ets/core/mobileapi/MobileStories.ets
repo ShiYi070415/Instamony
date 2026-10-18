@@ -127,6 +127,41 @@ export class MobileStories {
   }
 
   /**
+   * 拉一条**精选快拍（高光）**的全部媒体。
+   *
+   * 端点：`feed/reels_media/?reel_ids=highlight:<id>&source=highlight`
+   * （instagrapi 的 `highlight_info`）。注意媒体在 `reels["highlight:<id>"].items` 里，
+   * 键名带 `highlight:` 前缀。
+   *
+   * @param id 高光的 id（`highlights_tray` 给的那个，**不带** `highlight:` 前缀）
+   * @param title 高光名称（响应里没有作者信息，用它当标题）
+   */
+  static async highlightReel(id: string, title: string): Promise<StoryReel | null> {
+    const raw: string = id.trim();
+    if (raw.length === 0) {
+      return null;
+    }
+    const reelId: string = raw.startsWith('highlight:') ? raw : `highlight:${raw}`;
+    const params: string =
+      `reel_ids=${encodeURIComponent(reelId)}&source=highlight`;
+    const result: MobileResult = await MobileRequest.send('feed/reels_media/', '', params, true,
+      null, new MobileOptions(ApiThrottle.STORIES, ApiThrottle.interactive()));
+    if (!result.ok) {
+      hilog.warn(DOMAIN, TAG, 'highlight reel miss id=%{public}s %{public}s',
+        reelId, result.summary());
+      return null;
+    }
+    const items: Array<StoryItem> = MobileStories.reelsMediaItems(result.body, reelId);
+    if (items.length === 0) {
+      hilog.info(DOMAIN, TAG, 'highlight reel empty id=%{public}s bytes=%{public}d',
+        reelId, result.bytes);
+      return null;
+    }
+    hilog.info(DOMAIN, TAG, 'highlight reel ok id=%{public}s n=%{public}d', reelId, items.length);
+    return new StoryReel(reelId, title, '', items);
+  }
+
+  /**
    * 拉某个用户当前未过期的全部快拍（拿不到给 null）。
    *
    * 两条路按"最可能成"的顺序试：

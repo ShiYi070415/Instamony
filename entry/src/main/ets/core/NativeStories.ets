@@ -801,6 +801,16 @@ export class NativeStories {
   }
 
   /**
+   * 拉一条**精选快拍（高光）**的媒体（个人页那一排点开后播的就是它）。
+   *
+   * 薄包装：真正的端点与解析在 core/mobileapi/MobileStories.highlightReel
+   * （`feed/reels_media/?reel_ids=highlight:<id>&source=highlight`）。
+   */
+  static async highlightReel(id: string, title: string): Promise<StoryReel | null> {
+    return MobileStories.highlightReel(id, title);
+  }
+
+  /**
    * 拉一次托盘（拿不到给 null）。
    *
    * **同一时刻只跑一发**：启动预热、托盘组件挂载、以及"推荐快拍"兜底的重试可能同时来要，

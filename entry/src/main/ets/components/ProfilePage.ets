@@ -26,6 +26,7 @@ import { display } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { media } from '@kit.MediaKit';
 import { ProfileHeader, ProfileHighlight, ProfileMapper, ProfilePost, ProfileStreamPage, BioSegment, splitMentions } from '../model/Profile';
+import { StoryHeroRect } from '../model/Story';
 import { MediaPost } from '../model/MediaPost';
 import { FollowState, FOLLOW_VERSION_KEY } from '../core/FollowState';
 import { SaveState } from '../core/SaveState';
@@ -282,6 +283,13 @@ export struct ProfilePage {
   private audio: media.AVPlayer | null = null;
   /** 播放器正在创建（防连点创建出两个）。 */
   private audioOpening: boolean = false;
+  /**
+   * 精选快拍每颗圆在屏幕上的位置（id → 矩形）。
+   *
+   * 用途：点开时交给播放页做**共享元素转场**（从这颗圆放大/缩回），
+   * 和快拍托盘那套完全一致（见 StoriesTray.captureRect）。
+   */
+  private highlightRects: Map<string, StoryHeroRect> = new Map<string, StoryHeroRect>();
   @State private posts: Array<ProfilePost> = [];
   @State private busy: boolean = false;
   @State private status: string = '';
@@ -343,6 +351,15 @@ export struct ProfilePage {
    */
   onOpenUser: (username: string) => void = (username: string): void => {
   };
+  /**
+   * 点「精选快拍」里的一颗：请宿主用**快拍播放页**把它放出来
+   * （需求："highlight 要能打开，按照快拍的动画逻辑和卡片样式"）。
+   *
+   * 第二个参数是这颗圆在**屏幕上的矩形**（转场要用：卡片从它放大，收起再缩回它）。
+   */
+  onOpenHighlight: (item: ProfileHighlight, rect: StoryHeroRect) => void =
+    (item: ProfileHighlight, rect: StoryHeroRect): void => {
+    };
   /** 个人信息那一块的高度（vp，量出来的）：钉住的判据就是它。 */
   private headerBlockVp: number = 0;
   /** 屏幕高度（vp）：算"末尾补高"要用（见 tailSpacerVp）。 */
@@ -564,8 +581,16 @@ export struct ProfilePage {
               .width(HIGHLIGHT_LABEL_W - 8)
           }
           .width(HIGHLIGHT_LABEL_W)
+          // 量一下这颗圆在屏幕上的位置：点开时交给播放页做转场（见 highlightRects）。
+          .onAreaChange((oldArea: Area, newArea: Area): void => {
+            this.captureHighlightRect(one.id, newArea);
+          })
           .onClick((): void => {
-            hilog.info(DOMAIN, TAG, 'PF highlight tap id=%{public}s (not wired)', one.id);
+            const rect: StoryHeroRect | undefined = this.highlightRects.get(one.id);
+            hilog.info(DOMAIN, TAG, 'PF highlight open id=%{public}s title=%{public}s',
+              one.id, one.title);
+            this.onOpenHighlight(one,
+              rect === undefined ? new StoryHeroRect(0, 0, 0, 0) : rect);
           })
         }, (one: ProfileHighlight): string => one.id)
       }
@@ -613,6 +638,30 @@ export struct ProfilePage {
   /** 简介切好的片段（见 model/Profile 的 splitMentions）。 */
   private bioSegments(): Array<BioSegment> {
     return splitMentions(this.header === null ? '' : this.header.bio);
+  }
+
+  /** 记下精选快拍那颗圆的屏幕矩形（转场用，见 highlightRects）。 */
+  private captureHighlightRect(id: string, area: Area): void {
+    this.highlightRects.set(id, new StoryHeroRect(
+      ProfilePage.lenOf(area.globalPosition.x),
+      ProfilePage.lenOf(area.globalPosition.y),
+      ProfilePage.lenOf(area.width),
+      ProfilePage.lenOf(area.height)));
+  }
+
+  /** `Length`（number | string | Resource）→ vp 数值；认不出给 0。 */
+  private static lenOf(value: Length | undefined): number {
+    if (value === undefined) {
+      return 0;
+    }
+    if (typeof value === 'number') {
+      return value as number;
+    }
+    if (typeof value === 'string') {
+      const parsed: number = Number.parseFloat(value as string);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+    return 0;
   }
 
   /** 横幅区第一颗胶囊的文字：账号名（没有就给空串，胶囊里只剩图标）。 */

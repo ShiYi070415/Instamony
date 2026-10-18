@@ -88,11 +88,14 @@ export class ProfileHighlight {
   readonly id: string;
   readonly title: string;
   readonly coverUrl: string;
+  /** 这条高光的创建时间（毫秒；0 = 接口没给）。播放页上会显示成"哪年哪月"。 */
+  readonly createdAtMs: number;
 
-  constructor(id: string, title: string, coverUrl: string) {
+  constructor(id: string, title: string, coverUrl: string, createdAtMs: number = 0) {
     this.id = id;
     this.title = title;
     this.coverUrl = coverUrl;
+    this.createdAtMs = createdAtMs;
   }
 }
 

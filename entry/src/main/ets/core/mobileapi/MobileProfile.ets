@@ -334,7 +334,10 @@ export class MobileProfile {
       out.push(new ProfileHighlight(
         MobileProfile.firstText(one, ['id', 'strong_id__']),
         MobileProfile.firstText(one, ['title']),
-        coverUrl));
+        coverUrl,
+        // 发布时间：`created_at` 是秒；没有就退回 `latest_reel_media`（最后一条的发布时刻）。
+        MobileProfile.secondsToMs(MobileProfile.numberOf(one, 'created_at'))
+          || MobileProfile.secondsToMs(MobileProfile.numberOf(one, 'latest_reel_media'))));
     }
     hilog.info(DOMAIN, TAG, 'highlights ok n=%{public}d bytes=%{public}d', out.length, result.bytes);
     return out;
@@ -402,6 +405,24 @@ export class MobileProfile {
     } catch (error) {
       return null;
     }
+  }
+
+  /** 秒级时间戳 → 毫秒（0 / 负数给 0，别造出一个 1970 年）。 */
+  private static secondsToMs(seconds: number): number {
+    return seconds > 0 ? Math.round(seconds * 1000) : 0;
+  }
+
+  /** 取一个数字字段（缺/非数字给 0）。 */
+  private static numberOf(holder: Record<string, Object>, key: string): number {
+    const value: Object | undefined = holder[key];
+    if (value === undefined || value === null) {
+      return 0;
+    }
+    if (typeof value === 'number') {
+      return value as number;
+    }
+    const parsed: number = Number(`${value}`);
+    return Number.isFinite(parsed) ? parsed : 0;
   }
 
   /** 一个媒体节点里最宽的封面图（`image_versions2.candidates`）；没有给空串。 */

@@ -123,7 +123,7 @@ import { StoryViewer } from '../components/StoryViewer';
 import { ReelsPage } from '../components/ReelsPage';
 import { Reel } from '../model/Reel';
 import { CommentInputBar } from '../components/CommentInputBar';
-import { ProfileHeader, ProfilePost, ProfileStreamPage } from '../model/Profile';
+import { ProfileHeader, ProfileHighlight, ProfilePost, ProfileStreamPage } from '../model/Profile';
 import { DirectThread } from '../model/Direct';
 import { SearchUser, SearchPost } from '../model/Search';
 import { EMPTY_REEL, StoryHeroRect, StoryItem, StoryReel, StoryTray, StoryTrayItem } from '../model/Story';
@@ -6877,6 +6877,10 @@ struct Index {
       // 简介里的 @账号 → 打开那个人的主页（需求："点击后进入该用户主页"）。
       onOpenUser: (username: string): void => {
         this.openUserProfile(username, '');
+      },
+      // 精选快拍 → 用快拍播放页打开（同一套转场/卡片，只是没有动作区，见 openProfileHighlight）。
+      onOpenHighlight: (item: ProfileHighlight, rect: StoryHeroRect): void => {
+        this.openProfileHighlight(item, rect);
       }
     })
   }
@@ -7052,6 +7056,15 @@ struct Index {
    */
   @State private storyFollowing: boolean = true;
   /**
+   * 现在这一层放的是**精选快拍（高光）**而不是某个人的快拍。
+   *
+   * 用途：播放页据此**不画底部动作区**（需求："highlight…不需要动作区"），
+   * 也不显示"关注"、不接"下一位/上一位"。
+   */
+  @State private storyIsHighlight: boolean = false;
+  /** 高光的发布日期（显示在资讯栏标题后面；普通快拍为空）。 */
+  @State private storyDateText: string = '';
+  /**
    * 自己的头像（「你的快拍」那一项用）。
    *
    * 来源是「我的」头部那份资料（`profileVm.onHeader`）—— 不为托盘这一项单独打一发接口。
@@ -7159,6 +7172,58 @@ struct Index {
     }
     return FollowState.resolve(item.userId,
       FollowState.resolveName(item.username, item.following));
+  }
+
+  /**
+   * 点开「精选快拍」里的一颗（需求："highlight 要能打开，按照快拍的动画逻辑和卡片样式，
+   * 不需要动作区，资讯区头像用 highlight 的封面、文本用 highlight 的名称，还有发布日期以及更多按钮"）。
+   *
+   * 复用同一个播放浮层（StoryViewer）：卡片从**这颗圆**放大到全屏、收起时缩回它
+   * —— 和点开某人的快拍完全同一套动画；差别只有三处：
+   *   · 资讯栏的头像 = 高光封面、标题 = 高光名称，后面跟发布日期（`dateText`）；
+   *   · `hideActions` = true：不画底部输入框与点赞/评论/转发；
+   *   · 没有"下一位/上一位"（高光是独立的一组）。
+   */
+  private openProfileHighlight(item: ProfileHighlight, rect: StoryHeroRect): void {
+    hilog.info(DOMAIN, TAG, 'highlight open id=%{public}s hero=%{public}s',
+      item.id, rect.dump());
+    this.storyIsHighlight = true;
+    this.storyDateText = Index.dateTextOf(item.createdAtMs);
+    this.storyHero = rect;
+    this.storyHeroValid = rect.valid();
+    this.storyAvatar = item.coverUrl;
+    this.storyName = item.title;
+    this.storyUserId = item.id;
+    // 高光不显示"关注"（这不是某个作者的时间线）。
+    this.storyFollowing = true;
+    this.storyReel = EMPTY_REEL;
+    this.storyPendingOpen = true;
+    this.storyOpen = true;
+    NativeStories.highlightReel(item.id, item.title).then((reel: StoryReel | null): void => {
+      if (reel === null) {
+        hilog.warn(DOMAIN, TAG, 'highlight reel failed id=%{public}s', item.id);
+        this.storyPendingOpen = false;
+        this.toast($r('app.string.story_load_failed', 'highlight'));
+        this.requestStoryClose();
+        return;
+      }
+      this.storyReel = reel;
+      this.storyPendingOpen = false;
+      this.storyHeroValid = rect.valid();
+    }).catch((error: Error): void => {
+      hilog.warn(DOMAIN, TAG, 'highlight reel threw: %{public}s', error.message ?? '-');
+      this.storyPendingOpen = false;
+      this.requestStoryClose();
+    });
+  }
+
+  /** 毫秒时间戳 → "2026年10月18日"（0 = 没有日期，给空串）。 */
+  private static dateTextOf(ms: number): string {
+    if (ms <= 0) {
+      return '';
+    }
+    const when: Date = new Date(ms);
+    return `${when.getFullYear()}年${when.getMonth() + 1}月${when.getDate()}日`;
   }
 
   /**
@@ -7301,6 +7366,9 @@ struct Index {
     if (this.storyLoading) {
       return;
     }
+    // 普通快拍：把"精选快拍"那套标记复位（否则动作区会被藏掉、资讯栏还挂着日期）。
+    this.storyIsHighlight = false;
+    this.storyDateText = '';
     /*
      * **先弹卡片，后取数据**（需求："初次点击序列头像没有立马展开 stories"）。
      *
@@ -7612,6 +7680,10 @@ struct Index {
    * 取的还是同一套（取不到就再往后一位，见 playStoryAt）。
    */
   private advanceStory(): void {
+    if (this.storyIsHighlight) {
+      // 高光是独立的一组，没有"下一位用户"；走到最后一条就正常收起。
+      return;
+    }
     const next: number = this.storyQueueIndex + 1;
     hilog.info(DOMAIN, TAG, 'story next user from=%{public}d next=%{public}d of=%{public}d',
       this.storyQueueIndex, next, this.storyQueue.length);
@@ -7625,6 +7697,9 @@ struct Index {
    * 进的是上一位的**第一条**：播放页换 reel 时本来就从第一条重播（见 StoryViewer.onReelChanged）。
    */
   private backStory(): void {
+    if (this.storyIsHighlight) {
+      return;
+    }
     const prev: number = this.storyQueueIndex - 1;
     hilog.info(DOMAIN, TAG, 'story prev user from=%{public}d prev=%{public}d of=%{public}d',
       this.storyQueueIndex, prev, this.storyQueue.length);
@@ -7638,6 +7713,9 @@ struct Index {
     this.storyPendingOpen = false;
     this.storyHeroValid = false;
     this.storyClosing = false;
+    // 选精快拍那套标记跟着一起复位（下一层可能是普通快拍）。
+    this.storyIsHighlight = false;
+    this.storyDateText = '';
   }
 
   /**
@@ -9546,10 +9624,13 @@ struct Index {
           onFollowAuthor: (): Promise<boolean> => {
             return this.onFollowStoryAuthor();
           },
-          // 后面还有人 → 最后一条点右半屏接他（见 Index.advanceStory）。
-          hasNextUser: this.storyQueueIndex + 1 < this.storyQueue.length,
-          // 前面还有人 → 第一条点左半屏回他（见 Index.backStory）。
-          hasPrevUser: this.storyQueueIndex > 0,
+          // 后面还有人 → 最后一条点右半屏接他（见 Index.advanceStory）。高光没有"下一位"。
+          hasNextUser: !this.storyIsHighlight && this.storyQueueIndex + 1 < this.storyQueue.length,
+          // 前面还有人 → 第一条点左半屏回他（见 Index.backStory）。高光同上。
+          hasPrevUser: !this.storyIsHighlight && this.storyQueueIndex > 0,
+          // 精选快拍：不画底部动作区（输入框 + 点赞/评论/转发），资讯栏后面跟发布日期。
+          hideActions: this.storyIsHighlight,
+          dateText: this.storyDateText,
           // 这位的头像还在主页托盘上吗（不在就改成向下收起，见 StoryViewer.requestClose）。
           heroValid: this.storyHeroValid,
           onNextUser: (): void => {

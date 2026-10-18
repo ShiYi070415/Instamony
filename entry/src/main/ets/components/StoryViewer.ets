@@ -291,6 +291,15 @@ export struct StoryViewer {
   };
 
   /**
+   * 这一层是不是在放**精选快拍（高光）**：是的话**不画底部动作区**（输入框 + 点赞/评论/转发）。
+   *
+   * 需求："highlight… 按照快拍的动画逻辑和卡片样式，不需要动作区"。
+   */
+  @Prop hideActions: boolean = false;
+  /** 资讯栏里跟在标题后面的小字（高光用发布日期；普通快拍为空）。 */
+  @Prop dateText: string = '';
+
+  /**
    * **正在看的这一位关注了没有**（宿主算好传进来）。
    *
    * 需求："查阅快拍内容但未关注该用户就在用户资讯旁显示一个关注按钮"。
@@ -1539,6 +1548,14 @@ export struct StoryViewer {
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .constraintSize({ maxWidth: this.cardW() * 0.45 })
+          // 高光：标题后面跟一行小字的发布日期（需求："还有该 highlight 的发布日期"）。
+          if (this.dateText.length > 0) {
+            Text(this.dateText)
+              .fontSize(11)
+              .fontColor('#B3FFFFFF')
+              .maxLines(1)
+              .constraintSize({ maxWidth: this.cardW() * 0.3 })
+          }
         }
       }
       .padding({ left: 3, right: 12, top: 3, bottom: 3 })
@@ -1905,7 +1922,7 @@ export struct StoryViewer {
        * 它是独立一层（不在卡片的 clip 里），所以媒体区不用为它让出圆角。
        * 同样只在动画结束后挂上来，所以收起/展开时不会在屏幕上乱飘。
        */
-      if (this.contentMounted) {
+      if (this.contentMounted && !this.hideActions) {
         Row({ space: ACTION_GAP_VP }) {
           CommentInputBar({
             hint: $r('app.string.story_message_hint'),
