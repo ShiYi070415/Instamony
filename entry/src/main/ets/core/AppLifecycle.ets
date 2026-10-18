@@ -16,11 +16,27 @@ export class AppLifecycle {
   private static handler: VisibilityHandler = (foreground: boolean): void => {
   };
   private static registered: boolean = false;
+  /**
+   * **额外的监听者**（除了 Web 宿主那个主处理器）。
+   *
+   * 为什么单开一个数组：主处理器是"单槽"的（见 onVisibilityChanged），直接再加一个订阅会把它
+   * 顶掉、让 Web 宿主的暂停/恢复失效。这里让别的模块（私信页的前台刷新，见 DirectPage）
+   * 追加进来，互不影响。
+   */
+  private static extra: Array<VisibilityHandler> = [];
 
   /** 由 Web 宿主组件在 aboutToAppear 时注册。 */
   static onVisibilityChanged(handler: VisibilityHandler): void {
     AppLifecycle.handler = handler;
     AppLifecycle.registered = true;
+  }
+
+  /** 追加一个监听者（幂等：同一个函数只加一次）。 */
+  static addVisibilityListener(handler: VisibilityHandler): void {
+    if (AppLifecycle.extra.indexOf(handler) >= 0) {
+      return;
+    }
+    AppLifecycle.extra.push(handler);
   }
 
   /** 是否已有组件接管；没有时能力层不必通知（避免冷启动早期空转）。 */
@@ -30,9 +46,15 @@ export class AppLifecycle {
 
   static notifyForeground(): void {
     AppLifecycle.handler(true);
+    for (let index: number = 0; index < AppLifecycle.extra.length; index++) {
+      AppLifecycle.extra[index](true);
+    }
   }
 
   static notifyBackground(): void {
     AppLifecycle.handler(false);
+    for (let index: number = 0; index < AppLifecycle.extra.length; index++) {
+      AppLifecycle.extra[index](false);
+    }
   }
 }

@@ -1,4 +1,4 @@
-/*
+﻿/*
  * 一条私信会话（会话详情）的视图模型。
  *
  * ## 和 DirectViewModel 的分工
@@ -43,7 +43,7 @@ const TAG: string = 'DirectThreadViewModel';
  * **从 4 秒放宽到 25 秒**（降噪，见 `FINGERPRINT_ANALYSIS.md` 阶段一）：4 秒一发私有请求是最容易
  * 被 IG 判成脚本的固定节奏之一；人在会话页里 25 秒的延迟完全可接受（自己发消息后会主动拉一次）。
  */
-const THREAD_POLL_MS: number = 25000;
+const THREAD_POLL_MS: number = 10000;
 /**
  * 翻页"卡住"（去重后没多出任何一条）之后的冷却：这段时间内不再翻，过了允许再试一次。
  *

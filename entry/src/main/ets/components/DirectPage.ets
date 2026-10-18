@@ -17,6 +17,8 @@ import { display } from '@kit.ArkUI';
 import { DirectThread } from '../model/Direct';
 import { DirectViewModel } from '../viewmodel/DirectViewModel';
 import { ScrollDelta } from '../core/ScrollReport';
+// 回到前台的即时刷新（见 startPolling）。
+import { AppLifecycle } from '../core/AppLifecycle';
 
 /** 顶部让出标题栏、底部让出悬浮 tab 栏（与首页/我的同一个数）。 */
 const DIRECT_TOP_OFFSET: number = 94;
@@ -50,7 +52,7 @@ const UNREAD_MAX: number = 4;
  * 这一发是 `ApiThrottle.DIRECT` 家族里的普通读请求，内容没变时连界面都不重绘
  * （见 DirectViewModel.refreshQuietly / sameThreads）。
  */
-const DIRECT_POLL_MS: number = 20000;
+const DIRECT_POLL_MS: number = 15000;
 
 @Component
 export struct DirectPage {
@@ -81,7 +83,7 @@ export struct DirectPage {
   /** 自动刷新的定时器句柄（-1 = 没在跑，见 startPolling / aboutToDisappear）。 */
   private pollTimer: number = -1;
 
-  /** 起一个自动刷新定时器（幂等）：每 20 秒静默拉一次收件箱。 */
+  /** 起一个自动刷新定时器（幂等）：每 15 秒静默拉一次收件箱。 */
   private startPolling(): void {
     if (this.pollTimer >= 0) {
       return;
@@ -90,6 +92,16 @@ export struct DirectPage {
       this.vm.refreshQuietly().catch((): void => {
       });
     }, DIRECT_POLL_MS);
+    /*
+     * **回到前台立刻刷一次**：后台期间定时器会被系统压住（也可能被冻结），
+     * 回到前台那一眼看到的是旧列表 —— 这一发把"实时"补上（见 core/AppLifecycle）。
+     */
+    AppLifecycle.addVisibilityListener((foreground: boolean): void => {
+      if (foreground) {
+        this.vm.refreshQuietly().catch((): void => {
+        });
+      }
+    });
   }
 
   aboutToDisappear(): void {
