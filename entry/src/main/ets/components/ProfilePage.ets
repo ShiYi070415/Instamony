@@ -425,6 +425,22 @@ export struct ProfilePage {
   }
 
   /** 从视图模型回读当前数据（唯一的数据出口，避免依赖回调时序）。 */
+  /**
+   * 状态行要显示的内容。
+   *
+   * 只有两句"正常态"被过滤掉（`已加载` / `这个分页还没有内容`）：
+   * 前者没有信息量，后者内容区自己就有"还没有帖子"的空态图。
+   * 其余（正在抓模板 / 被限流还有几分钟 / 读取失败 + native、replay 诊断）**原样显示** ——
+   * 它是这个页面唯一的排查通道（hilog 在真机上常被 chromium 刷掉）。
+   */
+  private visibleStatus(): string {
+    const text: string = this.status;
+    if (text === '已加载' || text === '这个分页还没有内容') {
+      return '';
+    }
+    return text;
+  }
+
   private syncFromVm(): void {
     const header: ProfileHeader | null = this.vm.headerNow();
     if (header !== null) {
@@ -1028,11 +1044,13 @@ export struct ProfilePage {
               }
               .width('100%')
 
-              // 状态行：取数进度/失败原因（正常加载成功后是一句"已加载"）。
+              // 状态行：取数失败原因 / 正在干什么（正常加载成功后**不显示**）。
+              //
               // 它同时是**排查通道** —— 这个项目里日志经常被刷掉，界面上的这行字
-              // 用 uitest dumpLayout 一定读得到。
-              if (this.status.length > 0) {
-                Text(this.status)
+              // 用 uitest dumpLayout 一定读得到。所以只过滤掉那两句"没什么信息量"的正常态：
+              // 以前正常进页面也会在名字和简介之间插一行"已加载"，看起来像简介的一部分。
+              if (this.visibleStatus().length > 0) {
+                Text(this.visibleStatus())
                   .fontSize(12)
                   .fontColor($r('app.color.secondary_text'))
                   .width('100%')

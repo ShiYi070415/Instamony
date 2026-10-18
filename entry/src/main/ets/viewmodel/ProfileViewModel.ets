@@ -439,11 +439,19 @@ export class ProfileViewModel {
     this.tab = tab;
     // 记下自己的账号名：原生失败要重抓模板时靠它导航到 `/用户名/saved/` 这类地址
     // （见 recaptureAndRetry）。切页时页面会把它一起传进来。
-    if (ownUsername.length > 0) {
+    if (ownUsername.length > 0 && ProfileViewModel.isUsername(ownUsername)) {
       this.ownName = ownUsername;
     }
     // 广播出去：标题栏里那条分段按钮（钉住时显示的那条）也要跟着换选中态。
     this.onTab(tab);
+    /*
+     * 切分页时头部若还没有，顺手补上（**不 await**：切页要秒开，头部是一发小请求）。
+     * 头部与网格互不依赖，谁先回来都不影响另一个（见 load 里那段的说明）。
+     */
+    if (this.header === null) {
+      this.loadHeader().catch((): void => {
+      });
+    }
     const state: ProfileTabState = this.tabs[tab];
     // 立刻铺出这一分页已有的内容（空就空着，但状态行会说清在干什么）。
     this.posts = state.posts;
@@ -531,8 +539,22 @@ export class ProfileViewModel {
   async loadIfStale(maxAgeMs: number): Promise<void> {
     const state: ProfileTabState = this.tabs[this.tab];
     if (state.loaded && state.loadedAtMs > 0 && Date.now() - state.loadedAtMs < maxAgeMs) {
-      hilog.info(DOMAIN, TAG, 're-enter tab=%{public}d fresh (%{public}dms) → skip load',
+      hilog.info(DOMAIN, TAG, 're-enter tab=%{public}d fresh (%{public}dms) → skip grid load',
         this.tab, Date.now() - state.loadedAtMs);
+      /*
+       * **网格够新不拉，但头部是独立的一份，必须补**（这是用户报的
+       * "打开 app 进入我的页面头部数据没有加载"的直接原因）。
+       *
+       * 以前这里直接 `return`：而"网格够新"在**冷启动**时几乎恒成立 —— 启动预热
+       * （`preloadAllSegments` → `prefetchOthersSequential` → `loadTabInBackground`）
+       * 已经在后台把四个分页的第一页拉完了，但它**故意不碰头部**（不打扰当前显示）。
+       * 于是用户第一次点进「我的」时：网格 fresh → 整段跳过 → 头部一次都没请求 →
+       * 界面上头像空白、名字/简介为空、三个计数全 0。
+       */
+      if (this.header === null) {
+        hilog.info(DOMAIN, TAG, 're-enter: header missing → fetch it now');
+        await this.loadHeader();
+      }
       return;
     }
     await this.load(true);
@@ -1395,13 +1417,27 @@ export class ProfileViewModel {
     try {
       const href: string = await this.bridge.runBridge(OWN_PROFILE_SCRIPT,
         OWN_PROFILE_TIMEOUT_MS, 'own-profile');
-      const parts: Array<string> = href.split('/').filter((one: string): boolean => one.length > 0);
-      if (parts.length > 0) {
-        const name: string = parts[0].split('?')[0];
-        if (name.length > 0) {
+      /*
+       * ⚠️ **桥返回的不一定是路径**：页面没就绪 / 脚本出错时 `runBridge` 回的是
+       * `{"state":"not-ready"}` / `{"state":"error",…}` 这种 JSON 状态串。
+       * 以前这里直接 `href.split('/')[0]` 当账号名用 —— 于是 `ownName` 变成
+       * `{"state":"not-ready"}` 这串垃圾，紧接着头部一致性校验拿它去比 `xingli_415`，
+       * 必然不相等 → **头部被当成"别人的资料"丢掉**，界面上就是
+       * 头像空白 + 名字/简介空 + 三个计数全 0（用户刚报的"头部数据没有加载"）。
+       * 所以：先认状态串、再校验"像不像账号名"。
+       */
+      if (href.startsWith('{')) {
+        hilog.warn(DOMAIN, TAG, 'own name bridge state=%{public}s', href.substring(0, 80));
+      } else {
+        const parts: Array<string> = href.split('/').filter((one: string): boolean => one.length > 0);
+        const name: string = parts.length > 0 ? parts[0].split('?')[0] : '';
+        if (ProfileViewModel.isUsername(name)) {
           this.ownName = name;
           this.target = this.target.withSelfName(name);
           hilog.info(DOMAIN, TAG, 'own name resolved @%{public}s', name);
+        } else if (name.length > 0) {
+          hilog.warn(DOMAIN, TAG, 'own name rejected (not a username): %{public}s',
+            name.substring(0, 40));
         }
       }
     } catch (error) {
@@ -1414,7 +1450,7 @@ export class ProfileViewModel {
      */
     if (this.ownName.length === 0) {
       const name: string = await NativeProfile.selfUsername();
-      if (name.length > 0) {
+      if (ProfileViewModel.isUsername(name)) {
         this.ownName = name;
         this.target = this.target.withSelfName(name);
         hilog.info(DOMAIN, TAG, 'own name resolved via mobile @%{public}s', name);
@@ -1422,6 +1458,27 @@ export class ProfileViewModel {
         hilog.warn(DOMAIN, TAG, 'own name still unknown (bridge + mobile both failed)');
       }
     }
+  }
+
+  /**
+   * 这段字符串**像不像 Instagram 账号名**（只允许字母/数字/下划线/点，1~40 个字符）。
+   *
+   * 用途只有一个：挡住"桥返回的 JSON 状态串 / 空串 / 一整段 HTML"被当成账号名塞进
+   * `ownName` —— 那会让头部一致性校验永远不通过（见 ensureOwnName 的说明）。
+   */
+  private static isUsername(name: string): boolean {
+    if (name.length === 0 || name.length > 40) {
+      return false;
+    }
+    for (let index: number = 0; index < name.length; index++) {
+      const ch: string = name.charAt(index);
+      const ok: boolean = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+        || (ch >= '0' && ch <= '9') || ch === '_' || ch === '.';
+      if (!ok) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**
@@ -1552,45 +1609,59 @@ export class ProfileViewModel {
     // 顺序不能反：先确认这份状态属于当前账号（换账号时作废），再去解析账号名。
     await this.ensureSelfScope();
     await this.ensureOwnName();
-    // 原生优先：模板在就直发（见 NativeProfile）。
-    if (NativeProfile.hasTemplate(NativeProfile.OP_HEADER)) {
-      const native: ProfileHeader | null = await NativeProfile.fetchHeader(this.target);
-      if (native !== null) {
-        /*
-         * **本人的头部要核对账号名**：模板是按操作名共用的，如果在别人的主页上抓过一次，
-         * 那份模板里的目标是那个人 —— 本人这一路会把别人的资料当成"我的"显示出来
-         * （用户报的"我的页面信息错误显示为其他用户"）。
-         * NativeProfile 已经会把目标键回正成自己（见 ProfileTarget 的类头），这里再核一道：
-         * 回正失败（读不到自己的 id 等）时**宁可当成读取失败**，也不把别人的资料画上去。
-         */
-        if (this.target.isSelf() && this.ownName.length > 0
-          && native.username.toLowerCase() !== this.ownName.toLowerCase()) {
-          hilog.warn(DOMAIN, TAG, 'header mismatch @%{public}s vs own @%{public}s → ignore',
-            native.username, this.ownName);
-          if (!this.headerVerified) {
-            // 只重抓一次（抓模板要导航隐藏网页）：多半是模板串了别人的目标。
-            this.headerVerified = true;
-            await this.captureOwnProfile();
-            return await this.loadHeader();
-          }
-          this.onStatus('头部读取异常：拿到的不是本账号的资料');
+    /*
+     * **头部一律先走 `NativeProfile.fetchHeader`**（它内部就是移动端优先：
+     * `users/{pk}/info/` / `users/{username}/usernameinfo/`，**不需要任何模板**；
+     * 模板回放只是它的兜底）。
+     *
+     * 以前这里先判 `NativeProfile.hasTemplate(NativeProfile.OP_HEADER)` —— 没有模板就整段跳过。
+     * 于是"新装 / 换账号后模板被清 / 模板过期"的时候，"我的"头部永远是空的，
+     * 而且连状态行都不写（用户报的"打开 app 进入我的页面头部数据没有加载"就是这个）。
+     */
+    let native: ProfileHeader | null = await NativeProfile.fetchHeader(this.target);
+    if (native === null && !ApiThrottle.blocked(ApiThrottle.MOBILE)) {
+      // 偶发的超时 / 抖动：隔 600ms 再来一次（限流期间不重试，见 load 里的同一取舍）。
+      hilog.info(DOMAIN, TAG, 'header failed (%{public}s) → retry once',
+        NativeProfile.lastDetail());
+      await ProfileViewModel.sleep(600);
+      native = await NativeProfile.fetchHeader(this.target);
+    }
+    if (native !== null) {
+      /*
+       * **本人的头部要核对账号名**：模板回放那条是按操作名共用的，如果在别人的主页上抓过一次，
+       * 那份模板里的目标是那个人 —— 本人这一路会把别人的资料当成"我的"显示出来
+       * （用户报的"我的页面信息错误显示为其他用户"）。
+       * NativeProfile 已经会把目标键回正成自己（见 ProfileTarget 的类头），这里再核一道：
+       * 回正失败（读不到自己的 id 等）时**宁可当成读取失败**，也不把别人的资料画上去。
+       */
+      if (this.target.isSelf() && ProfileViewModel.isUsername(this.ownName)
+        && native.username.toLowerCase() !== this.ownName.toLowerCase()) {
+        hilog.warn(DOMAIN, TAG, 'header mismatch @%{public}s vs own @%{public}s → ignore',
+          native.username, this.ownName);
+        if (!this.headerVerified) {
+          // 只重抓一次（抓模板要导航隐藏网页）：多半是模板串了别人的目标。
+          this.headerVerified = true;
+          await this.captureOwnProfile();
+          await this.loadHeader();
           return;
         }
-        this.header = native;
-        // 本人这一页顺手把自己的账号名记下来：切分页时页面若还没拿到头部（own 传空），
-        // 收藏 / 被标注 / 视频那几段就抓不到模板、也没法重抓（见 ownName 的说明）。
-        if (this.target.isSelf() && native.username.length > 0) {
-          this.ownName = native.username;
-          // 名字也是"回正请求体"要用的（见 ProfileTarget.selfName）。
-          this.target = this.target.withSelfName(native.username);
-        }
-        hilog.info(DOMAIN, TAG, 'header native @%{public}s posts=%{public}d',
-          native.username, native.posts);
-        this.onHeader(native);
+        this.onStatus('头部读取异常：拿到的不是本账号的资料');
         return;
       }
-      hilog.info(DOMAIN, TAG, 'header native failed → replay');
+      this.header = native;
+      // 本人这一页顺手把自己的账号名记下来：切分页时页面若还没拿到头部（own 传空），
+      // 收藏 / 被标注 / 视频那几段就抓不到模板、也没法重抓（见 ownName 的说明）。
+      if (this.target.isSelf() && native.username.length > 0) {
+        this.ownName = native.username;
+        // 名字也是"回正请求体"要用的（见 ProfileTarget.selfName）。
+        this.target = this.target.withSelfName(native.username);
+      }
+      hilog.info(DOMAIN, TAG, 'header ok @%{public}s posts=%{public}d',
+        native.username, native.posts);
+      this.onHeader(native);
+      return;
     }
+    hilog.info(DOMAIN, TAG, 'header failed (%{public}s) → replay', NativeProfile.lastDetail());
     // 同 fetchPage：别人主页不走回放兜底（回放是原样重发模板，会把**我的**资料画成他的）。
     if (!this.target.isSelf()) {
       this.onStatus('头部读取失败：' + this.diag);
@@ -1598,7 +1669,12 @@ export class ProfileViewModel {
     }
     const cfg: string = this.registry.storedJson(NativeProfile.OP_HEADER);
     if (cfg.length === 0) {
-      hilog.info(DOMAIN, TAG, 'header: no template');
+      /*
+       * 走不到移动端、又没模板可回放：**必须把原因写到状态行**（以前只打一行日志就 return，
+       * 界面上什么都没有 = 用户说的"头部数据没有加载"却看不出为什么）。
+       */
+      hilog.info(DOMAIN, TAG, 'header: no template and mobile failed');
+      this.onStatus('头部读取失败：' + NativeProfile.lastDetail());
       return;
     }
     for (let attempt: number = 1; attempt <= EXTRACT_ATTEMPTS; attempt++) {
@@ -1614,7 +1690,7 @@ export class ProfileViewModel {
       if (header !== null) {
         // 本人这份也要核对（同上面原生那一路）：回放读的是**当前 DOM**，网页要是正停在
         // 别人的主页上，读回来的就是别人的资料（用户报的"我的页面显示成其他用户"）。
-        if (this.target.isSelf() && this.ownName.length > 0
+        if (this.target.isSelf() && ProfileViewModel.isUsername(this.ownName)
           && header.username.toLowerCase() !== this.ownName.toLowerCase()) {
           hilog.warn(DOMAIN, TAG, 'header replay mismatch @%{public}s vs own @%{public}s → ignore',
             header.username, this.ownName);
