@@ -87,7 +87,10 @@ const HIGHLIGHT_RING_W: number = 2.5;
 const HIGHLIGHT_LABEL_W: number = 106;
 /** 横幅区胶囊的高度，以及它四周要留的"呼吸位"（材质按下/拖拽会形变，贴着边会被裁）。 */
 const CHIP_HEIGHT_VP: number = 28;
-const CHIP_BLEED_VP: number = 10;
+/** 左右各留 16（= 简介的左边），上下只留一点：需求"顶部留白太多，缩小一点"。 */
+const CHIP_SIDE_VP: number = 16;
+const CHIP_TOP_VP: number = 2;
+const CHIP_BOTTOM_VP: number = 8;
 /**
  * 名字左边要空出多少（vp）—— 让它和「帖子」那一列文字左对齐。
  *
@@ -382,9 +385,9 @@ export struct ProfilePage {
   bannerChips() {
     Scroll() {
       /*
-       * 上下各留 6vp：材质按下时会**交互形变**（略微放大），贴着容器边缘就会被裁掉一条
-       * （用户报的"按钮被拽动时被容器边缘裁剪"）。留出这一圈之后形变有地方长，
-       * 视觉尺寸还是原来那条胶囊，只是"外面那层"更宽松。
+       * 左右各 16vp：**第一颗胶囊的左边和简介文字对齐**（简介那行也在这 16 的位置）。
+       * 上下只留一点（需求："顶部留白太多，缩小一点"）—— 竖直方向材质形变小，
+       * 留一点就够它不贴边。
        */
       Row({ space: 8 }) {
         // ① 主页 / Meta 软件：图标 + 用户名称（这里用账号名，点它先不接功能）。
@@ -415,13 +418,19 @@ export struct ProfilePage {
           }
         })
       }
-      .padding({ top: CHIP_BLEED_VP, bottom: CHIP_BLEED_VP, left: CHIP_BLEED_VP, right: CHIP_BLEED_VP })
+      .padding({ top: CHIP_TOP_VP, bottom: CHIP_BOTTOM_VP, left: CHIP_SIDE_VP, right: CHIP_SIDE_VP })
     }
     .scrollable(ScrollDirection.Horizontal)
     .scrollBar(BarState.Off)
-    .width('100%')
-    .height(CHIP_HEIGHT_VP + CHIP_BLEED_VP * 2)
+    .height(CHIP_HEIGHT_VP + CHIP_TOP_VP + CHIP_BOTTOM_VP)
     .align(Alignment.Start)
+    /*
+     * **抵掉外层那 16 的内边距**：Scroll 自己铺满整屏（宽 = 屏宽、左边 -16 抵掉内边距），
+     * 这样第一颗胶囊从 16 开始（**和简介文字左对齐**），它往左形变时仍有 16vp 的空间可用，
+     * 不会贴着 Scroll 视口被裁。
+     */
+    .margin({ left: -CHIP_SIDE_VP, right: -CHIP_SIDE_VP })
+    .width(this.screenWidthVp)
   }
 
   /**
