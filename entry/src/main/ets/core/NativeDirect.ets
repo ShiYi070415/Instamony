@@ -1239,12 +1239,18 @@ export class NativeDirect {
     const ok: boolean = sent.indexOf('"status":"ok"') >= 0 || sent.indexOf('"status": "ok"') >= 0;
     if (!ok) {
       /*
-       * **写接口撞上安全验证**（真机实测：`{"message":"challenge_required", "lock":true}`）：
-       * 这不是"发送逻辑写错了"，而是账号被要求先过人机验证 —— 重试多少次都一样。
-       * 记进全局台账（见 core/mobileapi/MobileChallenge），首页那条「去验证」横幅就会出现，
-       * 用户去网页里验一次再回来发即可。
+       * **区分"真的要人机验证"和"这条路本来就不通"**。
+       *
+       * 这条网页兜底用的是"网页模板头 + 安卓 UA"的混合身份，IG 对它的回法里有两种
+       * `challenge_required`：
+       *   · `{"message":"challenge_required","lock":true}`                → 真·安全验证；
+       *   · `{"message":"challenge_required","challenge":{"url":
+       *      ".../web/unsupported_version/"}}`                            → 客户端版本不受支持。
+       * 后者根本不是账号问题（2026-10-19 实测：发送失败就是这一种，却把首页那条
+       * 「去验证」横幅点亮了，属于误导）。所以只有**不是** unsupported_version 时才记台账。
        */
-      if (sent.indexOf('challenge_required') >= 0) {
+      const looksLikeVersion: boolean = sent.indexOf('unsupported_version') >= 0;
+      if (sent.indexOf('challenge_required') >= 0 && !looksLikeVersion) {
         MobileChallenge.note(sent);
       }
       hilog.warn(DOMAIN, TAG, 'send failed body: %{public}s',
@@ -1258,7 +1264,7 @@ export class NativeDirect {
         ? sent.substring(codeAt + '"error_code":"'.length, codeAt + 24).replace(/[^0-9].*$/, '')
         : '';
       NativeDirect.detail = `send-${errCode.length > 0 ? errCode : 'fail'}:${sent.substring(0, 60)}`;
-      if (sent.indexOf('challenge_required') >= 0) {
+      if (sent.indexOf('challenge_required') >= 0 && !looksLikeVersion) {
         // 把原因写清楚：界面状态行据此提示"去验证"，而不是一句 send-fail。
         NativeDirect.detail = 'challenge_required';
       }
