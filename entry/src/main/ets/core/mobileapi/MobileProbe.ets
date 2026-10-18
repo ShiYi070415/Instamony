@@ -207,11 +207,24 @@ export class MobileProbe {
     if (info.ok) {
       ok++;
     }
-    // ② 快拍托盘（本次移植的主目标之一；顺带记下第一条 reel id 给 ⑤ 用）
-    total++;
-    const tray: MobileResult = await MobileProbe.reelsTray(identity);
-    if (tray.ok) {
-      ok++;
+    /*
+     * ② 快拍托盘（本次移植的主目标之一；顺带记下第一条 reel id 给 ⑤ 用）。
+     *
+     * **启动自检跳过这一发**（`announce === false` 就是启动自检那条链，见 scheduleSelfTest）：
+     * 托盘是**用户可见的数据**，而 IG 的推荐位一轮只发一次 —— 自检这一发要是抢到了，
+     * 推荐就被写进探针文件、界面上反而空（真机日志里推荐与自检请求相隔 10 秒，
+     * 谁先发谁拿到）。自检的价值是"探路"，不该把产品要用的那份数据消耗掉；
+     * 设置页里的手动自检（`run(true)`）仍然照旧打这一发，诊断能力不丢。
+     */
+    let tray: MobileResult | null = null;
+    if (announce) {
+      total++;
+      tray = await MobileProbe.reelsTray(identity);
+      if (tray.ok) {
+        ok++;
+      }
+    } else {
+      MobileProbe.shape.push('reels_tray 跳过（启动自检不抢推荐位，手动自检会打）');
     }
     // ③ 私信收件箱（另一个主目标）
     total++;
@@ -281,7 +294,7 @@ export class MobileProbe {
     if (ENDPOINT_SCOUT) {
       await MobileProbe.scout(identity);
     }
-    MobileProbe.last = `ok=${ok}/${total} info=${MobileProbe.tip(info)} tray=${MobileProbe.tip(tray)}`
+    MobileProbe.last = `ok=${ok}/${total} info=${MobileProbe.tip(info)} tray=${MobileProbe.tipOrSkip(tray)}`
       + ` inbox=${MobileProbe.tip(inbox)} self=${MobileProbe.tip(story)}`
       + ` user=${MobileProbe.tipOrSkip(other)} media=${MobileProbe.tipOrSkip(mediaBare)}`
       + ` mediaJson=${MobileProbe.tipOrSkip(mediaJson)} thread=${MobileProbe.tipOrSkip(thread)}`;

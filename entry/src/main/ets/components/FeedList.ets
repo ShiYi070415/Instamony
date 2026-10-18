@@ -735,6 +735,8 @@ export struct FeedList {
    * @Prop：头像是**晚到**的（启动时「我的」头部还在路上），到了要跟着换上去。
    */
   @Prop selfAvatar: string = '';
+  /** 让托盘重新拉一次的信号（每 +1 一次，见 StoriesTray.reloadSignal）。 */
+  @Prop storyReload: number = 0;
   /** 点「你的快拍」/ 那颗「+」（这一版没有发布入口，宿主给一句提示），见 StoriesTray.onSelfTap。 */
   onStorySelf: () => void = (): void => {
   };
@@ -3042,6 +3044,8 @@ export struct FeedList {
                   seedAtMs: this.storySeedAtMs,
                   // 「你的快拍」那一项的头像（宿主从「我的」头部带过来，见 StoriesTray.selfAvatar）。
                   selfAvatar: this.selfAvatar,
+                  // 宿主让托盘重新拉一次（见 StoriesTray.reloadSignal）。
+                  reloadSignal: this.storyReload,
                   onSelfTap: (): void => {
                     this.onStorySelf();
                   },

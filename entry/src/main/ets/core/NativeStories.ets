@@ -102,10 +102,12 @@ export class NativeStories {
    */
   private static lastTray: StoryTray | null = null;
   private static lastTrayAt: number = 0;
+  /** 正在飞的那一发（见 tray 的说明：并发请求直接搭这一发，不各打一次）。 */
+  private static trayInflight: Promise<StoryTray | null> | null = null;
   /** 这份托盘多久之内可以直接复用（毫秒）：避免"预热 + 组件"两发打同一个接口。 */
-  private static readonly TRAY_REUSE_MS: number = 2 * 60 * 1000;
+  private static readonly TRAY_REUSE_MS: number = 10 * 60 * 1000;
   /** 新鲜那发回了空时，旧的这一份还能顶多久（毫秒）：推荐位一轮只发一次，空了不代表没内容。 */
-  private static readonly TRAY_STALE_FALLBACK_MS: number = 10 * 60 * 1000;
+  private static readonly TRAY_STALE_FALLBACK_MS: number = 30 * 60 * 1000;
   /**
    * 每个用户各自的**逐候选轨迹**（uid → 行数组，最多留 TRACE_MAX 行）。
    *
@@ -588,6 +590,68 @@ export class NativeStories {
     NativeStories.lastTrayAt = 0;
   }
 
+  /**
+   * "推荐快拍的候选账号"由宿主提供（首页那一排「为你推荐」里的作者）。
+   *
+   * 为什么放在宿主：这些账号来自信息流，而 `core` 不该直接依赖页面的数据；
+   * 钩子为空时整条兜底路径直接跳过（行为和没有它一样）。
+   */
+  private static suggestSource: (() => Array<StoryTrayItem>) | null = null;
+
+  static setSuggestSource(provider: () => Array<StoryTrayItem>): void {
+    NativeStories.suggestSource = provider;
+  }
+
+  /** 兜底一次最多问几位（每一位 1~2 发，别把新号的启动打成请求风暴）。 */
+  private static readonly SUGGEST_MAX: number = 3;
+  /** 兜底最多凑几条（够铺满半屏就行）。 */
+  private static readonly SUGGEST_KEEP: number = 3;
+
+  /**
+   * **用"为你推荐"里的账号现拼一条推荐快拍**（IG 自己那份没发下来时的兜底）。
+   *
+   * 为什么需要（真机证据）：新号关注 0 人时，IG 的推荐位**大约一小时才发一轮**，
+   * 而我们的托盘每开一次就要问一次 —— 绝大多数时候回的是 `tray:[]`，界面上就只剩
+   * 「你的快拍」（用户报的"还是没有显示快拍推荐"）。既然首页本来就在铺「为你推荐」，
+   * 就拿那几个公开账号去问"有没有快拍"：有内容的才留下来，标成推荐快拍
+   * （于是头像底部那条「+关注」胶囊、点开播放页的关注按钮都照常工作）。
+   *
+   * 只问前 3 位、凑到 3 条就停：这是兜底，不是主路径。
+   */
+  private static async trayFromSuggestions(): Promise<StoryTray | null> {
+    if (NativeStories.suggestSource === null) {
+      return null;
+    }
+    const candidates: Array<StoryTrayItem> = NativeStories.suggestSource();
+    if (candidates.length === 0) {
+      return null;
+    }
+    const items: Array<StoryTrayItem> = [];
+    for (let index: number = 0; index < candidates.length
+      && index < NativeStories.SUGGEST_MAX && items.length < NativeStories.SUGGEST_KEEP; index++) {
+      const one: StoryTrayItem = candidates[index];
+      const reel: StoryReel | null = await MobileStories.reel(one.userId, [], one.username,
+        ApiThrottle.warm());
+      if (reel === null || reel.items.length === 0) {
+        hilog.info(DOMAIN, TAG, 'suggest story miss uid=%{public}s name=%{public}s',
+          one.userId, one.username);
+        continue;
+      }
+      items.push(new StoryTrayItem(one.userId,
+        one.username.length > 0 ? one.username : reel.username,
+        one.avatarUrl.length > 0 ? one.avatarUrl : reel.avatarUrl,
+        false, reel.items.length, [], false, true, true, false));
+      hilog.info(DOMAIN, TAG, 'suggest story ok uid=%{public}s name=%{public}s n=%{public}d',
+        one.userId, one.username, reel.items.length);
+    }
+    if (items.length === 0) {
+      return null;
+    }
+    NativeStories.detail = '-suggest';
+    hilog.info(DOMAIN, TAG, 'tray via suggestions n=%{public}d', items.length);
+    return new StoryTray(items);
+  }
+
   /** 取数之后统一过一遍：已关注过的推荐不再出现（托盘条目、顺序、预取都跟着少一位）。 */
   private static pruneHidden(tray: StoryTray): StoryTray {    if (NativeStories.followedSuggested.size === 0) {
       return tray;
@@ -734,9 +798,27 @@ export class NativeStories {
   /**
    * 拉一次托盘（拿不到给 null）。
    *
-   * 请求体**原样重发**（模板就是网页自己发过的那一发，不动它的 variables —— 托盘没有分页需求）。
+   * **同一时刻只跑一发**：启动预热、托盘组件挂载、以及"推荐快拍"兜底的重试可能同时来要，
+   * 每一发都会各打一次 `feed/reels_tray/`（兜底那条还会各问几位候选人）—— 并发重复
+   * 既浪费配额，也让 IG 更容易把推荐位判成"发过了"。这里让后来者直接搭上在飞的那一发。
    */
-  static async tray(): Promise<StoryTray | null> {
+  static tray(): Promise<StoryTray | null> {
+    if (NativeStories.trayInflight !== null) {
+      hilog.info(DOMAIN, TAG, 'tray join inflight');
+      return NativeStories.trayInflight;
+    }
+    const job: Promise<StoryTray | null> = NativeStories.loadTray();
+    NativeStories.trayInflight = job;
+    job.then((): void => {
+      NativeStories.trayInflight = null;
+    }).catch((): void => {
+      NativeStories.trayInflight = null;
+    });
+    return job;
+  }
+
+  /** `tray()` 的真身（拿到之后走缓存、模板回放、推荐兜底这几级）。 */
+  private static async loadTray(): Promise<StoryTray | null> {
     /*
      * **先看手上这份还能不能直接用**（见 lastTray 的说明）。
      *
@@ -778,6 +860,16 @@ export class NativeStories {
       const fallback: StoryTray | null = NativeStories.staleFallback(nowMs);
       if (fallback !== null) {
         return fallback;
+      }
+      /*
+       * **IG 的推荐位没发**（新号最常见：它一个小时才发一轮，而请求一多就一直空）：
+       * 退一步用"推荐流里那些账号"现拼一条推荐快拍（见 trayFromSuggestions）。
+       * 这样新号的托盘不会永远是空的，用户也能直接在这排里关注人。
+       */
+      const suggested: StoryTray | null = await NativeStories.trayFromSuggestions();
+      if (suggested !== null) {
+        NativeStories.rememberTray(suggested);
+        return suggested;
       }
     }
     const tpl: ApiTemplate | null = ApiRegistry.getInstance().storedForNative(OP_TRAY);

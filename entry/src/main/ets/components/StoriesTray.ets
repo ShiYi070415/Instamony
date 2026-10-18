@@ -33,15 +33,25 @@ const RING_WIDTH_VP: number = 2.5;
 /** 每一项的宽度（含左右留白）。 */
 const ITEM_WIDTH_VP: number = 106;
 /**
- * 整条列表**首尾**的留白（vp）。
+ * 头像**可见边**到屏幕左右边的距离（vp）。需求："快拍列表的 padding left right 调整成 16vp"。
  *
- * 需求："第一个和最后一个需要增加 padding left 和 right，和屏幕边缘保持距离，但要让头像
- * 穿过屏幕"。做法是**在列表两端各插一个空 ListItem**（见 build）而不是给 List 加 padding：
- * List 的 padding 会把可滚动区一起缩窄，内容就再也滑不到屏幕边外（以前踩过，见 build 里
- * 那段"三条路的实测记录"）；两端插空条目则只影响"停住时第一项的位置"，滑动时它自己滚走，
- * 后面的头像照旧整颗穿出屏幕。
+ * 注意这是量**头像那一圈**的边，不是项盒子的边：项宽 106 里，环（91）两边各留 ITEM_INNER、
+ * 环里头像两边各留 RING_INNER，所以列表两端的空条目只需要 EDGE_SPACER 那么宽 ——
+ * 加起来正好 16。改这一个数，可视角落跟着走。
  */
 const EDGE_PAD_VP: number = 16;
+/** 项内留白：项宽里环两侧的余量。 */
+const ITEM_INNER_VP: number = (ITEM_WIDTH_VP - (AVATAR_VP + RING_GAP_VP * 2)) / 2;
+/** 环里头像两侧的余量（环的留白 + 描边）。 */
+const RING_INNER_VP: number = RING_GAP_VP + RING_WIDTH_VP;
+/**
+ * 列表两端那条空条目的宽度（vp）。
+ *
+ * 为什么是"空条目"而不是 List 的 padding：List 的 padding 会把可滚动区一起缩窄，内容就
+ * 再也滑不到屏幕边外（以前踩过，见 build 里那段说明）。空条目只在"停住时"占位，
+ * 滑起来它自己滚走 —— 两头的留白有了，头像照样整颗穿出屏幕。
+ */
+const EDGE_SPACER_VP: number = EDGE_PAD_VP - ITEM_INNER_VP - RING_INNER_VP;
 /** 已读（全看完）时的灰色环。 */
 const SEEN_GREY: string = '#C7C7C7';
 /**
@@ -58,10 +68,14 @@ const PENDING_MS: number = 1500;
  * 所以每次都会重新 `aboutToAppear`。有宿主那份数据就**立刻画出来**（这就是"秒盖上刚刚的数据"），
  * 只有在它过期时才去后台刷一次 —— 否则每切一次 tab 就打一发 IG 的托盘接口。
  *
- * 取 3 分钟：托盘的内容变化很慢（快拍 24 小时才过期），而"刚看完的快拍变灰"这类状态
+ * 取 10 分钟：托盘的内容变化很慢（快拍 24 小时才过期），而"刚看完的快拍变灰"这类状态
  * 由 StoryViewer 主动回报（见 Index 的 storyQueue 更新），不靠重新拉。
+ *
+ * **为什么从 3 分钟拉长到 10 分钟**：IG 的"推荐快拍"是**按时间发放**的（真机日志里两次拿到
+ * 推荐正好隔了约一小时），而每 3 分钟拉一次托盘会让账号一直"在刷新"，推荐位迟迟不再发。
+ * 拉长之后启动/切页只会复用宿主那份数据，真正打接口的只剩一次，推荐位更容易落下来。
  */
-const TRAY_FRESH_MS: number = 3 * 60 * 1000;
+const TRAY_FRESH_MS: number = 10 * 60 * 1000;
 /** 数据没到时画几个灰色占位头像（需求："数据没加载好可以在头像显示灰色"）。 */
 const SKELETON_COUNT: number = 5;
 /** 占位头像下面那条灰条的高度（vp）—— 和真名字那一行等高，免得列表上下跳。 */
@@ -125,6 +139,22 @@ export struct StoriesTray {
   /** 宿主那份头像晚到（「我的」头部还没取回来）时也要跟着更新自己那一项。 */
   private onSelfAvatarReady(): void {
     this.syncSelf();
+  }
+  /**
+   * 宿主让托盘**重新拉一次**（每 +1 一次）。
+   *
+   * 用处：新号的「推荐快拍」兜底要等「为你推荐」的帖子到手（见 Index.scheduleSuggestRetry）——
+   * 那会儿这一条已经画成"只有你的快拍"了，得再拉一次才会长出推荐条目。
+   */
+  @Prop @Watch('onReloadSignal') reloadSignal: number = 0;
+
+  private onReloadSignal(): void {
+    if (this.items.length > 0) {
+      // 已经有内容（自己的快拍 / 关注的人的 / IG 发下来的推荐）：不去打扰。
+      return;
+    }
+    hilog.info(DOMAIN, TAG, 'tray reload by host signal');
+    this.load();
   }
   /**
    * 点「你的快拍」（含那颗「+」）：这一版**没有发布快拍的入口**，交给宿主给一句提示。
@@ -583,7 +613,7 @@ export struct StoriesTray {
     Row({ space: 0 }) {
       // 首端留白（EDGE_PAD_VP）：和真托盘那个空 ListItem 对齐，否则数据一到位整排会横跳。
       Row()
-        .width(EDGE_PAD_VP)
+        .width(EDGE_SPACER_VP)
         .height(1)
       ForEach([0, 1, 2, 3, 4], (index: number): void => {
         if (index < SKELETON_COUNT) {
@@ -632,7 +662,7 @@ export struct StoriesTray {
          */
         ListItem() {
           Row()
-            .width(EDGE_PAD_VP)
+            .width(EDGE_SPACER_VP)
             .height(TRAY_HEIGHT_VP)
         }
         // 「你的快拍」：固定第一位（需求），不参与后端顺序。
@@ -647,7 +677,7 @@ export struct StoriesTray {
         // 末端留白（同首端）。
         ListItem() {
           Row()
-            .width(EDGE_PAD_VP)
+            .width(EDGE_SPACER_VP)
             .height(TRAY_HEIGHT_VP)
         }
       }
@@ -673,7 +703,7 @@ export struct StoriesTray {
       // 拉完了确实没有：占一块同高的空位，信息流不跳。但「你的快拍」**永远在**（需求）。
       Row({ space: 0 }) {
         Row()
-          .width(EDGE_PAD_VP)
+          .width(EDGE_SPACER_VP)
           .height(TRAY_HEIGHT_VP)
         this.selfItemView()
       }

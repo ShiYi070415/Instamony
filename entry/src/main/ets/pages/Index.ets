@@ -2048,6 +2048,14 @@ struct Index {
             header.username, header.avatarUrl.length);
         }
       };
+      /*
+       * IG 的"推荐快拍"位大约一小时才发一轮（见 NativeStories.trayFromSuggestions 的说明），
+       * 于是多数时候托盘是空的。这里把首页「为你推荐」里那些账号交给它当兜底候选：
+       * 新号也能在托盘上看到几条能点开、能关注的推荐快拍。
+       */
+      NativeStories.setSuggestSource((): Array<StoryTrayItem> => {
+        return this.suggestStoryCandidates();
+      });
       // 媒体预下载（幂等）：把缓存下载的下载信息表开大一点，信息流封面命中率才高。
       MediaPrefetch.init();
     }
@@ -2124,6 +2132,13 @@ struct Index {
     this.viewModel.onMode = (mode: string): void => {
       this.feedRecommended = mode === 'recommended';
       hilog.info(DOMAIN, TAG, 'feed mode=%{public}s', mode);
+      /*
+       * 新号的托盘要等**推荐流**到手才有候选（见 suggestStoryCandidates）：
+       * 托盘启动预热那会儿帖子还没到，兜底拼不出来，所以切到「为你推荐」之后再让托盘试一次。
+       */
+      if (this.feedRecommended && this.storyQueue.length === 0) {
+        this.scheduleSuggestRetry();
+      }
     };
     this.viewModel.loadRecommended = (): Promise<Array<MediaPost>> => {
       return this.loadHomeRecommended();
@@ -5858,6 +5873,8 @@ struct Index {
           storySeedAtMs: this.storyQueueAtMs,
           // 「你的快拍」那一项的头像（来自「我的」头部，见 selfAvatarUrl 的说明）。
           selfAvatar: this.selfAvatarUrl,
+          // 让托盘重新拉一次（新号的「推荐快拍」兜底要等推荐流到手，见 scheduleSuggestRetry）。
+          storyReload: this.storyReload,
           // 点「你的快拍」/ 那颗「+」：这一版没有发布入口，给一句提示。
           onStorySelf: (): void => {
             hilog.info(DOMAIN, TAG, 'story self tapped (no composer)');
@@ -7009,6 +7026,12 @@ struct Index {
    * 换账号时清空（见 forgetAccountMemory）。
    */
   @State private selfAvatarUrl: string = '';
+  /**
+   * 让托盘**重新拉一次**的信号（每 +1 一次；见 StoriesTray.reloadSignal）。
+   *
+   * 目前只有一个用处：新号的「推荐快拍」兜底要等推荐流到手（见 scheduleSuggestRetry）。
+   */
+  @State private storyReload: number = 0;
   /** 正在播的这一位的 userId（播放页按它去量序列里那颗头像，排查转场错位用）。 */
   @State private storyUserId: string = '';
   /** 正在取数（防连点；转圈由托盘自己画，见 StoriesTray.pendingUser）。 */
@@ -7176,6 +7199,65 @@ struct Index {
     this.rememberStoryQueue(kept);
     this.toast($r('app.string.follow_done'));
     return true;
+  }
+
+  /**
+   * 「推荐快拍」兜底的重试（见 onMode 里那一段）。
+   *
+   * 为什么要重试：兜底要拿「为你推荐」里的作者当候选，而那些帖子是**异步**到的 ——
+   * onMode 那一刻 `posts` 可能还是空的。隔几秒再看，帖子到了就让托盘重新拉一次
+   * （先把上一份空缓存作废，否则会被"复用"挡掉）。最多试 3 次，不成就作罢。
+   */
+  private suggestRetryTimer: number = -1;
+  private suggestRetryCount: number = 0;
+
+  private scheduleSuggestRetry(): void {
+    if (this.suggestRetryCount >= 3 || this.suggestRetryTimer >= 0) {
+      return;
+    }
+    const delayMs: number = 3000 + this.suggestRetryCount * 3000;
+    this.suggestRetryCount++;
+    this.suggestRetryTimer = setTimeout((): void => {
+      this.suggestRetryTimer = -1;
+      if (this.storyQueue.length > 0) {
+        return;
+      }
+      if (this.posts.length === 0) {
+        this.scheduleSuggestRetry();
+        return;
+      }
+      hilog.info(DOMAIN, TAG, 'story suggest retry %{public}d posts=%{public}d',
+        this.suggestRetryCount, this.posts.length);
+      NativeStories.forgetTray();
+      this.storyReload++;
+    }, delayMs);
+  }
+
+  /**
+   * 「推荐快拍」的候选账号（来自首页「为你推荐」那一排帖子的作者）。
+   *
+   * 只取公开、且不是自己的人；去重后最多给 4 位（core 那边只会问前 3 位）。
+   * 这条链只在 IG 自己的推荐位没发东西时才用（见 NativeStories.trayFromSuggestions）。
+   */
+  private suggestStoryCandidates(): Array<StoryTrayItem> {
+    const out: Array<StoryTrayItem> = [];
+    const seen: Set<string> = new Set<string>();
+    const own: string = this.profileVm.ownIdSync();
+    for (let index: number = 0; index < this.posts.length; index++) {
+      const post: MediaPost = this.posts[index];
+      const id: string = post.ownerId ?? '';
+      if (id.length === 0 || (own.length > 0 && id === own) || seen.has(id)) {
+        continue;
+      }
+      seen.add(id);
+      // 候选只带"是谁"，有没有快拍由 core 现问（见 trayFromSuggestions）。
+      out.push(new StoryTrayItem(id, post.ownerUsername, post.ownerAvatarUrl,
+        false, 0, [], false, true, true, false));
+      if (out.length >= 4) {
+        break;
+      }
+    }
+    return out;
   }
 
   /**
