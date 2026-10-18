@@ -907,7 +907,144 @@ export class NativeProfile {
       NativeProfile.numOf(user, 'following_count'),
       NativeProfile.numOf(user, 'media_count'),
       followed,
-      NativeProfile.musicOf(user));
+      NativeProfile.musicOf(user),
+      NativeProfile.boolOf(user, 'has_music_on_profile'));
+  }
+
+  /**
+   * 从**网页版个人页的 HTML**里取背景音乐（移动端 `users/{pk}/info/` 只给布尔值）。
+   *
+   * IG 的个人页 HTML 里带着一段 SSR 数据，形如
+   *   "profile_music":{"music_asset_info":{title,display_artist,progressive_download_url,…}}
+   * 这里用"找键名 + 配对大括号"的方式把它整块切出来（不整页 JSON.parse：那不是合法 JSON），
+   * 再解析标题/演唱者/音频地址。拿不到就 null —— 界面上那颗音乐胶囊就不显示。
+   *
+   * 代价：一发网页 HTML（几百 KB），所以只在"头部说 has_music_on_profile 但没给歌"时发一次。
+   */
+  static async fetchMusicByUsername(username: string): Promise<ProfileMusic | null> {
+    const name: string = username.trim();
+    if (name.length === 0) {
+      return null;
+    }
+    let headers: Record<string, string> = await NativeFeed.sessionOrBrowserHeaders();
+    if (Object.keys(headers).length === 0) {
+      return null;
+    }
+    const url: string = `https://www.instagram.com/${encodeURIComponent(name)}/`;
+    const request: http.HttpRequest = http.createHttp();
+    try {
+      const response: http.HttpResponse = await request.request(url, {
+        method: http.RequestMethod.GET,
+        header: headers,
+        connectTimeout: 12000,
+        readTimeout: 12000,
+        expectDataType: http.HttpDataType.STRING
+      });
+      const text: string = typeof response.result === 'string'
+        ? response.result as string : JSON.stringify(response.result);
+      hilog.info(DOMAIN, TAG, 'profile html code=%{public}d len=%{public}d',
+        response.responseCode, text.length);
+      const raw: string = NativeProfile.objectAfter(text, 'profile_music');
+      if (raw.length === 0) {
+        /*
+         * 没找到就把 HTML 里第一处 "music 前后的片段打出来（只打一次）：
+         * IG 各版本字段名不一样，凭这一段就能把键名对上，不用再猜。
+         */
+        const at: number = text.toLowerCase().indexOf('music');
+        hilog.info(DOMAIN, TAG, 'profile html music at=%{public}d snip=%{public}s',
+          at, at >= 0 ? text.substring(Math.max(0, at - 60), at + 140)
+            .replace(/[\r\n]+/g, ' ') : '-');
+        hilog.info(DOMAIN, TAG, 'profile music not in html');
+        return null;
+      }
+      const music: ProfileMusic | null = NativeProfile.musicFromJson(raw);
+      if (music !== null) {
+        hilog.info(DOMAIN, TAG, 'profile music ok title=%{public}s playable=%{public}s',
+          music.title, `${music.url.length > 0}`);
+      }
+      return music;
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'profile music fetch failed: %{public}s',
+        (error as Error).message);
+      return null;
+    } finally {
+      try {
+        request.destroy();
+      } catch (error) {
+      }
+    }
+  }
+
+  /** 从文本里切出 `"key":{…}` 这一整块对象（按大括号配对，跳过字符串里的括号）。 */
+  private static objectAfter(text: string, key: string): string {
+    const at: number = text.indexOf(`"${key}"`);
+    if (at < 0) {
+      return '';
+    }
+    const start: number = text.indexOf('{', at);
+    if (start < 0) {
+      return '';
+    }
+    let depth: number = 0;
+    let inString: boolean = false;
+    let escaped: boolean = false;
+    const limit: number = Math.min(text.length, start + 24000);
+    for (let index: number = start; index < limit; index++) {
+      const ch: string = text.charAt(index);
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (ch === '"') {
+        inString = !inString;
+        continue;
+      }
+      if (inString) {
+        continue;
+      }
+      if (ch === '{') {
+        depth++;
+      } else if (ch === '}') {
+        depth--;
+        if (depth === 0) {
+          return text.substring(start, index + 1);
+        }
+      }
+    }
+    return '';
+  }
+
+  /** 一块 `profile_music` JSON → ProfileMusic（字段名各版本不一，能认多少认多少）。 */
+  private static musicFromJson(raw: string): ProfileMusic | null {
+    let root: Record<string, Object>;
+    try {
+      root = JSON.parse(raw) as Record<string, Object>;
+    } catch (error) {
+      return null;
+    }
+    const holders: Array<string> = ['music_asset_info', 'audio_asset', 'music_consumption_info'];
+    let holder: Record<string, Object> = root;
+    for (let index: number = 0; index < holders.length; index++) {
+      const inner: Record<string, Object> | null = NativeProfile.recordOf(root, holders[index]);
+      if (inner !== null) {
+        holder = inner;
+        break;
+      }
+    }
+    const title: string = NativeProfile.firstString(holder,
+      ['title', 'display_title', 'song_name', 'music_title']);
+    if (title.length === 0) {
+      return null;
+    }
+    const artist: string = NativeProfile.firstString(holder,
+      ['display_artist', 'artist_name', 'subtitle', 'artist']);
+    const url: string = NativeProfile.firstString(holder,
+      ['progressive_download_url', 'download_url', 'audio_url', 'url']);
+    return new ProfileMusic(title, artist, url);
   }
 
   /**

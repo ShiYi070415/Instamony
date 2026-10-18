@@ -96,6 +96,53 @@ export class ProfileHighlight {
   }
 }
 
+/**
+ * 简介里的一段：普通文字，或者一个 `@账号` 提及。
+ *
+ * 需求："检测文本里的 @ 号，那可能代表着一位 ins 用户 id，需要动态转换为超链接，
+ * 点击后进入该用户主页"。`@` 后面的账号名按 IG 的规则取（字母/数字/下划线/点）。
+ */
+export class BioSegment {
+  readonly text: string;
+  /** true = 这一段是 `@name`（text 里**不含** `@`，渲染时自己补）。 */
+  readonly mention: boolean;
+
+  constructor(text: string, mention: boolean) {
+    this.text = text;
+    this.mention = mention;
+  }
+}
+
+/**
+ * 把一段文本切成"文字 / @提及"两种片段（切分规则见 BioSegment）。
+ *
+ * 为什么不用正则 `replace` 直接生成富文本：ArkUI 的富文本要一段一段挂 `Span`（每段
+ * 自己的颜色和点击事件），所以这里只负责切，渲染交给 ProfilePage.bioText。
+ */
+export function splitMentions(text: string): Array<BioSegment> {
+  const out: Array<BioSegment> = [];
+  if (text.length === 0) {
+    return out;
+  }
+  const re: RegExp = /@([A-Za-z0-9._]{1,30})/g;
+  let last: number = 0;
+  let hit: RegExpExecArray | null = re.exec(text);
+  while (hit !== null) {
+    const start: number = hit.index;
+    const name: string = hit.length > 1 ? hit[1] : '';
+    if (start > last) {
+      out.push(new BioSegment(text.substring(last, start), false));
+    }
+    out.push(new BioSegment(name, true));
+    last = start + 1 + name.length;
+    hit = re.exec(text);
+  }
+  if (last < text.length) {
+    out.push(new BioSegment(text.substring(last), false));
+  }
+  return out;
+}
+
 /** 页面头部。 */
 export class ProfileHeader {  readonly username: string;
   readonly fullName: string;
@@ -117,11 +164,19 @@ export class ProfileHeader {  readonly username: string;
   readonly followedByViewer: boolean;
   /** 个人页的背景音乐（没有就是 null，见 ProfileMusic）。 */
   readonly music: ProfileMusic | null;
+  /**
+   * IG 说"这个人的个人页挂了歌"（`has_music_on_profile`）。
+   *
+   * 移动端 `users/{pk}/info/` **只给这个布尔**、不给出曲目本身，所以视图模型看到它为真
+   * 而 `music` 为空时，会再去网页侧取一次（见 NativeProfile.fetchMusicByUsername）。
+   */
+  readonly hasMusicProfile: boolean;
 
   constructor(username: string, fullName: string, bio: string, link: string, avatarUrl: string,
               isVerified: boolean, isPrivate: boolean,
               followers: number, following: number, posts: number,
-              followedByViewer: boolean = false, music: ProfileMusic | null = null) {
+              followedByViewer: boolean = false, music: ProfileMusic | null = null,
+              hasMusicProfile: boolean = false) {
     this.username = username;
     this.fullName = fullName;
     this.bio = bio;
@@ -134,6 +189,14 @@ export class ProfileHeader {  readonly username: string;
     this.posts = posts;
     this.followedByViewer = followedByViewer;
     this.music = music;
+    this.hasMusicProfile = hasMusicProfile;
+  }
+
+  /** 换一首歌（或补上歌）之后的副本：头部其它字段原样带过去。 */
+  withMusic(music: ProfileMusic | null): ProfileHeader {
+    return new ProfileHeader(this.username, this.fullName, this.bio, this.link, this.avatarUrl,
+      this.isVerified, this.isPrivate, this.followers, this.following, this.posts,
+      this.followedByViewer, music, this.hasMusicProfile);
   }
 
   /**
@@ -158,7 +221,8 @@ export class ProfileHeader {  readonly username: string;
       fb: this.followedByViewer,
       mt: this.music === null ? '' : this.music.title,
       ms: this.music === null ? '' : this.music.subtitle,
-      mu: this.music === null ? '' : this.music.url
+      mu: this.music === null ? '' : this.music.url,
+      hm: this.hasMusicProfile
     });
   }
 
@@ -188,7 +252,8 @@ export class ProfileHeader {  readonly username: string;
           ? new ProfileMusic(one.mt as string,
             typeof one.ms === 'string' ? one.ms as string : '',
             typeof one.mu === 'string' ? one.mu as string : '')
-          : null);
+          : null,
+        one.hm === true);
     } catch (error) {
       return null;
     }

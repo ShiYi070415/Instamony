@@ -706,9 +706,9 @@ export struct MaterialChipButton {
   @Prop labelText: string = '';
   /** 右侧图标（例如播放 / 暂停；空 = 不画）。 */
   @Prop trailing: Resource | null = null;
-  @Prop fontSize: number = 13;
-  @Prop chipHeight: number = 32;
-  @Prop iconSize: number = 14;
+  @Prop fontSize: number = 12;
+  @Prop chipHeight: number = 28;
+  @Prop iconSize: number = 12;
   @Prop tint: string = '';
   @Prop autoInvert: boolean = true;
   @StorageProp(SETTING_MATERIAL_THICKNESS) thickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
@@ -752,7 +752,7 @@ export struct MaterialChipButton {
             .fontColor([this.inkColor()])
         }
       }
-      .padding({ left: 12, right: 12 })
+      .padding({ left: 10, right: 10 })
     }
     .height(this.chipHeight)
     .padding(0)

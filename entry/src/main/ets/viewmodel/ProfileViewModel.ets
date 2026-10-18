@@ -26,7 +26,7 @@ import { ApiRegistry } from '../bridge/ApiRegistry';
 import { OWN_PROFILE_SCRIPT, profileHeaderScript, profilePostsScript } from '../bridge/WebScripts';
 import { AppConfig } from '../config/AppConfig';
 import { NativeProfile, ProfileTarget } from '../core/NativeProfile';
-import { ProfileHeader, ProfileHighlight, ProfileMapper, ProfilePostsPage, ProfilePost } from '../model/Profile';
+import { ProfileHeader, ProfileHighlight, ProfileMapper, ProfileMusic, ProfilePostsPage, ProfilePost } from '../model/Profile';
 import { MediaPost } from '../model/MediaPost';
 import { MediaPrefetch } from '../core/MediaPrefetch';
 import { PosterCache } from '../core/PosterCache';
@@ -1756,6 +1756,8 @@ export class ProfileViewModel {
   };
   private highlightItems: Array<ProfileHighlight> = [];
   private highlightsFor: string = '';
+  /** 已经从网页侧拉过歌的账号名（见 fillMusicFromWeb：只试一次）。 */
+  private musicTriedFor: string = '';
 
   highlightsNow(): Array<ProfileHighlight> {
     return this.highlightItems;
@@ -1789,9 +1791,40 @@ export class ProfileViewModel {
     return now !== uid;
   }
 
+  /**
+   * 头部说"这个人挂了歌"（`has_music_on_profile`）但接口没给曲目时，去**网页版个人页**
+   * 的 HTML 里补一次（见 NativeProfile.fetchMusicByUsername），拿到之后把头部换成带歌的副本、
+   * 再通知页面重绘 —— 横幅区那颗音乐胶囊就是这么出现的。
+   *
+   * 每个账号只试一次（`musicTriedFor`）：那是一发几百 KB 的 HTML，不能反复打。
+   */
+  private fillMusicFromWeb(header: ProfileHeader): void {
+    if (header.music !== null || !header.hasMusicProfile || header.username.length === 0) {
+      return;
+    }
+    if (this.musicTriedFor === header.username) {
+      return;
+    }
+    this.musicTriedFor = header.username;
+    hilog.info(DOMAIN, TAG, 'music: fetching from web for @%{public}s', header.username);
+    NativeProfile.fetchMusicByUsername(header.username).then((music: ProfileMusic | null): void => {
+      if (music === null) {
+        return;
+      }
+      const now: ProfileHeader | null = this.header;
+      if (now === null || now.username !== header.username) {
+        // 这一发回来时页面已经换人了：丢掉。
+        return;
+      }
+      this.header = now.withMusic(music);
+      hilog.info(DOMAIN, TAG, 'music: header updated title=%{public}s', music.title);
+      this.onHeader(this.header);
+    }).catch((): void => {
+    });
+  }
+
   /** 拉一次头部（本人的话顺带把快照落盘，见 AppSettings.saveProfileHeader）。 */
-  private async loadHeader(): Promise<void> {
-    // 目标用户是"别人"、但我们只有用户名（没有数字 id）时**不发头部这条**：它的请求体里
+  private async loadHeader(): Promise<void> {    // 目标用户是"别人"、但我们只有用户名（没有数字 id）时**不发头部这条**：它的请求体里
     // 目标是用 `id` 表示的，没有 id 就只能原样重发 —— 那会把我自己的资料显示成他的
     // （比"头部空着"糟糕得多）。网格仍然能用（帖子那条按 username 取）。
     if (!this.target.isSelf() && this.target.id.length === 0) {
@@ -1872,6 +1905,8 @@ export class ProfileViewModel {
         AppSettings.saveProfileHeader(
           this.selfId.length > 0 ? this.selfId : NativeProfile.ownIdCached(), native.toJson());
       }
+      // 头部说"有歌"但没给曲目：去网页侧补一次（见 fillMusicFromWeb）。
+      this.fillMusicFromWeb(native);
       hilog.info(DOMAIN, TAG, 'header ok @%{public}s posts=%{public}d',
         native.username, native.posts);
       this.onHeader(native);

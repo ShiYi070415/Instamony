@@ -25,7 +25,7 @@
 import { display } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { media } from '@kit.MediaKit';
-import { ProfileHeader, ProfileHighlight, ProfileMapper, ProfilePost, ProfileStreamPage } from '../model/Profile';
+import { ProfileHeader, ProfileHighlight, ProfileMapper, ProfilePost, ProfileStreamPage, BioSegment, splitMentions } from '../model/Profile';
 import { MediaPost } from '../model/MediaPost';
 import { FollowState, FOLLOW_VERSION_KEY } from '../core/FollowState';
 import { SaveState } from '../core/SaveState';
@@ -80,9 +80,14 @@ const FOLLOW_BUTTON_HEIGHT: number = 40;
 const FOLLOW_GAP: number = 8;
 /** 头像直径（vp）。 */
 const AVATAR_SIZE: number = 88;
-/** 精选快拍那一排：圆圈直径 / 每格文字宽度（vp）。 */
-const HIGHLIGHT_SIZE: number = 64;
-const HIGHLIGHT_LABEL_W: number = 72;
+/** 精选快拍那一排：和主页快拍托盘同一套尺寸（头像 / 环 / 文字 / 每格宽度）。 */
+const HIGHLIGHT_SIZE: number = 80;
+const HIGHLIGHT_RING_GAP: number = 3;
+const HIGHLIGHT_RING_W: number = 2.5;
+const HIGHLIGHT_LABEL_W: number = 106;
+/** 横幅区胶囊的高度，以及它上下要留的"呼吸位"（材质按下会形变，贴着边会被裁）。 */
+const CHIP_HEIGHT_VP: number = 28;
+const CHIP_BLEED_VP: number = 6;
 /**
  * 名字左边要空出多少（vp）—— 让它和「帖子」那一列文字左对齐。
  *
@@ -320,6 +325,13 @@ export struct ProfilePage {
   /** 别人主页的**关注 / 发消息**那一行：点关注/取关（由宿主发请求，见 pages/Index.followUser）。 */
   onFollowUser: (follow: boolean) => Promise<boolean> =
     (follow: boolean): Promise<boolean> => Promise.resolve(false);
+  /**
+   * 点简介里的 `@账号`：请宿主打开那个人的主页（需求："点击后进入该用户主页"）。
+   *
+   * 由 pages/Index 接到 `openUserProfile` 上；宿主没接时点了只记日志。
+   */
+  onOpenUser: (username: string) => void = (username: string): void => {
+  };
   /** 个人信息那一块的高度（vp，量出来的）：钉住的判据就是它。 */
   private headerBlockVp: number = 0;
   /** 屏幕高度（vp）：算"末尾补高"要用（见 tailSpacerVp）。 */
@@ -369,6 +381,11 @@ export struct ProfilePage {
   @Builder
   bannerChips() {
     Scroll() {
+      /*
+       * 上下各留 6vp：材质按下时会**交互形变**（略微放大），贴着容器边缘就会被裁掉一条
+       * （用户报的"按钮被拽动时被容器边缘裁剪"）。留出这一圈之后形变有地方长，
+       * 视觉尺寸还是原来那条胶囊，只是"外面那层"更宽松。
+       */
       Row({ space: 8 }) {
         // ① 主页 / Meta 软件：图标 + 用户名称（这里用账号名，点它先不接功能）。
         MaterialChipButton({
@@ -398,10 +415,12 @@ export struct ProfilePage {
           }
         })
       }
+      .padding({ top: CHIP_BLEED_VP, bottom: CHIP_BLEED_VP, left: 2, right: 2 })
     }
     .scrollable(ScrollDirection.Horizontal)
     .scrollBar(BarState.Off)
     .width('100%')
+    .height(CHIP_HEIGHT_VP + CHIP_BLEED_VP * 2)
     .align(Alignment.Start)
   }
 
@@ -462,23 +481,24 @@ export struct ProfilePage {
   @Builder
   highlightsRow() {
     Scroll() {
-      Row({ space: 14 }) {
+      Row({ space: 0 }) {
+        // 「+ 新」：和托盘里"你的快拍"同一种画法（大圆 + 细环 + 11sp 小字）。
         Column({ space: 6 }) {
           Stack({ alignContent: Alignment.Center }) {
             Column()
-              .width(HIGHLIGHT_SIZE)
-              .height(HIGHLIGHT_SIZE)
-              .borderRadius(HIGHLIGHT_SIZE / 2)
-              .border({ width: 1, color: $r('app.color.divider') })
+              .width(HIGHLIGHT_SIZE + HIGHLIGHT_RING_GAP * 2)
+              .height(HIGHLIGHT_SIZE + HIGHLIGHT_RING_GAP * 2)
+              .borderRadius((HIGHLIGHT_SIZE + HIGHLIGHT_RING_GAP * 2) / 2)
+              .border({ width: HIGHLIGHT_RING_W, color: $r('app.color.divider') })
             SymbolGlyph($r('sys.symbol.plus'))
-              .fontSize(22)
+              .fontSize(26)
               .fontColor([$r('app.color.primary_text')])
           }
-          .width(HIGHLIGHT_SIZE)
-          .height(HIGHLIGHT_SIZE)
+          .width(HIGHLIGHT_SIZE + (HIGHLIGHT_RING_GAP + HIGHLIGHT_RING_W) * 2)
+          .height(HIGHLIGHT_SIZE + (HIGHLIGHT_RING_GAP + HIGHLIGHT_RING_W) * 2)
           Text($r('app.string.profile_highlight_new'))
-            .fontSize(12)
-            .fontColor($r('app.color.secondary_text'))
+            .fontSize(11)
+            .fontColor($r('app.color.primary_text'))
             .maxLines(1)
         }
         .width(HIGHLIGHT_LABEL_W)
@@ -488,21 +508,30 @@ export struct ProfilePage {
 
         ForEach(this.highlights, (one: ProfileHighlight): void => {
           Column({ space: 6 }) {
-            Image(one.coverUrl.length > 0 ? one.coverUrl : $r('app.media.startIcon'))
-              .draggable(false)
-              .width(HIGHLIGHT_SIZE)
-              .height(HIGHLIGHT_SIZE)
-              .borderRadius(HIGHLIGHT_SIZE / 2)
-              .objectFit(ImageFit.Cover)
-              .backgroundColor($r('app.color.field_background'))
-              .border({ width: 1, color: $r('app.color.divider') })
+            Stack({ alignContent: Alignment.Center }) {
+              Column()
+                .width(HIGHLIGHT_SIZE + HIGHLIGHT_RING_GAP * 2)
+                .height(HIGHLIGHT_SIZE + HIGHLIGHT_RING_GAP * 2)
+                .borderRadius((HIGHLIGHT_SIZE + HIGHLIGHT_RING_GAP * 2) / 2)
+                .border({ width: HIGHLIGHT_RING_W, color: $r('app.color.divider') })
+              Image(one.coverUrl.length > 0 ? one.coverUrl : $r('app.media.startIcon'))
+                .draggable(false)
+                .width(HIGHLIGHT_SIZE)
+                .height(HIGHLIGHT_SIZE)
+                .borderRadius(HIGHLIGHT_SIZE / 2)
+                .objectFit(ImageFit.Cover)
+                .backgroundColor($r('app.color.field_background'))
+                .border({ width: 2, color: $r('app.color.page_background') })
+            }
+            .width(HIGHLIGHT_SIZE + (HIGHLIGHT_RING_GAP + HIGHLIGHT_RING_W) * 2)
+            .height(HIGHLIGHT_SIZE + (HIGHLIGHT_RING_GAP + HIGHLIGHT_RING_W) * 2)
             Text(one.title.length > 0 ? one.title : ' ')
-              .fontSize(12)
+              .fontSize(11)
               .fontColor($r('app.color.primary_text'))
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
               .textAlign(TextAlign.Center)
-              .width(HIGHLIGHT_LABEL_W)
+              .width(HIGHLIGHT_LABEL_W - 8)
           }
           .width(HIGHLIGHT_LABEL_W)
           .onClick((): void => {
@@ -510,11 +539,48 @@ export struct ProfilePage {
           })
         }, (one: ProfileHighlight): string => one.id)
       }
+      // 上下留一点：圆的描边和材质阴影不贴边（和托盘一样的处理）。
+      .padding({ top: 2, bottom: 2 })
     }
     .scrollable(ScrollDirection.Horizontal)
     .scrollBar(BarState.Off)
     .width('100%')
+    .height(HIGHLIGHT_SIZE + (HIGHLIGHT_RING_GAP + HIGHLIGHT_RING_W) * 2 + 28)
     .align(Alignment.Start)
+  }
+
+  /**
+   * 简介：把 `@账号` 变成超链接（需求："检测文本里的 @ 号…动态转换为超链接，
+   * 点击后进入该用户主页"）。
+   *
+   * 做法：切成"文字 / @提及"片段，逐段挂 `Span`（`Span` 继承 `CommonMethod`，所以它能挂
+   * `onClick`，也不会影响整段文字自动换行）；提及用强调色 + 下划线，点了交给宿主开主页。
+   */
+  @Builder
+  bioText() {
+    Text() {
+      ForEach(this.bioSegments(), (seg: BioSegment, index: number): void => {
+        if (seg.mention) {
+          Span(`@${seg.text}`)
+            .fontColor($r('app.color.accent'))
+            .decoration({ type: TextDecorationType.Underline, color: $r('app.color.accent') })
+            .onClick((): void => {
+              hilog.info(DOMAIN, TAG, 'PF mention tap @%{public}s', seg.text);
+              this.onOpenUser(seg.text);
+            })
+        } else {
+          Span(seg.text)
+            .fontColor($r('app.color.primary_text'))
+        }
+      }, (seg: BioSegment, index: number): string => `${index}-${seg.text}`)
+    }
+    .fontSize(13)
+    .width('100%')
+  }
+
+  /** 简介切好的片段（见 model/Profile 的 splitMentions）。 */
+  private bioSegments(): Array<BioSegment> {
+    return splitMentions(this.header === null ? '' : this.header.bio);
   }
 
   /** 横幅区第一颗胶囊的文字：账号名（没有就给空串，胶囊里只剩图标）。 */
@@ -1389,10 +1455,8 @@ export struct ProfilePage {
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
               }
 
-              Text(this.header === null ? '' : this.header.bio)
-                .fontSize(13)
-                .fontColor($r('app.color.primary_text'))
-                .width('100%')
+              // 简介：`@账号` 现渲染成可点的超链接（见 bioText）。
+              this.bioText()
               if (this.header !== null && this.header.link.length > 0) {
                 Text(this.header.link)
                   .fontSize(13)

@@ -752,6 +752,8 @@ struct UserProfileRoute {
   /** 关注 / 取关这一页的用户（页面那一行按钮的动作，实现在 pages/Index.followUser）。 */
   onFollowUser: (id: string, username: string, follow: boolean) => Promise<boolean> =
     (id: string, username: string, follow: boolean): Promise<boolean> => Promise.resolve(false);
+  /** 简介里的 @账号 → 打开那个人的主页（实现在 pages/Index.openUserProfile）。 */
+  onOpenUserProfile: ((username: string) => void) | null = null;
   /** 路由参数里的用户名（头部还没到时的兜底，见 build 里的关注回调）。 */
   private userName: string = '';
   /** 路由参数里的数字 id（关注接口的路径参数）。 */
@@ -789,6 +791,12 @@ struct UserProfileRoute {
     ProfilePage({
       vm: this.vm,
       segmentMode: SEGMENT_MODE_USER,
+      // 简介里的 @账号：开那个人的主页（需求："点击后进入该用户主页"）。
+      onOpenUser: (username: string): void => {
+        if (this.onOpenUserProfile !== null) {
+          this.onOpenUserProfile(username);
+        }
+      },
       onOpen: (post: ProfilePost): void => {
         this.onOpen(post);
       },
@@ -6845,6 +6853,10 @@ struct Index {
       onOpen: (post: ProfilePost): void => {
         // 兜底（没接 onOpenStream 时才会走到）：交给网页打开那条帖子。
         this.openWeb(`https://www.instagram.com/p/${post.shortcode}/`);
+      },
+      // 简介里的 @账号 → 打开那个人的主页（需求："点击后进入该用户主页"）。
+      onOpenUser: (username: string): void => {
+        this.openUserProfile(username, '');
       }
     })
   }
@@ -7951,6 +7963,10 @@ struct Index {
           // 别人主页那一行的「关注 / 已关注」（需求：显示状态 + 支持关注、取关）。
           onFollowUser: (id: string, username: string, follow: boolean): Promise<boolean> => {
             return this.followUser(id, username, follow);
+          },
+          // 简介里的 @账号 → 再开一层主页（需求："点击后进入该用户主页"）。
+          onOpenUserProfile: (username: string): void => {
+            this.openUserProfile(username, '');
           },
           onFeedScroll: (deltaY: number, offsetY: number, scrollState: ScrollState): void => {
             this.onFeedScroll(deltaY, offsetY, scrollState);
