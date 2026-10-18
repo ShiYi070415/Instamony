@@ -85,9 +85,9 @@ const HIGHLIGHT_SIZE: number = 80;
 const HIGHLIGHT_RING_GAP: number = 3;
 const HIGHLIGHT_RING_W: number = 2.5;
 const HIGHLIGHT_LABEL_W: number = 106;
-/** 横幅区胶囊的高度，以及它上下要留的"呼吸位"（材质按下会形变，贴着边会被裁）。 */
+/** 横幅区胶囊的高度，以及它四周要留的"呼吸位"（材质按下/拖拽会形变，贴着边会被裁）。 */
 const CHIP_HEIGHT_VP: number = 28;
-const CHIP_BLEED_VP: number = 6;
+const CHIP_BLEED_VP: number = 10;
 /**
  * 名字左边要空出多少（vp）—— 让它和「帖子」那一列文字左对齐。
  *
@@ -415,7 +415,7 @@ export struct ProfilePage {
           }
         })
       }
-      .padding({ top: CHIP_BLEED_VP, bottom: CHIP_BLEED_VP, left: 2, right: 2 })
+      .padding({ top: CHIP_BLEED_VP, bottom: CHIP_BLEED_VP, left: CHIP_BLEED_VP, right: CHIP_BLEED_VP })
     }
     .scrollable(ScrollDirection.Horizontal)
     .scrollBar(BarState.Off)
@@ -539,8 +539,11 @@ export struct ProfilePage {
           })
         }, (one: ProfileHighlight): string => one.id)
       }
-      // 上下留一点：圆的描边和材质阴影不贴边（和托盘一样的处理）。
-      .padding({ top: 2, bottom: 2 })
+      /*
+       * 左右各 16vp 的**内容**留白（需求："把 margin 取消，改用 padding left right 16"）：
+       * Scroll 本身满屏宽，所以滑起来头像可以穿出屏幕边；第一颗从这里 16vp 开始。
+       */
+      .padding({ top: 2, bottom: 2, left: 16, right: 16 })
     }
     .scrollable(ScrollDirection.Horizontal)
     .scrollBar(BarState.Off)
@@ -563,7 +566,6 @@ export struct ProfilePage {
         if (seg.mention) {
           Span(`@${seg.text}`)
             .fontColor($r('app.color.accent'))
-            .decoration({ type: TextDecorationType.Underline, color: $r('app.color.accent') })
             .onClick((): void => {
               hilog.info(DOMAIN, TAG, 'PF mention tap @%{public}s', seg.text);
               this.onOpenUser(seg.text);
@@ -1387,7 +1389,13 @@ export struct ProfilePage {
       List({ scroller: this.pageScroller }) {
         // ---- 头部（个人信息）：会被外层滚出去 ----
         ListItem() {
-          Column({ space: 12 }) {
+          /*
+           * 外层这个 Column **不带左右内边距**：精选快拍那一排要**满屏宽**（滑起来像主页那条
+           * 快拍列表一样能穿出屏幕边），靠它自己行内的 `padding left/right 16` 和上面的内容对齐
+           * （见 highlightsRow）。
+           */
+          Column() {
+            Column({ space: 12 }) {
             /*
              * 头像 + 右侧一列（需求："将我的页面的用户名移到帖子数量上方，粗体显示"）。
              *
@@ -1481,9 +1489,6 @@ export struct ProfilePage {
 
               // ---- 功能区：编辑主页 / 分享主页（椭圆）+ 推荐关注（圆形）----
               this.actionRow()
-
-              // ---- 精选快拍区（+ 新 + 每个高光一颗圆图）----
-              this.highlightsRow()
             }
           }
           .width('100%')
@@ -1497,6 +1502,13 @@ export struct ProfilePage {
               this.headerBlockVp = height;
             }
           })
+
+            // ---- 精选快拍区：满屏宽的一排（左右留白在它自己行内，见 highlightsRow）----
+            if (this.isSelfPage()) {
+              this.highlightsRow()
+            }
+          }
+          .width('100%')
         }
 
         // ---- 关注 / 发消息：**分段按钮上方那一行**（只有别人主页有，见 followRow）----

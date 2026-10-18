@@ -3043,6 +3043,26 @@ struct Index {
     if (name.length === 0) {
       return;
     }
+    /*
+     * **只有账号名时先补数字 id**（简介里的 `@账号` 点进来就是这种情况）。
+     *
+     * 用户主页那一页的网格走 `feed/user/{pk}/`，没有 id 就只能靠"按用户名"那半边，
+     * 表现就是"页面打开了但内容加载不出来"（用户报的就是这个）。
+     * 补不到 id 也照常推页（头部还能按用户名取），只是网格会退到模板那条路。
+     */
+    if (userId.length === 0) {
+      NativeProfile.userIdByUsername(name).then((id: string): void => {
+        this.pushUserProfile(name, id);
+      }).catch((): void => {
+        this.pushUserProfile(name, '');
+      });
+      return;
+    }
+    this.pushUserProfile(name, userId);
+  }
+
+  /** 真正推"用户主页"那一层（去重、挂起评论面板，见 openUserProfile 的说明）。 */
+  private pushUserProfile(name: string, userId: string): void {
     // 已经在同一个人的主页上：不再压一层（连着压两层的话"返回"一次还停在原地）。
     const names: Array<string> = this.navStack.getAllPathName();
     if (names.length > 0 && names[names.length - 1] === USER_PROFILE_PAGE) {

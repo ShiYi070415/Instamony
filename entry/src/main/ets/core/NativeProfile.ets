@@ -392,6 +392,28 @@ export class NativeProfile {
    * 外面这层只管三件事：**缓存命中**、**并发合并**、**成功后回填缓存**；
    * 真正的取数在 loadHeaderBody 里（移动端优先、模板回放兜底）。
    */
+  /**
+   * 按账号名问一次数字 id（用户主页路由要它：`feed/user/{pk}/` 这类端点只认 pk）。
+   *
+   * 用途：简介里的 `@账号` 只有名字，点开主页时得先把 id 补上，否则那一页的网格/头部
+   * 都只有"按用户名"那半边能用、整页会像"加载不出来"（用户报的就是这个）。
+   */
+  static async userIdByUsername(username: string): Promise<string> {
+    const name: string = username.trim();
+    if (name.length === 0) {
+      return '';
+    }
+    const body: MobileUserBody | null = await MobileProfile.info('', name,
+      ApiThrottle.interactive());
+    if (body === null) {
+      hilog.info(DOMAIN, TAG, 'userIdByUsername miss @%{public}s', name);
+      return '';
+    }
+    const id: string = NativeProfile.userIdOf(body.user);
+    hilog.info(DOMAIN, TAG, 'userIdByUsername @%{public}s → %{public}s', name, id);
+    return id;
+  }
+
   static async fetchHeader(target: ProfileTarget = ProfileTarget.self()): Promise<ProfileHeader | null> {
     return NativeProfile.headerWithCache(target);
   }
