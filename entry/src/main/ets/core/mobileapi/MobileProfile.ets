@@ -128,6 +128,19 @@ export class MobileProfile {
     return null;
   }
 
+  /**
+   * 最近一次失败的原因（`challenge_required` / `feedback_required` / `http-…`）。
+   *
+   * 为什么要往上传：`NativeProfile` 与视图模型只拿得到"null"，看不出是网络问题、
+   * 限流、还是**账号被要求安全验证** —— 而那几种在界面上该说的话完全不同
+   * （尤其 `challenge_required`：必须让用户去网页里过验证，重试多少次都没用）。
+   */
+  private static last: string = '-';
+
+  static lastDetail(): string {
+    return MobileProfile.last;
+  }
+
   /** 一发 GET 网格（被标注 / 收藏那两条用）。 */
   private static async gridGet(endpoint: string, maxId: string, kind: string,
                                priority: number): Promise<MobileGridPage | null> {
@@ -139,6 +152,7 @@ export class MobileProfile {
     const result: MobileResult = await MobileRequest.send(endpoint, '', params, true, null,
       new MobileOptions(ApiThrottle.MOBILE, priority));
     if (!result.ok) {
+      MobileProfile.last = `tab[${kind}]:${result.error}`;
       hilog.info(DOMAIN, TAG, 'tab[%{public}s] miss (%{public}s): %{public}s',
         kind, endpoint, result.summary());
       return null;

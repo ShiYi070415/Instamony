@@ -176,12 +176,60 @@ export class ProfileViewModel {
   private readonly bridge: InstagramPageBridge = InstagramPageBridge.getInstance();
   private readonly registry: ApiRegistry = ApiRegistry.getInstance();
   private header: ProfileHeader | null = null;
-  /** 清空自己（退出登录 / 换账号时调，见 ReelsViewModel.reset 的说明）。 */
+  /**
+   * 一次性的**全量清空**（退出登录 / 换账号时调）。
+   *
+   * ⚠️ 以前这里只清了 `posts / endCursor / more / busy` 这四个**显示镜像**，四个分页各自的
+   * `tabs[]`、头部、ownName、selfId、target 一个都没动 —— 于是用户报的
+   * "退出登录后注册新账号，分页里的内容还是上一个人的"就成了必然：新账号进来时
+   * `setTab` 看到 `state.loaded === true` 直接铺旧列表，连请求都不发。
+   *
+   * 现在：四个分页全部回到"没加载过"，头部与身份信息一起作废，`generation` 自增让
+   * **清空之前发出去的那几发**回来时不要写状态（否则慢请求回来又把旧内容写回来了）。
+   */
   reset(): void {
+    this.generation++;
+    for (let tab: number = 0; tab < this.tabs.length; tab++) {
+      const state: ProfileTabState = this.tabs[tab];
+      state.posts = [];
+      state.cursor = '';
+      state.more = true;
+      state.loaded = false;
+      state.loading = false;
+      state.capturing = false;
+      state.wantMore = false;
+      state.nextPages = [];
+      this.tabOffsets[tab] = 0;
+    }
+    this.tab = PROFILE_TAB_POSTS;
     this.posts = [];
     this.endCursor = '';
     this.more = true;
     this.busy = false;
+    this.outerOffset = 0;
+    // 头部与"我是谁"：换账号后这些都不可信，全部回到初始态（见 ensureSelfScope）。
+    this.header = null;
+    this.ownName = '';
+    this.headerVerified = false;
+    this.selfId = '';
+    this.target = ProfileTarget.self();
+    this.diag = '-';
+    this.replayDiag = '-';
+    this.precaching = false;
+    this.usedColdPath = false;
+    this.coverTried = [];
+    hilog.info(DOMAIN, TAG, 'profile reset (generation=%{public}d)', this.generation);
+  }
+
+  /**
+   * 这次异步操作是不是已经**过期**（reset 之后 / 换过账号）。
+   *
+   * 每个耗时入口开头取一份 `generation`，写任何状态之前先问一句：过期的结果一律丢掉。
+   * 不做这一道的话，退出登录时正在飞的那一发（可能要十几秒）回来会把旧账号的列表 / 头部
+   * 重新写进视图模型 —— 表现就是"清了又回来了"。
+   */
+  private stale(gen: number): boolean {
+    return gen !== this.generation;
   }
 
   private posts: Array<ProfilePost> = [];
@@ -218,6 +266,13 @@ export class ProfileViewModel {
    * 每次进本人这条链先比一次 id，变了就把这几样**全部作废**（见 ensureSelfScope）。
    */
   private selfId: string = '';
+  /**
+   * 账号代次（见 stale / reset）。
+   *
+   * reset() 与"检测到换账号"时自增；每个异步入口开头取一份快照，写状态前比对一次，
+   * 过期就整段丢掉 —— 这是"清空后旧请求又把内容写回来"的唯一可靠解法。
+   */
+  private generation: number = 0;
   /**
    * **分段按钮与内部分页的对应关系**（第 n 段 = 哪个分页）。
    *
@@ -604,11 +659,19 @@ export class ProfileViewModel {
     state.loading = true;
     this.busy = true;
     this.onBusy(true);
+    /*
+     * 这一轮属于哪个"账号代次"（见 stale 的说明）。reset / 换账号之后，这里拿到的那几发
+     * 结果一律不许再写状态 —— 否则退出登录时在飞的请求回来会把旧账号的内容铺回去。
+     * 声明在 try 外面：catch / finally 也要用它做判断；真正的取值在 ensureSelfScope 之后
+     * （那里可能刚刚 reset 过，代次已经变了）。
+     */
+    let gen: number = this.generation;
     try {
       // 本人：网格请求体的目标键也要回正（见 ensureOwnName），所以发请求前先落实"我是谁"。
       // 同样先确认这份本人状态属于当前账号（换账号后必须作废，见 ensureSelfScope）。
       await this.ensureSelfScope();
       await this.ensureOwnName();
+      gen = this.generation;
       /*
        * 头部与网格**并发**拉（原来是先把头部拉完再拉网格）。
        *
@@ -642,6 +705,11 @@ export class ProfileViewModel {
         }
       }
       await headerJob;
+      if (this.stale(gen)) {
+        hilog.info(DOMAIN, TAG, 'tab load result dropped (generation %{public}d → %{public}d)',
+          gen, this.generation);
+        return;
+      }
       if (page === null) {
         /*
          * 状态行要能区分"被限流"和"真的读不到"：限流时用户等一会儿自己就好了，
@@ -703,11 +771,21 @@ export class ProfileViewModel {
       // 这里必须吞掉并记下来：异常一旦从这里跑出去，页面上的 aboutToAppear 是
       // "发了就不管"的调用，用户只会看到永远空白的页，日志里也什么都没有。
       hilog.warn(DOMAIN, TAG, 'load threw: %{public}s', (error as Error).message);
-      this.onStatus('加载出错');
+      if (!this.stale(gen)) {
+        this.onStatus('加载出错');
+      }
     } finally {
       // 走过冷启动就一定要把网页送回首页，否则首页信息流会被留在"我的主页"上（见 returnToFeed）。
       if (this.usedColdPath) {
         this.returnToFeed();
+      }
+      /*
+       * **过期的一轮不要再动状态**：reset() 之后 `tabs[]` 已经全部回到"没加载过"，
+       * 这里要是还去清 loading/busy 或补一次 requestMore，就会把新账号那一轮搅乱
+       * （最直观的后果是新账号一进来就显示"没有更多了"、或者触底直接空转）。
+       */
+      if (this.stale(gen)) {
+        return;
       }
       state.loading = false;
       this.busy = false;
@@ -1241,12 +1319,20 @@ export class ProfileViewModel {
     });
   }
 
-  /** 后台拉某一分页的第一页（只写进那一分页的状态，不打扰当前显示）。 */  private async loadTabInBackground(tab: number, op: string): Promise<void> {
+  /** 后台拉某一分页的第一页（只写进那一分页的状态，不打扰当前显示）。 */
+  private async loadTabInBackground(tab: number, op: string): Promise<void> {
     const state: ProfileTabState = this.tabs[tab];
+    const gen: number = this.generation;
     state.loading = true;
     try {
       const page: ProfilePostsPage | null = await this.fetchPage(op, '', tab);
       if (page === null) {
+        return;
+      }
+      // 过期的预取结果不许写（见 stale）：退出登录 / 换账号时在飞的这一发必须丢掉。
+      if (this.stale(gen)) {
+        hilog.info(DOMAIN, TAG, 'prefetch dropped tab=%{public}d (generation %{public}d → %{public}d)',
+          tab, gen, this.generation);
         return;
       }
       state.posts = page.posts;
@@ -1278,7 +1364,9 @@ export class ProfileViewModel {
       hilog.warn(DOMAIN, TAG, 'prefetch tab=%{public}d failed: %{public}s',
         tab, (error as Error).message);
     } finally {
-      state.loading = false;
+      if (!this.stale(gen)) {
+        state.loading = false;
+      }
     }
   }
 
@@ -1589,12 +1677,14 @@ export class ProfileViewModel {
     }
     hilog.info(DOMAIN, TAG, 'self account changed %{public}s → %{public}s → reset 本人缓存',
       this.selfId, id);
+    /*
+     * **换账号要把四个分页一起清掉**（用户报的"退出登录后注册新账号，分页里还是上一个人的内容"）：
+     * 只清头部是不够的 —— `tabs[]` 里每一段都存着 posts / cursor / loaded，
+     * 新账号进来 `setTab` 看到 `loaded === true` 就直接铺旧列表，连请求都不发。
+     * reset() 会顺手把 generation 自增，在飞的那几发回来也就写不进来了。
+     */
+    this.reset();
     this.selfId = id;
-    this.ownName = '';
-    this.headerVerified = false;
-    this.header = null;
-    // selfName 也要清：它被塞进请求体当目标用户名（见 ProfileTarget）。
-    this.target = ProfileTarget.self();
   }
 
   private async loadHeader(): Promise<void> {
@@ -1618,6 +1708,8 @@ export class ProfileViewModel {
      * 于是"新装 / 换账号后模板被清 / 模板过期"的时候，"我的"头部永远是空的，
      * 而且连状态行都不写（用户报的"打开 app 进入我的页面头部数据没有加载"就是这个）。
      */
+    // 这一发属于哪个账号代次（见 stale）：**必须在发请求之前**取，exit/reset 之后回来才丢得掉。
+    const gen: number = this.generation;
     let native: ProfileHeader | null = await NativeProfile.fetchHeader(this.target);
     if (native === null && !ApiThrottle.blocked(ApiThrottle.MOBILE)) {
       // 偶发的超时 / 抖动：隔 600ms 再来一次（限流期间不重试，见 load 里的同一取舍）。
@@ -1646,6 +1738,11 @@ export class ProfileViewModel {
           return;
         }
         this.onStatus('头部读取异常：拿到的不是本账号的资料');
+        return;
+      }
+      if (this.stale(gen)) {
+        hilog.info(DOMAIN, TAG, 'header result dropped (generation %{public}d → %{public}d)',
+          gen, this.generation);
         return;
       }
       this.header = native;
