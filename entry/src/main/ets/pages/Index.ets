@@ -145,6 +145,7 @@ import { MobileSession } from '../core/mobileapi/MobileSession';
 import { MobileProbe } from '../core/mobileapi/MobileProbe';
 import { MqttProbe } from '../core/mobileapi/MqttProbe';
 import { NetProbe } from '../core/mobileapi/NetProbe';
+import { MobileMqttWs } from '../core/mobileapi/MobileMqttWs';
 import { MainThreadWatchdog } from '../core/MainThreadWatchdog';
 import { PROFILE_TAB_POSTS, PROFILE_TAB_REELS, PROFILE_TAB_TAGGED, ProfileViewModel } from '../viewmodel/ProfileViewModel';
 import { DirectViewModel } from '../viewmodel/DirectViewModel';
@@ -2060,18 +2061,18 @@ struct Index {
         });
       }, 9000);
       /*
-       * 套接字收发探针（见 core/mobileapi/NetProbe）**默认不跑**：它是诊断用的，
-       * 结论已记在那个文件头（明文 TCP 收得到、TLS 收不到、我们的 MQTT 报文正确）。
-       * 需要复测时把下面这段的注释打开即可。
+       * **实时私信通道（MQTT over WebView WebSocket）**。
+       *
+       * 为什么走网页而不是原生：本运行时的 `TLSSocket` 收不到数据（实测见 NetProbe），
+       * 而隐藏 WebView 用的 Chromium 网络栈 WSS 是好的；原生只负责拼包/解包。
+       * 等 20 秒是为了让页面先加载完（注入脚本需要一个活文档），页面上那个 JS
+       * 会把收到的帧通过 `ogNative.onMqttEvent` 回传（见 core/mobileapi/MobileMqttWs）。
        */
-      // setTimeout((): void => {
-      //   const ui: UIContext = this.getUIContext();
-      //   NetProbe.run((text: string): void => {
-      //     ui.getPromptAction().showToast({ message: text, duration: 20000 });
-      //   }).catch((error: Error): void => {
-      //     hilog.warn(DOMAIN, TAG, 'net probe rejected: %{public}s', error.message);
-      //   });
-      // }, 15000);
+      setTimeout((): void => {
+        MobileMqttWs.start(this.bridge.controller).catch((error: Error): void => {
+          hilog.warn(DOMAIN, TAG, 'mqtt ws start rejected: %{public}s', error.message);
+        });
+      }, 20000);
       /*
        * **「你的快拍」头像先用落盘快照画出来**（用户报的"你的快拍头像加载很慢"）。
        *

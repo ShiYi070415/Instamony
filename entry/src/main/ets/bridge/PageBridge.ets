@@ -11,6 +11,8 @@ import { webview } from '@kit.ArkWeb';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { InstagramProbe } from '../probe/InstagramProbe';
 import { SessionGate } from '../core/SessionGate';
+// 实时通道的回传落点（见 onMqttEvent）。
+import { MobileMqttWs } from '../core/mobileapi/MobileMqttWs';
 
 const DEFAULT_TIMEOUT_MS: number = 20000;
 /**
@@ -123,6 +125,21 @@ export class InstagramBridgeProxy {
   /** 页面刚发出了一条点赞 / 转发的写请求（见 engageTemplateHandler）。 */
   onEngageTemplate(name: string): void {
     InstagramPageBridge.getInstance().publishEngageTemplate(name);
+  }
+
+  /**
+   * **MQTT over WebSocket 的回传通道**（见 core/mobileapi/MobileMqttWs）。
+   *
+   * 为什么实时通道要走网页：ArkTS 的 `TLSSocket` 在本运行时**收不到任何数据**
+   * （实测对照见 core/mobileapi/NetProbe：明文 TCP 收得到、TLS 一条都收不到），
+   * 而隐藏在应用里的 WebView 用的是 Chromium 的网络栈，WSS 是好的。
+   * 于是：原生负责拼 MQTT 报文（Thrift + zlib），网页负责收发帧。
+   *
+   * @param kind  `open` / `bin`（二进制帧，data 是 base64）/ `text` / `error` / `close`
+   * @param data  载荷（二进制帧为 base64，其余为短字符串）
+   */
+  onMqttEvent(kind: string, data: string): void {
+    MobileMqttWs.onEvent(kind, data);
   }
 }
 
