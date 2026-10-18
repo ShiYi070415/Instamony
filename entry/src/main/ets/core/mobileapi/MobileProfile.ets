@@ -29,6 +29,8 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ApiThrottle } from '../ApiThrottle';
 import { MobileRequest, MobileResult, MobileOptions } from './MobileRequest';
 import { MobileSession, MobileIdentity } from './MobileSession';
+import { ProfileHighlight } from '../../model/Profile';
+import { SUPPORTED_CAPABILITIES } from './MobileConfig';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'MobileProfile';
@@ -270,6 +272,75 @@ export class MobileProfile {
   }
 
   /**
+   * **精选快拍**（个人页高光那排）：`GET highlights_tray/{pk}/`。
+   *
+   * 对应 instagrapi 的 `user_highlights`。只取卡片要用的三样：id / 标题 / 封面
+   * （封面优先 `cover_media.thumbnail_url`，否则在 `cover_media.image_versions2.candidates` 里挑）。
+   * 拿不到就回空数组 —— 界面上那一排只留「+ 新」那颗。
+   */
+  static async highlights(userId: string,
+                          priority: number = ApiThrottle.warm()): Promise<Array<ProfileHighlight>> {
+    const id: string = userId.trim();
+    const out: Array<ProfileHighlight> = [];
+    if (id.length === 0) {
+      return out;
+    }
+    const endpoint: string = `highlights/${encodeURIComponent(id)}/highlights_tray/`;
+    /*
+     * 端点照 instagrapi 的 `user_highlights_v1`：`highlights/<pk>/highlights_tray/`
+     * （注意是**两段**，不是 `highlights_tray/<pk>/` —— 后者回一整页 HTML 404，踩过）。
+     * instagrapi 把参数挂在 query 上；这里先按签名表单 POST，不成就退回 GET + query。
+     */
+    const body: Record<string, Object> = {};
+    body['supported_capabilities_new'] = SUPPORTED_CAPABILITIES;
+    const opts: MobileOptions = new MobileOptions(ApiThrottle.MOBILE, priority);
+    let result: MobileResult = await MobileRequest.send(endpoint, MobileRequest.formOf(body), '',
+      true, null, opts);
+    if (!result.ok) {
+      const params: string =
+        `supported_capabilities_new=${encodeURIComponent(SUPPORTED_CAPABILITIES)}`;
+      result = await MobileRequest.send(endpoint, '', params, true, null, opts);
+    }
+    if (!result.ok) {
+      hilog.info(DOMAIN, TAG, 'highlights miss: %{public}s', result.summary());
+      return out;
+    }
+    const parsed: Record<string, Object> | null = MobileProfile.parse(result.body);
+    if (parsed === null) {
+      return out;
+    }
+    const tray: Array<Object> = MobileProfile.objectsOf(parsed['tray']);
+    for (let index: number = 0; index < tray.length; index++) {
+      const one: Record<string, Object> | null = MobileProfile.objectOf(tray[index]);
+      if (one === null) {
+        continue;
+      }
+      const cover: Record<string, Object> | null = MobileProfile.objectOf(one['cover_media']);
+      let coverUrl: string = '';
+      if (cover !== null) {
+        coverUrl = MobileProfile.firstText(cover, ['thumbnail_url', 'display_url']);
+        if (coverUrl.length === 0) {
+          coverUrl = MobileProfile.imageUrlOf(cover);
+        }
+        if (coverUrl.length === 0) {
+          // 有的版本把封面放在 `cropped_image_version` 里（一个 {url,width,height} 对象）。
+          const cropped: Record<string, Object> | null =
+            MobileProfile.objectOf(cover['cropped_image_version']);
+          if (cropped !== null) {
+            coverUrl = MobileProfile.firstText(cropped, ['url']);
+          }
+        }
+      }
+      out.push(new ProfileHighlight(
+        MobileProfile.firstText(one, ['id', 'strong_id__']),
+        MobileProfile.firstText(one, ['title']),
+        coverUrl));
+    }
+    hilog.info(DOMAIN, TAG, 'highlights ok n=%{public}d bytes=%{public}d', out.length, result.bytes);
+    return out;
+  }
+
+  /**
    * 主页网格（第一页 / 翻页）。
    *
    * @param userId 目标用户数字 id（`profile_grid_items` 之类都要它）
@@ -331,6 +402,34 @@ export class MobileProfile {
     } catch (error) {
       return null;
     }
+  }
+
+  /** 一个媒体节点里最宽的封面图（`image_versions2.candidates`）；没有给空串。 */
+  private static imageUrlOf(media: Record<string, Object>): string {
+    const versions: Record<string, Object> | null = MobileProfile.objectOf(media['image_versions2']);
+    if (versions === null) {
+      return '';
+    }
+    const candidates: Array<Object> = MobileProfile.objectsOf(versions['candidates']);
+    let best: string = '';
+    let bestWidth: number = -1;
+    for (let index: number = 0; index < candidates.length; index++) {
+      const one: Record<string, Object> | null = MobileProfile.objectOf(candidates[index]);
+      if (one === null) {
+        continue;
+      }
+      const url: string = MobileProfile.firstText(one, ['url']);
+      if (url.length === 0) {
+        continue;
+      }
+      const widthValue: Object | undefined = one['width'];
+      const width: number = typeof widthValue === 'number' ? widthValue as number : 0;
+      if (width > bestWidth) {
+        bestWidth = width;
+        best = url;
+      }
+    }
+    return best;
   }
 
   private static objectOf(value: Object | undefined): Record<string, Object> | null {

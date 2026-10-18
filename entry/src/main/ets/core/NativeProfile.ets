@@ -29,7 +29,7 @@ import { NativeFeed } from './NativeFeed';
 import { InstagramCookieJar, InstagramCookieSnapshot } from './InstagramCookieJar';
 import { ApiThrottle } from './ApiThrottle';
 import { MobileProfile, MobileUserBody, MobileGridPage } from './mobileapi/MobileProfile';
-import { ProfileHeader, ProfilePost, ProfilePostsPage } from '../model/Profile';
+import { ProfileHeader, ProfileHighlight, ProfileMusic, ProfilePost, ProfilePostsPage } from '../model/Profile';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeProfile';
@@ -244,6 +244,8 @@ export class NativeProfile {
    * 不把 detail 带出去就只能靠猜。
    */
   private static detail: string = '-';
+  /** 是否已经把 user 的键名打过一行日志（见 headerFromUser，只为找字段名）。 */
+  private static loggedUserKeys: boolean = false;
   /** "因为没有图片候选而丢掉了 mp4 封面"这件事只记一次（见 postOf 的 cover 兜底）。 */
   private static diagCoverDropped: number = 0;
 
@@ -390,8 +392,18 @@ export class NativeProfile {
    * 外面这层只管三件事：**缓存命中**、**并发合并**、**成功后回填缓存**；
    * 真正的取数在 loadHeaderBody 里（移动端优先、模板回放兜底）。
    */
-  static fetchHeader(target: ProfileTarget = ProfileTarget.self()): Promise<ProfileHeader | null> {
+  static async fetchHeader(target: ProfileTarget = ProfileTarget.self()): Promise<ProfileHeader | null> {
     return NativeProfile.headerWithCache(target);
+  }
+
+  /**
+   * 精选快拍（个人页高光那排）。
+   *
+   * 就是移动端 `highlights_tray/<pk>/` 的薄包装（见 core/mobileapi/MobileProfile.highlights）——
+   * 放在这里是为了让视图模型只依赖 NativeProfile 这一层。
+   */
+  static async highlights(userId: string): Promise<Array<ProfileHighlight>> {
+    return MobileProfile.highlights(userId, ApiThrottle.warm());
   }
 
   private static async headerWithCache(target: ProfileTarget): Promise<ProfileHeader | null> {
@@ -859,6 +871,15 @@ export class NativeProfile {
     if (username.length === 0) {
       return null;
     }
+    // 一次性把和音乐相关的键打出来（找字段名用；只打一次，别刷屏）。
+    if (!NativeProfile.loggedUserKeys) {
+      NativeProfile.loggedUserKeys = true;
+      const musicKeys: Array<string> = Object.keys(user)
+        .filter((key: string): boolean => key.indexOf('music') >= 0
+          || key.indexOf('audio') >= 0 || key.indexOf('song') >= 0);
+      hilog.info(DOMAIN, TAG, 'user music keys=[%{public}s] has_music=%{public}s',
+        musicKeys.join(','), `${NativeProfile.boolOf(user, 'has_music_on_profile')}`);
+    }
     const hd: Record<string, Object> | null = NativeProfile.recordOf(user, 'hd_profile_pic_url_info');
     let avatar: string = hd === null ? '' : NativeProfile.strOf(hd, 'url');
     if (avatar.length === 0) {
@@ -885,7 +906,53 @@ export class NativeProfile {
       NativeProfile.numOf(user, 'follower_count'),
       NativeProfile.numOf(user, 'following_count'),
       NativeProfile.numOf(user, 'media_count'),
-      followed);
+      followed,
+      NativeProfile.musicOf(user));
+  }
+
+  /**
+   * 从用户节点里挖**背景音乐**（横幅区那颗音乐胶囊要用）。
+   *
+   * IG 各版本把这歌挂在不同位置：`profile_music` / `music_metadata` / `audio_asset`，
+   * 而且外层可能再包一层（`music_asset_info`）。这里按"找到哪个算哪个"取：
+   * 标题、演唱者、可播放地址（`progressive_download_url` / `download_url` / `url`）。
+   * 一个都找不到就给 null —— 界面上那颗胶囊就不显示（总比放个空壳好）。
+   */
+  private static musicOf(user: Record<string, Object>): ProfileMusic | null {
+    const holders: Array<string> = ['profile_music', 'music_metadata', 'audio_asset'];
+    for (let index: number = 0; index < holders.length; index++) {
+      const outer: Record<string, Object> | null = NativeProfile.recordOf(user, holders[index]);
+      if (outer === null) {
+        continue;
+      }
+      // 再往里剥一层（`music_asset_info` / `music_consumption_info` 这类包装）。
+      const inner: Record<string, Object> | null = NativeProfile.recordOf(outer, 'music_asset_info');
+      const holder: Record<string, Object> = inner !== null ? inner : outer;
+      const title: string = NativeProfile.firstString(holder,
+        ['title', 'song_name', 'display_title', 'music_title']);
+      if (title.length === 0) {
+        continue;
+      }
+      const artist: string = NativeProfile.firstString(holder,
+        ['display_artist', 'artist_name', 'subtitle', 'artist']);
+      const url: string = NativeProfile.firstString(holder,
+        ['progressive_download_url', 'download_url', 'audio_url', 'url']);
+      hilog.info(DOMAIN, TAG, 'profile music key=%{public}s title=%{public}s playable=%{public}s',
+        holders[index], title, `${url.length > 0}`);
+      return new ProfileMusic(title, artist, url);
+    }
+    return null;
+  }
+
+  /** 按候选键取第一个非空字符串（音乐那种各版本字段名不一的解析用）。 */
+  private static firstString(holder: Record<string, Object>, keys: Array<string>): string {
+    for (let index: number = 0; index < keys.length; index++) {
+      const value: string = NativeProfile.strOf(holder, keys[index]);
+      if (value.length > 0) {
+        return value;
+      }
+    }
+    return '';
   }
 
   /**

@@ -26,7 +26,7 @@ import { ApiRegistry } from '../bridge/ApiRegistry';
 import { OWN_PROFILE_SCRIPT, profileHeaderScript, profilePostsScript } from '../bridge/WebScripts';
 import { AppConfig } from '../config/AppConfig';
 import { NativeProfile, ProfileTarget } from '../core/NativeProfile';
-import { ProfileHeader, ProfileMapper, ProfilePostsPage, ProfilePost } from '../model/Profile';
+import { ProfileHeader, ProfileHighlight, ProfileMapper, ProfilePostsPage, ProfilePost } from '../model/Profile';
 import { MediaPost } from '../model/MediaPost';
 import { MediaPrefetch } from '../core/MediaPrefetch';
 import { PosterCache } from '../core/PosterCache';
@@ -211,6 +211,11 @@ export class ProfileViewModel {
     this.outerOffset = 0;
     // 头部与"我是谁"：换账号后这些都不可信，全部回到初始态（见 ensureSelfScope）。
     this.header = null;
+    this.headerFromSnapshot = false;
+    // 精选快拍也按人：换账号后必须清掉，否则会显示上一个人的高光。
+    this.highlightItems = [];
+    this.highlightsFor = '';
+    this.onHighlights([]);
     this.ownName = '';
     this.headerVerified = false;
     this.selfId = '';
@@ -695,7 +700,9 @@ export class ProfileViewModel {
        * 头部只是计数与简介。两条互不依赖（头部失败也不影响网格），所以一起发。
        * 页面那边两个回调都只写自己的状态，谁先回来都不影响另一个。
        */
-      const headerJob: Promise<void> = this.header === null ? this.loadHeader() : Promise.resolve();
+      // 头部：还没有、或者现在这份只是**落盘快照**（见 paintHeaderSnapshot）都要真去拉一次。
+      const headerJob: Promise<void> = (this.header === null || this.headerFromSnapshot)
+        ? this.loadHeader() : Promise.resolve();
       let page: ProfilePostsPage | null =
         await this.fetchPage(this.opNameOf(tab), state.cursor, tab);
       if (page === null) {
@@ -783,6 +790,9 @@ export class ProfileViewModel {
       this.prefetchOthersSequential().catch((): void => {
       });
       this.prefetchNext(tab);
+      // 精选快拍（高光）单独一发：拿不到就空着，不影响页面其它部分。
+      this.loadHighlights().catch((): void => {
+      });
     } catch (error) {
       // 这里必须吞掉并记下来：异常一旦从这里跑出去，页面上的 aboutToAppear 是
       // "发了就不管"的调用，用户只会看到永远空白的页，日志里也什么都没有。
@@ -1705,6 +1715,8 @@ export class ProfileViewModel {
     this.selfId = id;
   }
 
+  private headerFromSnapshot: boolean = false;
+
   /**
    * 用**落盘快照**先把头部画出来（没有就什么都不做）。
    *
@@ -1724,9 +1736,57 @@ export class ProfileViewModel {
       return;
     }
     this.header = snap;
+    /*
+     * ⚠️ 必须记下"这是快照"：`load()` 里"要不要发网络那一发"看的正是 `header === null`。
+     * 不记的话快照一画上去就再也不会刷新 —— 真实数据永远停在旧快照上（踩过）。
+     */
+    this.headerFromSnapshot = true;
     hilog.info(DOMAIN, TAG, 'header snapshot @%{public}s posts=%{public}d',
       snap.username, snap.posts);
     this.onHeader(snap);
+  }
+
+  /**
+   * 精选快拍（个人页高光那排）的加载入口与结果。
+   *
+   * 只对**本人**页面拉（别人的主页这一版不做高光）；一发 `highlights_tray/<pk>/`，
+   * 失败就保持空（界面上那一排只留「+ 新」那颗，不报错）。
+   */
+  onHighlights: (items: Array<ProfileHighlight>) => void = (items: Array<ProfileHighlight>): void => {
+  };
+  private highlightItems: Array<ProfileHighlight> = [];
+  private highlightsFor: string = '';
+
+  highlightsNow(): Array<ProfileHighlight> {
+    return this.highlightItems;
+  }
+
+  private async loadHighlights(): Promise<void> {
+    if (!this.target.isSelf()) {
+      return;
+    }
+    const uid: string = this.selfId.length > 0 ? this.selfId : NativeProfile.ownIdCached();
+    if (uid.length === 0 || this.highlightsFor === uid) {
+      return;
+    }
+    this.highlightsFor = uid;
+    try {
+      const list: Array<ProfileHighlight> = await NativeProfile.highlights(uid);
+      if (list.length === 0 || this.staleOfHighlights(uid)) {
+        return;
+      }
+      this.highlightItems = list;
+      hilog.info(DOMAIN, TAG, 'highlights n=%{public}d', list.length);
+      this.onHighlights(list);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'highlights failed: %{public}s', (error as Error).message);
+    }
+  }
+
+  /** 这一发回来时账号是不是已经换了（换了就丢掉，别把上一个人的高光画上去）。 */
+  private staleOfHighlights(uid: string): boolean {
+    const now: string = this.selfId.length > 0 ? this.selfId : NativeProfile.ownIdCached();
+    return now !== uid;
   }
 
   /** 拉一次头部（本人的话顺带把快照落盘，见 AppSettings.saveProfileHeader）。 */
@@ -1800,6 +1860,8 @@ export class ProfileViewModel {
         return;
       }
       this.header = native;
+      // 拿到真数据了：这一份不再是快照（见 paintHeaderSnapshot）。
+      this.headerFromSnapshot = false;
       // 本人这一页顺手把自己的账号名记下来：切分页时页面若还没拿到头部（own 传空），
       // 收藏 / 被标注 / 视频那几段就抓不到模板、也没法重抓（见 ownName 的说明）。
       if (this.target.isSelf() && native.username.length > 0) {
@@ -1862,6 +1924,7 @@ export class ProfileViewModel {
           return;
         }
         this.header = header;
+        this.headerFromSnapshot = false;
         if (this.target.isSelf() && header.username.length > 0) {
           this.ownName = header.username;
           this.target = this.target.withSelfName(header.username);

@@ -690,6 +690,88 @@ export struct MaterialLabelButton {
 }
 
 /**
+ * **沉浸光感的信息胶囊**：一行「图标 + 文字 +（可选）尾部图标」，用于个人页的横幅区
+ * （`@ 账号` / 音乐 / 添加 那三个 chips，见 components/ProfilePage）。
+ *
+ * 为什么不用 MaterialLabelButton 凑：那个只能放文字，而 chips 都是"图标 + 文字"，
+ * 音乐那颗右边还要再挂一个播放/暂停图标。材质那一层和别的按钮完全一样
+ * （透明 Toggle 承载沉浸光感，见文件头）。
+ */
+@Component
+export struct MaterialChipButton {
+  /** 左侧图标（空 = 不画）。 */
+  @Prop symbol: Resource = $r('sys.symbol.at');
+  /** 文字（资源与纯文本二选一，`labelText` 非空时优先）。 */
+  @Prop labelRes: Resource = $r('app.string.story_message_hint');
+  @Prop labelText: string = '';
+  /** 右侧图标（例如播放 / 暂停；空 = 不画）。 */
+  @Prop trailing: Resource | null = null;
+  @Prop fontSize: number = 13;
+  @Prop chipHeight: number = 32;
+  @Prop iconSize: number = 14;
+  @Prop tint: string = '';
+  @Prop autoInvert: boolean = true;
+  @StorageProp(SETTING_MATERIAL_THICKNESS) thickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
+  onTap: () => void = (): void => {
+  };
+
+  private lastFireMs: number = 0;
+
+  /** 同 MaterialLabelButton：`onChange` 可能不来，`onClick` 兜底 + 400ms 去重。 */
+  private fire(): void {
+    const now: number = Date.now();
+    if (now - this.lastFireMs < 400) {
+      return;
+    }
+    this.lastFireMs = now;
+    this.onTap();
+  }
+
+  private inkColor(): ResourceColor {
+    return this.tint.length > 0 ? this.tint : $r('sys.color.font_primary');
+  }
+
+  build() {
+    Toggle({ type: ToggleType.Button, isOn: false }) {
+      Row({ space: 6 }) {
+        if (this.symbol !== null) {
+          SymbolGlyph(this.symbol)
+            .fontSize(this.iconSize)
+            .fontColor([this.inkColor()])
+        }
+        Text(this.labelText.length > 0 ? this.labelText : this.labelRes)
+          .fontSize(this.fontSize)
+          .fontWeight(FontWeight.Medium)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .fontColor(this.inkColor())
+          .constraintSize({ maxWidth: 160 })
+        if (this.trailing !== null) {
+          SymbolGlyph(this.trailing)
+            .fontSize(this.iconSize)
+            .fontColor([this.inkColor()])
+        }
+      }
+      .padding({ left: 12, right: 12 })
+    }
+    .height(this.chipHeight)
+    .padding(0)
+    .borderRadius(this.chipHeight / 2)
+    .backgroundColor(Color.Transparent)
+    .selectedColor(Color.Transparent)
+    .attributeModifier(new SurfaceModifier(this.thickness, this.autoInvert))
+    .onChange((): void => {
+      this.fire();
+    })
+    .onClick((): void => {
+      this.fire();
+    })
+    .onTouch(trackMaterialTouch)
+    .gesture(PanGesture().onActionStart(consumePan).onActionUpdate(consumePan))
+  }
+}
+
+/**
  * **椭圆图标胶囊**（快拍托盘里那颗「+关注」）。
  *
  * 为什么不能拿 MaterialIconButton 凑：那个的宽高是同一个 `buttonSize`（正方形 → 圆形），

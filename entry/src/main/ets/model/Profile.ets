@@ -55,9 +55,49 @@ export interface ProfilePostsDto {
   message?: string;
 }
 
+/**
+ * 个人页的**背景音乐**（横幅区那颗音乐胶囊，见 components/ProfilePage）。
+ *
+ * IG 把这首歌挂在用户节点的 `profile_music` / `music_metadata` 上，各版本字段名不一样，
+ * 解析在 NativeProfile.headerFromUser 里做"能认多少认多少"；`url` 为空 = 只能显示不能播。
+ */
+export class ProfileMusic {
+  readonly title: string;
+  readonly subtitle: string;
+  /** 可直接喂 AVPlayer 的音频地址（空 = 拿不到，见 canPlay）。 */
+  readonly url: string;
+
+  constructor(title: string, subtitle: string, url: string) {
+    this.title = title;
+    this.subtitle = subtitle;
+    this.url = url;
+  }
+
+  canPlay(): boolean {
+    return this.url.length > 0;
+  }
+}
+
+/**
+ * 「精选快拍」的一条（个人页高光那排）。
+ *
+ * 数据来自移动端 `highlights_tray/<pk>/`（见 core/mobileapi/MobileProfile.highlights）；
+ * 这里只留卡片要用的三样：id / 标题 / 封面。
+ */
+export class ProfileHighlight {
+  readonly id: string;
+  readonly title: string;
+  readonly coverUrl: string;
+
+  constructor(id: string, title: string, coverUrl: string) {
+    this.id = id;
+    this.title = title;
+    this.coverUrl = coverUrl;
+  }
+}
+
 /** 页面头部。 */
-export class ProfileHeader {
-  readonly username: string;
+export class ProfileHeader {  readonly username: string;
   readonly fullName: string;
   readonly bio: string;
   readonly link: string;
@@ -75,11 +115,13 @@ export class ProfileHeader {
    * 会用返回值校正（见 pages/Index.followUser）。
    */
   readonly followedByViewer: boolean;
+  /** 个人页的背景音乐（没有就是 null，见 ProfileMusic）。 */
+  readonly music: ProfileMusic | null;
 
   constructor(username: string, fullName: string, bio: string, link: string, avatarUrl: string,
               isVerified: boolean, isPrivate: boolean,
               followers: number, following: number, posts: number,
-              followedByViewer: boolean = false) {
+              followedByViewer: boolean = false, music: ProfileMusic | null = null) {
     this.username = username;
     this.fullName = fullName;
     this.bio = bio;
@@ -91,6 +133,7 @@ export class ProfileHeader {
     this.following = following;
     this.posts = posts;
     this.followedByViewer = followedByViewer;
+    this.music = music;
   }
 
   /**
@@ -112,7 +155,10 @@ export class ProfileHeader {
       fo: this.followers,
       fi: this.following,
       po: this.posts,
-      fb: this.followedByViewer
+      fb: this.followedByViewer,
+      mt: this.music === null ? '' : this.music.title,
+      ms: this.music === null ? '' : this.music.subtitle,
+      mu: this.music === null ? '' : this.music.url
     });
   }
 
@@ -137,7 +183,12 @@ export class ProfileHeader {
         typeof one.fo === 'number' ? one.fo as number : 0,
         typeof one.fi === 'number' ? one.fi as number : 0,
         typeof one.po === 'number' ? one.po as number : 0,
-        one.fb === true);
+        one.fb === true,
+        typeof one.mt === 'string' && (one.mt as string).length > 0
+          ? new ProfileMusic(one.mt as string,
+            typeof one.ms === 'string' ? one.ms as string : '',
+            typeof one.mu === 'string' ? one.mu as string : '')
+          : null);
     } catch (error) {
       return null;
     }

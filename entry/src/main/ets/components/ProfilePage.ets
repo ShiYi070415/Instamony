@@ -24,11 +24,12 @@
 
 import { display } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { ProfileHeader, ProfileMapper, ProfilePost, ProfileStreamPage } from '../model/Profile';
+import { media } from '@kit.MediaKit';
+import { ProfileHeader, ProfileHighlight, ProfileMapper, ProfilePost, ProfileStreamPage } from '../model/Profile';
 import { MediaPost } from '../model/MediaPost';
 import { FollowState, FOLLOW_VERSION_KEY } from '../core/FollowState';
 import { SaveState } from '../core/SaveState';
-import { MaterialLabelButton } from './MaterialSurface';
+import { MaterialChipButton, MaterialIconButton, MaterialLabelButton } from './MaterialSurface';
 import { SEGMENT_SIDE, SEGMENT_MODE_USER } from './ProfileSegmentBar';
 import { ProfileViewModel, PROFILE_TAB_POSTS, PROFILE_TAB_REELS, PROFILE_TAB_SAVED, PROFILE_TAB_TAGGED } from '../viewmodel/ProfileViewModel';
 import { ScrollDelta } from '../core/ScrollReport';
@@ -79,6 +80,18 @@ const FOLLOW_BUTTON_HEIGHT: number = 40;
 const FOLLOW_GAP: number = 8;
 /** 头像直径（vp）。 */
 const AVATAR_SIZE: number = 88;
+/** 精选快拍那一排：圆圈直径 / 每格文字宽度（vp）。 */
+const HIGHLIGHT_SIZE: number = 64;
+const HIGHLIGHT_LABEL_W: number = 72;
+/**
+ * 名字左边要空出多少（vp）—— 让它和「帖子」那一列文字左对齐。
+ *
+ * 计数是三等分、文字居中，所以"帖子"比格子左边多出 `(格宽 − 文字宽) / 2`。
+ * 这里按屏宽现算（见 nameIndentVp），不再写死：换屏宽、改头像尺寸都会自动跟上。
+ */
+const STAT_LABEL_W_VP: number = 26;
+const STAT_PAGE_SIDE_VP: number = 32;
+const STAT_AVATAR_GAP_VP: number = 16;
 /** 网格列数与间距（vp）。 */
 const GRID_COLUMNS: number = 3;
 const GRID_GAP: number = 2;
@@ -245,6 +258,14 @@ export struct ProfilePage {
       }
     };
   @State private header: ProfileHeader | null = null;
+  /** 精选快拍（高光）那排的数据（见 ProfileViewModel.loadHighlights）。 */
+  @State private highlights: Array<ProfileHighlight> = [];
+  /** 背景音乐在不在播（横幅区那颗音乐胶囊的播放/暂停图标看它）。 */
+  @State private musicPlaying: boolean = false;
+  /** 背景音乐的播放器（首次播放时才创建，见 toggleMusic）。 */
+  private audio: media.AVPlayer | null = null;
+  /** 播放器正在创建（防连点创建出两个）。 */
+  private audioOpening: boolean = false;
   @State private posts: Array<ProfilePost> = [];
   @State private busy: boolean = false;
   @State private status: string = '';
@@ -339,6 +360,275 @@ export struct ProfilePage {
     (deltaY: number, offsetY: number, scrollState: ScrollState): void => {
     };
 
+  /**
+   * 「横幅区」那三颗胶囊（需求：Meta 旗下软件的"软件图标 + 用户名称" / 音乐 / 添加）。
+   *
+   * 全部走 `MaterialChipButton`（沉浸光感：透明 Toggle 承载材质 + 图标/文字内容）。
+   * 音乐那颗点一下播放/暂停（见 toggleMusic）；另外两颗按需求**先不接功能**。
+   */
+  @Builder
+  bannerChips() {
+    Scroll() {
+      Row({ space: 8 }) {
+        // ① 主页 / Meta 软件：图标 + 用户名称（这里用账号名，点它先不接功能）。
+        MaterialChipButton({
+          symbol: $r('sys.symbol.at'),
+          labelText: this.chipName(),
+          onTap: (): void => {
+            hilog.info(DOMAIN, TAG, 'PF chip profile tap (not wired)');
+          }
+        })
+        // ② 音乐：标题 + 播放/暂停（有歌才画，见 header.music）。
+        if (this.header !== null && this.header.music !== null) {
+          MaterialChipButton({
+            symbol: $r('sys.symbol.music'),
+            labelText: this.musicLabel(),
+            trailing: this.musicPlaying ? $r('sys.symbol.pause_fill') : $r('sys.symbol.play_fill'),
+            onTap: (): void => {
+              this.toggleMusic();
+            }
+          })
+        }
+        // ③ 添加（先不接功能）。
+        MaterialChipButton({
+          symbol: $r('sys.symbol.plus'),
+          labelRes: $r('app.string.profile_chip_add'),
+          onTap: (): void => {
+            hilog.info(DOMAIN, TAG, 'PF chip add tap (not wired)');
+          }
+        })
+      }
+    }
+    .scrollable(ScrollDirection.Horizontal)
+    .scrollBar(BarState.Off)
+    .width('100%')
+    .align(Alignment.Start)
+  }
+
+  /**
+   * 「功能区」：编辑主页 / 分享主页（椭圆按钮）+ 推荐关注（圆形按钮）。
+   *
+   * 需求明确"先不用做功能"，所以只做外观；三颗都用沉浸光感组件
+   * （`MaterialLabelButton` / `MaterialIconButton`，见 components/MaterialSurface）。
+   */
+  @Builder
+  actionRow() {
+    Row({ space: 8 }) {
+      Row() {
+        MaterialLabelButton({
+          labelRes: $r('app.string.profile_action_edit'),
+          fullWidth: true,
+          fontSize: 14,
+          pillHeight: 36,
+          onTap: (): void => {
+            hilog.info(DOMAIN, TAG, 'PF edit profile tap (not wired)');
+          }
+        })
+      }
+      .layoutWeight(1)
+
+      Row() {
+        MaterialLabelButton({
+          labelRes: $r('app.string.profile_action_share'),
+          fullWidth: true,
+          fontSize: 14,
+          pillHeight: 36,
+          onTap: (): void => {
+            hilog.info(DOMAIN, TAG, 'PF share profile tap (not wired)');
+          }
+        })
+      }
+      .layoutWeight(1)
+
+      MaterialIconButton({
+        symbol: $r('sys.symbol.person_badge_plus'),
+        buttonSize: 36,
+        iconSize: 18,
+        onTap: (on: boolean): void => {
+          hilog.info(DOMAIN, TAG, 'PF suggest follow tap (not wired)');
+        }
+      })
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Center)
+  }
+
+  /**
+   * 「精选快拍」区：一颗「+ 新」+ 每个高光一颗圆图 + 标题（版式照参考图）。
+   *
+   * 数据来自 `highlights_tray/<pk>/`（见 ProfileViewModel.loadHighlights）；拿不到就只剩
+   * 「+ 新」那一颗 —— 和 Instagram 上新号看到的一样。
+   */
+  @Builder
+  highlightsRow() {
+    Scroll() {
+      Row({ space: 14 }) {
+        Column({ space: 6 }) {
+          Stack({ alignContent: Alignment.Center }) {
+            Column()
+              .width(HIGHLIGHT_SIZE)
+              .height(HIGHLIGHT_SIZE)
+              .borderRadius(HIGHLIGHT_SIZE / 2)
+              .border({ width: 1, color: $r('app.color.divider') })
+            SymbolGlyph($r('sys.symbol.plus'))
+              .fontSize(22)
+              .fontColor([$r('app.color.primary_text')])
+          }
+          .width(HIGHLIGHT_SIZE)
+          .height(HIGHLIGHT_SIZE)
+          Text($r('app.string.profile_highlight_new'))
+            .fontSize(12)
+            .fontColor($r('app.color.secondary_text'))
+            .maxLines(1)
+        }
+        .width(HIGHLIGHT_LABEL_W)
+        .onClick((): void => {
+          hilog.info(DOMAIN, TAG, 'PF highlight new tap (not wired)');
+        })
+
+        ForEach(this.highlights, (one: ProfileHighlight): void => {
+          Column({ space: 6 }) {
+            Image(one.coverUrl.length > 0 ? one.coverUrl : $r('app.media.startIcon'))
+              .draggable(false)
+              .width(HIGHLIGHT_SIZE)
+              .height(HIGHLIGHT_SIZE)
+              .borderRadius(HIGHLIGHT_SIZE / 2)
+              .objectFit(ImageFit.Cover)
+              .backgroundColor($r('app.color.field_background'))
+              .border({ width: 1, color: $r('app.color.divider') })
+            Text(one.title.length > 0 ? one.title : ' ')
+              .fontSize(12)
+              .fontColor($r('app.color.primary_text'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .textAlign(TextAlign.Center)
+              .width(HIGHLIGHT_LABEL_W)
+          }
+          .width(HIGHLIGHT_LABEL_W)
+          .onClick((): void => {
+            hilog.info(DOMAIN, TAG, 'PF highlight tap id=%{public}s (not wired)', one.id);
+          })
+        }, (one: ProfileHighlight): string => one.id)
+      }
+    }
+    .scrollable(ScrollDirection.Horizontal)
+    .scrollBar(BarState.Off)
+    .width('100%')
+    .align(Alignment.Start)
+  }
+
+  /** 横幅区第一颗胶囊的文字：账号名（没有就给空串，胶囊里只剩图标）。 */
+  private chipName(): string {
+    return this.header === null ? '' : this.header.username;
+  }
+
+  /**
+   * 名字的左侧缩进（vp）：让它的左沿和下面「帖子」两个字对齐。
+   *
+   * 列宽 = 屏宽 − 左右留白 − 头像 − 头像与文字的间距；每个计数格是列宽的三分之一，
+   * 文字居中 → 比格子左边多出 `(格宽 − 文字宽) / 2`。
+   */
+  private nameIndentVp(): number {
+    const column: number = this.screenWidthVp - STAT_PAGE_SIDE_VP - AVATAR_SIZE
+      - STAT_AVATAR_GAP_VP;
+    if (column <= 0) {
+      return 0;
+    }
+    const cell: number = column / 3;
+    const indent: number = (cell - STAT_LABEL_W_VP) / 2;
+    return indent > 0 ? indent : 0;
+  }
+
+  /** 音乐胶囊的文字：`歌名 · 演唱者`（演唱者没有就只给歌名）。 */
+  private musicLabel(): string {
+    if (this.header === null || this.header.music === null) {
+      return '';
+    }
+    const music = this.header.music;
+    return music.subtitle.length > 0 ? `${music.title} · ${music.subtitle}` : music.title;
+  }
+
+  /**
+   * 音乐胶囊的播放 / 暂停（需求："音乐要做播放功能，点击暂停/播放"）。
+   *
+   * 播放器按需创建（AVPlayer + url，不需要 surface）；没有可播地址时只记一行日志 ——
+   * IG 有的账号只挂了"这首歌"的元数据、没给音频直链，这时界面上不该假装在播。
+   */
+  private async toggleMusic(): Promise<void> {
+    if (this.header === null || this.header.music === null) {
+      return;
+    }
+    const music = this.header.music;
+    if (!music.canPlay()) {
+      hilog.info(DOMAIN, TAG, 'PF music has no audio url title=%{public}s', music.title);
+      return;
+    }
+    const player: media.AVPlayer | null = await this.ensureAudio(music.url);
+    if (player === null) {
+      return;
+    }
+    try {
+      if (this.musicPlaying) {
+        await player.pause();
+        this.musicPlaying = false;
+        hilog.info(DOMAIN, TAG, 'PF music pause');
+      } else {
+        await player.play();
+        this.musicPlaying = true;
+        hilog.info(DOMAIN, TAG, 'PF music play url=%{public}s',
+          music.url.substring(0, 40));
+      }
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'PF music toggle failed: %{public}s', (error as Error).message);
+      this.musicPlaying = false;
+    }
+  }
+
+  /** 拿到（必要时创建）音频播放器；失败给 null。 */
+  private async ensureAudio(url: string): Promise<media.AVPlayer | null> {
+    if (this.audio !== null) {
+      return this.audio;
+    }
+    if (this.audioOpening) {
+      return null;
+    }
+    this.audioOpening = true;
+    try {
+      const player: media.AVPlayer = await media.createAVPlayer();
+      player.on('stateChange', (state: media.AVPlayerState): void => {
+        // 播完了把图标切回"播放"（否则会一直显示暂停）。
+        if (state === 'completed') {
+          this.musicPlaying = false;
+        }
+      });
+      player.url = url;
+      this.audio = player;
+      hilog.info(DOMAIN, TAG, 'PF audio ready');
+      return player;
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'PF audio create failed: %{public}s', (error as Error).message);
+      return null;
+    } finally {
+      this.audioOpening = false;
+    }
+  }
+
+  /** 页面销毁：把播放器放掉（不停会继续出声）。 */
+  private releaseAudio(): void {
+    const player: media.AVPlayer | null = this.audio;
+    this.audio = null;
+    this.musicPlaying = false;
+    if (player === null) {
+      return;
+    }
+    player.release().catch((): void => {
+    });
+  }
+
+  aboutToDisappear(): void {
+    this.releaseAudio();
+  }
+
   aboutToAppear(): void {
     try {
       const dsp: display.Display = display.getDefaultDisplaySync();
@@ -382,6 +672,11 @@ export struct ProfilePage {
     this.vm.onStatus = (text: string): void => {
       this.status = text;
     };
+    // 精选快拍（高光）到了：那一排跟着长出来（拿不到就一直是空的，只留「+ 新」）。
+    this.vm.onHighlights = (items: Array<ProfileHighlight>): void => {
+      this.highlights = items;
+    };
+    this.highlights = this.vm.highlightsNow();
     /*
      * 分页变了：这里做**唯一的**切页记账，然后广播给标题栏那条分段按钮。
      *
@@ -1062,6 +1357,8 @@ export struct ProfilePage {
                 }
                 .width('100%')
                 .alignItems(VerticalAlign.Center)
+                // 名字和下面"帖子"那一列文字左对齐（见 nameIndentVp）。
+                .padding({ left: this.nameIndentVp() })
 
                 Row({ space: 0 }) {
                   this.statCell(0, $r('app.string.profile_stat_posts'))
@@ -1107,6 +1404,23 @@ export struct ProfilePage {
             }
             .width('100%')
             .alignItems(HorizontalAlign.Start)
+
+            /*
+             * ---- 横幅区（chips）----
+             * 需求："包括 meta 旗下软件的主页：软件图标 + 用户名称 / 音乐（要做播放功能，
+             * 点击暂停/播放）/ 添加（先不用做功能）"，样式全部用沉浸光感组件。
+             *
+             * 只在**本人**页面画：别人的主页没有"编辑主页/添加"这些入口，画上去反而奇怪。
+             */
+            if (this.isSelfPage()) {
+              this.bannerChips()
+
+              // ---- 功能区：编辑主页 / 分享主页（椭圆）+ 推荐关注（圆形）----
+              this.actionRow()
+
+              // ---- 精选快拍区（+ 新 + 每个高光一颗圆图）----
+              this.highlightsRow()
+            }
           }
           .width('100%')
           .alignItems(HorizontalAlign.Start)

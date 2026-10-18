@@ -313,6 +313,26 @@
       "value": "你的快拍"
     },
     {
+      "name": "profile_chip_add",
+      "value": "添加"
+    },
+    {
+      "name": "profile_action_edit",
+      "value": "编辑主页"
+    },
+    {
+      "name": "profile_action_share",
+      "value": "分享主页"
+    },
+    {
+      "name": "profile_highlight_new",
+      "value": "新"
+    },
+    {
+      "name": "profile_highlight_suggest",
+      "value": "推荐关注"
+    },
+    {
       "name": "story_create_pending",
       "value": "发布快拍还没接上 —— 这是入口"
     },
