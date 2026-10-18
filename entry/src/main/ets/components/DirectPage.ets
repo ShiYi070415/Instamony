@@ -43,6 +43,14 @@ const WEEK_MS: number = 7 * DAY_MS;
 const UNREAD_DOT_COLOR: string = '#1D4ED8';
 /** "n 条新消息"里 n 的上限（需求：n 最大等于 4）。 */
 const UNREAD_MAX: number = 4;
+/**
+ * 私信列表**自动刷新**的间隔（毫秒）。
+ *
+ * 取 20 秒：比"人打开列表看一眼再走"的节奏慢、比"消息已读状态一直不更新"的体感快；
+ * 这一发是 `ApiThrottle.DIRECT` 家族里的普通读请求，内容没变时连界面都不重绘
+ * （见 DirectViewModel.refreshQuietly / sameThreads）。
+ */
+const DIRECT_POLL_MS: number = 20000;
 
 @Component
 export struct DirectPage {
@@ -70,6 +78,26 @@ export struct DirectPage {
     };
   /** 上一次触发翻页的时刻（限流：列表滚动会反复触发）。 */
   private lastAskMs: number = 0;
+  /** 自动刷新的定时器句柄（-1 = 没在跑，见 startPolling / aboutToDisappear）。 */
+  private pollTimer: number = -1;
+
+  /** 起一个自动刷新定时器（幂等）：每 20 秒静默拉一次收件箱。 */
+  private startPolling(): void {
+    if (this.pollTimer >= 0) {
+      return;
+    }
+    this.pollTimer = setInterval((): void => {
+      this.vm.refreshQuietly().catch((): void => {
+      });
+    }, DIRECT_POLL_MS);
+  }
+
+  aboutToDisappear(): void {
+    if (this.pollTimer >= 0) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = -1;
+    }
+  }
 
   aboutToAppear(): void {
     try {
@@ -90,6 +118,12 @@ export struct DirectPage {
     };
     // 先回填视图模型里已有的数据（切 tab 会重建这个组件，取数结果留在视图模型里）。
     this.syncFromVm();
+    /*
+     * **列表自动刷新**（需求："私信列表不会实时刷新状态"）：挂载期间每
+     * `DIRECT_POLL_MS` 静默拉一次收件箱（`refreshQuietly`：不动状态行、不清游标，
+     * 内容没变就什么都不做）。返回/切走时 `aboutToDisappear` 清掉定时器。
+     */
+    this.startPolling();
     /*
      * **数据新鲜就别再拉一次**（用户报的"私信列表加载慢"）。
      *

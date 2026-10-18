@@ -122,6 +122,61 @@ export class DirectViewModel {
   }
   /** 拉一次（refresh=true 时丢掉游标从头拉）。 */
   /**
+   * **静默刷新**（私信页轮询用，见 components/DirectPage 的轮询定时器）。
+   *
+   * 和 `load()` 的区别：不动状态行、不动骨架屏、不清游标 —— 只把"变了的那份列表"换上去。
+   * 判"有没有变"用 `sameThreads`（id / 未读 / 条数 / 预览文字 / 时间），
+   * 一样就直接返回，避免每 20 秒让整张列表重绘一次。
+   *
+   * @returns 这次有没有真的换过列表（只用于日志）
+   */
+  async refreshQuietly(): Promise<boolean> {
+    if (this.busy || this.polling) {
+      return false;
+    }
+    this.polling = true;
+    try {
+      const page: DirectInboxPage | null = await this.fetchInbox('');
+      if (page === null) {
+        return false;
+      }
+      if (DirectViewModel.sameThreads(this.threads, page.threads)) {
+        return false;
+      }
+      this.threads = page.threads;
+      this.endCursor = page.endCursor;
+      this.more = page.hasMore && page.endCursor.length > 0;
+      this.loadedAtMs = Date.now();
+      this.onThreads(this.threads, this.more);
+      hilog.info(DOMAIN, TAG, 'poll refresh n=%{public}d', this.threads.length);
+      PushCenter.noteUnread('direct', DirectViewModel.unreadTotal(this.threads));
+      return true;
+    } catch (error) {
+      hilog.info(DOMAIN, TAG, 'poll failed: %{public}s', (error as Error).message);
+      return false;
+    } finally {
+      this.polling = false;
+    }
+  }
+
+  /** 两份列表"看着一样"吗（轮询用它决定要不要重绘）。 */
+  private static sameThreads(older: Array<DirectThread>,
+                             newer: Array<DirectThread>): boolean {
+    if (older.length !== newer.length) {
+      return false;
+    }
+    for (let index: number = 0; index < older.length; index++) {
+      const a: DirectThread = older[index];
+      const b: DirectThread = newer[index];
+      if (a.id !== b.id || a.unread !== b.unread || a.unreadCount !== b.unreadCount
+        || a.text !== b.text || a.tsMs !== b.tsMs) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
    * 这条会话已经看过了：把本地列表那一行的未读标记清掉（粗体 + 右侧蓝点跟着消失）。
    *
    * 由 `DirectThreadViewModel.onSeen` 在服务端 `mark_seen` 成功之后回调（见 pages/Index）。
@@ -163,6 +218,9 @@ export class DirectViewModel {
     }
     return total;
   }
+
+  /** 轮询那一发在不在飞（和 `busy` 分开：轮询不该让页面显示"加载中"）。 */
+  private polling: boolean = false;
 
   async load(refresh: boolean): Promise<void> {
     if (this.busy) {
