@@ -138,6 +138,15 @@ const REFRESH_READY_MS: number = 6000;
 const READY_TOTAL_MS: number = 30000;
 const READY_SLICE_MS: number = 4000;
 /**
+ * 「这一轮是不是真的等过」的判据，以及没等过时主动让出的时长（毫秒）。
+ *
+ * `awaitPageReady` 命中"刚刚确认不就绪"的快速通道时会**立刻**返回，一轮几乎不耗时；
+ * 那种情况下必须自己 sleep 一下，否则 `waitPageReady` 的 while 会变成纯微任务自旋
+ * 把主线程占死（真机实测 10 秒 AppFreeze，见那里的注释）。
+ */
+const READY_MIN_WAIT_MS: number = 50;
+const READY_RETRY_GAP_MS: number = 250;
+/**
  * 等下拉刷新真正做完的上限（毫秒），以及轮询间隔。
  *
  * 见 `awaitIdle`：刷新请求可能正好撞上在跑的一轮取数，那一轮结束后才会真正重读第一页，
@@ -423,14 +432,32 @@ export class FeedViewModel {
     while (Date.now() < deadline) {
       const left: number = deadline - Date.now();
       const chunk: number = left > READY_SLICE_MS ? READY_SLICE_MS : left;
+      const before: number = Date.now();
       await this.bridge.awaitPageReady(chunk);
       if (this.bridge.isReady()) {
         hilog.info(DOMAIN, TAG, 'page ready after %{public}d waits', rounds + 1);
         return true;
       }
       rounds++;
+      /*
+       * **本轮几乎没等就回来了 → 必须自己让出一拍。**
+       *
+       * `awaitPageReady` 有一条"刚刚确认不就绪"的快速通道（见 PageBridge.NOT_READY_MEMO_MS）：
+       * 命中时它**立刻**返回 'timeout'，一个定时器都不排。于是这个 while 会退化成
+       * **纯微任务自旋** —— `await` 一个已解决的 promise 只会排微任务，宏任务队列（定时器、
+       * 触摸、绘制）永远排不进来，主线程就被这一圈代码占死了。
+       * 真机实测：这一圈连续转 10 秒、写了 36 万行日志，系统直接记 `uv_timer_task 10004ms`
+       * 并报 AppFreeze（用户说的「经常 appfreeze」就是它）。
+       *
+       * 所以：只要这一轮没真的等过（< READY_MIN_WAIT_MS），就主动 sleep 一下，
+       * 把主线程让给定时器与输入事件。
+       */
+      if (Date.now() - before < READY_MIN_WAIT_MS) {
+        await FeedViewModel.delay(READY_RETRY_GAP_MS);
+      }
     }
-    hilog.warn(DOMAIN, TAG, 'page not ready after %{public}dms', READY_TOTAL_MS);
+    hilog.warn(DOMAIN, TAG, 'page not ready after %{public}dms rounds=%{public}d',
+      READY_TOTAL_MS, rounds);
     return false;
   }
 

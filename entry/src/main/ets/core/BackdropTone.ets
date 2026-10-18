@@ -21,11 +21,25 @@ import { image } from '@kit.ImageKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppSettings, SETTING_OVERLAY_BACKDROP_LIGHT, SETTING_OVERLAY_BOTTOM,
   SETTING_OVERLAY_TOP } from './AppSettings';
+import { AppLifecycle } from './AppLifecycle';
 
 const TAG: string = 'InstarmonyTone';
 const DOMAIN: number = 0xFF00;
-/** 采样间隔（毫秒）：滚动时颜色要跟得上，静止时又不至于白耗电。 */
+/** 采样间隔（毫秒）：**画面刚变过**的那几秒要跟得上，之后退到 IDLE。 */
 const SAMPLE_INTERVAL_MS: number = 700;
+/**
+ * 静止时的采样间隔（毫秒）。
+ *
+ * 为什么要退：`componentSnapshot.get` 是**整层快照 + GPU 回读**，一次开销远不止"取几个像素"，
+ * 而视频画面停住时（暂停、静态封面、用户没在滚）取多少拍都是同一个结果。
+ * 早先固定 700ms 一直拍，等于让主线程每秒多干一两件重活 —— 这正是"偶发 appfreeze"最典型的
+ * 温床（叠加解码/滚动时更容易被推到 6 秒线上）。改成"变过才密、静下来就稀"。
+ */
+const SAMPLE_INTERVAL_IDLE_MS: number = 2200;
+/**
+ * 连续多少拍结果都没变就退到静止频率（3 拍 ≈ 2 秒，够覆盖视频里正常的画面变化）。
+ */
+const STILL_TICKS_BEFORE_IDLE: number = 3;
 /** 快照缩放：0.12 时 1280 宽的屏只有 154 像素，取一次足够快。 */
 const SNAPSHOT_SCALE: number = 0.12;
 /**
@@ -57,13 +71,87 @@ export class BackdropTone {
   private static busy: boolean = false;
   /** 上一次的判断，用于迟滞。 */
   private static overlayLight: boolean = false;
+  /** 当前用的采样间隔（在 SAMPLE_INTERVAL_MS / _IDLE_MS 之间切换，见 STILL_TICKS_BEFORE_IDLE）。 */
+  private static intervalMs: number = SAMPLE_INTERVAL_MS;
+  /** 连续"结果没变"的拍数。 */
+  private static stillTicks: number = 0;
+  /** 侦测要挂靠的组件 id（切频率时重建定时器要用）。 */
+  private static contentId: string = '';
+  /** 前后台监听是否已挂（见 pauseOnBackground）。 */
+  private static watchingVisibility: boolean = false;
+  /** 当前是否因为进了后台而暂停。 */
+  private static paused: boolean = false;
 
   /** 开始连续侦测（传内容层的组件 id）。重复调用只会重置定时器。 */
   static start(contentId: string): void {
     BackdropTone.stop();
+    BackdropTone.contentId = contentId;
+    BackdropTone.intervalMs = SAMPLE_INTERVAL_MS;
+    BackdropTone.stillTicks = 0;
+    BackdropTone.paused = false;
+    BackdropTone.watchVisibility();
+    BackdropTone.schedule();
+  }
+
+  /**
+   * 进后台就停拍（回来再接着拍）。
+   *
+   * 后台快照毫无意义（画面根本不在渲染），却会真的占主线程 —— 而那正是系统最容易把
+   * 一个"后台还在干活"的应用判成异常的时候。监听是幂等的，所以放在 start 里挂。
+   */
+  private static watchVisibility(): void {
+    if (BackdropTone.watchingVisibility) {
+      return;
+    }
+    BackdropTone.watchingVisibility = true;
+    AppLifecycle.addVisibilityListener((foreground: boolean): void => {
+      if (foreground) {
+        BackdropTone.paused = false;
+        BackdropTone.stillTicks = 0;
+        BackdropTone.useInterval(SAMPLE_INTERVAL_MS);
+        BackdropTone.schedule();
+      } else {
+        BackdropTone.paused = true;
+        if (BackdropTone.timer >= 0) {
+          clearInterval(BackdropTone.timer);
+          BackdropTone.timer = -1;
+        }
+      }
+    });
+  }
+
+  /** 按当前频率重挂定时器（频率变了才需要重建）。 */
+  private static schedule(): void {
+    if (BackdropTone.timer >= 0) {
+      clearInterval(BackdropTone.timer);
+      BackdropTone.timer = -1;
+    }
+    const contentId: string = BackdropTone.contentId;
+    if (contentId.length === 0 || BackdropTone.paused) {
+      return;
+    }
     BackdropTone.timer = setInterval((): void => {
       BackdropTone.tick(contentId);
-    }, SAMPLE_INTERVAL_MS);
+    }, BackdropTone.intervalMs);
+  }
+
+  /** 频率切换（只在跨过静止阈值时调，避免每次采样都重建定时器）。 */
+  private static useInterval(nextMs: number): void {
+    if (nextMs === BackdropTone.intervalMs) {
+      return;
+    }
+    BackdropTone.intervalMs = nextMs;
+    BackdropTone.schedule();
+  }
+
+  /**
+   * 画面刚刚变过（滚动 / 切歌 / 暂停恢复）：请立即回到密集采样。
+   *
+   * 由 FeedList 在焦点变化、播放状态变化时调 —— 那些时刻画面一定变了，不该等 2 秒。
+   */
+  static kick(): void {
+    BackdropTone.stillTicks = 0;
+    BackdropTone.useInterval(SAMPLE_INTERVAL_MS);
   }
 
   /** 停止侦测（页面销毁 / 进后台时调）。 */
@@ -72,6 +160,7 @@ export class BackdropTone {
       clearInterval(BackdropTone.timer);
       BackdropTone.timer = -1;
     }
+    BackdropTone.contentId = '';
   }
 
   private static tick(contentId: string): void {
@@ -111,12 +200,32 @@ export class BackdropTone {
 
     const text: ToneSample = BackdropTone.average(pixels, width, height, TEXT_X0, TEXT_X1, top, bottom);
     if (text.count > 0) {
-      BackdropTone.overlayLight = BackdropTone.decide(text.luminance, BackdropTone.overlayLight);
-      AppStorage.setOrCreate(SETTING_OVERLAY_BACKDROP_LIGHT, BackdropTone.overlayLight);
+      const next: boolean = BackdropTone.decide(text.luminance, BackdropTone.overlayLight);
+      const changed: boolean = next !== BackdropTone.overlayLight;
+      BackdropTone.overlayLight = next;
+      /*
+       * **只在结论变了的时候写 AppStorage**。
+       *
+       * 每拍都 `setOrCreate` 一次（哪怕值一样）会让订阅方（FeedList 的 @StorageProp）跟着
+       * 重绘一次 —— 于是"快照 → 写 storage → 重绘 → 下一拍快照"变成一条自激循环，
+       * 静止画面也会一直重绘。这是最需要避免的那种"看起来没动、其实一直在干活"。
+       */
+      if (changed) {
+        AppStorage.setOrCreate(SETTING_OVERLAY_BACKDROP_LIGHT, next);
+        BackdropTone.stillTicks = 0;
+      } else {
+        BackdropTone.stillTicks++;
+      }
+      // 连续几拍都没变 → 退到静止频率（见 SAMPLE_INTERVAL_IDLE_MS）。
+      if (BackdropTone.stillTicks >= STILL_TICKS_BEFORE_IDLE) {
+        BackdropTone.useInterval(SAMPLE_INTERVAL_IDLE_MS);
+      } else {
+        BackdropTone.useInterval(SAMPLE_INTERVAL_MS);
+      }
       // 每一次采样都留一行（debug 级）：颜色不对时，看一眼亮度就知道是"取错了区域"
       // 还是"快照根本没拿到画面"。亮度取整后再打：hilog 不支持 %{public}.1f 这种写法。
       hilog.debug(DOMAIN, TAG, 'text=%{public}d(%{public}s) band=%{public}d-%{public}d',
-        Math.round(text.luminance), BackdropTone.overlayLight ? 'light' : 'dark',
+        Math.round(text.luminance), next ? 'light' : 'dark',
         Math.round(top * 1000), Math.round(bottom * 1000));
     }
   }

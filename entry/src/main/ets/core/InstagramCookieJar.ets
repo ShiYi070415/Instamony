@@ -52,6 +52,23 @@ export class InstagramCookieJar {
   /** 会话 Cookie：Instagram 网页登录后由服务端种下，且都是 HttpOnly。 */
   private static readonly SESSION_MARKERS: Array<string> = ['sessionid=', 'ds_user_id='];
 
+  /**
+   * 读罐结果的**短缓存 + 单飞**。
+   *
+   * 为什么需要：`WebCookieManager` 这几个接口在引擎里是**同步 IPC**
+   * （CEF 日志里就是 `CefCookieManagerImpl::VisitAllCookies is_sync: 1`）——
+   * 引擎忙或还没起来时，这一发会把**主线程**按住（真机实测有过 10 秒量级）。
+   * 而 `inspect()` 被调用的地方非常多：`MobileSession.ensure()` 每发一个移动 API 请求就读一次，
+   * 信息流/私信/资料各自还会再读。同一个瞬间有十几处并发读罐时，串成一次就没这个风险了。
+   *
+   * 缓存寿命取 1.5 秒：登录/退出这类"罐变了"的时刻由 `invalidate()` 显式作废（见 save/clear），
+   * 所以这里只用来合并同一阵发起的读。
+   */
+  private static pending: Promise<InstagramCookieSnapshot> | null = null;
+  private static cached: InstagramCookieSnapshot | null = null;
+  private static cachedAt: number = 0;
+  private static readonly CACHE_TTL_MS: number = 1500;
+
   static getInstance(): InstagramCookieJar {
     if (InstagramCookieJar.instance === null) {
       InstagramCookieJar.instance = new InstagramCookieJar();
@@ -75,8 +92,37 @@ export class InstagramCookieJar {
     return false;
   }
 
-  /** 读整个 Cookie 罐，取出 Instagram 域的会话并判断是否已登录。 */
+  /** 读整个 Cookie 罐，取出 Instagram 域的会话并判断是否已登录（带短缓存 + 单飞，见 CACHE_TTL_MS）。 */
   static async inspect(): Promise<InstagramCookieSnapshot> {
+    const now: number = Date.now();
+    const cached: InstagramCookieSnapshot | null = InstagramCookieJar.cached;
+    if (cached !== null && now - InstagramCookieJar.cachedAt < InstagramCookieJar.CACHE_TTL_MS) {
+      return cached;
+    }
+    // 已经有一次在读：搭它的车，别再往引擎里发第二发同步 IPC。
+    const inflight: Promise<InstagramCookieSnapshot> | null = InstagramCookieJar.pending;
+    if (inflight !== null) {
+      return inflight;
+    }
+    const task: Promise<InstagramCookieSnapshot> = InstagramCookieJar.readSnapshot();
+    InstagramCookieJar.pending = task;
+    try {
+      const snapshot: InstagramCookieSnapshot = await task;
+      InstagramCookieJar.cached = snapshot;
+      InstagramCookieJar.cachedAt = Date.now();
+      return snapshot;
+    } finally {
+      InstagramCookieJar.pending = null;
+    }
+  }
+
+  /** 作废读罐缓存（登录/退出/落盘前后调，见 save / clear）。 */
+  static invalidate(): void {
+    InstagramCookieJar.cached = null;
+    InstagramCookieJar.cachedAt = 0;
+  }
+
+  private static async readSnapshot(): Promise<InstagramCookieSnapshot> {
     const entries: Array<CookieEntry> = await InstagramCookieJar.read();
     const pairs: Array<string> = [];
     const names: Array<string> = [];
@@ -94,6 +140,8 @@ export class InstagramCookieJar {
   static async save(): Promise<void> {
     try {
       await webview.WebCookieManager.saveCookieAsync();
+      // 刚落过盘 = 罐这一阵子可能刚被网页改过，下一次读罐别用旧缓存。
+      InstagramCookieJar.invalidate();
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'save cookie jar failed');
     }
@@ -112,6 +160,7 @@ export class InstagramCookieJar {
    * 这一类"清了 Cookie 没清存储"）。
    */
   async clear(): Promise<void> {
+    InstagramCookieJar.invalidate();
     try {
       webview.WebCookieManager.clearAllCookiesSync();
       webview.WebCookieManager.clearSessionCookieSync();

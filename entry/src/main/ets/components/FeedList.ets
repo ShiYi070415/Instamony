@@ -20,6 +20,7 @@ import {
   SETTING_VIDEO_MUTED
 } from '../core/AppSettings';
 import { MediaPrefetch } from '../core/MediaPrefetch';
+import { BackdropTone } from '../core/BackdropTone';
 import { PosterCache } from '../core/PosterCache';
 import { FollowState, FOLLOW_VERSION_KEY } from '../core/FollowState';
 import { SaveState } from '../core/SaveState';
@@ -2236,6 +2237,8 @@ export struct FeedList {
       const bottom: number = (info.windowOffset.y + info.size.height) / screenHeightPx;
       if (bottom > top) {
         AppSettings.setOverlayBand(top, bottom);
+        // 画面（焦点视频）刚换过：把叠字亮度侦测拉回密集采样（见 BackdropTone.kick）。
+        BackdropTone.kick();
         return;
       }
     } catch (err) {

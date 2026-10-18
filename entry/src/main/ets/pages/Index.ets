@@ -143,6 +143,8 @@ import { PosterCache } from '../core/PosterCache';
 import { Translator } from '../core/Translator';
 import { MobileSession } from '../core/mobileapi/MobileSession';
 import { MobileProbe } from '../core/mobileapi/MobileProbe';
+import { MqttProbe } from '../core/mobileapi/MqttProbe';
+import { MainThreadWatchdog } from '../core/MainThreadWatchdog';
 import { PROFILE_TAB_POSTS, PROFILE_TAB_REELS, PROFILE_TAB_TAGGED, ProfileViewModel } from '../viewmodel/ProfileViewModel';
 import { DirectViewModel } from '../viewmodel/DirectViewModel';
 import { DirectThreadViewModel } from '../viewmodel/DirectThreadViewModel';
@@ -2044,6 +2046,19 @@ struct Index {
         PushCenter.requestPermissionNow(abilityContext);
       }, 4000);
       /*
+       * **实时通道的握手探针**（见 core/mobileapi/MqttProbe）。
+       *
+       * 私信现在的"实时"是 15 秒轮询；真正实时的通道是 IG 的 MQTToT（Thrift 版 CONNECT）。
+       * 探针跑三段：公共 broker 当对照组（验证 socket 与组包本身）、`edge-mqtt.facebook.com`、
+       * `mqtt-mini.facebook.com`，日志里给三行结论。等 9 秒是为了让启动那波预热先过去。
+       * **验完就可以把这一段删掉**（探针本身不产生任何副作用，也不改任何状态）。
+       */
+      setTimeout((): void => {
+        MqttProbe.probe().catch((error: Error): void => {
+          hilog.warn(DOMAIN, TAG, 'mqtt probe rejected: %{public}s', error.message);
+        });
+      }, 9000);
+      /*
        * **「你的快拍」头像先用落盘快照画出来**（用户报的"你的快拍头像加载很慢"）。
        *
        * 那条头像以前只等「我的」头部那一发（真机上闸门排队后要 2~4 秒），托盘上于是
@@ -2098,6 +2113,14 @@ struct Index {
     }
     // 开始连续侦测**叠字**背后的画面明暗（沉浸式视频里的文字颜色靠它，见 overlayTextColor）。
     BackdropTone.start(SHELL_CONTENT_ID);
+    /*
+     * **主线程卡顿看门狗**（见 core/MainThreadWatchdog）。
+     *
+     * 用户报的「经常 appfreeze」= 主线程被占住 6 秒以上，而事后无处可查（faultlog 读不到）。
+     * 它挂一个 100ms 心跳，哪一拍迟到就把"被占住多久"打进日志 —— 下一次卡顿时，
+     * 这条时间和同时段的业务日志一对，就能定位到具体那一段同步代码。
+     */
+    MainThreadWatchdog.start();
     // 底栏胶囊的左右留白要按屏宽反算（见 barSideMargin）。
     try {
       const widthPx: number = display.getDefaultDisplaySync().width;
@@ -2282,6 +2305,7 @@ struct Index {
    */
   aboutToDisappear(): void {
     BackdropTone.stop();
+    MainThreadWatchdog.stop();
     if (this.commentsExitTimer >= 0) {
       clearTimeout(this.commentsExitTimer);
       this.commentsExitTimer = -1;

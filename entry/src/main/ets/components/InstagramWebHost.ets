@@ -46,6 +46,8 @@ export struct InstagramWebHost {
    * 能读到。拿到会话后立刻落盘，下次启动不必重新登录。
    */
   private async detectSession(): Promise<void> {
+    // 这里是"登录态"的权威核对：罐可能刚被网页改过，先作废读罐缓存（见 InstagramCookieJar）。
+    InstagramCookieJar.invalidate();
     const snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
     hilog.info(DOMAIN, TAG, 'cookie jar entries=%{public}d signedIn=%{public}s names=%{public}s',
       snapshot.count, snapshot.signedIn ? '1' : '0', snapshot.names);

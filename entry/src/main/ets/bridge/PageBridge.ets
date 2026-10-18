@@ -20,6 +20,13 @@ const DEFAULT_TIMEOUT_MS: number = 20000;
  * 又不至于让用户过一会儿主动重试时也被跳过等待。
  */
 const NOT_READY_MEMO_MS: number = 10000;
+/**
+ * 快速通道上**限流**日志：同一份"不就绪"记忆期间，最多每隔这么久打一行。
+ *
+ * 为什么必须限流：这条通道是同步返回的，调用方如果在 while 里重试，就能在几秒里调它
+ * 几万次 —— 曾经真的这么打过 36 万行日志（日志本身又反过来占住主线程，见下面的 yield）。
+ */
+const NOT_READY_LOG_GAP_MS: number = 500;
 const TAG: string = 'InstarmonyBridge';
 const DOMAIN: number = 0xFF00;
 
@@ -138,6 +145,9 @@ export class InstagramPageBridge {
    * `markReady()` / `markUnready()` 都会清掉它（就绪状态变了，这份记忆就不成立了）。
    */
   private notReadyAtMs: number = 0;
+  /** 上一次在快速通道上打日志的时刻 / 期间被抑制的次数（见 NOT_READY_LOG_GAP_MS）。 */
+  private notReadyLoggedAt: number = 0;
+  private notReadySkipCount: number = 0;
   private sequence: number = 0;
   private routeHandler: (url: string) => void = (url: string): void => {
   };
@@ -253,8 +263,28 @@ export class InstagramPageBridge {
      * 页面真的就绪（markReady）或开始新一轮导航（markUnready）时，这份记忆都会作废。
      */
     if (this.notReadyAtMs > 0 && Date.now() - this.notReadyAtMs < NOT_READY_MEMO_MS) {
-      hilog.info(DOMAIN, TAG, 'awaitPageReady skip: not ready %{public}dms ago',
-        Date.now() - this.notReadyAtMs);
+      const now: number = Date.now();
+      const skipped: number = this.notReadySkipCount + 1;
+      this.notReadySkipCount = skipped;
+      if (now - this.notReadyLoggedAt >= NOT_READY_LOG_GAP_MS) {
+        this.notReadyLoggedAt = now;
+        this.notReadySkipCount = 0;
+        hilog.info(DOMAIN, TAG, 'awaitPageReady skip: not ready %{public}dms ago (x%{public}d)',
+          now - this.notReadyAtMs, skipped);
+      }
+      /*
+       * **让出一个宏任务再返回。**
+       *
+       * 这条通道是"立刻返回"的，而调用方往往写成 `while (...) { await awaitPageReady() }`。
+       * 只 await 一个**已解决**的 promise 只会排微任务：定时器、触摸、绘制这些宏任务
+       * 一辈子排不进来，主线程就被那一圈代码占死。真机实测：连续 10 秒、36 万行日志、
+       * 系统记 `uv_timer_task 10004ms` 并报 AppFreeze。
+       * 这里 sleep 0 毫秒，等于把调用方的自旋强制降速成"每圈一个宏任务"，即使调用方
+       * 没改也不会再冻住主线程（调用方那侧另有正当的等待，见 FeedViewModel.waitPageReady）。
+       */
+      await new Promise<void>((resolve: () => void): void => {
+        setTimeout(resolve, 0);
+      });
       return 'timeout';
     }
     const deferred: DeferredOutcome = new DeferredOutcome();
