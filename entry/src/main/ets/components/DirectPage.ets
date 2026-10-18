@@ -48,11 +48,11 @@ const UNREAD_MAX: number = 4;
 /**
  * 私信列表**自动刷新**的间隔（毫秒）。
  *
- * 取 20 秒：比"人打开列表看一眼再走"的节奏慢、比"消息已读状态一直不更新"的体感快；
+ * 看列表的人通常就是在等回信，所以这里跟会话页一样按"近实时"取值：6 秒。
  * 这一发是 `ApiThrottle.DIRECT` 家族里的普通读请求，内容没变时连界面都不重绘
- * （见 DirectViewModel.refreshQuietly / sameThreads）。
+ * （见 DirectViewModel.refreshQuietly / sameThreads）；进后台就停（见 startPolling）。
  */
-const DIRECT_POLL_MS: number = 15000;
+const DIRECT_POLL_MS: number = 6000;
 
 @Component
 export struct DirectPage {
@@ -83,7 +83,7 @@ export struct DirectPage {
   /** 自动刷新的定时器句柄（-1 = 没在跑，见 startPolling / aboutToDisappear）。 */
   private pollTimer: number = -1;
 
-  /** 起一个自动刷新定时器（幂等）：每 15 秒静默拉一次收件箱。 */
+  /** 起一个自动刷新定时器（幂等）：按 DIRECT_POLL_MS 静默拉一次收件箱。 */
   private startPolling(): void {
     if (this.pollTimer >= 0) {
       return;
@@ -93,13 +93,24 @@ export struct DirectPage {
       });
     }, DIRECT_POLL_MS);
     /*
-     * **回到前台立刻刷一次**：后台期间定时器会被系统压住（也可能被冻结），
-     * 回到前台那一眼看到的是旧列表 —— 这一发把"实时"补上（见 core/AppLifecycle）。
+     * **跟着前后台走**：进后台停（省电、也少给 IG 发"看不见的请求"），回前台立刻刷一次 ——
+     * 后台期间定时器会被系统压住（也可能整进程被冻结），回到前台那一眼看到的才是旧列表。
      */
     AppLifecycle.addVisibilityListener((foreground: boolean): void => {
-      if (foreground) {
-        this.vm.refreshQuietly().catch((): void => {
-        });
+      if (!foreground) {
+        if (this.pollTimer >= 0) {
+          clearInterval(this.pollTimer);
+          this.pollTimer = -1;
+        }
+        return;
+      }
+      this.vm.refreshQuietly().catch((): void => {
+      });
+      if (this.pollTimer < 0) {
+        this.pollTimer = setInterval((): void => {
+          this.vm.refreshQuietly().catch((): void => {
+          });
+        }, DIRECT_POLL_MS);
       }
     });
   }

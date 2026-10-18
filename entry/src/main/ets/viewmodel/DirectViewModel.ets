@@ -149,7 +149,7 @@ export class DirectViewModel {
       this.loadedAtMs = Date.now();
       this.onThreads(this.threads, this.more);
       hilog.info(DOMAIN, TAG, 'poll refresh n=%{public}d', this.threads.length);
-      PushCenter.noteUnread('direct', DirectViewModel.unreadTotal(this.threads));
+      this.noteNewUnread();
       return true;
     } catch (error) {
       hilog.info(DOMAIN, TAG, 'poll failed: %{public}s', (error as Error).message);
@@ -221,6 +221,38 @@ export class DirectViewModel {
 
   /** 轮询那一发在不在飞（和 `busy` 分开：轮询不该让页面显示"加载中"）。 */
   private polling: boolean = false;
+
+  /**
+   * **发现新的未读时发一条带内容的系统通知**（标题=发信人、正文=消息）。
+   *
+   * 计数口径仍是 `unreadTotal`：只有比上次多才发（`PushCenter` 里记账），避免重复"叮"。
+   * 内容取**最近的、未读的那条会话**：私信列表本来就按时间倒序，第一条未读就是"最新来信"。
+   */
+  private noteNewUnread(): void {
+    const total: number = DirectViewModel.unreadTotal(this.threads);
+    if (total <= 0) {
+      // 清空时也要走一遍：让 PushCenter 把计数降下去，否则"读完之后又收到一条"不会响。
+      PushCenter.noteUnread('direct', 0);
+      return;
+    }
+    let newest: DirectThread | null = null;
+    for (let index: number = 0; index < this.threads.length; index++) {
+      if (this.threads[index].unread) {
+        newest = this.threads[index];
+        break;
+      }
+    }
+    if (newest === null) {
+      PushCenter.noteUnread('direct', total);
+      return;
+    }
+    // 先记账（内部只在"变多"时才会 push 一条），再补一条"带内容"的通知把标题正文覆盖掉。
+    const before: number = PushCenter.lastUnread('direct');
+    PushCenter.noteUnread('direct', total);
+    if (PushCenter.lastUnread('direct') > before) {
+      PushCenter.notifyDirect(newest.title, newest.text, total - before);
+    }
+  }
 
   async load(refresh: boolean): Promise<void> {
     if (this.busy) {

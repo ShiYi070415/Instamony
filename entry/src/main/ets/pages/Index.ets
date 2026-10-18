@@ -144,6 +144,7 @@ import { Translator } from '../core/Translator';
 import { MobileSession } from '../core/mobileapi/MobileSession';
 import { MobileProbe } from '../core/mobileapi/MobileProbe';
 import { MqttProbe } from '../core/mobileapi/MqttProbe';
+import { NetProbe } from '../core/mobileapi/NetProbe';
 import { MainThreadWatchdog } from '../core/MainThreadWatchdog';
 import { PROFILE_TAB_POSTS, PROFILE_TAB_REELS, PROFILE_TAB_TAGGED, ProfileViewModel } from '../viewmodel/ProfileViewModel';
 import { DirectViewModel } from '../viewmodel/DirectViewModel';
@@ -2058,6 +2059,19 @@ struct Index {
           hilog.warn(DOMAIN, TAG, 'mqtt probe rejected: %{public}s', error.message);
         });
       }, 9000);
+      /*
+       * 套接字收发探针（见 core/mobileapi/NetProbe）**默认不跑**：它是诊断用的，
+       * 结论已记在那个文件头（明文 TCP 收得到、TLS 收不到、我们的 MQTT 报文正确）。
+       * 需要复测时把下面这段的注释打开即可。
+       */
+      // setTimeout((): void => {
+      //   const ui: UIContext = this.getUIContext();
+      //   NetProbe.run((text: string): void => {
+      //     ui.getPromptAction().showToast({ message: text, duration: 20000 });
+      //   }).catch((error: Error): void => {
+      //     hilog.warn(DOMAIN, TAG, 'net probe rejected: %{public}s', error.message);
+      //   });
+      // }, 15000);
       /*
        * **「你的快拍」头像先用落盘快照画出来**（用户报的"你的快拍头像加载很慢"）。
        *

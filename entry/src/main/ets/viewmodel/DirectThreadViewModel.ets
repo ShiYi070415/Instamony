@@ -35,15 +35,20 @@ import { DirectCache } from '../core/DirectCache';
 // 进会话就把它标成已读（见 markThreadSeen）。
 import { MobileDirect } from '../core/mobileapi/MobileDirect';
 import { DirectMessage, DirectThreadView } from '../model/Direct';
+import { AppLifecycle } from '../core/AppLifecycle';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'DirectThreadViewModel';
-/** 实时接收的轮询间隔（毫秒，见 startPolling 里为什么用轮询）。
+/**
+ * 会话页**可见时**的轮询间隔（毫秒）。
  *
- * **从 4 秒放宽到 25 秒**（降噪，见 `FINGERPRINT_ANALYSIS.md` 阶段一）：4 秒一发私有请求是最容易
- * 被 IG 判成脚本的固定节奏之一；人在会话页里 25 秒的延迟完全可接受（自己发消息后会主动拉一次）。
+ * 为什么是 2.5 秒：IG 的真正实时通道是 MQTT（MQTToT），但真机实测当前运行时的
+ * `TLSSocket` **收不到任何数据**（同样代码走明文 TCP 收得到，见 core/mobileapi/NetProbe
+ * 的 ①②③ 三组对照），所以 MQTT 这条路暂时不可用。退一步用"够快的轮询"做**近实时**：
+ * 2.5 秒一轮 ≈ 对方发完就能看到；而这条 REST 一次往返只有几十 KB、几百毫秒，
+ * 只在**会话页开着**时才跑（进后台就停，见 hookVisibility），代价可控。
  */
-const THREAD_POLL_MS: number = 10000;
+const THREAD_POLL_MS: number = 2500;
 /**
  * 翻页"卡住"（去重后没多出任何一条）之后的冷却：这段时间内不再翻，过了允许再试一次。
  *
@@ -103,6 +108,10 @@ export class DirectThreadViewModel {
   private pollTimer: number = -1;
   /** 一轮轮询正在跑（防重入）。 */
   private polling: boolean = false;
+  /** 应用是否在前台（后台时暂停轮询，见 hookVisibility）。 */
+  private foreground: boolean = true;
+  /** 前后台监听是否已挂（幂等）。 */
+  private visibilityHooked: boolean = false;
   /** 有新消息时的回调（界面据此贴到底部）。 */
   private onNew: (() => void) | undefined = undefined;
 
@@ -611,12 +620,46 @@ export class DirectThreadViewModel {
    */
   startPolling(onNew: () => void): void {
     this.onNew = onNew;
+    this.hookVisibility();
     if (this.pollTimer >= 0) {
       return;
+    }
+    this.armTimer();
+  }
+
+  /** 按当前间隔重新挂定时器（见 THREAD_POLL_MS 的说明）。 */
+  private armTimer(): void {
+    if (this.pollTimer >= 0) {
+      clearInterval(this.pollTimer);
     }
     this.pollTimer = setInterval((): void => {
       this.pollOnce();
     }, THREAD_POLL_MS);
+  }
+
+  /**
+   * 进后台就停、回前台立刻补一发。
+   *
+   * 后台里继续每 2.5 秒发一发请求，除了耗电与白白消耗 IG 的读写配额，什么也换不到
+   * （界面根本看不见）；而回前台那一眼最需要的是"马上就是最新的"。
+   */
+  private hookVisibility(): void {
+    if (this.visibilityHooked) {
+      return;
+    }
+    this.visibilityHooked = true;
+    AppLifecycle.addVisibilityListener((foreground: boolean): void => {
+      this.foreground = foreground;
+      if (!foreground) {
+        if (this.pollTimer >= 0) {
+          clearInterval(this.pollTimer);
+          this.pollTimer = -1;
+        }
+        return;
+      }
+      this.armTimer();
+      this.pollOnce();
+    });
   }
 
   /** 停止实时接收（页面销毁时调用）。 */

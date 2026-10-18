@@ -158,6 +158,35 @@ export class PushCenter {
   }
 
   /**
+   * **私信专用的通知**：标题是发信人、正文是消息内容。
+   *
+   * 与 `noteUnread` 的区别是要有内容才有用："你有 1 条新私信"点开还得自己找是谁；
+   * 而"某人：内容"在通知栏就能看完（这也是所有聊天软件的做法）。
+   * 未读计数仍然只在**变多**时才可能调用它（判断在调用方，见 DirectViewModel.refreshQuietly）。
+   *
+   * @param sender  发信人昵称（群聊里是群名）
+   * @param preview 最新的那条内容（调用方已经截断）
+   */
+  static notifyDirect(sender: string, preview: string, added: number): void {
+    const name: string = sender.trim().length > 0 ? sender.trim() : '私信';
+    const body: string = preview.trim().length > 0 ? preview.trim()
+      : `你有 ${added} 条新私信`;
+    hilog.info(DOMAIN, TAG, 'direct notify from=%{public}s added=%{public}d',
+      name, added);
+    PushCenter.publish(NOTIFY_ID_DIRECT, name, body);
+  }
+
+  /** 上一次记下的未读数（-1 = 还没记过）。调用方用它判断"这一轮是不是变多了"。 */
+  static lastUnread(kind: string): number {
+    for (let index: number = 0; index < PushCenter.marks.length; index++) {
+      if (PushCenter.marks[index].kind === kind) {
+        return PushCenter.marks[index].total;
+      }
+    }
+    return -1;
+  }
+
+  /**
    * 真正发一条本地通知。
    *
    * 同一类通知用**同一个 id**：后来的覆盖前一条，通知栏不会堆一屏"n 条新私信"。
