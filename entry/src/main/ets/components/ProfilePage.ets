@@ -87,10 +87,18 @@ const HIGHLIGHT_RING_W: number = 2.5;
 const HIGHLIGHT_LABEL_W: number = 106;
 /** 横幅区胶囊的高度，以及它四周要留的"呼吸位"（材质按下/拖拽会形变，贴着边会被裁）。 */
 const CHIP_HEIGHT_VP: number = 28;
-/** 左右各留 16（= 简介的左边），上下只留一点：需求"顶部留白太多，缩小一点"。 */
+/** 左右各留 16（= 简介的左边）。 */
 const CHIP_SIDE_VP: number = 16;
-const CHIP_TOP_VP: number = 2;
+/**
+ * 胶囊行的**上内边距**：容器紧贴简介，靠这段 padding 把按钮往下推。
+ *
+ * 为什么要这么多：材质按下/拖拽时"交互形变"会往上长出去，容器（Scroll）自己会裁掉
+ * 超出视口的那一条 —— 顶部留白给够（这里 14vp），按钮就永远在视口里面，不会被裁。
+ */
+const CHIP_TOP_VP: number = 14;
 const CHIP_BOTTOM_VP: number = 8;
+/** 头部那块 Column 的行距（横幅区要用负 margin 抵掉它，见 bannerChips）。 */
+const HEADER_ROW_GAP_VP: number = 12;
 /**
  * 名字左边要空出多少（vp）—— 让它和「帖子」那一列文字左对齐。
  *
@@ -428,8 +436,16 @@ export struct ProfilePage {
      * **抵掉外层那 16 的内边距**：Scroll 自己铺满整屏（宽 = 屏宽、左边 -16 抵掉内边距），
      * 这样第一颗胶囊从 16 开始（**和简介文字左对齐**），它往左形变时仍有 16vp 的空间可用，
      * 不会贴着 Scroll 视口被裁。
+     *
+     * 上边再 `-HEADER_ROW_GAP_VP`：让容器**紧贴简介**（抵掉头部 Column 的行距），
+     * 按钮的下移完全交给内容行的 `padding.top`（CHIP_TOP_VP）—— 这样视口上沿就在简介
+     * 下面一点点，按钮离上沿有整整 14vp，形变永远不会被裁。
      */
-    .margin({ left: -CHIP_SIDE_VP, right: -CHIP_SIDE_VP })
+    .margin({
+      left: -CHIP_SIDE_VP,
+      right: -CHIP_SIDE_VP,
+      top: -HEADER_ROW_GAP_VP
+    })
     .width(this.screenWidthVp)
   }
 
@@ -1404,7 +1420,7 @@ export struct ProfilePage {
            * （见 highlightsRow）。
            */
           Column() {
-            Column({ space: 12 }) {
+            Column({ space: HEADER_ROW_GAP_VP }) {
             /*
              * 头像 + 右侧一列（需求："将我的页面的用户名移到帖子数量上方，粗体显示"）。
              *
