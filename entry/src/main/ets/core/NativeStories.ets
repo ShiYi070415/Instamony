@@ -90,6 +90,23 @@ export class NativeStories {
    */
   private static followedSuggested: Set<string> = new Set<string>();
   /**
+   * **最近一次拿到的托盘**（含时间戳）。
+   *
+   * 为什么必须留一份：启动预热链（`warmOtherTabs` 的 `stories` 那一步）和托盘组件自己的
+   * `aboutToAppear` 会**各发一发** `feed/reels_tray/`。真机实测（18:08 的日志）：
+   * 第一发拿到 12 条推荐快拍，第二发回 `tray:[]` —— IG 的推荐位**一轮只发一次**，
+   * 于是界面上刚长出来的推荐又被第二发抹成空（用户报的"快拍推荐数据没有加载"）。
+   *
+   * 现在：短窗口内（TRAY_REUSE_MS）直接复用这一份，不再打接口；更久之后真发了
+   * 却回了空，也退回这一份（TRAY_STALE_FALLBACK_MS 之内），不让推荐位凭空消失。
+   */
+  private static lastTray: StoryTray | null = null;
+  private static lastTrayAt: number = 0;
+  /** 这份托盘多久之内可以直接复用（毫秒）：避免"预热 + 组件"两发打同一个接口。 */
+  private static readonly TRAY_REUSE_MS: number = 2 * 60 * 1000;
+  /** 新鲜那发回了空时，旧的这一份还能顶多久（毫秒）：推荐位一轮只发一次，空了不代表没内容。 */
+  private static readonly TRAY_STALE_FALLBACK_MS: number = 10 * 60 * 1000;
+  /**
    * 每个用户各自的**逐候选轨迹**（uid → 行数组，最多留 TRACE_MAX 行）。
    *
    * 为什么必须留（用户报的"点开快拍说没取到"）：这条链一次可能发好几发、每发的身份和 URL 都不同，
@@ -538,9 +555,41 @@ export class NativeStories {
     NativeStories.followedSuggested.clear();
   }
 
+  /** 记下"最新这份合格的托盘"（见 lastTray 的说明）。 */
+  private static rememberTray(tray: StoryTray): void {
+    NativeStories.lastTray = tray;
+    NativeStories.lastTrayAt = Date.now();
+  }
+
+  /**
+   * 新鲜那发回了空（或失败）时的兜底：手上那份还不太旧就顶上。
+   *
+   * 为什么不让它一直顶：快拍 24 小时就过期，托盘内容本来就会变空；超过
+   * `TRAY_STALE_FALLBACK_MS` 之后就该如实显示空（用户发的快拍真的都过期了）。
+   */
+  private static staleFallback(nowMs: number): StoryTray | null {
+    if (NativeStories.lastTray === null || NativeStories.lastTray.items.length === 0) {
+      return null;
+    }
+    const ageMs: number = nowMs - NativeStories.lastTrayAt;
+    if (ageMs >= NativeStories.TRAY_STALE_FALLBACK_MS) {
+      hilog.info(DOMAIN, TAG, 'tray empty and cached too old age=%{public}dms → give up', ageMs);
+      return null;
+    }
+    hilog.info(DOMAIN, TAG, 'tray empty → reuse cached age=%{public}dms n=%{public}d',
+      ageMs, NativeStories.lastTray.items.length);
+    NativeStories.detail = '-cached';
+    return NativeStories.lastTray;
+  }
+
+  /** 换账号 / 退出登录：上一份托盘属于上一个人，整个作废。 */
+  static forgetTray(): void {
+    NativeStories.lastTray = null;
+    NativeStories.lastTrayAt = 0;
+  }
+
   /** 取数之后统一过一遍：已关注过的推荐不再出现（托盘条目、顺序、预取都跟着少一位）。 */
-  private static pruneHidden(tray: StoryTray): StoryTray {
-    if (NativeStories.followedSuggested.size === 0) {
+  private static pruneHidden(tray: StoryTray): StoryTray {    if (NativeStories.followedSuggested.size === 0) {
       return tray;
     }
     const kept: Array<StoryTrayItem> = [];
@@ -689,6 +738,20 @@ export class NativeStories {
    */
   static async tray(): Promise<StoryTray | null> {
     /*
+     * **先看手上这份还能不能直接用**（见 lastTray 的说明）。
+     *
+     * 典型场景：启动预热刚拉回来一份（带推荐快拍），托盘组件紧接着挂载又要一次 ——
+     * 那一发会让 IG 把推荐位判成"已经发过"，回 `tray:[]`，界面于是从"有推荐"跳回"空"。
+     */
+    const nowMs: number = Date.now();
+    if (NativeStories.lastTray !== null
+      && nowMs - NativeStories.lastTrayAt < NativeStories.TRAY_REUSE_MS) {
+      hilog.info(DOMAIN, TAG, 'tray reused age=%{public}dms n=%{public}d',
+        nowMs - NativeStories.lastTrayAt, NativeStories.lastTray.items.length);
+      NativeStories.detail = '-';
+      return NativeStories.lastTray;
+    }
+    /*
      * **移动端私有 API 优先**（见文件头 MOBILE_STORIES_FIRST）：
      * 一发 `feed/reels_tray/` 就把整条托盘带回来（实测 213 条 / 425KB），
      * 而且不依赖"网页抓到的模板"——模板缺失正是这条路上最常见的失败（`no-template`）。
@@ -702,8 +765,19 @@ export class NativeStories {
         hilog.info(DOMAIN, TAG, 'tray via mobile n=%{public}d first=%{public}s',
           tray.items.length, tray.items.length > 0 ? tray.items[0].username : '-');
         if (tray.items.length > 0) {
+          NativeStories.rememberTray(tray);
           return tray;
         }
+        // 全被"已关注过的推荐"滤掉了：当作真的没有，别把空表塞给界面。
+        return null;
+      }
+      /*
+       * 这一发回了空（或失败）：**推荐位一轮只发一次**，空了不等于没内容 ——
+       * 手上那份还不太旧就先顶上，别让刚长出来的推荐凭空消失。
+       */
+      const fallback: StoryTray | null = NativeStories.staleFallback(nowMs);
+      if (fallback !== null) {
+        return fallback;
       }
     }
     const tpl: ApiTemplate | null = ApiRegistry.getInstance().storedForNative(OP_TRAY);
@@ -756,6 +830,7 @@ export class NativeStories {
       NativeStories.detail = '-';
       hilog.info(DOMAIN, TAG, 'tray ok n=%{public}d first=%{public}s seen=%{public}s',
         tray.items.length, tray.items[0].username, `${tray.items[0].seen}`);
+      NativeStories.rememberTray(tray);
       return tray;
     } catch (error) {
       NativeStories.detail = `throw:${(error as Error).message ?? 'request-threw'}`.substring(0, 60);

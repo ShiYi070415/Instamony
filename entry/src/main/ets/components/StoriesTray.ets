@@ -367,15 +367,25 @@ export struct StoriesTray {
           this.ring(this.selfId, this.selfAvatarUrl, this.selfSeen,
             this.pendingUser === this.selfId)
         } else {
-          // 没有自己的快拍：只画头像，不套环（和参考图一致）。
-          Image(this.selfAvatarUrl.length > 0 ? this.selfAvatarUrl : $r('app.media.startIcon'))
-            .draggable(false)
-            .width(AVATAR_VP)
-            .height(AVATAR_VP)
-            .borderRadius(AVATAR_VP / 2)
-            .objectFit(ImageFit.Cover)
-            .backgroundColor($r('app.color.field_background'))
-            .margin({ left: RING_GAP_VP + RING_WIDTH_VP, top: RING_GAP_VP + RING_WIDTH_VP })
+          /*
+           * 没有自己的快拍：只画头像，不套环（和参考图一致）。
+           *
+           * **必须自己再包一层居中的 Stack**：外面那层是按 `BottomEnd` 对齐的（为了把加号
+           * 摆到右下角），头像直接放进去会被顶到右下角 —— 真机上就是"头像往右偏了一截，
+           * 名字还居中，两者对不齐"。包一层等大的 Stack 之后，头像永远落在正中。
+           */
+          Stack({ alignContent: Alignment.Center }) {
+            Image(this.selfAvatarUrl.length > 0 ? this.selfAvatarUrl : $r('app.media.startIcon'))
+              .draggable(false)
+              .width(AVATAR_VP)
+              .height(AVATAR_VP)
+              .borderRadius(AVATAR_VP / 2)
+              .objectFit(ImageFit.Cover)
+              .backgroundColor($r('app.color.field_background'))
+              .border({ width: 2, color: $r('app.color.page_background') })
+          }
+          .width(AVATAR_VP + (RING_GAP_VP + RING_WIDTH_VP) * 2)
+          .height(AVATAR_VP + (RING_GAP_VP + RING_WIDTH_VP) * 2)
         }
         // 右下角的「+」：沉浸光感（点它 = 想发快拍，交给宿主提示）。
         Column() {

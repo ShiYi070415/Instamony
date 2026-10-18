@@ -2783,6 +2783,8 @@ struct Index {
     StoryCache.reset([], 0);
     // "已关注过的推荐快拍"那张表也是按人的（见 NativeStories.hideSuggested）。
     NativeStories.clearHidden();
+    // 上一份托盘缓存同样按人（见 NativeStories.forgetTray）。
+    NativeStories.forgetTray();
     // 「你的快拍」那一项的头像同样属于"这个人"：换人之后先把旧头像抹掉，等新头部回来再填。
     this.selfAvatarUrl = '';
     // 私信预取队列 + 快照缓存（落盘那份已由 AccountScope 搬到备份位）。

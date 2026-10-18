@@ -31,6 +31,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ApiThrottle } from '../ApiThrottle';
 import { MobileRequest, MobileResult, MobileOptions } from './MobileRequest';
 import { MobileSession, MobileIdentity } from './MobileSession';
+import { uuid4 } from './MobileSign';
 import { StoryItem, StoryReel, StoryTray, StoryTrayItem } from '../../model/Story';
 import { SUPPORTED_CAPABILITIES } from './MobileConfig';
 
@@ -57,10 +58,28 @@ export class MobileStories {
     }
     const data: Record<string, Object> = {};
     data['supported_capabilities_new'] = SUPPORTED_CAPABILITIES;
-    data['reason'] = 'cold_start';
+    /*
+     * `reason` 取 **`pull_to_refresh`**（instagrapi 那边写的是 `cold_start`）。
+     *
+     * 真机证据：同一个账号，`cold_start` 这一档在第一次之后就一直是空数组；换成
+     * `pull_to_refresh` 的那一发把 12 条推荐快拍重新带了回来（18:08 的日志）。
+     * IG 显然把"冷启动"当成"这一轮已经发过了"的理由，而"下拉刷新"才会重新算推荐位。
+     * 我们的托盘本来就不是严格意义的冷启动（首页随时会重建、下拉也会刷新），用这一档更贴。
+     */
+    data['reason'] = 'pull_to_refresh';
     data['timezone_offset'] = `${identity.timezoneOffset}`;
-    data['tray_session_id'] = identity.traySessionId;
-    data['request_id'] = identity.requestId;
+    /*
+     * **`tray_session_id` / `request_id` 每发都新生成**（设备身份 `_uuid` 不变）。
+     *
+     * 真机证据：同一台设备、同一个账号，第一次拉托盘回了 12 条"推荐快拍"
+     * （`reel_type=suggested_user_reel`），之后**一直是空数组**（`tray:[]`，551 字节）——
+     * 而我们这两个 id 是从设备种子里读出来的**固定值**，每发都一模一样。
+     * IG 用它们做"这一轮托盘是否已经发过"的去重：同一个 request_id 再问一次，
+     * 服务端直接回空，推荐位自然再也刷不出来（用户报的"快拍推荐数据没有加载"）。
+     * 真实的 App 每发都会现生成这两个 id，所以这里照做：id 每发一换，设备身份照旧。
+     */
+    data['tray_session_id'] = uuid4();
+    data['request_id'] = uuid4();
     data['page_size'] = MobileStories.TRAY_PAGE_SIZE;
     data['_uuid'] = identity.uuid;
     const none: Record<string, Object> = {};
