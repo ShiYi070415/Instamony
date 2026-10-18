@@ -92,6 +92,56 @@ export class ProfileHeader {
     this.posts = posts;
     this.followedByViewer = followedByViewer;
   }
+
+  /**
+   * 序列化成一行 JSON（只用于**落盘快照**，见 core/AppSettings.saveProfileHeader）。
+   *
+   * 为什么需要：头部那一发在真机上常被限速闸门排在别的请求后面（2~4 秒），
+   * 而这份数据变化很慢 —— 进「我的」先把上次的快照画上去，网络回来再覆盖。
+   * 键名取短的：这串会塞进 preferences，越短越省。
+   */
+  toJson(): string {
+    return JSON.stringify({
+      u: this.username,
+      f: this.fullName,
+      b: this.bio,
+      l: this.link,
+      a: this.avatarUrl,
+      v: this.isVerified,
+      p: this.isPrivate,
+      fo: this.followers,
+      fi: this.following,
+      po: this.posts,
+      fb: this.followedByViewer
+    });
+  }
+
+  /** 反序列化（坏数据 / 缺字段一律给 null，绝不把半个头部画上去）。 */
+  static fromJson(raw: string): ProfileHeader | null {
+    if (raw.length < 2) {
+      return null;
+    }
+    try {
+      const one: Record<string, Object> = JSON.parse(raw) as Record<string, Object>;
+      const username: string = typeof one.u === 'string' ? one.u as string : '';
+      if (username.length === 0) {
+        return null;
+      }
+      return new ProfileHeader(username,
+        typeof one.f === 'string' ? one.f as string : '',
+        typeof one.b === 'string' ? one.b as string : '',
+        typeof one.l === 'string' ? one.l as string : '',
+        typeof one.a === 'string' ? one.a as string : '',
+        one.v === true,
+        one.p === true,
+        typeof one.fo === 'number' ? one.fo as number : 0,
+        typeof one.fi === 'number' ? one.fi as number : 0,
+        typeof one.po === 'number' ? one.po as number : 0,
+        one.fb === true);
+    } catch (error) {
+      return null;
+    }
+  }
 }
 
 /** 网格里的一条：画格子要用的字段 + **帖子页（feeds 流样式）要用的那一套**。 */

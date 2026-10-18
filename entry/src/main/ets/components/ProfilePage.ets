@@ -860,6 +860,24 @@ export struct ProfilePage {
   }
 
   /**
+   * 头部那一行**粗体的名字**。
+   *
+   * 需求："Empty 才是用户名，_yijin.__ 是用户名称（先不用显示这个）" —— 也就是显示 IG 的
+   * 显示名（`full_name`），**不显示**账号名（`username`）。显示名为空时才退回账号名，
+   * 免得头部只剩一个空行（有些账号确实没设显示名）。
+   */
+  private displayName(): string {
+    const header: ProfileHeader | null = this.header;
+    if (header === null) {
+      return '';
+    }
+    if (header.fullName.length > 0) {
+      return header.fullName;
+    }
+    return header.username;
+  }
+
+  /**
    * 这一页主人的**账号名 / 头像**（`@Builder` 里不能先取局部变量，所以包成方法）。
    *
    * 用途：**视频分页**那条查询不给作者（`user` 是空的，真机实测）—— 而这一页整段都是同一个人，
@@ -1009,6 +1027,16 @@ export struct ProfilePage {
         // ---- 头部（个人信息）：会被外层滚出去 ----
         ListItem() {
           Column({ space: 12 }) {
+            /*
+             * 头像 + 右侧一列（需求："将我的页面的用户名移到帖子数量上方，粗体显示"）。
+             *
+             * 版式照 Instagram 个人页来：头像单独在左，右边从上到下是
+             *   **用户名（粗体）** → 帖子/粉丝/关注 三格。
+             *
+             * 这里的"用户名"就是 IG 的**显示名**（`full_name`，比如 `Empty`）—— 需求明确
+             * 说了"_yijin.__ 那一串（`username`）先不显示"。只有显示名为空时，才退回账号名，
+             * 免得头部只剩一个空行。
+             */
             Row({ space: 16 }) {
               Image(this.header === null || this.header.avatarUrl.length === 0
                 ? $r('app.media.startIcon') : this.header.avatarUrl)
@@ -1018,32 +1046,38 @@ export struct ProfilePage {
                 .borderRadius(AVATAR_SIZE / 2)
                 .objectFit(ImageFit.Cover)
                 .backgroundColor($r('app.color.field_background'))
-              Row({ space: 0 }) {
-                this.statCell(0, $r('app.string.profile_stat_posts'))
-                this.statCell(1, $r('app.string.profile_stat_followers'))
-                this.statCell(2, $r('app.string.profile_stat_following'))
+              Column({ space: 8 }) {
+                Row({ space: 5 }) {
+                  Text(this.displayName())
+                    .fontSize(18)
+                    .fontWeight(FontWeight.Bold)
+                    .fontColor($r('app.color.primary_text'))
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  if (this.header !== null && this.header.isVerified) {
+                    SymbolGlyph($r('sys.symbol.checkmark_circle_fill'))
+                      .fontSize(15)
+                      .fontColor([$r('app.color.accent')])
+                  }
+                }
+                .width('100%')
+                .alignItems(VerticalAlign.Center)
+
+                Row({ space: 0 }) {
+                  this.statCell(0, $r('app.string.profile_stat_posts'))
+                  this.statCell(1, $r('app.string.profile_stat_followers'))
+                  this.statCell(2, $r('app.string.profile_stat_following'))
+                }
+                .width('100%')
               }
               .layoutWeight(1)
+              .alignItems(HorizontalAlign.Start)
+              .justifyContent(FlexAlign.Center)
             }
             .width('100%')
             .alignItems(VerticalAlign.Center)
 
             Column({ space: 4 }) {
-              Row({ space: 5 }) {
-                Text(this.header === null ? '' : this.header.fullName)
-                  .fontSize(14)
-                  .fontWeight(FontWeight.Medium)
-                  .fontColor($r('app.color.primary_text'))
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                if (this.header !== null && this.header.isVerified) {
-                  SymbolGlyph($r('sys.symbol.checkmark_circle_fill'))
-                    .fontSize(14)
-                    .fontColor([$r('app.color.accent')])
-                }
-              }
-              .width('100%')
-
               // 状态行：取数失败原因 / 正在干什么（正常加载成功后**不显示**）。
               //
               // 它同时是**排查通道** —— 这个项目里日志经常被刷掉，界面上的这行字

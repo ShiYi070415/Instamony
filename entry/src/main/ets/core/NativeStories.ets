@@ -630,8 +630,13 @@ export class NativeStories {
     for (let index: number = 0; index < candidates.length
       && index < NativeStories.SUGGEST_MAX && items.length < NativeStories.SUGGEST_KEEP; index++) {
       const one: StoryTrayItem = candidates[index];
+      /*
+       * **idle 优先级**：这条兜底链要连问好几位（每位 1~2 发），全走 warm 会把启动那段
+       * 限速闸门塞满 —— 真机日志里"进我的页面拿头部"因此要在闸门后面等 3~4 秒。
+       * 它是"兜底数据"，晚几秒到没关系；交互请求（用户点开的那一发）会插到它前面。
+       */
       const reel: StoryReel | null = await MobileStories.reel(one.userId, [], one.username,
-        ApiThrottle.warm());
+        ApiThrottle.idle());
       if (reel === null || reel.items.length === 0) {
         hilog.info(DOMAIN, TAG, 'suggest story miss uid=%{public}s name=%{public}s',
           one.userId, one.username);

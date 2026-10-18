@@ -32,6 +32,8 @@ import { MediaPrefetch } from '../core/MediaPrefetch';
 import { PosterCache } from '../core/PosterCache';
 import { MediaDetail, NativeMediaInfo } from '../core/NativeMediaInfo';
 import { ApiThrottle } from '../core/ApiThrottle';
+// 头部落盘快照（见 AppSettings.saveProfileHeader 与 load 里的 paintHeaderSnapshot）。
+import { AppSettings } from '../core/AppSettings';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'ProfileViewModel';
@@ -670,7 +672,21 @@ export class ProfileViewModel {
       // 本人：网格请求体的目标键也要回正（见 ensureOwnName），所以发请求前先落实"我是谁"。
       // 同样先确认这份本人状态属于当前账号（换账号后必须作废，见 ensureSelfScope）。
       await this.ensureSelfScope();
-      await this.ensureOwnName();
+      /*
+       * 网络那一发之前，**先用上次的快照把头部画出来**（见 AppSettings.saveProfileHeader）。
+       *
+       * 用户报的"切回大号，头部数据太慢"：头部这一发常被限速闸门排在别的请求后面
+       * （真机 2~4 秒，闸门日志 `waited=2407ms waiting=6`）。这份数据变化很慢，
+       * 先画快照、网络回来再覆盖，观感就是"进来就有"。
+       */
+      this.paintHeaderSnapshot();
+      /*
+       * 账号名**不再提前要**（见 loadHeader 那段说明 + 用户报的"切回大号头部太慢"）：
+       * 头部那一发本来就会把 `username` 带回来（loadHeader 末尾会写进 ownName），
+       * 这里再要一次等于把同一发 `users/{pk}/info/` 打两遍 —— 两发还共用同一个
+       * ApiThrottle 家族（900ms 起跳），纯粹是自己把自己拖慢。真要回放模板时，
+       * loadHeader / fetchPage 里那两处会各自 `await this.ensureOwnName()`。
+       */
       gen = this.generation;
       /*
        * 头部与网格**并发**拉（原来是先把头部拉完再拉网格）。
@@ -1502,6 +1518,20 @@ export class ProfileViewModel {
     if (!this.target.isSelf() || this.ownName.length > 0) {
       return;
     }
+    /*
+     * **先问移动端**（几百毫秒的一发小请求），网页桥放后面。
+     *
+     * 以前是反过来的：先跑隐藏网页里的脚本，页面没就绪 / 正在导航时要**等到超时**
+     * （几秒）；而这只是在"回放模板"那条兜底路上才需要的东西 —— 用户报的
+     * "从新号切回大号，头部数据太慢"里，有一大截就是这里白等的。
+     */
+    const fast: string = await NativeProfile.selfUsername();
+    if (ProfileViewModel.isUsername(fast)) {
+      this.ownName = fast;
+      this.target = this.target.withSelfName(fast);
+      hilog.info(DOMAIN, TAG, 'own name resolved via mobile @%{public}s', fast);
+      return;
+    }
     try {
       const href: string = await this.bridge.runBridge(OWN_PROFILE_SCRIPT,
         OWN_PROFILE_TIMEOUT_MS, 'own-profile');
@@ -1531,20 +1561,8 @@ export class ProfileViewModel {
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'own name failed: %{public}s', (error as Error).message);
     }
-    /*
-     * 网页桥拿不到（引擎没就绪 / 共用网页正被别的流程导航 / 页面不在自己的主页上）时
-     * **退一步按自己的 id 问一次用户名**：没有账号名会让"重抓模板 / 收藏·被标注按用户名取"
-     * 全部卡住，而这一发只是几百毫秒的小请求（见 NativeProfile.selfUsername）。
-     */
     if (this.ownName.length === 0) {
-      const name: string = await NativeProfile.selfUsername();
-      if (ProfileViewModel.isUsername(name)) {
-        this.ownName = name;
-        this.target = this.target.withSelfName(name);
-        hilog.info(DOMAIN, TAG, 'own name resolved via mobile @%{public}s', name);
-      } else {
-        hilog.warn(DOMAIN, TAG, 'own name still unknown (bridge + mobile both failed)');
-      }
+      hilog.warn(DOMAIN, TAG, 'own name still unknown (mobile + bridge both failed)');
     }
   }
 
@@ -1687,6 +1705,31 @@ export class ProfileViewModel {
     this.selfId = id;
   }
 
+  /**
+   * 用**落盘快照**先把头部画出来（没有就什么都不做）。
+   *
+   * 只在"还没有 header"时画：网络那一发回来会正常覆盖它（见 loadHeader）。
+   * 快照按账号 id 分开存放 —— 换账号后读的是新账号自己那份，不会串号。
+   */
+  private paintHeaderSnapshot(): void {
+    if (this.header !== null || !this.target.isSelf()) {
+      return;
+    }
+    const uid: string = this.selfId.length > 0 ? this.selfId : NativeProfile.ownIdCached();
+    if (uid.length === 0) {
+      return;
+    }
+    const snap: ProfileHeader | null = ProfileHeader.fromJson(AppSettings.loadProfileHeader(uid));
+    if (snap === null) {
+      return;
+    }
+    this.header = snap;
+    hilog.info(DOMAIN, TAG, 'header snapshot @%{public}s posts=%{public}d',
+      snap.username, snap.posts);
+    this.onHeader(snap);
+  }
+
+  /** 拉一次头部（本人的话顺带把快照落盘，见 AppSettings.saveProfileHeader）。 */
   private async loadHeader(): Promise<void> {
     // 目标用户是"别人"、但我们只有用户名（没有数字 id）时**不发头部这条**：它的请求体里
     // 目标是用 `id` 表示的，没有 id 就只能原样重发 —— 那会把我自己的资料显示成他的
@@ -1695,10 +1738,17 @@ export class ProfileViewModel {
       hilog.info(DOMAIN, TAG, 'header skipped: target has no numeric id');
       return;
     }
-    // 本人：先把"我是谁"落实（请求体里的目标键要按它回正，见 ensureOwnName）。
-    // 顺序不能反：先确认这份状态属于当前账号（换账号时作废），再去解析账号名。
+    /*
+     * 本人：先确认这份状态属于当前账号（换账号时整份作废，见 ensureSelfScope）。
+     *
+     * ⚠️ **这里不再等 `ensureOwnName()`**（用户报的"从新号切回大号，头部数据太慢"）：
+     * 账号名只给**模板回放**用（请求体里的目标键要按它回正），而移动端那条
+     * `users/{pk}/info/` 用的是 Cookie 里的 pk，根本不需要账号名。以前先等它 ——
+     * 它要跑一段**隐藏网页里的脚本**（`OWN_PROFILE_SCRIPT`，换账号后网页正在重载，
+     * 常常等到超时），头部于是白等好几秒。现在移动端先发，账号名由头部自己带回来
+     * （见下面 `this.ownName = native.username`）；真要回放模板时才补它。
+     */
     await this.ensureSelfScope();
-    await this.ensureOwnName();
     /*
      * **头部一律先走 `NativeProfile.fetchHeader`**（它内部就是移动端优先：
      * `users/{pk}/info/` / `users/{username}/usernameinfo/`，**不需要任何模板**；
@@ -1710,6 +1760,7 @@ export class ProfileViewModel {
      */
     // 这一发属于哪个账号代次（见 stale）：**必须在发请求之前**取，exit/reset 之后回来才丢得掉。
     const gen: number = this.generation;
+    const startedMs: number = Date.now();
     let native: ProfileHeader | null = await NativeProfile.fetchHeader(this.target);
     if (native === null && !ApiThrottle.blocked(ApiThrottle.MOBILE)) {
       // 偶发的超时 / 抖动：隔 600ms 再来一次（限流期间不重试，见 load 里的同一取舍）。
@@ -1718,6 +1769,9 @@ export class ProfileViewModel {
       await ProfileViewModel.sleep(600);
       native = await NativeProfile.fetchHeader(this.target);
     }
+    // 耗时一行（用户报的"头部太慢"：换账号后拿它核对是哪一段在花时间）。
+    hilog.info(DOMAIN, TAG, 'header round ms=%{public}d ok=%{public}s detail=%{public}s',
+      Date.now() - startedMs, `${native !== null}`, NativeProfile.lastDetail());
     if (native !== null) {
       /*
        * **本人的头部要核对账号名**：模板回放那条是按操作名共用的，如果在别人的主页上抓过一次，
@@ -1752,6 +1806,9 @@ export class ProfileViewModel {
         this.ownName = native.username;
         // 名字也是"回正请求体"要用的（见 ProfileTarget.selfName）。
         this.target = this.target.withSelfName(native.username);
+        // 落一份快照：下次进「我的」先把这份画上去（见 paintHeaderSnapshot）。
+        AppSettings.saveProfileHeader(
+          this.selfId.length > 0 ? this.selfId : NativeProfile.ownIdCached(), native.toJson());
       }
       hilog.info(DOMAIN, TAG, 'header ok @%{public}s posts=%{public}d',
         native.username, native.posts);
@@ -1764,6 +1821,11 @@ export class ProfileViewModel {
       this.onStatus('头部读取失败：' + this.diag);
       return;
     }
+    /*
+     * 走到回放这条路**才**补"我是谁"（见上面那句说明：账号名只有回放要用）。
+     * 回放的模板会把目标键替换成 `selfName`，没有账号名就可能把我自己的资料画成别人。
+     */
+    await this.ensureOwnName();
     const cfg: string = this.registry.storedJson(NativeProfile.OP_HEADER);
     if (cfg.length === 0) {
       /*

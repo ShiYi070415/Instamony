@@ -205,6 +205,9 @@ export class NativeProfile {
   static clearCache(): void {
     NativeProfile.ownIdCache = '';
     NativeProfile.detail = '-';
+    NativeProfile.headerCache.clear();
+    NativeProfile.headerCacheAt.clear();
+    NativeProfile.headerInflight.clear();
   }
 
   /** 已经读到的自己的数字 id（同步；没读过给空串，见 ownId）。 */
@@ -366,8 +369,72 @@ export class NativeProfile {
     return ApiRegistry.getInstance().storedForNative(op) !== null;
   }
 
-  /** 拉一次个人页头部（拿不到就 null）。 */
-  static async fetchHeader(target: ProfileTarget = ProfileTarget.self()): Promise<ProfileHeader | null> {
+  /**
+   * 头部结果的**短缓存**（key = 目标用户的数字 id）。
+   *
+   * 为什么需要（用户报的"从新号切回大号，获取头部数据太慢"）：`users/{pk}/info/` 这一发
+   * 在真机上经常被**限速闸门**排在别的请求后面（日志里 `waited=2494ms`、甚至
+   * `waited=24106ms`），而"我的"页每进一次都会要一次。同一个账号 5 分钟内不会变，
+   * 缓存住它就够了；换账号时 `clearCache()` 一并清掉。
+   */
+  private static headerCache: Map<string, ProfileHeader> = new Map<string, ProfileHeader>();
+  private static headerCacheAt: Map<string, number> = new Map<string, number>();
+  /** 同一个目标**正在飞的那一发**（两次 load 同时要头部时只打一次接口）。 */
+  private static headerInflight: Map<string, Promise<ProfileHeader | null>> =
+    new Map<string, Promise<ProfileHeader | null>>();
+  private static readonly HEADER_TTL_MS: number = 5 * 60 * 1000;
+
+  /**
+   * 拉一次个人页头部（拿不到就 null）。
+   *
+   * 外面这层只管三件事：**缓存命中**、**并发合并**、**成功后回填缓存**；
+   * 真正的取数在 loadHeaderBody 里（移动端优先、模板回放兜底）。
+   */
+  static fetchHeader(target: ProfileTarget = ProfileTarget.self()): Promise<ProfileHeader | null> {
+    return NativeProfile.headerWithCache(target);
+  }
+
+  private static async headerWithCache(target: ProfileTarget): Promise<ProfileHeader | null> {
+    let uid: string = target.id;
+    if (uid.length === 0 && target.isSelf()) {
+      uid = await NativeProfile.ownId();
+    }
+    const key: string = uid.length > 0 ? uid : `name:${target.username}`;
+    const cached: ProfileHeader | undefined = NativeProfile.headerCache.get(key);
+    const at: number = NativeProfile.headerCacheAt.get(key) ?? 0;
+    if (cached !== undefined && Date.now() - at < NativeProfile.HEADER_TTL_MS) {
+      hilog.info(DOMAIN, TAG, 'header cached key=%{public}s age=%{public}dms',
+        key, Date.now() - at);
+      return cached;
+    }
+    const inflight: Promise<ProfileHeader | null> | undefined =
+      NativeProfile.headerInflight.get(key);
+    if (inflight !== undefined) {
+      hilog.info(DOMAIN, TAG, 'header join inflight key=%{public}s', key);
+      return inflight;
+    }
+    const job: Promise<ProfileHeader | null> = NativeProfile.loadHeaderCached(target, key);
+    NativeProfile.headerInflight.set(key, job);
+    job.then((): void => {
+      NativeProfile.headerInflight.delete(key);
+    }).catch((): void => {
+      NativeProfile.headerInflight.delete(key);
+    });
+    return job;
+  }
+
+  private static async loadHeaderCached(target: ProfileTarget,
+                                        key: string): Promise<ProfileHeader | null> {
+    const header: ProfileHeader | null = await NativeProfile.loadHeaderBody(target);
+    if (header !== null) {
+      NativeProfile.headerCache.set(key, header);
+      NativeProfile.headerCacheAt.set(key, Date.now());
+    }
+    return header;
+  }
+
+  /** 拉一次个人页头部（拿不到就 null）——**不带缓存的那一层**，见 fetchHeader。 */
+  private static async loadHeaderBody(target: ProfileTarget): Promise<ProfileHeader | null> {
     /*
      * **① 移动端优先**（instagrapi 的 `user_info_v1` / `user_info_by_username_v1`）。
      *
@@ -430,7 +497,11 @@ export class NativeProfile {
     if (uid.length === 0) {
       return '';
     }
-    const mobile: MobileUserBody | null = await MobileProfile.info(uid, '', ApiThrottle.idle());
+    /*
+     * 交互优先级：这一发是"回放模板"的前置条件，用户正等着界面出东西，
+     * 排到预取/自检后面会白等好几秒（见 ProfileViewModel.ensureOwnName）。
+     */
+    const mobile: MobileUserBody | null = await MobileProfile.info(uid, '', ApiThrottle.interactive());
     if (mobile === null) {
       return '';
     }

@@ -282,6 +282,28 @@ export class AppSettings {
     }
   }
 
+  /**
+   * **个人页头部的落盘快照**（按账号 id 分开，见 model/Profile 的 ProfileHeader.toJson）。
+   *
+   * 用途（用户报的"从新号切回大号，获取头部数据太慢"）：头部那一发常被限速闸门排在
+   * 别的请求后面（真机 2~4 秒），而这份数据变化很慢。进「我的」时先把上次的快照画上去，
+   * 网络回来再覆盖 —— 观感就是"秒开"。
+   */
+  static saveProfileHeader(uid: string, json: string): void {
+    if (uid.length === 0 || json.length < 2) {
+      return;
+    }
+    AppSettings.write(`profile_header_${uid}`, json);
+  }
+
+  /** 取某个账号上次的头部快照（没有给空串）。 */
+  static loadProfileHeader(uid: string): string {
+    if (uid.length === 0) {
+      return '';
+    }
+    return AppSettings.readString(`profile_header_${uid}`, '');
+  }
+
   private static readString(key: string, fallback: string): string {
     try {
       if (AppSettings.store !== null) {
