@@ -31,6 +31,7 @@ import { MediaPost } from '../model/MediaPost';
 import { MediaPrefetch } from '../core/MediaPrefetch';
 import { PosterCache } from '../core/PosterCache';
 import { MediaDetail, NativeMediaInfo } from '../core/NativeMediaInfo';
+import { ApiThrottle } from '../core/ApiThrottle';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'ProfileViewModel';
@@ -607,11 +608,35 @@ export class ProfileViewModel {
          */
         page = await this.recaptureAndRetry(tab, state);
       }
+      if (page === null) {
+        /*
+         * 失败后**再给一次机会**（用户报的"偶尔加载不出来"）：绝大多数偶发失败是网络抖动 /
+         * 一发超时，隔 700ms 重试一次基本就过了。限流期间不重试（那只会把冷却窗口拖更长）。
+         */
+        if (!ApiThrottle.blocked(ApiThrottle.MOBILE)) {
+          hilog.info(DOMAIN, TAG, 'tab load failed (%{public}s) → retry once', this.diag);
+          await ProfileViewModel.sleep(700);
+          page = await this.fetchPage(this.opNameOf(tab), state.cursor, tab);
+        }
+      }
       await headerJob;
       if (page === null) {
-        // 带上诊断：这个项目的 hilog 常被系统刷掉，界面上的这一行是可靠的排查通道。
-        // 原生与回放分开写，一眼能看出是"请求没成"还是"回放没跑起来"。
-        this.onStatus(`读取失败：native=${this.diag} ${this.replayDiag}`);
+        /*
+         * 状态行要能区分"被限流"和"真的读不到"：限流时用户等一会儿自己就好了，
+         * 这条文案直接告诉他还要多久，比一句笼统的"读取失败"有用得多。
+         */
+        if (ApiThrottle.blocked(ApiThrottle.MOBILE)) {
+          const left: number = ApiThrottle.remainingMinutes(ApiThrottle.MOBILE);
+          this.onStatus(left > 0
+            ? `接口被限流，约 ${left} 分钟后自动恢复`
+            : '接口被限流，稍后自动恢复');
+        } else {
+          // 带上诊断：这个项目的 hilog 常被系统刷掉，界面上的这一行是可靠的排查通道。
+          // 原生与回放分开写，一眼能看出是"请求没成"还是"回放没跑起来"。
+          this.onStatus(`读取失败：native=${this.diag} ${this.replayDiag}`);
+        }
+        hilog.info(DOMAIN, TAG, 'tab load gave up tab=%{public}d diag=%{public}s replay=%{public}s',
+          tab, this.diag, this.replayDiag);
         return;
       }
       if (refresh && state.posts.length > 0) {
@@ -793,17 +818,57 @@ export class ProfileViewModel {
    */
   private async fetchPage(op: string, cursor: string,
                           tab: number = PROFILE_TAB_POSTS): Promise<ProfilePostsPage | null> {
-    if (NativeProfile.hasTemplate(op)) {
-      const page: ProfilePostsPage | null = await NativeProfile.fetchPosts(op, cursor, this.target);
+    let opName: string = op;
+    /*
+     * **合成操作名先打移动端**（这是"我的页面四个分页有时加载不出来"的修复点）。
+     *
+     * 以前这里第一句是 `if (hasTemplate(op))` —— 合成名 `mobile:clips` 永远没有模板，
+     * 于是直接掉到下面"只有帖子段允许回放"的判断，**返回 null，移动端那一发根本没发**。
+     * 结果：收藏 / 视频 / 被标注三段只有在"恰好抓到过模板"的时候才加载得出来，
+     * 其余时候就是空的 + 一句"读取失败"，而且每次表现还不一样（取决于模板缓存）。
+     *
+     * 现在：先真打一发移动端；没成再看有没有这一段的模板，有就带着 `skipMobile` 走模板。
+     */
+    if (NativeProfile.isMobileOp(opName)) {
+      const mobilePage: ProfilePostsPage | null =
+        await NativeProfile.fetchPosts(opName, cursor, this.target);
+      if (mobilePage !== null) {
+        this.diag = '-';
+        hilog.info(DOMAIN, TAG, 'posts mobile op=%{public}s n=%{public}d more=%{public}s',
+          opName, mobilePage.posts.length, mobilePage.hasMore ? 'y' : 'n');
+        return mobilePage;
+      }
+      this.diag = 'mobile:' + NativeProfile.lastDetail();
+      hilog.info(DOMAIN, TAG, 'posts mobile failed op=%{public}s why=%{public}s → template?',
+        opName, NativeProfile.lastDetail());
+      const template: string = this.templateOpName(tab);
+      if (template.length === 0) {
+        this.replayDiag = 'no-template-for-kind';
+        return null;
+      }
+      // 有这一段模板：跳过移动端（刚失败过），直接回放它。
+      opName = template;
+      const viaTemplate: ProfilePostsPage | null =
+        await NativeProfile.fetchPosts(opName, cursor, this.target, true);
+      if (viaTemplate !== null) {
+        hilog.info(DOMAIN, TAG, 'posts template op=%{public}s n=%{public}d',
+          opName, viaTemplate.posts.length);
+        return viaTemplate;
+      }
+      this.diag = `${this.diag} tpl:${NativeProfile.lastDetail()}`;
+      return null;
+    }
+    if (NativeProfile.hasTemplate(opName)) {
+      const page: ProfilePostsPage | null = await NativeProfile.fetchPosts(opName, cursor, this.target);
       if (page !== null) {
         hilog.info(DOMAIN, TAG, 'posts native op=%{public}s n=%{public}d more=%{public}s',
-          op, page.posts.length, page.hasMore ? 'y' : 'n');
+          opName, page.posts.length, page.hasMore ? 'y' : 'n');
         return page;
       }
       // 原生失败的原因要带出去：界面上那行状态就是排查通道（hilog 会被系统刷掉）。
       this.diag = 'native:' + NativeProfile.lastDetail();
       hilog.info(DOMAIN, TAG, 'posts native failed op=%{public}s why=%{public}s → replay',
-        op, NativeProfile.lastDetail());
+        opName, NativeProfile.lastDetail());
     }
     // 别人主页**不走回放兜底**：回放是把模板原样重发（页面脚本只合并顶层的 after / username），
     // 视频那条的目标用户藏在 `data.target_user_id` 里改不动 —— 回放出来会是我的内容显示在他的
@@ -831,7 +896,7 @@ export class ProfileViewModel {
       hilog.info(DOMAIN, TAG, 'replay skipped tab=%{public}d (needs native http)', tab);
       return null;
     }
-    return this.fetchPostsWithRetry(op, cursor);
+    return this.fetchPostsWithRetry(opName, cursor);
   }
 
   /**
@@ -865,15 +930,30 @@ export class ProfileViewModel {
     return this.opNameOf(this.tab);
   }
 
-  /** 某个分页对应的操作名（认不出返回空串）。 */
+  /**
+   * 某个分页对应的操作名（认不出返回空串）。
+   *
+   * 顺序：**有模板就用模板名**（那条路本来会先试移动端、失败再回放模板，最全）；
+   * 没模板就给**合成名** `mobile:kind`（移动端四条端点不需要模板）。
+   */
   private opNameOf(tab: number): string {
+    const template: string = this.templateOpName(tab);
+    if (template.length > 0) {
+      return template;
+    }
+    return NativeProfile.mobileOpFor(PROFILE_TAB_KINDS[tab]);
+  }
+
+  /**
+   * 某一分页**已存模板**的操作名（没有给空串）。
+   *
+   * 帖子那条是已知名；另外三条按模板名里的片段猜（`...Reels...` / `...Saved...` / `...Tagged...`），
+   * 猜的时候要把已经用掉的三个已知操作名排除，免得"帖子"那条被当成别的分页。
+   */
+  private templateOpName(tab: number): string {
     const kind: string = PROFILE_TAB_KINDS[tab];
     if (tab === PROFILE_TAB_POSTS) {
-      // 帖子这条是**已知**的：抓到的模板就是它；没有模板但移动端那条能用时给合成名。
-      if (NativeProfile.hasTemplate(NativeProfile.OP_POSTS)) {
-        return NativeProfile.OP_POSTS;
-      }
-      return NativeProfile.mobileOpFor(kind);
+      return NativeProfile.hasTemplate(NativeProfile.OP_POSTS) ? NativeProfile.OP_POSTS : '';
     }
     const keys: Array<string> = [TAB_PATTERNS[tab]];
     const names: Array<string> = this.registry.storedNames();
@@ -895,14 +975,8 @@ export class ProfileViewModel {
         return name;
       }
     }
-    /*
-     * **没有模板也给移动端一个机会**（用户要求："我的（及其下四个分页）尝试改为 instagrapi 的协议"）。
-     *
-     * 这一句是"切分页不再卡"的关键：原来这里返回空串，`setTab`/`load` 于是去跑
-     * `captureTab()`（导航隐藏网页、抓模板，秒级）—— 用户看到的就是"每次切到没抓过的分页都要等"。
-     * 移动端那四条端点不需要模板，`tabUsable` 为真（帖子/被标注乐观、Reels/收藏学到的）就返回合成名。
-     */
-    return NativeProfile.mobileOpFor(kind);
+    // 名字里没命中（IG 改过名）：退回按 kind 查一遍（见 NativeProfile.templateOpOfKind）。
+    return NativeProfile.templateOpOfKind(kind);
   }
 
   /**
@@ -1332,6 +1406,21 @@ export class ProfileViewModel {
       }
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'own name failed: %{public}s', (error as Error).message);
+    }
+    /*
+     * 网页桥拿不到（引擎没就绪 / 共用网页正被别的流程导航 / 页面不在自己的主页上）时
+     * **退一步按自己的 id 问一次用户名**：没有账号名会让"重抓模板 / 收藏·被标注按用户名取"
+     * 全部卡住，而这一发只是几百毫秒的小请求（见 NativeProfile.selfUsername）。
+     */
+    if (this.ownName.length === 0) {
+      const name: string = await NativeProfile.selfUsername();
+      if (name.length > 0) {
+        this.ownName = name;
+        this.target = this.target.withSelfName(name);
+        hilog.info(DOMAIN, TAG, 'own name resolved via mobile @%{public}s', name);
+      } else {
+        hilog.warn(DOMAIN, TAG, 'own name still unknown (bridge + mobile both failed)');
+      }
     }
   }
 

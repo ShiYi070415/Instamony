@@ -417,9 +417,35 @@ export class NativeProfile {
     return NativeProfile.headerOf(result.text);
   }
 
-  /** 拉一页网格（拿不到就 null）。 */
+  /**
+   * 按当前会话的 id 问一次**自己的用户名**（拿不到给空串）。
+   *
+   * 用途：视图模型解析"我是谁"有两条路 —— 隐藏网页的地址（`OWN_PROFILE_SCRIPT`）和这里。
+   * 网页桥不可用时（引擎还没就绪 / 共用网页正被别的流程导航）前者会失败，
+   * 而"没有账号名"会让后面"重抓模板 / 收藏被标注按用户名取"全部卡住 ——
+   * 这时按 `ds_user_id` 问一发 `users/{pk}/info/` 就能把名字补回来，代价只是一发小请求。
+   */
+  static async selfUsername(): Promise<string> {
+    const uid: string = await NativeProfile.ownId();
+    if (uid.length === 0) {
+      return '';
+    }
+    const mobile: MobileUserBody | null = await MobileProfile.info(uid, '', ApiThrottle.idle());
+    if (mobile === null) {
+      return '';
+    }
+    return NativeProfile.strOf(mobile.user, 'username').trim();
+  }
+
+  /**
+   * 拉一页网格（拿不到就 null）。
+   *
+   * @param skipMobile true = **只走模板**（调用方刚刚已经试过移动端这条并失败了，
+   *                   不要再白发一次同样的请求；见 viewmodel/ProfileViewModel.fetchPage）。
+   */
   static async fetchPosts(op: string, after: string,
-                          target: ProfileTarget = ProfileTarget.self()): Promise<ProfilePostsPage | null> {
+                          target: ProfileTarget = ProfileTarget.self(),
+                          skipMobile: boolean = false): Promise<ProfilePostsPage | null> {
     /*
      * **① 移动端优先**（四个分页各有对应端点，见 core/mobileapi/MobileProfile.tab）：
      *   帖子 `feed/user/{pk}/`、Reels `clips/user/`、被标注 `usertags/{pk}/feed/`、收藏 `feed/saved/`。
@@ -429,11 +455,12 @@ export class NativeProfile {
      * "这个分页的接口模板还没有"。移动端这四条同样是一次 GET/POST，且不需要任何模板。
      *
      * 退路完整保留：kind 认不出、没有目标 id、或者移动端这一发没通 → 原样走模板那条路。
-     * 用**乐观性**区分（见 MobileProfile.tabUsable）：帖子/被标注直接乐观用；
-     * Reels/收藏是试出来的端点，学到能用之后才在"没模板"时也敢用合成操作名。
+     * 合成操作名（`mobile:clips`）以前在这里直接 return null 是**错的**（那条分支等于
+     * "移动端失败就什么都不试"，收藏/被标注的整段加载不出来就是它造成的）——
+     * 现在由调用方先试移动端、再带着 `skipMobile` 走模板，两条路都走完才算失败。
      */
     const kind: string = NativeProfile.mobileKindOf(op);
-    if (kind.length > 0) {
+    if (kind.length > 0 && !skipMobile) {
       let uid: string = target.id;
       if (uid.length === 0 && target.isSelf()) {
         uid = await NativeProfile.ownId();
@@ -451,8 +478,8 @@ export class NativeProfile {
         }
       }
       if (NativeProfile.isMobileOp(op)) {
-        // 合成操作名 = 调用方本来就没有模板，只有移动端这一条；这里再退也没得退。
-        hilog.warn(DOMAIN, TAG, 'mobile tab failed and no template op: kind=%{public}s', kind);
+        // 合成名 + 移动端没成：模板那一路得由调用方带着真实 op 再来（见 fetchPage）。
+        hilog.warn(DOMAIN, TAG, 'mobile tab failed for synthesized op: kind=%{public}s', kind);
         return null;
       }
     }
@@ -494,12 +521,57 @@ export class NativeProfile {
     return '';
   }
 
-  /** 这一分页在"没有模板"时能不能靠移动端（见 viewmodel/ProfileViewModel.opNameOf）。 */
+  /**
+   * 这一分页在"没有模板"时的**合成操作名**（`mobile:clips` 这种，见 viewmodel/ProfileViewModel.opNameOf）。
+   *
+   * 以前这里要 `MobileProfile.tabUsable(kind)` 为真才给（帖子/被标注乐观、Reels/收藏要先"试出来"），
+   * 于是**新进程里 Reels / 收藏两段永远没有操作名** → 视图模型只能去跑"抓模板"那条冷路径
+   * （导航隐藏网页、秒级、可能失败）→ 用户看到的就是"我的页面四个分页有时加载不出来"。
+   *
+   * 现在一律给合成名：`fetchPage` 会先试移动端这一发，失败再带着 `skipMobile` 退回模板，
+   * 两条路都走完才算失败 —— "先试试移动端"不该被一个进程内的学习标记挡住。
+   */
   static mobileOpFor(kind: string): string {
     if (kind.length === 0) {
       return '';
     }
-    return MobileProfile.tabUsable(kind) ? `${NativeProfile.MOBILE_OP_PREFIX}${kind}` : '';
+    return `${NativeProfile.MOBILE_OP_PREFIX}${kind}`;
+  }
+
+  /** 某一分页已经存下的**模板**操作名（没有就给空串；用于合成名失败后的回退）。 */
+  static templateOpOfKind(kind: string): string {
+    const targets: Array<string> = NativeProfile.namesOfKind(kind);
+    const names: Array<string> = ApiRegistry.getInstance().storedNames();
+    for (let index: number = 0; index < names.length; index++) {
+      const upper: string = names[index];
+      if (upper.indexOf('Profile') < 0) {
+        continue;
+      }
+      const lower: string = upper.toLowerCase();
+      for (let at: number = 0; at < targets.length; at++) {
+        if (lower.indexOf(targets[at]) >= 0) {
+          return upper;
+        }
+      }
+    }
+    return '';
+  }
+
+  /** 分页 kind → 模板名里可能出现的片段（`feed/saved/` 那类端点没有模板，所以只看 clips/tagged）。 */
+  private static namesOfKind(kind: string): Array<string> {
+    if (kind === 'clips') {
+      return ['reels', 'clips'];
+    }
+    if (kind === 'saved') {
+      return ['saved'];
+    }
+    if (kind === 'tagged') {
+      return ['tagged', 'usertag'];
+    }
+    if (kind === 'posts') {
+      return ['postsquery'];
+    }
+    return [];
   }
 
   static isMobileOp(op: string): boolean {
