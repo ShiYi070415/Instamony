@@ -7,6 +7,18 @@
 1.1.0 只做四件事：**把私信修到能用**、**把两张 `主页` 做完整**、**把 `快拍/精选` 打磨到能用**、
 以及**修掉偶发 appfreeze**。没有引入新的账号体系、没有改数据来源（仍然是"网页登录 + 原生取数"）。
 
+## 下载
+
+| 文件 | 用途 |
+|---|---|
+| `Instarmony-1.1.0.app.zip` | **App Pack**（`.app`，用于 AppGallery / 正式分发；GitHub 不允许 `.app` 扩展名，故带 `.zip`。解开或改名回 `.app` 即可） |
+| `Instarmony-1.1.0.hap` | 单模块 HAP，用于 `hdc install` 直接装到设备 |
+
+- App Pack 内含 `entry-default.hap`，版本 `1.1.0`（`versionCode 1001000`），`pack.info` 里
+  `apiVersion.compatible=20 / target=26`。
+- 构建命令：App Pack 用 `hvigorw --mode project -p product=default assembleApp`
+  （注意 `--mode module` 下没有 `assembleApp` 这个任务）；产物在 `build/outputs/default/*.app`。
+
 ---
 
 ## 1. 私信（本版改动最大）
