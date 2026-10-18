@@ -27,6 +27,13 @@ export class DirectThread {
   readonly isGroup: boolean;
   /** 对方**名字**（ull_name；标题栏第一行用它，用户名留给第二行）。 */
   readonly unread: boolean;
+  /**
+   * 未读**条数**（列表里 "n 条新消息" 用；0 = 没有未读，界面上只显示最近一条内容）。
+   *
+   * 由 `last_seen_at`（我看到哪儿了）和最近几条消息的时间戳算出来，**封顶 4**：
+   * 需求"一条显示消息内容，超过一条显示 n 条新消息，n 最大等于 4"。
+   */
+  readonly unreadCount: number;
   readonly muted: boolean;
   readonly pinned: boolean;
   /** 最近活动时间（毫秒）。 */
@@ -40,13 +47,14 @@ export class DirectThread {
 
   constructor(id: string, key: string, title: string, avatarUrl: string, isGroup: boolean,
               unread: boolean, muted: boolean, pinned: boolean, tsMs: number,
-              text: string, kind: string, username: string = '') {
+              text: string, kind: string, username: string = '', unreadCount: number = 0) {
     this.id = id;
     this.key = key;
     this.title = title;
     this.avatarUrl = avatarUrl;
     this.isGroup = isGroup;
     this.unread = unread;
+    this.unreadCount = unreadCount;
     this.muted = muted;
     this.pinned = pinned;
     this.tsMs = tsMs;
@@ -752,9 +760,11 @@ export class DirectMapper {
       // `last_activity_at` 是**微秒**（GraphQL 那条给的是毫秒）。
       const micros: number = JsonRead.numOf(th, 'last_activity_at');
       const ts: number = micros > 0 ? Math.round(micros / 1000) : 0;
+      const me: string = JsonRead.strOf(th, 'viewer_id');
       threads.push(new DirectThread(id, '', title, isGroup ? '' : avatar, isGroup,
         JsonRead.strOf(th, 'read_state') === '0', JsonRead.boolOf(th, 'muted'),
-        JsonRead.boolOf(th, 'is_pin'), ts, text, kind, username));
+        JsonRead.boolOf(th, 'is_pin'), ts, text, kind, username,
+        DirectMapper.unreadCountOf(th, me, items)));
     }
     const next: string = JsonRead.strOf(box, 'next_max_id');
     const older: boolean = JsonRead.boolOf(box, 'has_older') || next.length > 0;
@@ -773,6 +783,42 @@ export class DirectMapper {
    *   2. `items` 是**新在前**的老序（和列表相反），这里翻正序给界面；
    *   3. 判断"是不是我发的"要用 `viewer_id`（响应里就有）；拿不到才退回本地存的自己 id。
    */
+  /**
+   * 这一条收件箱会话里"我还没看的、别人发来的"消息有几条（**封顶 4**）。
+   *
+   * 判据：`last_seen_at[我的 id].timestamp`（我上次读到哪儿，微秒）与 `items[]` 里每条消息的
+   * `timestamp`（也是微秒）比；只有**别人发的**才算未读。算不出来（没有 last_seen_at /
+   * 不知道我是谁）就给 0 —— 界面那时按 `unread` 那个布尔显示加粗就行。
+   */
+  private static unreadCountOf(th: Record<string, Object>, me: string,
+                               items: Array<Object>): number {
+    if (items.length === 0 || me.length === 0) {
+      return 0;
+    }
+    const lastSeen: Record<string, Object> | null = JsonRead.recordOf(th, 'last_seen_at');
+    if (lastSeen === null) {
+      return 0;
+    }
+    const mine: Record<string, Object> | null = JsonRead.recordOf(lastSeen, me);
+    const seenMicros: number = mine === null ? 0 : JsonRead.numOf(mine, 'timestamp');
+    let count: number = 0;
+    for (let index: number = 0; index < items.length && count < 4; index++) {
+      const item: Record<string, Object> | null = JsonRead.asRecord(items[index]);
+      if (item === null) {
+        continue;
+      }
+      const sender: string = JsonRead.strOf(item, 'user_id');
+      if (sender.length > 0 && sender === me) {
+        continue;
+      }
+      const at: number = JsonRead.numOf(item, 'timestamp');
+      if (at > seenMicros) {
+        count++;
+      }
+    }
+    return count;
+  }
+
   static threadFromJson(raw: string, ownId: string): DirectThreadView | null {
     // 同 inboxFromRestJson：`thread_id` / `pk` 是 19~20 位，必须走 parseWithBigIds 才不丢精度。
     const root: Record<string, Object> = JsonRead.parseWithBigIds(raw);

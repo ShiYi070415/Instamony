@@ -30,6 +30,8 @@ import { NativeProfile } from './NativeProfile';
 import { RestSession } from './RestSession';
 import { DirectInboxPage, DirectMapper, DirectThread, DirectThreadView } from '../model/Direct';
 import { MobileDirect } from './mobileapi/MobileDirect';
+// 写接口撞上 challenge_required 时记进全局台账（界面据此出「去验证」横幅）。
+import { MobileChallenge } from './mobileapi/MobileChallenge';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeDirect';
@@ -1131,6 +1133,22 @@ export class NativeDirect {
       return false;
     }
     /*
+     * **先走移动端私有 API**（`direct_v2/threads/broadcast/text/`，见
+     * core/mobileapi/MobileDirect.sendText）：读收件箱/会话走的就是这套签名请求，
+     * 而网页 REST 那条写接口在真机上被 `useragent mismatch` 卡过。
+     * 成功就直接返回；失败再落到下面那条网页老路（两条都试完才算失败）。
+     */
+    if (!ApiThrottle.blocked(ApiThrottle.DIRECT)) {
+      const viaMobile: boolean = await MobileDirect.sendText(id, body);
+      if (viaMobile) {
+        NativeDirect.detail = '-';
+        hilog.info(DOMAIN, TAG, 'send ok via mobile thread=%{public}s len=%{public}d',
+          id, body.length);
+        return true;
+      }
+      hilog.info(DOMAIN, TAG, 'send mobile miss thread=%{public}s → web rest', id);
+    }
+    /*
      * **优先用"刚抓到的那份会话模板"里的头**，而不是自己拼的那套。
      *
      * 写接口（broadcast）在真机上第一发就是被这套头卡住的：`useragent mismatch` / 404
@@ -1207,6 +1225,15 @@ export class NativeDirect {
     }
     const ok: boolean = sent.indexOf('"status":"ok"') >= 0 || sent.indexOf('"status": "ok"') >= 0;
     if (!ok) {
+      /*
+       * **写接口撞上安全验证**（真机实测：`{"message":"challenge_required", "lock":true}`）：
+       * 这不是"发送逻辑写错了"，而是账号被要求先过人机验证 —— 重试多少次都一样。
+       * 记进全局台账（见 core/mobileapi/MobileChallenge），首页那条「去验证」横幅就会出现，
+       * 用户去网页里验一次再回来发即可。
+       */
+      if (sent.indexOf('challenge_required') >= 0) {
+        MobileChallenge.note(sent);
+      }
       hilog.warn(DOMAIN, TAG, 'send failed body: %{public}s',
         sent.substring(0, 200).replace(/[\r\n]+/g, ' '));
       /*
@@ -1218,6 +1245,10 @@ export class NativeDirect {
         ? sent.substring(codeAt + '"error_code":"'.length, codeAt + 24).replace(/[^0-9].*$/, '')
         : '';
       NativeDirect.detail = `send-${errCode.length > 0 ? errCode : 'fail'}:${sent.substring(0, 60)}`;
+      if (sent.indexOf('challenge_required') >= 0) {
+        // 把原因写清楚：界面状态行据此提示"去验证"，而不是一句 send-fail。
+        NativeDirect.detail = 'challenge_required';
+      }
       return false;
     }
     // 成功：把回执里的 item_id 打出来（"发出去了"和"服务端真收下了"是两件事）

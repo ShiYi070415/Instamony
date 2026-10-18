@@ -13,6 +13,8 @@ import { directInboxScript } from '../bridge/WebScripts';
 import { AppConfig } from '../config/AppConfig';
 import { NativeDirect } from '../core/NativeDirect';
 import { DirectPrefetch } from '../core/DirectPrefetch';
+// 新私信的本地通知（见 core/PushCenter）。
+import { PushCenter } from '../core/PushCenter';
 import { DirectThreadViewModel } from './DirectThreadViewModel';
 import { DirectMapper } from '../model/Direct';
 import { DirectInboxPage, DirectMessage, DirectThread, DirectThreadView } from '../model/Direct';
@@ -119,6 +121,23 @@ export class DirectViewModel {
     return Date.now() - this.loadedAtMs <= maxAgeMs;
   }
   /** 拉一次（refresh=true 时丢掉游标从头拉）。 */
+  /**
+   * 这一页上未读的总条数（列表右侧那顆蓝点 / "n 条新消息"用的是同一条计数）。
+   *
+   * 没有 `unreadCount`（旧解析 / GraphQL 那条路）时按"未读 = 1 条"算，至少让通知有数。
+   */
+  static unreadTotal(threads: Array<DirectThread>): number {
+    let total: number = 0;
+    for (let index: number = 0; index < threads.length; index++) {
+      const one: DirectThread = threads[index];
+      if (!one.unread) {
+        continue;
+      }
+      total += one.unreadCount > 0 ? one.unreadCount : 1;
+    }
+    return total;
+  }
+
   async load(refresh: boolean): Promise<void> {
     if (this.busy) {
       return;
@@ -149,6 +168,14 @@ export class DirectViewModel {
        * "首次加载 / 下拉刷新 / 触底翻页"——三种情况都调它，真正发请求的只有缺快照的那几条。
        */
       DirectPrefetch.seed(this.threads);
+      /*
+       * **有新私信就弹一条系统通知**（需求："把消息通知接入 push kit，包括通知页和私信"）。
+       *
+       * 远端推送要 AGC 后台发，客户端这边能保证的是：自己拉到了新的未读 → 用
+       * NotificationKit 发一条本地通知（见 core/PushCenter）。只有未读数**变多**才弹，
+       * 每次刷新都弹会吵死人。
+       */
+      PushCenter.noteUnread('direct', DirectViewModel.unreadTotal(this.threads));
       this.onStatus(this.usedColdPath ? '已加载（首次走网页抓接口）' : '已加载');
     }
     catch (error) {

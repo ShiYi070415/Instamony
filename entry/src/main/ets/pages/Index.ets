@@ -78,6 +78,8 @@ import { WebTokens } from '../core/WebTokens';
 import { EngageSkeleton } from '../core/EngageSkeleton';
 import { NativeEngage, EngageResult, EngageState, LIKE_OP, UNLIKE_OP, REPOST_OP, UNREPOST_OP } from '../core/NativeEngage';
 import { NativeNotifications } from '../core/NativeNotifications';
+// 通知：Push Kit 注册 + 本地通知（见 core/PushCenter）。
+import { PushCenter } from '../core/PushCenter';
 import { NativeComments } from '../core/NativeComments';
 import { ReelsAction, REELS_ACTION_VERSION } from '../core/ReelsAction';
 import {
@@ -2032,6 +2034,16 @@ struct Index {
     if (host !== undefined) {
       AppSettings.init(host);
       /*
+       * 通知权限**等首帧之后再要**（在 EntryAbility.onCreate 里要会回
+       * "IPC communication failed"，见 core/PushCenter.requestPermissionNow）。
+       * 顺带延迟几秒：启动瞬间要权限弹窗会打断首屏。
+       */
+      const abilityContext: common.UIAbilityContext = this.getUIContext()
+        .getHostContext() as common.UIAbilityContext;
+      setTimeout((): void => {
+        PushCenter.requestPermissionNow(abilityContext);
+      }, 4000);
+      /*
        * **「你的快拍」头像先用落盘快照画出来**（用户报的"你的快拍头像加载很慢"）。
        *
        * 那条头像以前只等「我的」头部那一发（真机上闸门排队后要 2~4 秒），托盘上于是
@@ -3730,6 +3742,11 @@ struct Index {
         // 整份替换：fresh 已经是"通知 + 关注状态 + 为你推荐"的完整集合。
         this.notifications = fresh;
         this.notificationsLoading = false;
+        /*
+         * **通知页也接上本地通知**（需求："把消息通知接入 push kit，包括通知页和私信"）：
+         * 条数比上次多就弹一条系统通知（见 core/PushCenter；远端推送要 AGC 后台发）。
+         */
+        PushCenter.noteUnread('feed', fresh.length);
       } else if (this.notifications.length === 0) {
         this.notificationsState = 'failed';
       }

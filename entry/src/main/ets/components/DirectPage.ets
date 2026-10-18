@@ -39,6 +39,10 @@ const PREFETCH_FRESH_MS: number = 2 * MINUTE_MS;
 const HOUR_MS: number = 60 * MINUTE_MS;
 const DAY_MS: number = 24 * HOUR_MS;
 const WEEK_MS: number = 7 * DAY_MS;
+/** 未读条目在列表右侧那顆**深蓝色**圆点的颜色。 */
+const UNREAD_DOT_COLOR: string = '#1D4ED8';
+/** "n 条新消息"里 n 的上限（需求：n 最大等于 4）。 */
+const UNREAD_MAX: number = 4;
 
 @Component
 export struct DirectPage {
@@ -142,33 +146,49 @@ export struct DirectPage {
   }
 
   /**
-   * 消息预览文案。
+   * 消息预览文字（**纯字符串**：这一行要和相对时间拼在一起，`ResourceStr` 拼不了）。
    *
-   * 网页版私信列表里带媒体的消息只有图标没有文字，所以文字为空时按 item_type 给一个方括号占位，
-   * 免得那一行看起来像空的。
+   * 占位文本和资源里那三句保持一致（direct_kind_voice / media / other）。
    */
-  private preview(thread: DirectThread): ResourceStr {
+  private previewText(thread: DirectThread): string {
     if (thread.text.length > 0) {
       return thread.text;
     }
     const kind: string = thread.kind.toLowerCase();
     if (kind.indexOf('voice') >= 0 || kind.indexOf('audio') >= 0) {
-      return $r('app.string.direct_kind_voice');
+      return '[语音]';
     }
     if (kind.indexOf('media') >= 0 || kind.indexOf('raven') >= 0 || kind.indexOf('clip') >= 0) {
-      return $r('app.string.direct_kind_media');
+      return '[照片/视频]';
     }
-    return $r('app.string.direct_kind_other');
+    return '[消息]';
   }
 
-  /** 相对时间（和 IG 的私信列表一致：刚刚 / N分钟 / N小时 / N天 / 具体日期）。 */
+  /**
+   * 列表第二行：**"内容 · 相对时间"**（需求："消息内容展示为『消息内容 · 现在/n分钟/n小时/n天/n周』"）。
+   *
+   * 未读超过一条时，内容位换成 **"n 条新消息"**（n 封顶 4，见 DirectThread.unreadCount）。
+   */
+  private previewLine(thread: DirectThread): string {
+    const when: string = this.agoText(thread.tsMs);
+    let head: string = '';
+    if (thread.unreadCount > 1) {
+      const n: number = thread.unreadCount > UNREAD_MAX ? UNREAD_MAX : thread.unreadCount;
+      head = `${n}条新消息`;
+    } else {
+      head = this.previewText(thread);
+    }
+    return when.length > 0 ? `${head} · ${when}` : head;
+  }
+
+  /** 相对时间（现在 / N分钟 / N小时 / N天 / N周）。 */
   private agoText(tsMs: number): string {
     if (tsMs <= 0) {
       return '';
     }
     const diff: number = Date.now() - tsMs;
     if (diff < MINUTE_MS) {
-      return '刚刚';
+      return '现在';
     }
     if (diff < HOUR_MS) {
       return `${Math.floor(diff / MINUTE_MS)}分钟`;
@@ -178,6 +198,10 @@ export struct DirectPage {
     }
     if (diff < WEEK_MS) {
       return `${Math.floor(diff / DAY_MS)}天`;
+    }
+    // 超过一周按周记（需求列到"周"为止；再久给具体日期更直观）。
+    if (diff < WEEK_MS * 5) {
+      return `${Math.floor(diff / WEEK_MS)}周`;
     }
     const date: Date = new Date(tsMs);
     return `${date.getMonth() + 1}月${date.getDate()}日`;
@@ -220,20 +244,10 @@ export struct DirectPage {
             .objectFit(ImageFit.Cover)
             .backgroundColor($r('app.color.field_background'))
         }
-        if (thread.unread) {
-          // 未读：一个小圆点（用页面底色描一圈，压在头像上才看得清）。
-          //
-          // **不用 Circle().fill()/stroke()**：这两个属性在 SDK 声明里标的是 26.0.0 起，
-          // 而本包 compatibleSdk 是 20 —— 低版本设备上等于调用了不存在的接口。
-          // 用容器画（圆角 + 底色 + 描边），API 20 起都能用，观感一模一样。
-          Column()
-            .width(12)
-            .height(12)
-            .borderRadius(6)
-            .backgroundColor($r('app.color.accent'))
-            .border({ width: 2, color: $r('app.color.page_background') })
-            .margin({ right: 2, bottom: 2 })
-        }
+        /*
+         * 未读不再在头像上点小圆点：需求要的是"在私信 item **右侧**显示深蓝色圆点"，
+         * 见下面那一行最后那颗点。
+         */
       }
       Column({ space: 3 }) {
         Row({ space: 6 }) {
@@ -244,23 +258,36 @@ export struct DirectPage {
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .layoutWeight(1)
-          Text(this.agoText(thread.tsMs))
-            .fontSize(11)
-            .fontColor($r('app.color.secondary_text'))
         }
         .width('100%')
 
-        Text(this.preview(thread))
+        /*
+         * 第二行 = "内容 · 相对时间"；未读多条的显示"n 条新消息"（见 previewLine）。
+         * 未读整行加粗（需求："如果是未读消息则粗体显示"）。
+         */
+        Text(this.previewLine(thread))
           .fontSize(13)
+          .fontWeight(thread.unread ? FontWeight.Bold : FontWeight.Normal)
           .fontColor(thread.unread ? $r('app.color.primary_text') : $r('app.color.secondary_text'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
       }
       .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
+      /*
+       * 未读：**右侧一颗深蓝色圆点**（需求）。用容器画（圆角 + 底色），API 20 起可用；
+       * 不用 Circle().fill()/stroke()（26 起，本包 compatibleSdk 是 20）。
+       */
+      if (thread.unread) {
+        Column()
+          .width(10)
+          .height(10)
+          .borderRadius(5)
+          .backgroundColor(UNREAD_DOT_COLOR)
+      }
     }
     .width('100%')
+    .alignItems(VerticalAlign.Center)
     .padding({ left: SIDE_PADDING, right: SIDE_PADDING, top: 10, bottom: 10 })
     .onClick((): void => {
       this.onOpen(thread);

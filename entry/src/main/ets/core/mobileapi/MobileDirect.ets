@@ -24,6 +24,8 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ApiThrottle } from '../ApiThrottle';
 import { MobileRequest, MobileResult, MobileOptions } from './MobileRequest';
 import { MobileSession, MobileIdentity } from './MobileSession';
+// 发消息要现生成两个 uuid（`client_context` / `mutation_token`）。
+import { uuid4 } from './MobileSign';
 import { DirectInboxPage, DirectMapper, DirectThread, DirectThreadView } from '../../model/Direct';
 
 const DOMAIN: number = 0xFF00;
@@ -104,6 +106,59 @@ export class MobileDirect {
         fixed.threads[0].title, fixed.threads[0].avatarUrl.substring(0, 90));
     }
     return fixed;
+  }
+
+  /**
+   * **发一条文字私信**（移动端私有 API：`direct_v2/threads/broadcast/text/`）。
+   *
+   * 对应 instagrapi 的 `direct_send`：字段表照抄（`action=send_item` / `text` / `thread_ids`
+   * / `client_context` / `mutation_token` / `_csrftoken` / `_uid` / `_uuid` / `device_id`，
+   * 外加 `send_attribution=direct_thread`、`entry=text`、`is_shh_mode=0`）。
+   *
+   * 为什么优先走这一条（而不是网页那条 REST）：写接口在真机上被网页 UA 判过
+   * `useragent mismatch`，而移动端这套**签名请求 + 安卓身份**正是我们自己能稳定复现的路
+   * （读收件箱/会话就是走它）。失败了再由调用方退回网页 REST 那条老路。
+   *
+   * @returns 服务端回 `{"status":"ok"}` 才算成功。
+   */
+  static async sendText(threadId: string, text: string): Promise<boolean> {
+    const id: string = threadId.trim();
+    const body: string = text;
+    if (id.length === 0 || body.length === 0) {
+      return false;
+    }
+    const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
+    if (identity === null) {
+      hilog.info(DOMAIN, TAG, 'send skipped: no session');
+      return false;
+    }
+    const data: Record<string, Object> = MobileRequest.withExtraData(identity);
+    data['action'] = 'send_item';
+    data['is_shh_mode'] = '0';
+    data['send_attribution'] = 'direct_thread';
+    data['client_context'] = uuid4();
+    data['mutation_token'] = uuid4();
+    data['entry'] = 'text';
+    data['text'] = body;
+    data['device_id'] = identity.androidDeviceId;
+    /*
+     * `thread_ids` 照 instagrapi 的写法是**不带引号的数字数组**：`json.dumps([int(id)])` → `[123]`。
+     * 之前写成 `["123"]` 被 IG 回 400（"很抱歉，出错了，请重试。"，62 字节）—— 就是这一处。
+     */
+    data['thread_ids'] = `[${id}]`;
+    const result: MobileResult = await MobileRequest.send(
+      'direct_v2/threads/broadcast/text/', MobileRequest.formOf(data), '', true, null,
+      new MobileOptions(ApiThrottle.DIRECT, ApiThrottle.interactive()));
+    if (!result.ok) {
+      hilog.warn(DOMAIN, TAG, 'send miss thread=%{public}s %{public}s',
+        id, result.summary());
+      return false;
+    }
+    const ok: boolean = result.body.indexOf('"status":"ok"') >= 0
+      || result.body.indexOf('"status": "ok"') >= 0;
+    hilog.info(DOMAIN, TAG, 'send %{public}s thread=%{public}s len=%{public}d ack=%{public}s',
+      ok ? 'ok' : 'rejected', id, body.length, result.body.substring(0, 120));
+    return ok;
   }
 
   /**

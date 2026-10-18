@@ -430,7 +430,17 @@ export class DirectThreadViewModel {
     try {
       const ok: boolean = await NativeDirect.sendText(this.threadId, body);
       if (!ok) {
-        this.onStatus('发送失败：' + NativeDirect.lastDetail());
+        /*
+         * 失败原因分两类说清楚：
+         *   · `challenge_required`：账号被要求**安全验证**（写接口全被拒，重试无用）——
+         *     让用户去首页横幅点「去验证」；真机实测发消息失败正是这个
+         *     （响应体 `{"message":"challenge_required", … "lock":true}`）。
+         *   · 其它：原样带上 detail（如 `send-1545023:…`），便于定位。
+         */
+        const why: string = NativeDirect.lastDetail();
+        this.onStatus(why === 'challenge_required'
+          ? '账号被要求安全验证：去首页点「去验证」之后再试'
+          : '发送失败：' + why);
         return false;
       }
       // 成功：把这条乐观气泡去掉，再拉一次（服务端那条就有真 id 与时间了）。
