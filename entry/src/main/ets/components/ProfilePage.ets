@@ -355,10 +355,15 @@ export struct ProfilePage {
    * 点「精选快拍」里的一颗：请宿主用**快拍播放页**把它放出来
    * （需求："highlight 要能打开，按照快拍的动画逻辑和卡片样式"）。
    *
-   * 第二个参数是这颗圆在**屏幕上的矩形**（转场要用：卡片从它放大，收起再缩回它）。
+   * @param items 这一排的全部高光（宿主据此做"上一/下一条高光"的连续播放）
+   * @param index 点的是第几条
+   * @param rect  被点那颗圆在**屏幕上的矩形**（转场要用：卡片从它放大，收起再缩回它）
+   * @param rects 每颗圆的矩形（id → 矩形），换下一条高光时转场也用它
    */
-  onOpenHighlight: (item: ProfileHighlight, rect: StoryHeroRect) => void =
-    (item: ProfileHighlight, rect: StoryHeroRect): void => {
+  onOpenHighlight: (items: Array<ProfileHighlight>, index: number, rect: StoryHeroRect,
+                    rects: Map<string, StoryHeroRect>) => void =
+    (items: Array<ProfileHighlight>, index: number, rect: StoryHeroRect,
+     rects: Map<string, StoryHeroRect>): void => {
     };
   /** 个人信息那一块的高度（vp，量出来的）：钉住的判据就是它。 */
   private headerBlockVp: number = 0;
@@ -553,7 +558,7 @@ export struct ProfilePage {
           hilog.info(DOMAIN, TAG, 'PF highlight new tap (not wired)');
         })
 
-        ForEach(this.highlights, (one: ProfileHighlight): void => {
+        ForEach(this.highlights, (one: ProfileHighlight, index: number): void => {
           Column({ space: 6 }) {
             Stack({ alignContent: Alignment.Center }) {
               Column()
@@ -589,8 +594,8 @@ export struct ProfilePage {
             const rect: StoryHeroRect | undefined = this.highlightRects.get(one.id);
             hilog.info(DOMAIN, TAG, 'PF highlight open id=%{public}s title=%{public}s',
               one.id, one.title);
-            this.onOpenHighlight(one,
-              rect === undefined ? new StoryHeroRect(0, 0, 0, 0) : rect);
+            this.onOpenHighlight(this.highlights, index,
+              rect === undefined ? new StoryHeroRect(0, 0, 0, 0) : rect, this.highlightRects);
           })
         }, (one: ProfileHighlight): string => one.id)
       }

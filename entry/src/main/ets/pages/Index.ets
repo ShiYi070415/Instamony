@@ -6878,9 +6878,10 @@ struct Index {
       onOpenUser: (username: string): void => {
         this.openUserProfile(username, '');
       },
-      // 精选快拍 → 用快拍播放页打开（同一套转场/卡片，只是没有动作区，见 openProfileHighlight）。
-      onOpenHighlight: (item: ProfileHighlight, rect: StoryHeroRect): void => {
-        this.openProfileHighlight(item, rect);
+      // 精选快拍 → 用快拍播放页打开（同一套转场/卡片，无动作区；高光之间可连续，见 openHighlightAt）。
+      onOpenHighlight: (items: Array<ProfileHighlight>, index: number, rect: StoryHeroRect,
+                        rects: Map<string, StoryHeroRect>): void => {
+        this.openProfileHighlight(items, index, rect, rects);
       }
     })
   }
@@ -7065,6 +7066,15 @@ struct Index {
   /** 高光的发布日期（显示在资讯栏标题后面；普通快拍为空）。 */
   @State private storyDateText: string = '';
   /**
+   * 这一排高光 + 现在放的是第几条（需求："highlight 之间需要连续"）。
+   *
+   * `highlightIndex` 是 @State：换高光时播放页要重绘（"上/下一条"的可用状态跟着变）。
+   */
+  private highlightQueue: Array<ProfileHighlight> = [];
+  @State private highlightIndex: number = 0;
+  /** 每颗高光圆的屏幕矩形（换高光时转场/收起都朝它，见 ProfilePage.highlightRects）。 */
+  private highlightRects: Map<string, StoryHeroRect> = new Map<string, StoryHeroRect>();
+  /**
    * 自己的头像（「你的快拍」那一项用）。
    *
    * 来源是「我的」头部那份资料（`profileVm.onHeader`）—— 不为托盘这一项单独打一发接口。
@@ -7184,32 +7194,72 @@ struct Index {
    *   · `hideActions` = true：不画底部输入框与点赞/评论/转发；
    *   · 没有"下一位/上一位"（高光是独立的一组）。
    */
-  private openProfileHighlight(item: ProfileHighlight, rect: StoryHeroRect): void {
-    hilog.info(DOMAIN, TAG, 'highlight open id=%{public}s hero=%{public}s',
-      item.id, rect.dump());
+  private openProfileHighlight(items: Array<ProfileHighlight>, index: number,
+                               rect: StoryHeroRect,
+                               rects: Map<string, StoryHeroRect>): void {
+    hilog.info(DOMAIN, TAG, 'highlight open index=%{public}d of %{public}d hero=%{public}s',
+      index, items.length, rect.dump());
+    this.highlightQueue = items;
+    this.highlightRects = rects;
     this.storyIsHighlight = true;
-    this.storyDateText = Index.dateTextOf(item.createdAtMs);
+    // 先弹卡片（用被点那颗的矩形），数据到了再播 —— 和普通快拍同一个节奏。
     this.storyHero = rect;
     this.storyHeroValid = rect.valid();
+    this.storyPendingOpen = true;
+    this.storyOpen = true;
+    this.openHighlightAt(index, rect);
+  }
+
+  /**
+   * 播这一排里的第 `index` 条高光（首条 / 上一条 / 下一条都走它）。
+   *
+   * 换高光时卡片**不重开**：只换 reel / 标题 / 封面 / 日期（播放页的 @Watch 会回到第一条），
+   * 所以观感是"同一个播放页里换了一组"，和快拍里"接续下一位用户"一致。
+   */
+  private openHighlightAt(index: number, fallbackHero: StoryHeroRect): void {
+    if (this.highlightQueue.length === 0) {
+      return;
+    }
+    if (index < 0 || index >= this.highlightQueue.length) {
+      // 这个方向没有了：收页（和快拍队列走到底一样）。
+      this.requestStoryClose();
+      return;
+    }
+    const item: ProfileHighlight = this.highlightQueue[index];
+    this.highlightIndex = index;
+    this.storyDateText = Index.dateTextOf(item.createdAtMs);
     this.storyAvatar = item.coverUrl;
     this.storyName = item.title;
     this.storyUserId = item.id;
     // 高光不显示"关注"（这不是某个作者的时间线）。
     this.storyFollowing = true;
+    const known: StoryHeroRect | undefined = this.highlightRects.get(item.id);
+    const hero: StoryHeroRect = known !== undefined && known.valid() ? known : fallbackHero;
+    this.storyHero = hero;
+    this.storyHeroValid = hero.valid();
+    // 换组：播放页 @Watch 到新 reel 就从第一条播。
     this.storyReel = EMPTY_REEL;
-    this.storyPendingOpen = true;
-    this.storyOpen = true;
+    hilog.info(DOMAIN, TAG, 'highlight play index=%{public}d id=%{public}s title=%{public}s',
+      index, item.id, item.title);
     NativeStories.highlightReel(item.id, item.title).then((reel: StoryReel | null): void => {
+      if (!this.storyIsHighlight || this.highlightIndex !== index) {
+        // 这一发回来时已经换组 / 收页了：丢掉。
+        return;
+      }
       if (reel === null) {
-        hilog.warn(DOMAIN, TAG, 'highlight reel failed id=%{public}s', item.id);
-        this.storyPendingOpen = false;
-        this.toast($r('app.string.story_load_failed', 'highlight'));
-        this.requestStoryClose();
+        hilog.warn(DOMAIN, TAG, 'highlight reel failed id=%{public}s → 下一条', item.id);
+        // 这一条取不到就顺着往下试（和快拍"取不到就接续下一位"同一套）。
+        const next: number = index + 1;
+        if (next < this.highlightQueue.length) {
+          this.openHighlightAt(next, hero);
+        } else {
+          this.storyPendingOpen = false;
+          this.requestStoryClose();
+        }
         return;
       }
       this.storyReel = reel;
       this.storyPendingOpen = false;
-      this.storyHeroValid = rect.valid();
     }).catch((error: Error): void => {
       hilog.warn(DOMAIN, TAG, 'highlight reel threw: %{public}s', error.message ?? '-');
       this.storyPendingOpen = false;
@@ -7681,7 +7731,8 @@ struct Index {
    */
   private advanceStory(): void {
     if (this.storyIsHighlight) {
-      // 高光是独立的一组，没有"下一位用户"；走到最后一条就正常收起。
+      // 高光之间连续：走到这一组最后一条就接下一条高光（见 openHighlightAt）。
+      this.openHighlightAt(this.highlightIndex + 1, this.storyHero);
       return;
     }
     const next: number = this.storyQueueIndex + 1;
@@ -7698,6 +7749,9 @@ struct Index {
    */
   private backStory(): void {
     if (this.storyIsHighlight) {
+      // 高光之间连续：放到第一条再往左 = 上一组高光的最后一条由播放页自己处理，
+      // 这里只负责"上一组"（没有就收页，见 openHighlightAt）。
+      this.openHighlightAt(this.highlightIndex - 1, this.storyHero);
       return;
     }
     const prev: number = this.storyQueueIndex - 1;
@@ -9624,10 +9678,14 @@ struct Index {
           onFollowAuthor: (): Promise<boolean> => {
             return this.onFollowStoryAuthor();
           },
-          // 后面还有人 → 最后一条点右半屏接他（见 Index.advanceStory）。高光没有"下一位"。
-          hasNextUser: !this.storyIsHighlight && this.storyQueueIndex + 1 < this.storyQueue.length,
-          // 前面还有人 → 第一条点左半屏回他（见 Index.backStory）。高光同上。
-          hasPrevUser: !this.storyIsHighlight && this.storyQueueIndex > 0,
+          // 后面还有人 → 最后一条点右半屏接他（见 Index.advanceStory）。高光同理接下一组。
+          hasNextUser: this.storyIsHighlight
+            ? this.highlightIndex + 1 < this.highlightQueue.length
+            : this.storyQueueIndex + 1 < this.storyQueue.length,
+          // 前面还有人 → 第一条点左半屏回他（见 Index.backStory）。
+          hasPrevUser: this.storyIsHighlight
+            ? this.highlightIndex > 0
+            : this.storyQueueIndex > 0,
           // 精选快拍：不画底部动作区（输入框 + 点赞/评论/转发），资讯栏后面跟发布日期。
           hideActions: this.storyIsHighlight,
           dateText: this.storyDateText,
