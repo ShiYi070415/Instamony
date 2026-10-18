@@ -34,6 +34,9 @@ import { MediaDetail, NativeMediaInfo } from '../core/NativeMediaInfo';
 import { ApiThrottle } from '../core/ApiThrottle';
 // 头部落盘快照（见 AppSettings.saveProfileHeader 与 load 里的 paintHeaderSnapshot）。
 import { AppSettings } from '../core/AppSettings';
+// 关注状态校正：`friendships/show_many` 比头部那个字段更权威（见 verifyOtherFollow）。
+import { NativeFollow } from '../core/NativeFollow';
+import { FollowState } from '../core/FollowState';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'ProfileViewModel';
@@ -1823,6 +1826,40 @@ export class ProfileViewModel {
     });
   }
 
+  /**
+   * 校正「我有没有关注这个人」（只在别人主页用）。
+   *
+   * 判据用 `friendships/show_many`（一次能问一批、GET 就通，见 core/NativeFollow）：
+   * 头部里那个 `friendship_status.following` 在某些载荷里缺失或是旧值，界面就会
+   * "明明已关注却显示关注"。这里拿到权威值后写进本地覆盖表 `FollowState`（其它页面
+   * 那颗按钮也跟着对）并把头部换成校正后的副本，再通知页面重绘。
+   */
+  private verifyOtherFollow(header: ProfileHeader): void {
+    const id: string = this.target.id;
+    if (id.length === 0) {
+      return;
+    }
+    NativeFollow.statesFor([id]).then((states: Map<string, boolean>): void => {
+      const known: boolean | undefined = states.get(id);
+      if (known === undefined) {
+        return;
+      }
+      FollowState.remember(id, header.username, known);
+      if (header.followedByViewer === known) {
+        return;
+      }
+      const now: ProfileHeader | null = this.header;
+      if (now === null || now.username !== header.username) {
+        return;
+      }
+      hilog.info(DOMAIN, TAG, 'follow state corrected @%{public}s → %{public}s',
+        header.username, `${known}`);
+      this.header = now.withFollowedByViewer(known);
+      this.onHeader(this.header);
+    }).catch((): void => {
+    });
+  }
+
   /** 拉一次头部（本人的话顺带把快照落盘，见 AppSettings.saveProfileHeader）。 */
   private async loadHeader(): Promise<void> {    // 目标用户是"别人"、但我们只有用户名（没有数字 id）时**不发头部这条**：它的请求体里
     // 目标是用 `id` 表示的，没有 id 就只能原样重发 —— 那会把我自己的资料显示成他的
@@ -1910,6 +1947,14 @@ export class ProfileViewModel {
       hilog.info(DOMAIN, TAG, 'header ok @%{public}s posts=%{public}d',
         native.username, native.posts);
       this.onHeader(native);
+      /*
+       * **别人主页的关注状态要以 `show_many` 为准**（用户报的"用户主页的关注状态没有正确显示"）：
+       * 头部那个 `friendship_status` 有时缺、有时是旧值，于是界面上"明明关注了却显示关注"。
+       * 这里先按头部画出来（不等），再在后台问一次、不一致就静默改过来。
+       */
+      if (!this.target.isSelf()) {
+        this.verifyOtherFollow(native);
+      }
       return;
     }
     hilog.info(DOMAIN, TAG, 'header failed (%{public}s) → replay', NativeProfile.lastDetail());

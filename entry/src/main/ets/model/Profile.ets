@@ -203,6 +203,18 @@ export class ProfileHeader {  readonly username: string;
   }
 
   /**
+   * 校正「我有没有关注这个人」之后的副本。
+   *
+   * 为什么需要：移动端 `users/{pk}/info/` 里这个字段有时缺 / 有时旧，而
+   * `friendships/show_many` 是权威值（见 ProfileViewModel.verifyOtherFollow）。
+   */
+  withFollowedByViewer(following: boolean): ProfileHeader {
+    return new ProfileHeader(this.username, this.fullName, this.bio, this.link, this.avatarUrl,
+      this.isVerified, this.isPrivate, this.followers, this.following, this.posts,
+      following, this.music, this.hasMusicProfile);
+  }
+
+  /**
    * 序列化成一行 JSON（只用于**落盘快照**，见 core/AppSettings.saveProfileHeader）。
    *
    * 为什么需要：头部那一发在真机上常被限速闸门排在别的请求后面（2~4 秒），

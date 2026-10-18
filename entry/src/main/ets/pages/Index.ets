@@ -2031,6 +2031,23 @@ struct Index {
     const host: common.Context | undefined = this.getUIContext().getHostContext();
     if (host !== undefined) {
       AppSettings.init(host);
+      /*
+       * **「你的快拍」头像先用落盘快照画出来**（用户报的"你的快拍头像加载很慢"）。
+       *
+       * 那条头像以前只等「我的」头部那一发（真机上闸门排队后要 2~4 秒），托盘上于是
+       * 先是一个应用图标占位。快照里本来就存着头像地址（见 AppSettings.saveProfileHeader），
+       * 这里在启动时就把它填上 —— 托盘第一次构建就有图，网络回来再被真值覆盖。
+       */
+      NativeProfile.ownId().then((uid: string): void => {
+        const snap: ProfileHeader | null =
+          ProfileHeader.fromJson(AppSettings.loadProfileHeader(uid));
+        if (snap !== null && snap.avatarUrl.length > 0 && this.selfAvatarUrl.length === 0) {
+          this.selfAvatarUrl = snap.avatarUrl;
+          hilog.info(DOMAIN, TAG, 'self avatar from snapshot len=%{public}d',
+            snap.avatarUrl.length);
+        }
+      }).catch((): void => {
+      });
       // 接口模板落盘（幂等）：读回上次抓到的请求模板，"不走网页"的第一发要用它
       // （见 bridge/ApiRegistry.persistTemplates 与 core/NativeFeed）。
       ApiRegistry.init(host);
