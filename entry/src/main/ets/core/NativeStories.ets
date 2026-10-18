@@ -20,6 +20,8 @@ import { JsonRead } from './JsonRead';
 import { StoryItem, StoryReel, StoryTray, StoryTrayItem } from '../model/Story';
 import { MobileStories } from './mobileapi/MobileStories';
 import { MobileChallenge } from './mobileapi/MobileChallenge';
+// 「是不是我自己的快拍」要读当前会话的 `ds_user_id`（见 parse 里 selfReel 那一段）。
+import { NativeProfile } from './NativeProfile';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeStories';
@@ -78,6 +80,15 @@ const ID_KEYS: Array<string> = ['pk', 'id', 'user_id', 'strong_id__'];
 
 export class NativeStories {
   private static detail: string = '-';
+  /**
+   * **已经关注过的"推荐快拍"**（userId 集合）。
+   *
+   * 需求："头像底部…点击后关注并消失"。光把它从界面数组里删掉不够：托盘缓存只有 3 分钟
+   * （见 StoriesTray.TRAY_FRESH_MS），过期后我们会重新拉一次 `feed/reels_tray/`，
+   * 而 IG 那边**这次**的推荐位多半还带着他（关注关系刚落库）—— 于是刚点过关注的那一项
+   * 又冒出来了。所以在取数这一层就把它们滤掉：这一轮会话里不再出现，换账号时清空。
+   */
+  private static followedSuggested: Set<string> = new Set<string>();
   /**
    * 每个用户各自的**逐候选轨迹**（uid → 行数组，最多留 TRACE_MAX 行）。
    *
@@ -511,6 +522,43 @@ export class NativeStories {
     return NativeStories.detail;
   }
 
+  /**
+   * 把一位"推荐快拍"从后续托盘里永久滤掉（用户点了关注，见 followedSuggested 的说明）。
+   *
+   * 只影响这一轮会话：换账号时 `clearHidden()`。
+   */
+  static hideSuggested(userId: string): void {
+    if (userId.length > 0) {
+      NativeStories.followedSuggested.add(userId);
+    }
+  }
+
+  /** 换账号 / 退出登录：把"已关注过的推荐"那张表清掉（那是上一个人的关注关系）。 */
+  static clearHidden(): void {
+    NativeStories.followedSuggested.clear();
+  }
+
+  /** 取数之后统一过一遍：已关注过的推荐不再出现（托盘条目、顺序、预取都跟着少一位）。 */
+  private static pruneHidden(tray: StoryTray): StoryTray {
+    if (NativeStories.followedSuggested.size === 0) {
+      return tray;
+    }
+    const kept: Array<StoryTrayItem> = [];
+    for (let index: number = 0; index < tray.items.length; index++) {
+      const one: StoryTrayItem = tray.items[index];
+      if (one.suggested && NativeStories.followedSuggested.has(one.userId)) {
+        continue;
+      }
+      kept.push(one);
+    }
+    if (kept.length === tray.items.length) {
+      return tray;
+    }
+    hilog.info(DOMAIN, TAG, 'tray pruned followed-suggested %{public}d → %{public}d',
+      tray.items.length, kept.length);
+    return new StoryTray(kept, tray.selfAvatar);
+  }
+
   /** 记一行轨迹（按 uid 分开存，见 traces 的说明）。 */
   private static note(userId: string, line: string): void {
     let list: Array<string> | undefined = NativeStories.traces.get(userId);
@@ -650,9 +698,12 @@ export class NativeStories {
       const mobile: StoryTray | null = await MobileStories.tray();
       if (mobile !== null && mobile.items.length > 0) {
         NativeStories.detail = '-';
+        const tray: StoryTray = NativeStories.pruneHidden(mobile);
         hilog.info(DOMAIN, TAG, 'tray via mobile n=%{public}d first=%{public}s',
-          mobile.items.length, mobile.items[0].username);
-        return mobile;
+          tray.items.length, tray.items.length > 0 ? tray.items[0].username : '-');
+        if (tray.items.length > 0) {
+          return tray;
+        }
       }
     }
     const tpl: ApiTemplate | null = ApiRegistry.getInstance().storedForNative(OP_TRAY);
@@ -692,11 +743,12 @@ export class NativeStories {
           text.substring(0, 160).replace(/[\r\n]+/g, ' '));
         return null;
       }
-      const tray: StoryTray | null = NativeStories.parse(text);
-      if (tray === null) {
+      const parsedTray: StoryTray | null = NativeStories.parse(text);
+      if (parsedTray === null) {
         NativeStories.detail = 'parse';
         return null;
       }
+      const tray: StoryTray = NativeStories.pruneHidden(parsedTray);
       if (tray.items.length === 0) {
         NativeStories.detail = 'empty';
         return null;
@@ -779,11 +831,39 @@ export class NativeStories {
         }
       }
       const count: number = JsonRead.arrayOf(node, 'items').length;
+      /*
+       * 新增的三个判据（和移动端那条对齐，见 core/mobileapi/MobileStories.trayItems）：
+       *   · `reel_type` 含 `suggested`（或 `is_suggested`）→ 推荐快拍（头像底部挂「+关注」）；
+       *   · `user.friendship_status.following` → 播放页那颗关注按钮要不要出现；
+       *   · `user.pk` 等于自己的 `ds_user_id` → 这是"我的快拍"（固定排第一位）。
+       * 网页模板这条路上这些字段不一定齐，所以"没给"一律按未知处理（followKnown）。
+       */
+      const reelType: string = NativeStories.pickStr(node, ['reel_type', 'reelType'], '');
+      const suggested: boolean = reelType.indexOf('suggested') >= 0
+        || JsonRead.boolOf(node, 'is_suggested');
+      const friendship: Record<string, Object> | null = JsonRead.recordOf(host, 'friendship_status');
+      let followKnown: boolean = false;
+      let following: boolean = false;
+      if (friendship !== null) {
+        followKnown = true;
+        following = JsonRead.boolOf(friendship, 'following');
+      }
+      const ownId: string = NativeProfile.ownIdCached();
+      const selfReel: boolean = ownId.length > 0 && id === ownId;
       NativeStories.rememberNode(id, node);
       NativeStories.rememberShape(id, node, user);
-      items.push(new StoryTrayItem(id, username, avatar, seen, count, altIds));
+      items.push(new StoryTrayItem(id, username, avatar, seen, count, altIds,
+        following, followKnown, suggested, selfReel));
     }
-    return new StoryTray(items);
+    // 自己的头像：托盘里正好有自己那一项就用它（没有时由宿主补，见 StoryTray.selfAvatar）。
+    let selfAvatar: string = '';
+    for (let index: number = 0; index < items.length; index++) {
+      if (items[index].selfReel) {
+        selfAvatar = items[index].avatarUrl;
+        break;
+      }
+    }
+    return new StoryTray(items, selfAvatar);
   }
 
   /**

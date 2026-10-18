@@ -309,6 +309,14 @@
       "value": "发消息"
     },
     {
+      "name": "story_your_story",
+      "value": "你的快拍"
+    },
+    {
+      "name": "story_create_pending",
+      "value": "发布快拍还没接上 —— 这是入口"
+    },
+    {
       "name": "translate_action",
       "value": "翻译"
     },

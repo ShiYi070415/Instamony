@@ -33,24 +33,59 @@ export class StoryTrayItem {
    * 有了它：主 id 问不出内容时**换备选 id 再问一发**，把这一整类问题就地消化掉。
    */
   readonly altIds: Array<string>;
+  /**
+   * 本机关注这位作者了没有（`user.friendship_status.following`）。
+   *
+   * 用途：快拍播放页那一行「用户资讯」旁边要不要挂关注按钮（需求："查阅快拍内容但未关注
+   * 该用户就在用户资讯旁显示一个关注按钮"）。拿不到时是 false，同时 `followKnown` 也是 false。
+   */
+  readonly following: boolean;
+  /** `following` 是**数据源真的说了**，还是只是默认的 false（判据同 model/Reel 的 followKnown）。 */
+  readonly followKnown: boolean;
+  /**
+   * 这条是 IG **推荐**给我们的快拍（新号没有关注任何人时最常见）。
+   *
+   * 真机实测（`Instarmony_mobile.txt`）：托盘条目里 `reel_type=suggested_user_reel` 就是它。
+   * 界面据此在头像底部挂一颗椭圆「+关注」按钮（需求），关注成功后整条消失。
+   */
+  readonly suggested: boolean;
+  /**
+   * 这是**我自己**的快拍（`user.pk` 等于当前会话的 `ds_user_id`）。
+   *
+   * 托盘里出现它时，界面把它固定在第一项（「你的快拍」），不用再单独取一次自己的头像。
+   */
+  readonly selfReel: boolean;
 
   constructor(userId: string, username: string, avatarUrl: string, seen: boolean,
-              count: number = 0, altIds: Array<string> = []) {
+              count: number = 0, altIds: Array<string> = [],
+              following: boolean = false, followKnown: boolean = false,
+              suggested: boolean = false, selfReel: boolean = false) {
     this.userId = userId;
     this.username = username;
     this.avatarUrl = avatarUrl;
     this.seen = seen;
     this.count = count;
     this.altIds = altIds;
+    this.following = following;
+    this.followKnown = followKnown;
+    this.suggested = suggested;
+    this.selfReel = selfReel;
   }
 }
 
 /** 一整条托盘（顺序就是界面上的顺序）。 */
 export class StoryTray {
   readonly items: Array<StoryTrayItem>;
+  /**
+   * 自己的头像（托盘里没有自己的快拍时用它画「你的快拍」那一项；空 = 还不知道）。
+   *
+   * 谁给：宿主（首页）把「我的」头部那份头像塞进来 —— 不为这一项单独打一次 IG 接口。
+   */
+  readonly selfAvatar: string;
 
-  constructor(items: Array<StoryTrayItem>) {
+  constructor(items: Array<StoryTrayItem>, selfAvatar: string = '') {
     this.items = items;
+    this.selfAvatar = selfAvatar;
   }
 }
 

@@ -729,6 +729,18 @@ export struct FeedList {
    */
   storySeed: Array<StoryTrayItem> = [];
   storySeedAtMs: number = 0;
+  /**
+   * 「你的快拍」那一项用的头像（宿主从「我的」头部那份资料顺手带过来）。
+   *
+   * @Prop：头像是**晚到**的（启动时「我的」头部还在路上），到了要跟着换上去。
+   */
+  @Prop selfAvatar: string = '';
+  /** 点「你的快拍」/ 那颗「+」（这一版没有发布入口，宿主给一句提示），见 StoriesTray.onSelfTap。 */
+  onStorySelf: () => void = (): void => {
+  };
+  /** 推荐快拍底部那条「+关注」：宿主负责关注并回结果，见 StoriesTray.onFollow。 */
+  onStoryFollow: (item: StoryTrayItem) => Promise<boolean> =
+    (item: StoryTrayItem): Promise<boolean> => Promise.resolve(false);
   /** 点开某一项（宿主拉数据 + 开播放页），见 StoriesTray.onOpen。 */
   onStoryOpen: (item: StoryTrayItem, rect: StoryHeroRect) => void =
     (item: StoryTrayItem, rect: StoryHeroRect): void => {
@@ -3028,6 +3040,14 @@ export struct FeedList {
                   // 首帧就用宿主那份数据（见 storySeed 的说明）：切回来不再空一块。
                   seed: this.storySeed,
                   seedAtMs: this.storySeedAtMs,
+                  // 「你的快拍」那一项的头像（宿主从「我的」头部带过来，见 StoriesTray.selfAvatar）。
+                  selfAvatar: this.selfAvatar,
+                  onSelfTap: (): void => {
+                    this.onStorySelf();
+                  },
+                  onFollow: (item: StoryTrayItem): Promise<boolean> => {
+                    return this.onStoryFollow(item);
+                  },
                   onOpen: (item: StoryTrayItem, rect: StoryHeroRect): void => {
                     this.onStoryOpen(item, rect);
                   },

@@ -28,7 +28,7 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { curves, display } from '@kit.ArkUI';
 import { CommentInputBar } from './CommentInputBar';
-import { MaterialIconButton, SurfaceModifier } from './MaterialSurface';
+import { MaterialIconButton, MaterialLabelButton, SurfaceModifier } from './MaterialSurface';
 import { MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS } from '../core/AppSettings';
 import {
   EMPTY_REEL,
@@ -92,6 +92,9 @@ const INFO_SIDE_VP: number = 8;
 const INFO_AVATAR_VP: number = 34;
 /** 资讯栏胶囊的高度（vp，和 feeds 的材质容器 40 对齐）。 */
 const INFO_PILL_H: number = 40;
+/** 资讯旁那颗「关注」的宽高（vp）：比胶囊矮一档，看着是"贴在胶囊右边的一条小按钮"。 */
+const STORY_FOLLOW_W_VP: number = 58;
+const STORY_FOLLOW_H_VP: number = 30;
 /** 功能区的统一间隔（vp）：输入框与三颗按钮之间都是这个数。 */
 const ACTION_GAP_VP: number = 10;
 /** 媒体区 → 功能区（vp）。 */
@@ -282,6 +285,24 @@ export struct StoryViewer {
   onAction: (kind: string) => void = (kind: string): void => {
   };
 
+  /**
+   * **正在看的这一位关注了没有**（宿主算好传进来）。
+   *
+   * 需求："查阅快拍内容但未关注该用户就在用户资讯旁显示一个关注按钮"。
+   * 所以为假才画按钮；自己看自己的快拍、已经关注过的人都不画。
+   * 数据源可能是"托盘条目的 friendship_status"，也可能是本地覆盖表（见 core/FollowState）；
+   * 完全不知道时宿主按"没关注"传 false —— 宁可我多一颗按钮，也不能让用户对着关注过的
+   * 人看不见"已关注"的分寸感。
+   */
+  @Prop following: boolean = true;
+  /**
+   * 点资讯旁那颗「关注」：宿主去关注（HTTP 优先、网页兜底），成功回 true。
+   *
+   * 回真之后宿主把 `following` 改成 true，按钮自己就消失了（见 Index.onFollowStoryAuthor）。
+   * 失败则原样留着，用户还能再点一次。
+   */
+  onFollowAuthor: () => Promise<boolean> = (): Promise<boolean> => Promise.resolve(false);
+
   /** false = 停在头像矩形里（第一帧）；true = 全屏。 */
   @State private open: boolean = false;
   /** 内容淡入（免得小矩形里先挤一坨字）。 */
@@ -336,6 +357,32 @@ export struct StoryViewer {
    * 重新起播（实机上表现就是"第二条不播"）。翻一下这个值让分支换边，节点就一定是新的。
    */
   @State private seqEven: boolean = true;
+  /** 正在关注（防连点：一颗按钮点两下会发两次 friendship/create）。 */
+  @State private followBusy: boolean = false;
+
+  /**
+   * 点资讯旁那颗「关注」（需求："查阅快拍内容但未关注该用户就在用户资讯旁显示一个关注按钮"）。
+   *
+   * 按钮的显隐**只听宿主**（`following` 是 @Prop）：这里只负责把动作交出去，
+   * 成功了宿主把 following 改成 true，这颗按钮就自己消失了（不在这里乐观改状态 ——
+   * 关注失败要能留在原地让用户重试）。
+   */
+  private async tapFollow(): Promise<void> {
+    if (this.followBusy) {
+      return;
+    }
+    this.followBusy = true;
+    hilog.info(DOMAIN, TAG, 'story follow tap user=%{public}s', this.username);
+    try {
+      const ok: boolean = await this.onFollowAuthor();
+      hilog.info(DOMAIN, TAG, 'story follow result user=%{public}s ok=%{public}s',
+        this.username, `${ok}`);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'story follow threw: %{public}s', (error as Error).message);
+    } finally {
+      this.followBusy = false;
+    }
+  }
 
   private timerId: number = -1;
   /** 当前这条的起播时刻（毫秒时间戳）。 */
@@ -1501,6 +1548,34 @@ export struct StoryViewer {
       .onClick((): void => {
         this.onAction('info');
       })
+
+      /*
+       * 资讯胶囊右边那颗「关注」（需求："查阅快拍内容但未关注该用户就在用户资讯旁显示一个关注按钮"）。
+       *
+       * 只在"没关注"时画；点赞/评论/查看更多都保持不变。材质走全 app 那一套
+       * （MaterialLabelButton = 透明 Toggle 承载沉浸光感），颜色固定白色（这一行永远压在画面上，
+       * 同胶囊里的用户名），所以关掉自动反色。
+       */
+      if (!this.following && this.username.length > 0) {
+        Row() {
+          MaterialLabelButton({
+            labelRes: $r('app.string.action_follow'),
+            fontSize: 12,
+            pillWidth: STORY_FOLLOW_W_VP,
+            pillHeight: STORY_FOLLOW_H_VP,
+            tint: '#FFFFFF',
+            autoInvert: false,
+            onTap: (): void => {
+              this.tapFollow();
+            }
+          })
+        }
+        .margin({ left: 8 })
+        /*
+         * 这里**不加 `hitTestBehavior(Transparent)`**：加了的话这一次点击会同时落到下面的
+         * "点左/右半屏翻一条"上（点关注顺手把快拍翻了）。默认让按钮自己吃下点击。
+         */
+      }
 
       // 右侧「更多」：feeds 那颗（≡）。
       Row().layoutWeight(1)

@@ -688,3 +688,72 @@ export struct MaterialLabelButton {
     .gesture(PanGesture().onActionStart(consumePan).onActionUpdate(consumePan))
   }
 }
+
+/**
+ * **椭圆图标胶囊**（快拍托盘里那颗「+关注」）。
+ *
+ * 为什么不能拿 MaterialIconButton 凑：那个的宽高是同一个 `buttonSize`（正方形 → 圆形），
+ * 而需求要的是"椭圆形加号按钮"（参考图里是一条横向的小胶囊）—— 宽高必须能分开给。
+ * 材质那一层和别的按钮**完全一样**：内容区只有 Toggle/Slider/Select 拿得到沉浸光感
+ * （官方《沉浸光感–功耗优化》，见文件头），所以这里仍然是一颗透明 Toggle 垫材质、
+ * 图标当它的内容。
+ */
+@Component
+export struct MaterialPillIcon {
+  @Prop symbol: Resource = $r('sys.symbol.plus');
+  /** 胶囊宽（vp）。 */
+  @Prop pillWidth: number = 44;
+  /** 胶囊高（vp）；圆角按它的一半算，于是永远是一条完整的胶囊。 */
+  @Prop pillHeight: number = 26;
+  @Prop iconSize: number = 16;
+  /** 图标色；空串 = 系统可反色资源色（跟着材质底色自动反色）。 */
+  @Prop tint: string = '';
+  @Prop autoInvert: boolean = true;
+  @StorageProp(SETTING_MATERIAL_THICKNESS) thickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
+  onTap: () => void = (): void => {
+  };
+
+  /** 上一次真正触发动作的时刻（毫秒）—— 去重用，见 fire()。 */
+  private lastFireMs: number = 0;
+
+  /**
+   * 真正把点击转出去。
+   *
+   * 和 MaterialLabelButton 同一套理由与参数：`isOn` 是字面量（这颗按钮没有选中态），
+   * 真机上 `onChange` 可能不来，所以 `onClick` 也挂上，400ms 去重保证只算一次。
+   */
+  private fire(): void {
+    const now: number = Date.now();
+    if (now - this.lastFireMs < 400) {
+      return;
+    }
+    this.lastFireMs = now;
+    this.onTap();
+  }
+
+  build() {
+    Toggle({ type: ToggleType.Button, isOn: false }) {
+      SymbolGlyph(this.symbol)
+        .fontSize(this.iconSize)
+        .fontColor([this.tint.length > 0 ? this.tint : $r('sys.color.font_primary')])
+    }
+    .width(this.pillWidth)
+    .height(this.pillHeight)
+    .padding(0)
+    .borderRadius(this.pillHeight / 2)
+    .backgroundColor(Color.Transparent)
+    // 选中态透明（同 MaterialIconButton：否则点一下整颗变蓝）。
+    .selectedColor(Color.Transparent)
+    // 沉浸光感材质；低版本设备自动退化成纯色底（见 SurfaceModifier）。
+    .attributeModifier(new SurfaceModifier(this.thickness, this.autoInvert))
+    .onChange((): void => {
+      this.fire();
+    })
+    .onClick((): void => {
+      this.fire();
+    })
+    // 按住期间把外层滚动也挡住（这颗在横向托盘里，见 MaterialPressState 与 consumePan）。
+    .onTouch(trackMaterialTouch)
+    .gesture(PanGesture().onActionStart(consumePan).onActionUpdate(consumePan))
+  }
+}

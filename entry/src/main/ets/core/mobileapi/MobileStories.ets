@@ -77,14 +77,34 @@ export class MobileStories {
       hilog.warn(DOMAIN, TAG, 'tray non-json len=%{public}d', result.body.length);
       return null;
     }
-    const tray: Array<StoryTrayItem> = MobileStories.trayItems(parsed);
+    const tray: Array<StoryTrayItem> = MobileStories.trayItems(parsed, identity.userId);
     if (tray.length === 0) {
       hilog.warn(DOMAIN, TAG, 'tray parsed empty');
       return null;
     }
-    hilog.info(DOMAIN, TAG, 'tray ok n=%{public}d first=%{public}s unseen=%{public}d',
-      tray.length, tray[0].username, tray[0].seen ? 0 : 1);
-    return new StoryTray(tray);
+    // 「你的快拍」那一项要用：自己的头像（托盘里没有自己的快拍时只能从别处拿，见 StoryTray.selfAvatar）。
+    let selfAvatar: string = '';
+    for (let index: number = 0; index < tray.length; index++) {
+      if (tray[index].selfReel) {
+        selfAvatar = tray[index].avatarUrl;
+        break;
+      }
+    }
+    hilog.info(DOMAIN, TAG, 'tray ok n=%{public}d first=%{public}s unseen=%{public}d suggested=%{public}d',
+      tray.length, tray[0].username, tray[0].seen ? 0 : 1,
+      MobileStories.countSuggested(tray));
+    return new StoryTray(tray, selfAvatar);
+  }
+
+  /** 这一批里有几条是"推荐快拍"（只用于日志）。 */
+  private static countSuggested(items: Array<StoryTrayItem>): number {
+    let out: number = 0;
+    for (let index: number = 0; index < items.length; index++) {
+      if (items[index].suggested) {
+        out++;
+      }
+    }
+    return out;
   }
 
   /**
@@ -154,7 +174,7 @@ export class MobileStories {
   // ------------------------------------------------------------------ 解析：托盘
 
   /** 托盘那一发 → 界面要的条目（跳过已过期 / 形状不对的）。 */
-  private static trayItems(parsed: Record<string, Object>): Array<StoryTrayItem> {
+  private static trayItems(parsed: Record<string, Object>, ownId: string): Array<StoryTrayItem> {
     const out: Array<StoryTrayItem> = [];
     const raw: Array<Object> = MobileStories.objectsOf(parsed['tray']);
     const nowMs: number = Date.now();
@@ -189,9 +209,25 @@ export class MobileStories {
       if (reelId.length > 0 && reelId !== userId) {
         altIds.push(reelId);
       }
+      /*
+       * 「推荐快拍」（需求："新号会推荐快拍，头像底部需要显示一个椭圆形加号按钮用于关注该快拍用户"）。
+       *
+       * 真机实测（见 `Instarmony_mobile.txt` 的 tray[0]）：`reel_type=suggested_user_reel` 就是它；
+       * 个别版本改挂 `is_suggested` 布尔。两种都认。
+       */
+      const reelType: string = MobileStories.firstText(one, ['reel_type']);
+      const suggested: boolean = reelType.indexOf('suggested') >= 0
+        || MobileStories.boolOf(one, 'is_suggested');
+      // 关注状态：`user.friendship_status.following`（播放页那颗按钮要它）。
+      const friendship: Record<string, Object> | null =
+        MobileStories.objectOf(user['friendship_status']);
+      const followKnown: boolean = friendship !== null;
+      const following: boolean = followKnown && MobileStories.boolOf(friendship, 'following');
+      // 是不是我自己的快拍：和当前会话的 `ds_user_id` 比（自己那一项固定排第一位）。
+      const selfReel: boolean = ownId.length > 0 && userId === ownId;
       out.push(new StoryTrayItem(userId, username,
         MobileStories.firstText(user, ['profile_pic_url', 'profile_pic_url_hd']),
-        seen, count, altIds));
+        seen, count, altIds, following, followKnown, suggested, selfReel));
     }
     return out;
   }
@@ -414,6 +450,22 @@ export class MobileStories {
     }
     const parsed: number = Number(`${value}`);
     return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  /** 布尔字段（`true` / `1` / `"true"` 都算真；缺字段算假）。 */
+  private static boolOf(holder: Record<string, Object> | null, name: string): boolean {
+    if (holder === null) {
+      return false;
+    }
+    const value: Object | undefined = holder[name];
+    if (value === undefined || value === null) {
+      return false;
+    }
+    if (typeof value === 'boolean') {
+      return value as boolean;
+    }
+    const text: string = `${value}`.toLowerCase();
+    return text === 'true' || text === '1';
   }
 
   /** 托盘一次要几条（instagrapi 的 `page_size` 默认 50，实测 213 条一次全给）。 */

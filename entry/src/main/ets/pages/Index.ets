@@ -2034,6 +2034,20 @@ struct Index {
       this.profileVm.onDigest = (text: string): void => {
         this.dumpProbeFile('profile', text);
       };
+      /*
+       * 「你的快拍」那一项要用自己的头像（见 selfAvatarUrl）。
+       *
+       * 顺手从「我的」头部那份资料里取：这一页在启动预热里本来就会拉一次
+       * （见 warmStep('profile')），所以这是**零额外请求**。头像晚到也没关系：托盘那边
+       * 是 @Prop + @Watch，到了就换上去（见 StoriesTray.onSelfAvatarReady）。
+       */
+      this.profileVm.onHeader = (header: ProfileHeader): void => {
+        if (header.avatarUrl.length > 0 && header.avatarUrl !== this.selfAvatarUrl) {
+          this.selfAvatarUrl = header.avatarUrl;
+          hilog.info(DOMAIN, TAG, 'self avatar ready @%{public}s len=%{public}d',
+            header.username, header.avatarUrl.length);
+        }
+      };
       // 媒体预下载（幂等）：把缓存下载的下载信息表开大一点，信息流封面命中率才高。
       MediaPrefetch.init();
     }
@@ -2767,6 +2781,10 @@ struct Index {
     // 快拍：托盘队列 + 预缓存 —— "快拍还是上一个人的"就在这里。
     this.storyQueue = [];
     StoryCache.reset([], 0);
+    // "已关注过的推荐快拍"那张表也是按人的（见 NativeStories.hideSuggested）。
+    NativeStories.clearHidden();
+    // 「你的快拍」那一项的头像同样属于"这个人"：换人之后先把旧头像抹掉，等新头部回来再填。
+    this.selfAvatarUrl = '';
     // 私信预取队列 + 快照缓存（落盘那份已由 AccountScope 搬到备份位）。
     DirectPrefetch.cancel();
     DirectCache.clear();
@@ -5836,6 +5854,17 @@ struct Index {
            */
           storySeed: this.storyQueue,
           storySeedAtMs: this.storyQueueAtMs,
+          // 「你的快拍」那一项的头像（来自「我的」头部，见 selfAvatarUrl 的说明）。
+          selfAvatar: this.selfAvatarUrl,
+          // 点「你的快拍」/ 那颗「+」：这一版没有发布入口，给一句提示。
+          onStorySelf: (): void => {
+            hilog.info(DOMAIN, TAG, 'story self tapped (no composer)');
+            this.toast($r('app.string.story_create_pending'));
+          },
+          // 推荐快拍底部那条「+关注」：关注成功后把它从家列里拿掉（见 followSuggestedStory）。
+          onStoryFollow: (item: StoryTrayItem): Promise<boolean> => {
+            return this.followSuggestedStory(item);
+          },
           // 点开某一项：取数 + 开播放页（转场要用被点头像的屏幕矩形）。
           onStoryOpen: (item: StoryTrayItem, rect: StoryHeroRect): void => {
             this.openStory(item, rect);
@@ -6964,6 +6993,20 @@ struct Index {
   /** 被点那一项的头像 / 用户名（取数回来那份里可能没有，先拿托盘的顶上）。 */
   @State private storyAvatar: string = '';
   @State private storyName: string = '';
+  /**
+   * 正在看的这一位关注了没有（`StoryViewer.following`）。
+   *
+   * 需求："查阅快拍内容但未关注该用户就在用户资讯旁显示一个关注按钮"。
+   * 默认 true = 不显示按钮（不知道时宁可先不显示，等 `refreshStoryFollow` 问清楚再定）。
+   */
+  @State private storyFollowing: boolean = true;
+  /**
+   * 自己的头像（「你的快拍」那一项用）。
+   *
+   * 来源是「我的」头部那份资料（`profileVm.onHeader`）—— 不为托盘这一项单独打一发接口。
+   * 换账号时清空（见 forgetAccountMemory）。
+   */
+  @State private selfAvatarUrl: string = '';
   /** 正在播的这一位的 userId（播放页按它去量序列里那颗头像，排查转场错位用）。 */
   @State private storyUserId: string = '';
   /** 正在取数（防连点；转圈由托盘自己画，见 StoriesTray.pendingUser）。 */
@@ -7045,6 +7088,95 @@ struct Index {
   }
 
   /**
+   * 正在看的这一位关注了没有（托盘条目 → 本地覆盖表兜底）。
+   *
+   * 判据顺序和 feeds / reels 那两处一致（见 core/FollowState 的文件头）：
+   *   ① 自己的快拍：永远算"已关注"（自己不用关注自己，按钮也不该出现）；
+   *   ② 本地覆盖表（本机刚点过关注/取关的以它为准）；
+   *   ③ 数据源给的 `friendship_status.following`。
+   */
+  private storyFollowState(item: StoryTrayItem): boolean {
+    const own: string = this.profileVm.ownIdSync();
+    if (own.length > 0 && item.userId === own) {
+      return true;
+    }
+    return FollowState.resolve(item.userId,
+      FollowState.resolveName(item.username, item.following));
+  }
+
+  /**
+   * 托盘没给关注状态时（网页模板那条路常见）现问一次。
+   *
+   * 只在"不知道"时才发：这一发是 `friendships/show_many`（可以批量、便宜），
+   * 目的是别让"我明明关注了他、快拍页却挂着关注按钮"这种反向错误留下来。
+   */
+  private refreshStoryFollow(item: StoryTrayItem): void {
+    if (item.followKnown || item.selfReel) {
+      return;
+    }
+    NativeFollow.statesFor([item.userId]).then((states: Map<string, boolean>): void => {
+      const known: boolean | undefined = states.get(item.userId);
+      if (known === undefined || item.userId !== this.storyUserId) {
+        return;
+      }
+      FollowState.remember(item.userId, item.username, known);
+      this.storyFollowing = known;
+    }).catch((): void => {
+    });
+  }
+
+  /**
+   * 快拍播放页那颗「关注」（需求："查阅快拍内容但未关注该用户就在用户资讯旁显示一个关注按钮"）。
+   *
+   * 走的是和 feeds / reels / 通知页同一套 `followUser`（HTTP 优先，非私密账号失败还能网页兜底），
+   * 成功后把 `storyFollowing` 置真 —— 播放页那颗按钮自己就消失了。
+   */
+  private async onFollowStoryAuthor(): Promise<boolean> {
+    const name: string = this.storyName;
+    const id: string = this.storyUserId;
+    if (name.length === 0 && id.length === 0) {
+      this.toast($r('app.string.follow_failed'));
+      return false;
+    }
+    const ok: boolean = await this.followUser(id, name, true);
+    if (ok) {
+      this.storyFollowing = true;
+      this.toast($r('app.string.follow_done'));
+    } else {
+      this.toast($r('app.string.follow_failed'));
+    }
+    return ok;
+  }
+
+  /**
+   * 托盘里"推荐快拍"底部那条「+关注」（需求："点击后关注并消失"）。
+   *
+   * 关注成功后做两件事：
+   *   ① 把这位从宿主那份托盘顺序里删掉（"下一位是谁"不会再把已关注的人排进去）；
+   *   ② `NativeStories.hideSuggested` 记账 —— 3 分钟后托盘重拉不会再冒出来。
+   * 托盘组件自己也会把这一项从界面上删掉（见 StoriesTray.followSuggested）。
+   */
+  private async followSuggestedStory(item: StoryTrayItem): Promise<boolean> {
+    hilog.info(DOMAIN, TAG, 'story suggested follow uid=%{public}s name=%{public}s',
+      item.userId, item.username);
+    const ok: boolean = await this.followUser(item.userId, item.username, true);
+    if (!ok) {
+      this.toast($r('app.string.follow_failed'));
+      return false;
+    }
+    NativeStories.hideSuggested(item.userId);
+    const kept: Array<StoryTrayItem> = [];
+    for (let index: number = 0; index < this.storyQueue.length; index++) {
+      if (this.storyQueue[index].userId !== item.userId) {
+        kept.push(this.storyQueue[index]);
+      }
+    }
+    this.rememberStoryQueue(kept);
+    this.toast($r('app.string.follow_done'));
+    return true;
+  }
+
+  /**
    * 点开托盘里的一个用户：先取数，成功才进播放页（需求："加载成功跳进新页面"）。
    *
    * 取数失败**不进页**（在首页弹一句就完），因为进来也是一片黑。
@@ -7080,6 +7212,9 @@ struct Index {
     this.storyAvatar = item.avatarUrl;
     this.storyName = item.username;
     this.storyUserId = item.userId;
+    // 资讯旁那颗关注按钮的初始状态（见 storyFollowState / refreshStoryFollow）。
+    this.storyFollowing = this.storyFollowState(item);
+    this.refreshStoryFollow(item);
     this.storyHeroValid = true;
     this.storyReel = EMPTY_REEL;
     // 立刻展开（转场从被点的头像开始）。
@@ -7342,6 +7477,9 @@ struct Index {
     this.storyAvatar = item.avatarUrl.length > 0 ? item.avatarUrl : reel.avatarUrl;
     this.storyName = item.username.length > 0 ? item.username : reel.username;
     this.storyUserId = item.userId;
+    // 换人就重算"资讯旁那颗关注按钮"的显隐（需求：没关注才显示）。
+    this.storyFollowing = this.storyFollowState(item);
+    this.refreshStoryFollow(item);
     // 最后再换 reel：@Prop 一变，播放页自己回到第一条重播（见 StoryViewer.onReelChanged）。
     this.storyReel = reel;
     // 卡片在 openStory 里就已经弹出来了（先弹后取数），这里只把"点开那一发"的标记清掉。
@@ -9283,6 +9421,11 @@ struct Index {
           avatarUrl: this.storyAvatar,
           // 正在播的这一位（播放页按它去量序列里那颗头像的位置，见 StoryViewer.logRects）。
           heroUserId: this.storyUserId,
+          // 资讯旁那颗「关注」：没关注才显示（需求），点它走 followUser（见 onFollowStoryAuthor）。
+          following: this.storyFollowing,
+          onFollowAuthor: (): Promise<boolean> => {
+            return this.onFollowStoryAuthor();
+          },
           // 后面还有人 → 最后一条点右半屏接他（见 Index.advanceStory）。
           hasNextUser: this.storyQueueIndex + 1 < this.storyQueue.length,
           // 前面还有人 → 第一条点左半屏回他（见 Index.backStory）。
