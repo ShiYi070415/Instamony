@@ -50,6 +50,16 @@ const TAG: string = 'DirectThreadViewModel';
  */
 const THREAD_POLL_MS: number = 2500;
 /**
+ * 乐观气泡的**确认窗口**（毫秒）。
+ *
+ * 发送成功后要等"服务端那条"回到视图里，才把本地气泡撤掉；本地时间戳与服务端时间戳
+ * 会差几百毫秒到几秒，所以给一个窗口。取得小一点是为了避免"连发两条同样文本"时
+ * 第二条被第一条的服务端副本误确认（另有一条"一个副本只能用一次"的约束兜底）。
+ */
+const PENDING_MATCH_SLACK_MS: number = 6000;
+/** 确认失败后的复查间隔（毫秒）：一次没对上就在这之后再看一眼（气泡不会消失）。 */
+const PENDING_RECHECK_MS: number = 1200;
+/**
  * 翻页"卡住"（去重后没多出任何一条）之后的冷却：这段时间内不再翻，过了允许再试一次。
  *
  * 为什么要它：这条查询的分页参数在真机上本来就不认（详见 NativeDirect 里的说明），一次卡住就把
@@ -501,11 +511,21 @@ export class DirectThreadViewModel {
           : '发送失败：' + why);
         return false;
       }
-      // 成功：把这条乐观气泡去掉，再拉一次（服务端那条就有真 id 与时间了）。
-      this.pending = [];
-      this.onPending(this.pending);
       this.onStatus('');
+      /*
+       * **先拉一次把服务端那条拿到手，再撤掉乐观气泡。**
+       *
+       * 早先是"先 `pending = []` 再 `load()`"：中间那 1~3 秒里刚发出去的那条会**凭空消失**，
+       * 等刷新回来又出现 —— 用户报的"发出后消失再出现"就是这个闪烁。
+       * 现在反过来：气泡一直留着，直到新视图里真的出现"我发的、同一条文本"才撤掉，
+       * 视觉上是同一个气泡从"本地那条"无缝换成"服务端那条"。
+       */
       await this.load();
+      this.dropConfirmedPending();
+      // 一次没对上（服务端还没返回）就过一会儿再看；这期间气泡继续留着，不会消失。
+      setTimeout((): void => {
+        this.dropConfirmedPending();
+      }, PENDING_RECHECK_MS);
       return true;
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'send threw: %{public}s', (error as Error).message);
@@ -517,9 +537,64 @@ export class DirectThreadViewModel {
     }
   }
 
+  /**
+   * 把**已经在服务端出现**的乐观气泡撤掉（见 send 里的说明）。
+   *
+   * 匹配规则：同一条文本、都是我发的、时间不早于本地那条太多。
+   * 一条服务端消息**只能用一次**（`used`）：连发两条同样的文本时，第一条的
+   * 服务端副本不能把第二条也"确认"掉，否则第二条会立刻消失。
+   */
+  private dropConfirmedPending(): void {
+    if (this.pending.length === 0) {
+      return;
+    }
+    const used: Set<string> = new Set<string>();
+    const keep: Array<DirectMessage> = [];
+    let dropped: number = 0;
+    for (let index: number = 0; index < this.pending.length; index++) {
+      const one: DirectMessage = this.pending[index];
+      const hitId: string = DirectThreadViewModel.serverCopyOf(this.view, one, used);
+      if (hitId.length > 0) {
+        used.add(hitId);
+        dropped++;
+        continue;
+      }
+      keep.push(one);
+    }
+    if (dropped === 0) {
+      return;
+    }
+    this.pending = keep;
+    this.onPending(this.pending);
+    hilog.info(DOMAIN, TAG, 'pending confirmed dropped=%{public}d left=%{public}d',
+      dropped, keep.length);
+  }
+
+  /** 视图里有没有"这一条"的服务端副本（有就返回它的 id，没有给空串）。 */
+  private static serverCopyOf(view: DirectThreadView | null, temp: DirectMessage,
+                              used: Set<string>): string {
+    if (view === null) {
+      return '';
+    }
+    for (let index: number = 0; index < view.messages.length; index++) {
+      const one: DirectMessage = view.messages[index];
+      if (!one.mine || one.kind !== 'text' || one.text !== temp.text) {
+        continue;
+      }
+      if (used.has(one.id)) {
+        continue;
+      }
+      // 本地时间与服务端时间会差几百毫秒到几秒；只认"不早于本地那条太多"的。
+      if (one.tsMs + PENDING_MATCH_SLACK_MS < temp.tsMs) {
+        continue;
+      }
+      return one.id;
+    }
+    return '';
+  }
+
   /** 取更老的一批消息（接到前面）。 */
-  async loadOlder(): Promise<void> {
-    /*
+  async loadOlder(): Promise<void> {    /*
      * 上一次"卡住"（去重后没多出东西）之后有个冷却期：期间直接返回，别每滑一下就发一发
      * 必然重复的请求；过了冷却允许再试（见 loadOlder 里 stuck 那段与 LOAD_OLDER_RETRY_GAP_MS）。
      */
@@ -728,6 +803,12 @@ export class DirectThreadViewModel {
       hilog.info(DOMAIN, TAG, 'poll: +%{public}d messages (total=%{public}d)',
         added, merged.length);
       this.onView(this.view);
+      /*
+       * 轮询也顺手做一次"确认撤销"：自己发出去的那条，服务端回来后由这里换成真身
+       * （见 dropConfirmedPending 与 send 里的说明）。放在 onNew 之前，
+       * 这样界面一次性拿到的是"气泡已撤、真身已到"的最终状态，不会多闪一帧。
+       */
+      this.dropConfirmedPending();
       if (this.onNew !== undefined) {
         this.onNew();
       }

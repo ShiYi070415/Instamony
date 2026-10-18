@@ -31,6 +31,13 @@ const PULL_DOWN_VP: number = 56;
 const BOTTOM_OFFSET: number = 92;
 const FALLBACK_WIDTH_VP: number = 411;
 const SIDE_PADDING: number = 16;
+/**
+ * 发送成功后"再贴一次底"的延迟（毫秒）。
+ *
+ * 键盘收起 + 输入条下移是个动画，列表可视高度在这期间一直在变；只在动画开始时贴底会落到
+ * 半路（新气泡贴着屏幕顶端），等布局稳定再贴一次才落到底（见 inputOverlay 的 onSend）。
+ */
+const SEND_SCROLL_SETTLE_MS: number = 260;
 const AVATAR_SIZE: number = 28;
 const BUBBLE_MAX_RATIO: number = 0.72;
 const BUBBLE_GAP_VP: number = 2;
@@ -729,6 +736,15 @@ export struct DirectThreadPage {
               .then((): void => {
                 this.syncFromVm();
                 this.scrollToNewest();
+                /*
+                 * **再贴一次底**：发送后键盘收起、输入条下移，列表可视高度在动画里
+                 * 一直变；`scrollEdge(Bottom)` 只按**当时**的高度算，于是会停在
+                 * "新气泡贴着屏幕顶端"那种错位（一帧后再自己回正，看起来就是跳一下）。
+                 * 等布局稳定后再贴一次，落点就对了。
+                 */
+                setTimeout((): void => {
+                  this.scrollToNewest();
+                }, SEND_SCROLL_SETTLE_MS);
               })
               .catch((): void => {
               });
