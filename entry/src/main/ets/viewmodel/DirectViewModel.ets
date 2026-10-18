@@ -122,6 +122,32 @@ export class DirectViewModel {
   }
   /** 拉一次（refresh=true 时丢掉游标从头拉）。 */
   /**
+   * 这条会话已经看过了：把本地列表那一行的未读标记清掉（粗体 + 右侧蓝点跟着消失）。
+   *
+   * 由 `DirectThreadViewModel.onSeen` 在服务端 `mark_seen` 成功之后回调（见 pages/Index）。
+   */
+  markThreadRead(threadId: string): void {
+    let changed: boolean = false;
+    const next: Array<DirectThread> = [];
+    for (let index: number = 0; index < this.threads.length; index++) {
+      const one: DirectThread = this.threads[index];
+      if (one.id !== threadId || (!one.unread && one.unreadCount === 0)) {
+        next.push(one);
+        continue;
+      }
+      next.push(new DirectThread(one.id, one.key, one.title, one.avatarUrl, one.isGroup,
+        false, one.muted, one.pinned, one.tsMs, one.text, one.kind, one.username, 0));
+      changed = true;
+    }
+    if (!changed) {
+      return;
+    }
+    this.threads = next;
+    this.onThreads(next, this.more);
+    hilog.info(DOMAIN, TAG, 'mark read thread=%{public}s', threadId);
+  }
+
+  /**
    * 这一页上未读的总条数（列表右侧那顆蓝点 / "n 条新消息"用的是同一条计数）。
    *
    * 没有 `unreadCount`（旧解析 / GraphQL 那条路）时按"未读 = 1 条"算，至少让通知有数。

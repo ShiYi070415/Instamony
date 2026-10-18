@@ -7062,6 +7062,14 @@ struct Index {
      */
     this.directThreadVm.open(thread.id, thread.title, thread.avatarUrl, thread.isGroup,
       thread.key.length > 0 ? thread.key : '', thread.username);
+    /*
+     * **进会话即已读**：`DirectThreadViewModel` 在服务端标成功后回调这里，
+     * 把私信列表那一行的未读标记（粗体 + 右侧蓝点）立刻清掉 ——
+     * 不用等下一次整表刷新（见 core/mobileapi/MobileDirect.markSeen）。
+     */
+    this.directThreadVm.onSeen = (threadId: string): void => {
+      this.directVm.markThreadRead(threadId);
+    };
     this.navStack.pushPath({ name: DIRECT_THREAD_PAGE, param: thread.id });
   }
 

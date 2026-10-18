@@ -32,6 +32,8 @@ import { AppConfig } from '../config/AppConfig';
 import { directScrollUpScript } from '../bridge/WebScripts';
 import { NativeDirect } from '../core/NativeDirect';
 import { DirectCache } from '../core/DirectCache';
+// 进会话就把它标成已读（见 markThreadSeen）。
+import { MobileDirect } from '../core/mobileapi/MobileDirect';
 import { DirectMessage, DirectThreadView } from '../model/Direct';
 
 const DOMAIN: number = 0xFF00;
@@ -87,6 +89,11 @@ export class DirectThreadViewModel {
   }
 
   private view: DirectThreadView | null = null;
+  /** 已经报过"已读"的那条（`threadId:messageId`，见 markThreadSeen）。 */
+  private seenSentFor: string = '';
+  /** "这条会话已在服务端标成已读" → 收件箱列表把它的未读标记清掉（见 pages/Index 的接线）。 */
+  onSeen: (threadId: string) => void = (threadId: string): void => {
+  };
   private busy: boolean = false;
   private sending: boolean = false;
   private diag: string = '-';
@@ -287,6 +294,15 @@ export class DirectThreadViewModel {
       this.onView(shown);
       this.onStatus(shown.messages.length > 0
         ? (this.usedColdPath ? '已加载（首次走网页抓接口）' : '已加载') : '');
+      /*
+       * **进会话就算看过了**：照 instagrapi 的 `direct_send_seen` 把这条会话标成已读
+       * （`direct_v2/threads/{id}/items/{最新消息id}/seen/`，见 MobileDirect.markSeen）。
+       *
+       * 不标的话 IG 那边一直记着"没看"，下次刷收件箱又会把这条画成未读
+       * —— 用户报的"已读私信全变成未读"有一半是这个原因。
+       * 发完就刷新收件箱（列表里的粗体/蓝点跟着消失）。
+       */
+      this.markThreadSeen(shown);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'load threw: %{public}s', (error as Error).message);
       this.onStatus('加载出错');
@@ -294,6 +310,34 @@ export class DirectThreadViewModel {
       this.busy = false;
       this.onBusy(false);
     }
+  }
+
+  /**
+   * 把这条会话在服务端标成已读（进会话即触发，见 load 里那一处调用）。
+   *
+   * 只发一次（`seenSentFor` 记住"这条会话的哪条消息已经报过"）：翻页/轮询回来重复报
+   * 没有意义，还会白白多打写接口。
+   */
+  private markThreadSeen(view: DirectThreadView): void {
+    if (view.messages.length === 0) {
+      return;
+    }
+    const newest: DirectMessage = view.messages[view.messages.length - 1];
+    if (newest.id.length === 0) {
+      return;
+    }
+    const key: string = `${view.id}:${newest.id}`;
+    if (this.seenSentFor === key) {
+      return;
+    }
+    this.seenSentFor = key;
+    MobileDirect.markSeen(view.id, newest.id).then((ok: boolean): void => {
+      hilog.info(DOMAIN, TAG, 'seen reported id=%{public}s ok=%{public}s', view.id, `${ok}`);
+      if (ok) {
+        this.onSeen(view.id);
+      }
+    }).catch((): void => {
+    });
   }
 
   /**

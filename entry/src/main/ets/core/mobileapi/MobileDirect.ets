@@ -109,6 +109,47 @@ export class MobileDirect {
   }
 
   /**
+   * **把一条会话标成已读**（对准 instagrapi 的 `direct_send_seen` → `direct_message_seen`）。
+   *
+   * 端点与字段照抄：
+   *   `POST direct_v2/threads/{thread_id}/items/{message_id}/seen/`
+   *   `thread_id` / `action=mark_seen` / `client_context` / `_uuid` / `offline_threading_id`
+   * 注意 instagrapi 这一发是 **with_signature=False**：不走 `signed_body`，直接发表单。
+   *
+   * 为什么需要：不告诉服务端"我看过了"，收件箱里那条会话的未读状态就会一直留着
+   * （用户报的"已读私信全变成未读"除了本地判据，也有一半是这个原因）。
+   *
+   * @param messageId 会话里**最新**那条消息的 id（instagrapi 用 `thread.messages[0].id`）
+   */
+  static async markSeen(threadId: string, messageId: string): Promise<boolean> {
+    const id: string = threadId.trim();
+    const mid: string = messageId.trim();
+    if (id.length === 0 || mid.length === 0) {
+      return false;
+    }
+    const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
+    if (identity === null) {
+      return false;
+    }
+    const token: string = uuid4();
+    const data: Record<string, Object> = {};
+    data['thread_id'] = id;
+    data['action'] = 'mark_seen';
+    data['client_context'] = token;
+    data['_uuid'] = identity.uuid;
+    data['offline_threading_id'] = token;
+    const endpoint: string = `direct_v2/threads/${encodeURIComponent(id)}/items/`
+      + `${encodeURIComponent(mid)}/seen/`;
+    // signed=false：instagrapi 这一发就是普通表单（见方法说明）。
+    const result: MobileResult = await MobileRequest.send(endpoint, MobileRequest.formOf(data), '',
+      false, null, new MobileOptions(ApiThrottle.DIRECT, ApiThrottle.idle()));
+    const ok: boolean = result.ok && result.body.indexOf('"status":"ok"') >= 0;
+    hilog.info(DOMAIN, TAG, 'mark seen thread=%{public}s msg=%{public}s → %{public}s',
+      id, mid, ok ? 'ok' : result.summary());
+    return ok;
+  }
+
+  /**
    * **发一条文字私信**（移动端私有 API：`direct_v2/threads/broadcast/text/`）。
    *
    * 对应 instagrapi 的 `direct_send`：字段表照抄（`action=send_item` / `text` / `thread_ids`

@@ -761,10 +761,24 @@ export class DirectMapper {
       const micros: number = JsonRead.numOf(th, 'last_activity_at');
       const ts: number = micros > 0 ? Math.round(micros / 1000) : 0;
       const me: string = JsonRead.strOf(th, 'viewer_id');
+      /*
+       * **"未读"的判据**（用户报的"全部已读私信都变成未读了"）：
+       *
+       * 以前只看 `read_state === '0'` —— 而这个字段在真机上是 **0 = 已读**（和直觉相反），
+       * 于是所有读过的会话都被画成未读（红点/粗体）。
+       * 现在优先用**消息时间戳**算（`last_seen_at` 与 items 比，见 unreadCountOf）：
+       * 算得出来就以它为准（-1 = 算不出来）；算不出来才退回 `read_state`，
+       * 并且按 **1 = 未读** 来解释。
+       */
+      const count: number = DirectMapper.unreadCountOf(th, me, items);
+      const readState: string = JsonRead.strOf(th, 'read_state').toLowerCase();
+      const unread: boolean = count >= 0
+        ? count > 0
+        : (readState === '1' || readState === 'true' || readState === 'unread');
       threads.push(new DirectThread(id, '', title, isGroup ? '' : avatar, isGroup,
-        JsonRead.strOf(th, 'read_state') === '0', JsonRead.boolOf(th, 'muted'),
+        unread, JsonRead.boolOf(th, 'muted'),
         JsonRead.boolOf(th, 'is_pin'), ts, text, kind, username,
-        DirectMapper.unreadCountOf(th, me, items)));
+        count > 0 ? count : 0));
     }
     const next: string = JsonRead.strOf(box, 'next_max_id');
     const older: boolean = JsonRead.boolOf(box, 'has_older') || next.length > 0;
@@ -792,12 +806,16 @@ export class DirectMapper {
    */
   private static unreadCountOf(th: Record<string, Object>, me: string,
                                items: Array<Object>): number {
-    if (items.length === 0 || me.length === 0) {
+    if (items.length === 0) {
       return 0;
+    }
+    if (me.length === 0) {
+      return -1;
     }
     const lastSeen: Record<string, Object> | null = JsonRead.recordOf(th, 'last_seen_at');
     if (lastSeen === null) {
-      return 0;
+      // 不知道"读到哪里了"：交给调用方按 read_state 那个布尔兜底。
+      return -1;
     }
     const mine: Record<string, Object> | null = JsonRead.recordOf(lastSeen, me);
     const seenMicros: number = mine === null ? 0 : JsonRead.numOf(mine, 'timestamp');
