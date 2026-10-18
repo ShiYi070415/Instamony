@@ -1128,8 +1128,16 @@ export class NativeDirect {
   static async sendText(threadId: string, text: string): Promise<boolean> {
     const id: string = threadId.trim();
     const body: string = text;
+    /*
+     * 入口先留痕：发送失败时"到底有没有走到这里"是最关键的一问 —— 界面上气泡已经画出来了
+     * （乐观 pending），如果连这行都没有，问题就在调用方（VM/输入条）而不在网络。
+     */
+    hilog.info(DOMAIN, TAG, 'send entry thread=%{public}d len=%{public}d mobileBlocked=%{public}s',
+      id.length, body.length, `${ApiThrottle.blocked(ApiThrottle.DIRECT)}`);
     if (id.length === 0 || body.length === 0) {
       NativeDirect.detail = 'no-thread-or-text';
+      hilog.warn(DOMAIN, TAG, 'send abort: empty thread=%{public}d text=%{public}d',
+        id.length, body.length);
       return false;
     }
     /*
@@ -1147,6 +1155,9 @@ export class NativeDirect {
         return true;
       }
       hilog.info(DOMAIN, TAG, 'send mobile miss thread=%{public}s → web rest', id);
+    } else {
+      hilog.warn(DOMAIN, TAG, 'send mobile skipped: direct family throttled %{public}dmin left',
+        ApiThrottle.remainingMinutes(ApiThrottle.DIRECT));
     }
     /*
      * **优先用"刚抓到的那份会话模板"里的头**，而不是自己拼的那套。
@@ -1170,6 +1181,7 @@ export class NativeDirect {
     }
     if (Object.keys(headers).length === 0) {
       NativeDirect.detail = 'no-session';
+      hilog.warn(DOMAIN, TAG, 'send abort: no headers (op=%{public}s)', op.length > 0 ? op : '-');
       return false;
     }
     /*
@@ -1221,6 +1233,7 @@ export class NativeDirect {
     const sent: string = await NativeDirect.send(url, http.RequestMethod.POST, headers,
       parts.join('&'));
     if (sent.length === 0) {
+      hilog.warn(DOMAIN, TAG, 'send abort: web rest returned empty (transport/session)');
       return false;
     }
     const ok: boolean = sent.indexOf('"status":"ok"') >= 0 || sent.indexOf('"status": "ok"') >= 0;

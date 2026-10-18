@@ -1,4 +1,4 @@
-﻿/*
+/*
  * 一条私信会话（会话详情）的视图模型。
  *
  * ## 和 DirectViewModel 的分工
@@ -462,7 +462,12 @@ export class DirectThreadViewModel {
    */
   async send(text: string): Promise<boolean> {
     const body: string = text.trim();
+    // 入口留痕：界面气泡画出来了但网络没动静时，这一行能区分"没进 VM"与"VM 里被挡下"。
+    hilog.info(DOMAIN, TAG, 'send ui entry len=%{public}d thread=%{public}s busy=%{public}s',
+      body.length, this.threadId, `${this.sending}`);
     if (body.length === 0 || this.threadId.length === 0 || this.sending) {
+      hilog.warn(DOMAIN, TAG, 'send ui blocked: len=%{public}d thread=%{public}d busy=%{public}s',
+        body.length, this.threadId.length, `${this.sending}`);
       return false;
     }
     this.sending = true;

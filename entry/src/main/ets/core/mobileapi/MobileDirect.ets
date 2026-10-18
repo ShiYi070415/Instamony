@@ -56,6 +56,8 @@ const CURSOR_KEYS: Array<string> = ['oldest_cursor', 'prev_cursor'];
 const MOBILE_INBOX_CURSOR_USABLE: boolean = true;
 
 export class MobileDirect {
+  /** 已经打过"id 候选"那行的会话（见 logIdCandidates；只为去噪）。 */
+  private static idLoggedFor: string = '';
   /**
    * 收件箱一页（拿不到给 null）。
    *
@@ -152,13 +154,20 @@ export class MobileDirect {
   /**
    * **发一条文字私信**（移动端私有 API：`direct_v2/threads/broadcast/text/`）。
    *
-   * 对应 instagrapi 的 `direct_send`：字段表照抄（`action=send_item` / `text` / `thread_ids`
-   * / `client_context` / `mutation_token` / `_csrftoken` / `_uid` / `_uuid` / `device_id`，
-   * 外加 `send_attribution=direct_thread`、`entry=text`、`is_shh_mode=0`）。
+   * ## 字段表逐条照抄 instagrapi 的 `direct_send`（这是本轮修复的核心）
+   * 真机实测（2026-10-19）：我们原来那版**带签名**（`signed_body=`）只有 7 个字段，
+   * IG 回 `400` + 62 字节的通用错误 `很抱歉，出错了，请重试。`；而 instagrapi 这一发是
+   * **不签名**的（`with_signature=False`），并且体里有 15 个字段。差异就是拒收的原因：
    *
-   * 为什么优先走这一条（而不是网页那条 REST）：写接口在真机上被网页 UA 判过
-   * `useragent mismatch`，而移动端这套**签名请求 + 安卓身份**正是我们自己能稳定复现的路
-   * （读收件箱/会话就是走它）。失败了再由调用方退回网页 REST 那条老路。
+   *   · `with_signature=False` —— 这条写接口**不认** `signed_body`，要普通表单体；
+   *   · `client_context` / `mutation_token` / `offline_threading_id` 是**同一个** token
+   *     （instagrapi 里 `token = self.generate_mutation_token()` 之后三个键都填它）；
+   *     我们原来给 client_context 和 mutation_token 各生成一个 uuid，服务端对不上就丢消息；
+   *   · `send_attribution=message_button`（不是 `direct_thread`）；
+   *   · `is_x_transport_forward` / `send_silently` / `btt_dual_send` / `is_ae_dual_send` /
+   *     `nav_chain` 这几个"看起来没用"的字段也必须带 —— IG 的写接口会校验它们的**存在**。
+   *
+   * 失败时由调用方退回网页 REST 那条老路（见 core/NativeDirect.sendText）。
    *
    * @returns 服务端回 `{"status":"ok"}` 才算成功。
    */
@@ -174,31 +183,42 @@ export class MobileDirect {
       return false;
     }
     const data: Record<string, Object> = MobileRequest.withExtraData(identity);
+    // 三个键共用同一个 token（见上面的说明）。
+    const token: string = uuid4();
     data['action'] = 'send_item';
+    data['is_x_transport_forward'] = 'false';
+    data['send_silently'] = 'false';
     data['is_shh_mode'] = '0';
-    data['send_attribution'] = 'direct_thread';
-    data['client_context'] = uuid4();
-    data['mutation_token'] = uuid4();
-    data['entry'] = 'text';
-    data['text'] = body;
+    data['send_attribution'] = 'message_button';
+    data['client_context'] = token;
     data['device_id'] = identity.androidDeviceId;
+    data['mutation_token'] = token;
+    data['_uuid'] = identity.uuid;
+    data['btt_dual_send'] = 'false';
+    data['nav_chain'] = '1qT:feed_timeline:1,1qT:feed_timeline:2,1qT:feed_timeline:3,'
+      + '7Az:direct_inbox:4,7Az:direct_inbox:5,5rG:direct_thread:7';
+    data['is_ae_dual_send'] = 'false';
+    data['offline_threading_id'] = token;
+    data['text'] = body;
     /*
      * `thread_ids` 照 instagrapi 的写法是**不带引号的数字数组**：`json.dumps([int(id)])` → `[123]`。
-     * 之前写成 `["123"]` 被 IG 回 400（"很抱歉，出错了，请重试。"，62 字节）—— 就是这一处。
      */
     data['thread_ids'] = `[${id}]`;
+    hilog.info(DOMAIN, TAG, 'send mobile entry thread=%{public}s len=%{public}d idLen=%{public}d',
+      id, body.length, id.length);
+    // **不签名**（instagrapi 的 with_signature=False）：第 4 个参数是 false。
     const result: MobileResult = await MobileRequest.send(
-      'direct_v2/threads/broadcast/text/', MobileRequest.formOf(data), '', true, null,
+      'direct_v2/threads/broadcast/text/', MobileRequest.formOf(data), '', false, null,
       new MobileOptions(ApiThrottle.DIRECT, ApiThrottle.interactive()));
     if (!result.ok) {
-      hilog.warn(DOMAIN, TAG, 'send miss thread=%{public}s %{public}s',
-        id, result.summary());
+      hilog.warn(DOMAIN, TAG, 'send miss thread=%{public}s %{public}s body=%{public}s',
+        id, result.summary(), result.body.substring(0, 160).replace(/[\r\n]+/g, ' '));
       return false;
     }
     const ok: boolean = result.body.indexOf('"status":"ok"') >= 0
       || result.body.indexOf('"status": "ok"') >= 0;
     hilog.info(DOMAIN, TAG, 'send %{public}s thread=%{public}s len=%{public}d ack=%{public}s',
-      ok ? 'ok' : 'rejected', id, body.length, result.body.substring(0, 120));
+      ok ? 'ok' : 'rejected', id, body.length, result.body.substring(0, 160));
     return ok;
   }
 
@@ -250,7 +270,45 @@ export class MobileDirect {
       + ' older=%{public}s with=%{public}s',
       id, view.messages.length, MobileDirect.rawItemCount(result.body),
       `${view.hasOlder}`, view.withUsername);
+    MobileDirect.logIdCandidates(id, result.body);
     return view;
+  }
+
+  /**
+   * 把会话响应里**所有可能是"会话 id"的字段**打一行（诊断用，一发一次）。
+   *
+   * 为什么要它：`direct_v2/threads/<id>/` 这条**读**接口接受我们手上的这个 id（39 位、
+   * 接近 2^128），但 `broadcast/text/` 那条**写**接口一直 400 —— 两件事要么是同一把
+   * id 两边都认，要么是读用的是 `thread_v2_id`、写要的是 `thread_id`。
+   * 把四个候选键一次都打出来，就不用再猜了。
+   */
+  private static logIdCandidates(threadId: string, body: string): void {
+    // 每条会话只打一次：会话页每 10 秒轮询一次，不设闸门就是每分钟 6 行噪音。
+    if (MobileDirect.idLoggedFor === threadId) {
+      return;
+    }
+    const parsed: Record<string, Object> | null = MobileDirect.parse(body);
+    if (parsed === null) {
+      return;
+    }
+    const thread: Object | undefined = parsed['thread'];
+    if (thread === undefined || thread === null || Array.isArray(thread)) {
+      return;
+    }
+    MobileDirect.idLoggedFor = threadId;
+    const box: Record<string, Object> = thread as Record<string, Object>;
+    const keys: Array<string> = ['thread_id', 'thread_v2_id', 'thread_fbid', 'thread_key'];
+    const parts: Array<string> = [];
+    for (let index: number = 0; index < keys.length; index++) {
+      const value: Object | undefined = box[keys[index]];
+      if (value === undefined || value === null) {
+        parts.push(`${keys[index]}=-`);
+        continue;
+      }
+      parts.push(`${keys[index]}=${value}`);
+    }
+    hilog.info(DOMAIN, TAG, 'thread ids requested=%{public}s %{public}s',
+      threadId, parts.join(' '));
   }
 
   /** `thread.items` 的原始条数（拿不到给 -1，用来区分"服务端没给"与"解析丢了"）。 */
