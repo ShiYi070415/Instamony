@@ -13,6 +13,14 @@
 export class AppConfig {
   static readonly INSTAGRAM_HOME_URL: string = 'https://www.instagram.com/';
   static readonly INSTAGRAM_LOGIN_URL: string = 'https://www.instagram.com/accounts/login/';
+  /**
+   * 注册页（登录页那颗「注册账号」按钮跳这里）。
+   *
+   * 走 IG 自己的网页注册流程：全程在隐藏网页里做，本 App 不收任何邮箱 / 密码。
+   * 注册完成后点网页 chrome 上的「关闭」就回到登录页（见 pages/Index.closeWeb）；
+   * 已经注册并自动登录的，会话检测会直接把 App 接进去。
+   */
+  static readonly INSTAGRAM_SIGNUP_URL: string = 'https://www.instagram.com/accounts/emailsignup/';
   static readonly INSTAGRAM_SEARCH_URL: string = 'https://www.instagram.com/explore/search/';
   /**
    * 短视频流（Reels）。

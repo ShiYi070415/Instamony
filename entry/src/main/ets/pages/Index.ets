@@ -128,6 +128,8 @@ import { DirectThread } from '../model/Direct';
 import { SearchUser, SearchPost } from '../model/Search';
 import { EMPTY_REEL, StoryHeroRect, StoryItem, StoryReel, StoryTray, StoryTrayItem } from '../model/Story';
 import { NativeStories } from '../core/NativeStories';
+// 首页「为你推荐」复用搜索页那条探索流（见 loadHomeRecommended）。
+import { NativeSearch, SearchPostPage } from '../core/NativeSearch';
 import { StoryCache } from '../core/StoryCache';
 import { AccountChange, AccountScope } from '../core/AccountScope';
 import { StoryDiag } from '../core/StoryDiag';
@@ -847,6 +849,13 @@ struct Index {
    * （显示空态与加载按钮），避免首屏出现空态一闪。
    */
   @State loadedOnce: boolean = false;
+  /**
+   * 首页现在展示的是**为你推荐**而不是信息流（见 FeedViewModel.mode 的说明）。
+   *
+   * 新注册账号还没关注任何人时 IG 的时间线是空的，这时铺探索流内容并在列表上方
+   * 显示一行「为你推荐 · 关注后会变成信息流」；关注了人之后下拉刷新会自动切回来。
+   */
+  @State feedRecommended: boolean = false;
   @State statusText: ResourceStr = '';
   /** 状态行是否显示。ResourceStr 是联合类型，没法直接取 .length 判空，所以单独记。 */
   @State statusShown: boolean = false;
@@ -2075,6 +2084,17 @@ struct Index {
       // 顺带看一眼接口登记表有没有新东西（有 TTL，过桥不频繁）。
       this.syncApiIndex();
     };
+    /*
+     * 「为你推荐」：新号没关注任何人时 IG 的时间线是空的，这时铺探索流的内容
+     * （和官方 App 一样），并让页面上显示那行提示（见 FeedViewModel.mode 的说明）。
+     */
+    this.viewModel.onMode = (mode: string): void => {
+      this.feedRecommended = mode === 'recommended';
+      hilog.info(DOMAIN, TAG, 'feed mode=%{public}s', mode);
+    };
+    this.viewModel.loadRecommended = (): Promise<Array<MediaPost>> => {
+      return this.loadHomeRecommended();
+    };
     this.bridge.setReadyHandler((): void => {
       this.bridgeReady = true;
       // 网页宿主就绪 = 切 tab / 导航网页都已经可用 → 这时候才执行深链意图（见 consumePendingDeepLink）。
@@ -2908,6 +2928,22 @@ struct Index {
       return;
     }
     this.bridge.loadUrl(AppConfig.INSTAGRAM_LOGIN_URL);
+  }
+
+  /**
+   * 点登录页那颗「注册新账号」按钮：把网页亮出来并导航到 **IG 的注册页**。
+   *
+   * 注册全程在 Instagram 官方网页里做（本 App 不收邮箱/密码）。注册完成后：
+   *   · 网页里直接登进去了 → 点 chrome 上的「关闭」→ `closeWeb()` 重读 Cookie 罐 → 进 App；
+   *   · 没登进去（IG 让它回登录页）→ 关闭后仍停在这一页，用新账号点「登录」即可。
+   *
+   * 未登录时 `SessionGate` 只放行 `/accounts/…` 这类登录流程地址，注册页正好在这一族里。
+   */
+  private openSignupWeb(): void {
+    this.webVisible = true;
+    this.statusShown = false;
+    hilog.info(DOMAIN, TAG, 'open signup web');
+    this.bridge.loadUrl(AppConfig.INSTAGRAM_SIGNUP_URL);
   }
 
   private openWeb(url: string): void {
@@ -5596,6 +5632,29 @@ struct Index {
    *   2) `viewModel.refresh()` 撞上在跑的一轮取数时只是排队就返回了，转圈会提前收起 ——
    *      所以再 `awaitIdle()` 等它排完并跑完，转圈才收。
    */
+  /**
+   * 取一份「为你推荐」内容（首页时间线为空时用，见 FeedViewModel.mode 的说明）。
+   *
+   * 复用搜索页那条**探索流**（`discover/topical_explore/`，见 core/NativeSearch.recommendedPage）：
+   * 它不需要任何模板、专门就是推荐内容，而且是"原生一发"。转成 `MediaPost` 之后首页
+   * 那套 FeedList 直接就能画（点赞 / 收藏 / 进帖子页全部照旧）。
+   */
+  private async loadHomeRecommended(): Promise<Array<MediaPost>> {
+    try {
+      const page: SearchPostPage | null = await NativeSearch.recommendedPage('');
+      if (page === null || page.posts.length === 0) {
+        hilog.info(DOMAIN, TAG, 'home recommended empty (%{public}s)', NativeSearch.lastDiag());
+        return [];
+      }
+      const list: Array<MediaPost> = Index.searchPostsToMedia(page.posts);
+      hilog.info(DOMAIN, TAG, 'home recommended n=%{public}d', list.length);
+      return list;
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'home recommended failed: %{public}s', (error as Error).message);
+      return [];
+    }
+  }
+
   private async refreshFeed(): Promise<void> {
     this.refreshing = true;
     try {
@@ -5636,6 +5695,8 @@ struct Index {
          */
         FeedList({
           posts: this.posts,
+          // 「为你推荐」模式下的那一行提示（见 feedRecommended 的说明）。
+          recommended: this.feedRecommended,
           // 列表顶部放那条托盘（数据由托盘自己拉）。
           showStories: true,
           /*
@@ -5802,6 +5863,9 @@ struct Index {
       LoginPage({
         onLogin: (): void => {
           this.openLoginWeb();
+        },
+        onRegister: (): void => {
+          this.openSignupWeb();
         },
         onRecheck: (): void => {
           this.refreshSessionFromJar();

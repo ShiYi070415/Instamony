@@ -150,6 +150,20 @@ export class FeedViewModel {
   private readonly bridge: InstagramPageBridge = InstagramPageBridge.getInstance();
   private posts: MediaPost[] = [];
   private busy: boolean = false;
+  /**
+   * 现在这份列表是**信息流**还是**为你推荐**。
+   *
+   * 新注册的账号还没有关注任何人，IG 的首页时间线会回**空**（`feed_items: []`），
+   * 而官方 App 这时展示的是「为你推荐」（探索那套内容）。这里照同一个逻辑：
+   * 第一页读出来是 0 条 → 用 `loadRecommended`（页面注入，走探索流）补一份，
+   * `mode` 切成 `recommended`；一旦时间线真的有内容了（关注了人 / 下拉刷新）就切回 `feed`。
+   *
+   * **判据只看服务端数据**（第一页条目数），不猜：这样"空时间线"和"读失败"不会混为一谈
+   * —— 读失败会走 `FeedStatus.Failed`，仍然报错，不会被推荐内容盖掉。
+   */
+  private mode: string = 'feed';
+  /** 上一次为「为你推荐」拿到的那一份（刷新时先复用，避免列表闪空）。 */
+  private recommended: Array<MediaPost> = [];
   private statusKind: FeedStatus = FeedStatus.Idle;
   private statusDetail: string = '';
   private debug: string = '';
@@ -230,9 +244,29 @@ export class FeedViewModel {
   /** 一轮加载结束（页面据此落一次轻量探针报告）。 */
   onSettled: () => void = (): void => {
   };
+  /**
+   * 列表性质变了：`feed` = 信息流，`recommended` = 为你推荐（见 mode 的说明）。
+   *
+   * 页面据此显示"为你推荐"那行提示；列表本身照旧走 onPosts。
+   */
+  onMode: (mode: string) => void = (mode: string): void => {
+  };
+  /**
+   * 取一份「为你推荐」内容（页面注入：走探索流，见 core/NativeSearch.recommendedPage）。
+   *
+   * 默认返回空数组 —— 没注入时行为与以前完全一致（时间线空就空着）。
+   */
+  loadRecommended: () => Promise<Array<MediaPost>> = (): Promise<Array<MediaPost>> => {
+    return Promise.resolve([]);
+  };
 
   list(): MediaPost[] {
     return this.posts;
+  }
+
+  /** 现在这份列表是信息流还是为你推荐（见 mode 的说明）。 */
+  feedMode(): string {
+    return this.mode;
   }
 
   isBusy(): boolean {
@@ -303,6 +337,9 @@ export class FeedViewModel {
     this.sawEndAtMs = 0;
     this.pending = false;
     this.wantFirstPage = false;
+    // 换账号后"为你推荐"那份也是上一个人的内容，一起作废（见 mode 的说明）。
+    this.mode = 'feed';
+    this.recommended = [];
     // 转发状态是本机记的，换了账号就完全不可信了。
     this.repostedKeys.clear();
     this.setPosts([]);
@@ -448,6 +485,12 @@ export class FeedViewModel {
     try {
       if (firstLoad || refreshing) {
         await this.loadFirstPage(firstLoad, refreshing);
+        /*
+         * 第一页到手之后：**时间为空就补「为你推荐」**（见 mode 的说明）。
+         * 新注册的账号还没关注任何人，IG 的时间线会回空 —— 官方 App 这时展示的也是推荐内容，
+         * 否则用户看到的就是一屏空白。关注了人 / 下拉刷新拿到真内容后会自动切回信息流。
+         */
+        await this.maybeLoadRecommended();
       } else {
         await this.loadNextPage();
       }
@@ -462,6 +505,49 @@ export class FeedViewModel {
         this.loadFeed();
       }
     }
+  }
+
+  /**
+   * 时间线是空的时候补一份「为你推荐」，有内容时切回信息流（见 mode 的说明）。
+   *
+   * 判据只有一条：**服务端这一页给了几条**。所以：
+   *   · 有内容 → `mode='feed'`（如果上一轮是推荐，这里就切回来，列表用新内容整体替换）；
+   *   · 0 条 → 走注入的 `loadRecommended()`；拿到了就铺上并 `mode='recommended'`，
+   *     拿不到就保持原样（状态行仍然是它原来的语义，不会被悄悄改成"空列表"）。
+   *
+   * 推荐内容**不分页**：`hasMore=false`，避免触底哨兵对着一条不翻页的流空转。
+   */
+  private async maybeLoadRecommended(): Promise<void> {
+    if (this.posts.length > 0) {
+      if (this.mode !== 'feed') {
+        this.mode = 'feed';
+        this.onMode('feed');
+        hilog.info(DOMAIN, TAG, 'feed mode → feed (timeline has content)');
+      }
+      return;
+    }
+    let list: Array<MediaPost> = this.recommended;
+    if (list.length === 0) {
+      try {
+        list = await this.loadRecommended();
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'recommended load failed: %{public}s', (error as Error).message);
+        return;
+      }
+    }
+    if (list.length === 0) {
+      hilog.info(DOMAIN, TAG, 'timeline empty and no recommended content');
+      return;
+    }
+    this.recommended = list;
+    this.mode = 'recommended';
+    this.hasMore = false;
+    this.sawEnd = true;
+    this.sawEndAtMs = Date.now();
+    this.setStatus(FeedStatus.Idle);
+    this.setPosts(list);
+    this.onMode('recommended');
+    hilog.info(DOMAIN, TAG, 'timeline empty → recommended n=%{public}d', list.length);
   }
 
   /**

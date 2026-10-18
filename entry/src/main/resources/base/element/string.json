@@ -29,6 +29,22 @@
       "value": "我已登录，重新检查"
     },
     {
+      "name": "login_register",
+      "value": "注册新账号"
+    },
+    {
+      "name": "login_register_hint",
+      "value": "注册会在 Instagram 官方网页里完成，返回这一页后直接用新账号登录即可。"
+    },
+    {
+      "name": "feed_recommended_title",
+      "value": "为你推荐"
+    },
+    {
+      "name": "feed_recommended_hint",
+      "value": "新账号还没有可推送的内容，关注一些人后下拉刷新即可看到信息流"
+    },
+    {
       "name": "login_page_action",
       "value": "登录 Instagram"
     },

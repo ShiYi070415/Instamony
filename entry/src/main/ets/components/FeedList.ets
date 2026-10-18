@@ -713,6 +713,13 @@ export struct FeedList {
    */
   @Prop showStories: boolean = false;
   /**
+   * 这份列表是不是「为你推荐」（首页时间线为空时铺的探索流，见 FeedViewModel.mode）。
+   *
+   * 为真时在列表最上面画一行提示（"为你推荐 · 关注一些人后下拉刷新即是信息流"），
+   * 它跟着列表一起滚走，不占固定空间。
+   */
+  @Prop recommended: boolean = false;
+  /**
    * 宿主手上那份托盘数据 + 它的时间戳，原样交给 StoriesTray 当**首帧内容**。
    *
    * 为什么需要：FeedList 跟着 tab 一起被销毁重建（内容层是 `if (selectedIndex === 0)`，
@@ -3042,6 +3049,33 @@ export struct FeedList {
                * padding 只在**内部**留白，行本身仍是整屏宽，两端能穿出屏幕。
                */
               .padding({ bottom: TRAY_FEED_GAP_VP })
+            }
+            /*
+             * 「为你推荐」提示行（宿主在"时间线为空、改铺探索流"时置位，见
+             * FeedViewModel.mode）。放在列表里而不是页面外层：它会跟着信息流一起滚走，
+             * 不占用固定的纵向空间。
+             */
+            if (this.recommended) {
+              ListItem() {
+                Row({ space: 8 }) {
+                  SymbolGlyph($r('sys.symbol.star_fill'))
+                    .fontSize(15)
+                    .fontColor([$r('app.color.accent')])
+                  Text($r('app.string.feed_recommended_title'))
+                    .fontSize(14)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor($r('app.color.primary_text'))
+                  Text($r('app.string.feed_recommended_hint'))
+                    .fontSize(12)
+                    .fontColor($r('app.color.secondary_text'))
+                    .layoutWeight(1)
+                    .maxLines(2)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                }
+                .width('100%')
+                .alignItems(VerticalAlign.Center)
+                .padding({ left: 16, right: 16, top: 12, bottom: 4 })
+              }
             }
             ForEach(this.posts, (post: MediaPost, index: number): void => {
               ListItem() {

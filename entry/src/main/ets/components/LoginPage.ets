@@ -30,6 +30,9 @@ export struct LoginPage {
   /** 点「登录」：把网页亮出来并导航到登录页（见 pages/Index.openLoginWeb）。 */
   onLogin: () => void = (): void => {
   };
+  /** 点「注册账号」：把网页亮出来并导航到 IG 的注册页（见 pages/Index.openSignupWeb）。 */
+  onRegister: () => void = (): void => {
+  };
   /** 点「重新检查」：网页里已经登好了、但信号没送到时的手动兜底。 */
   onRecheck: () => void = (): void => {
   };
@@ -127,6 +130,17 @@ export struct LoginPage {
         .onChange((): void => {
           this.onLogin();
         })
+
+        // ---- 次按钮：注册账号（走 IG 网页注册，注册完回到这一页）----
+        MaterialLabelButton({
+          labelRes: $r('app.string.login_register'),
+          fullWidth: true,
+          fontSize: 15,
+          onTap: (): void => {
+            this.onRegister();
+          }
+        })
+          .margin({ top: 12 })
 
         // ---- 次按钮：手动重新检查（网页里登好了但信号未到时用）----
         MaterialLabelButton({
