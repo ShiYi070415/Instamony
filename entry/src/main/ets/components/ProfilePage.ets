@@ -417,14 +417,19 @@ export struct ProfilePage {
             }
           })
         }
-        // ③ 添加（先不接功能）。
-        MaterialChipButton({
-          symbol: $r('sys.symbol.plus'),
-          labelRes: $r('app.string.profile_chip_add'),
-          onTap: (): void => {
-            hilog.info(DOMAIN, TAG, 'PF chip add tap (not wired)');
-          }
-        })
+        /*
+         * ③ 添加（先不接功能）——**只有本人主页有**：
+         * 需求"用户主页横幅区取消添加按钮"，添加是本人往自己主页挂东西的入口。
+         */
+        if (this.isSelfPage()) {
+          MaterialChipButton({
+            symbol: $r('sys.symbol.plus'),
+            labelRes: $r('app.string.profile_chip_add'),
+            onTap: (): void => {
+              hilog.info(DOMAIN, TAG, 'PF chip add tap (not wired)');
+            }
+          })
+        }
       }
       .padding({ top: CHIP_TOP_VP, bottom: CHIP_BOTTOM_VP, left: CHIP_SIDE_VP, right: CHIP_SIDE_VP })
     }
