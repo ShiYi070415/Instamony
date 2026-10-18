@@ -92,9 +92,14 @@ const INFO_SIDE_VP: number = 8;
 const INFO_AVATAR_VP: number = 34;
 /** 资讯栏胶囊的高度（vp，和 feeds 的材质容器 40 对齐）。 */
 const INFO_PILL_H: number = 40;
-/** 资讯旁那颗「关注」的宽高（vp）：比胶囊矮一档，看着是"贴在胶囊右边的一条小按钮"。 */
-const STORY_FOLLOW_W_VP: number = 58;
-const STORY_FOLLOW_H_VP: number = 30;
+/**
+ * 资讯旁那颗「关注」的宽高（vp）。
+ *
+ * 需求："快拍内容的关注按钮放大，高度要和用户资讯一样" —— 高度直接取 `INFO_PILL_H`（40），
+ * 和左边那颗"头像 + 用户名"的胶囊齐平；宽度也给足，字才不至于挤。
+ */
+const STORY_FOLLOW_W_VP: number = 76;
+const STORY_FOLLOW_H_VP: number = INFO_PILL_H;
 /** 功能区的统一间隔（vp）：输入框与三颗按钮之间都是这个数。 */
 const ACTION_GAP_VP: number = 10;
 /** 媒体区 → 功能区（vp）。 */
@@ -1560,7 +1565,7 @@ export struct StoryViewer {
         Row() {
           MaterialLabelButton({
             labelRes: $r('app.string.action_follow'),
-            fontSize: 12,
+            fontSize: 14,
             pillWidth: STORY_FOLLOW_W_VP,
             pillHeight: STORY_FOLLOW_H_VP,
             tint: '#FFFFFF',

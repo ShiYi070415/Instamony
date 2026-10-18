@@ -88,12 +88,12 @@ const SELF_PLUS_VP: number = 26;
 const FOLLOW_PILL_W_VP: number = 46;
 const FOLLOW_PILL_H_VP: number = 24;
 /**
- * 那条胶囊往下沉多少（vp）。
+ * 那条胶囊离环底边的距离（vp）。
  *
- * 参考图里胶囊的**中线**正好压在环的底边上（一半在头像上、一半在头像下），
- * 所以从"底边对齐"再往下沉半个胶囊高。
+ * 需求："关注按钮上移一些，要在圆圈里面"。所以不再让它骑在环的底边上，而是**整颗落在圈内**：
+ * 环盒 91、头像直径 80（上下各留 5.5），胶囊高 24 → 底边留 8 时正好完全在头像圆里。
  */
-const FOLLOW_PILL_DROP_VP: number = 11;
+const FOLLOW_PILL_INSET_VP: number = 8;
 
 @Component
 export struct StoriesTray {
@@ -493,9 +493,7 @@ export struct StoriesTray {
             })
           }
           // 压在环的底边上（参考图里那条胶囊正好骑在头像下缘）。
-          .padding({ bottom: 1 })
-          // 参考图里胶囊的**中线**落在环的底边上，所以再往下沉半个胶囊高。
-          .translate({ y: FOLLOW_PILL_DROP_VP })
+          .padding({ bottom: FOLLOW_PILL_INSET_VP })
           /*
            * 这里同样**不能**用 `hitTestBehavior(Transparent)`（见 selfItemView 那颗「+」的说明）：
            * 胶囊必须自己吃下点击，否则点「+关注」等于同时点了这一整项（会把快拍打开）。
