@@ -1523,6 +1523,16 @@ export const DOM_SURVEY_SCRIPT: string = '(function(){try{' +
  * 不改请求、不改响应，只上报「方法 + URL + 触发方式」。
  */
 export const NETWORK_WATCHER: string = '(function(){try{' +
+    /*
+     * **只在闸门打开时才装钩子**（见 core/WatchGate）。
+     *
+     * 装钩子 = 包住 fetch/XHR，是页面脚本能直接看出来的自动化痕迹；而这个项目的
+     * "原生自己取数"只在**需要抓请求模板**的那几秒才依赖它。所以现在由原生决定要不要装：
+     * document-start 时同步问一句 `ogNative.shouldWatch()`（同步很关键 —— 必须赶在
+     * 页面自己发第一发请求之前），没被点名就原样不动。
+     */
+    'var __watchOn=false;try{__watchOn=(' + PROXY + '.shouldWatch()===true);}catch(e){}' +
+    'if(!__watchOn)return;' +
     'if(window.__ogNetWatch){return;}window.__ogNetWatch=1;' +
     'var tell=function(payload){try{' + PROXY + '.onApiDetail(String(payload));}catch(e){}};' +
     'var pack=function(o){try{return JSON.stringify(o);}catch(e){return "{}";}};' +

@@ -163,6 +163,8 @@ import { NativeUserInfo } from '../core/NativeUserInfo';
 import { ApiThrottle } from '../core/ApiThrottle';
 // 降噪度量（临时 toast 用，见 aboutToAppear 末尾那段）。
 import { MobileRequest } from '../core/mobileapi/MobileRequest';
+// 抓包闸门：页面里的 fetch 钩子只在需要抓模板时才装（见 core/WatchGate）。
+import { WatchGate } from '../core/WatchGate';
 import { SessionGate } from '../core/SessionGate';
 import { InstagramProbe } from '../probe/InstagramProbe';
 import { FeedViewModel } from '../viewmodel/FeedViewModel';
@@ -2116,6 +2118,17 @@ struct Index {
       // 接口模板落盘（幂等）：读回上次抓到的请求模板，"不走网页"的第一发要用它
       // （见 bridge/ApiRegistry.persistTemplates 与 core/NativeFeed）。
       ApiRegistry.init(host);
+      /*
+       * **冷启动的抓包窗口**：只有"一条模板都没有"（首次安装 / 清过缓存）时才需要
+       * 页面里的 fetch 钩子 —— 那时原生没有任何可回放的请求配置，必须靠页面自己发的那几发
+       * 把模板抓下来。平时（模板已在盘上）就不装钩子（见 core/WatchGate 的文件头）。
+       */
+      if (ApiRegistry.getInstance().count() === 0) {
+        WatchGate.arm(240000, 'cold-start');
+      } else {
+        hilog.info(DOMAIN, TAG, 'watch off: templates n=%{public}d',
+          ApiRegistry.getInstance().count());
+      }
       // 搜索页冷路径抓完模板会把"结构摘要"交回来 → 落进探针文件（见 dumpProbeFile）。
       this.searchVm.onDigest = (text: string): void => {
         this.dumpProbeFile('search', text);
@@ -3578,6 +3591,8 @@ struct Index {
    * 那时 ProfileViewModel 还没有 header 可用。
    */
   private async captureProfileTemplates(): Promise<void> {
+    // 抓模板 = 需要页面里的 fetch 钩子（见 core/WatchGate）；窗口开 3 分钟够跑完四条分页。
+    WatchGate.arm(180000, 'probe-profile');
     let username: string = '';
     try {
       const href: string = await this.bridge.runBridge(OWN_PROFILE_SCRIPT, 8000, 'own-profile');
@@ -3615,6 +3630,8 @@ struct Index {
    * 逼出"结果那条" → 回首页；跑完把结构摘要落进沙箱（`probe_search_*.txt`，见 dumpSearchDigest）。
    */
   private async captureSearchTemplates(): Promise<void> {
+    // 抓模板需要页面里的 fetch 钩子（见 core/WatchGate）。
+    WatchGate.arm(180000, 'probe-search');
     this.setLocalStatus($r('app.string.probe_search_templates'));
     const digest: string = await this.searchVm.captureTemplates();
     hilog.info(DOMAIN, TAG, 'probe search templates done %{public}s | digest=%{public}d chars',
@@ -3849,6 +3866,8 @@ struct Index {
     if (ApiRegistry.getInstance().storedForNative(AYML_OP) !== null) {
       return true;
     }
+    // 要把页面导航过去抓一发请求，需要 fetch 钩子在位（见 core/WatchGate）。
+    WatchGate.arm(120000, 'ayml');
     if (this.aymlCapturing) {
       return false;
     }
@@ -3902,6 +3921,8 @@ struct Index {
     if (NativeStories.hasStoryTemplate()) {
       return true;
     }
+    // 打开某人的故事页去抓它自己那条查询：同样需要 fetch 钩子（见 core/WatchGate）。
+    WatchGate.arm(120000, 'story');
     if (this.storyCapturing) {
       return false;
     }

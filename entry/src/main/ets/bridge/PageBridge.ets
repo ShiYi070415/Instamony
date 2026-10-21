@@ -13,6 +13,8 @@ import { InstagramProbe } from '../probe/InstagramProbe';
 import { SessionGate } from '../core/SessionGate';
 // 实时通道的回传落点（见 onMqttEvent）。
 import { MobileMqttWs } from '../core/mobileapi/MobileMqttWs';
+// 抓包闸门（见 shouldWatch：页面只在被点名时才装 fetch 钩子）。
+import { WatchGate } from '../core/WatchGate';
 
 const DEFAULT_TIMEOUT_MS: number = 20000;
 /**
@@ -140,6 +142,16 @@ export class InstagramBridgeProxy {
    */
   onMqttEvent(kind: string, data: string): void {
     MobileMqttWs.onEvent(kind, data);
+  }
+
+  /**
+   * **页面问一句"这次要不要装抓包钩子"**（见 core/WatchGate 与 WebScripts.NETWORK_WATCHER）。
+   *
+   * 必须**同步返回**：document-start 时页面自己马上就要发请求，异步问就晚了。
+   * JS proxy 允许同步返回值，页面侧因此能拿到 true/false。
+   */
+  shouldWatch(): boolean {
+    return WatchGate.armed();
   }
 }
 
