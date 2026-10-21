@@ -49,6 +49,13 @@ const DOMAIN = 0x0000;
 const WARM_FEED_COUNT: number = 7;
 /** reels 预热的条数（和 ReelsViewModel 的 NATIVE_PAGE_COUNT 一致，别让它再发一次）。 */
 const WARM_REELS_COUNT: number = 7;
+/**
+ * reels 预热**让开首屏**的延迟（毫秒）。
+ *
+ * 节流闸是全局单闸：启动瞬间就发这一发（200~600KB / 4~6 秒）会把首页那条探索流请求堵在后面。
+ * 6 秒足够让首屏那一发先走完，之后再把 Reels 备上（用户真去点 Reels 时多半已经到了）。
+ */
+const WARM_REELS_DELAY_MS: number = 6000;
 /** 材质能力诊断日志的 tag（`hilog -T InstarmonyMaterialDiag` 单独抓）。 */
 const TAG_MATERIAL: string = 'InstarmonyMaterialDiag';
 
@@ -144,11 +151,28 @@ export default class EntryAbility extends UIAbility {
        * 也要用它给点开的会话铺第一屏 —— 异步读的话这两件事都会赶在数据到手之前发生。
        */
       DirectCache.init(this.context);
-      NativeFeed.warmStart(WARM_FEED_COUNT);
-      // reels 的预热**只在 Wi-Fi/不计费网络**下做：它是一次完整的 Clips 请求（响应比信息流那条
-      // 更大），而用户开 app 未必会点进 Reels —— 蜂窝网下这笔钱不值得先花（见 core/NetworkState）。
+      /*
+       * **首屏是探索流时，启动不要先用"关注流预热"占住节流闸**。
+       *
+       * `ApiThrottle` 是**全局单闸**：这一发时间线预热（300KB / 4~9 秒）会把页面那条探索流
+       * 请求堵在后面 —— 用户看到的就是"缓存已经铺上去了，但好几秒才换成新帖子"。
+       * 而 `timelineCaughtUp()` 说明这个账号的时间线本来就只会回"看完了"那条占位，
+       * 这一发**注定没用**，跳过它等于把首屏提前 4~9 秒。
+       */
+      if (NativeFeed.timelineCaughtUp()) {
+        hilog.info(DOMAIN, 'testTag', 'feed warm skipped: timeline caught up');
+      } else {
+        NativeFeed.warmStart(WARM_FEED_COUNT);
+      }
+      /*
+       * reels 的预热**只在 Wi-Fi/不计费网络**下做（见 core/NetworkState），
+       * 而且要**让开首屏**：它是一次完整的 Clips 请求（200~600KB / 4~6 秒），
+       * 启动瞬间就打会和上面那条一样堵探索流。延迟几秒，等首屏那发探索流走完再补。
+       */
       if (NetworkState.allowPrefetch()) {
-        NativeReels.warmStart(WARM_REELS_COUNT);
+        setTimeout((): void => {
+          NativeReels.warmStart(WARM_REELS_COUNT);
+        }, WARM_REELS_DELAY_MS);
       }
       hilog.info(DOMAIN, 'testTag', 'warmup kicked off %{public}s', NetworkState.describe());
     } catch (err) {

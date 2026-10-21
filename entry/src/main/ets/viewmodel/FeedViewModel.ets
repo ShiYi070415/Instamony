@@ -497,17 +497,21 @@ export class FeedViewModel {
     const refreshing: boolean = this.wantFirstPage;
     this.wantFirstPage = false;
     try {
-      if (refreshing && this.exploreTakesOver()) {
-        /*
-         * **探索流已经接管这一屏时，刷新只刷探索流**（用户要求：
-         * "没关注的帖子不显示只针对关注流；当探索流接管 feeds 流时就只刷新探索流的帖子，没有限制"）。
-         *
-         * 判定见 `exploreTakesOver()`。这时再花 4~9 秒去问时间线纯属白等 —— 它回的
-         * 还是同一批"没关注的推荐帖"，全会被筛掉。冷启动那头（列表还空）仍照常问一次关注流，
-         * 所以新关注的账号下次启动还是能把关注流接回来。
-         */
-        hilog.info(DOMAIN, TAG, 'refresh: explore takes over → timeline skipped');
+      /*
+       * **探索流接管这一屏时，冷启动和刷新都先取探索流**（用户要求："冷启动时如果是探索流就
+       * 优先获取帖子并覆盖 feeds 流，现在要等好几秒才会从缓存变为新获取的帖子"）。
+       *
+       * `exploreTakesOver()` = 关注流那一段空 + 探索流有内容（缓存已经铺上了）。
+       * 这时先发探索流那一发（它才是"新帖子"的来源），关注流改到**后台**顺带问一次
+       * （见 refreshFollowingQuietly）—— 既不挡首屏，也不会让新关注的人永远不出现。
+       */
+      if (this.exploreTakesOver()) {
+        hilog.info(DOMAIN, TAG, 'feed first/refresh: explore takes over → explore first');
         await this.loadExplore(true);
+        if (firstLoad) {
+          // 首屏已经出来了，再在后台补一次关注流（不 await、失败无所谓）。
+          this.refreshFollowingQuietly();
+        }
       } else if (firstLoad || refreshing) {
         await this.loadFirstPage(firstLoad, refreshing);
         /*
@@ -864,6 +868,30 @@ export class FeedViewModel {
    */
   private exploreTakesOver(): boolean {
     return this.following.length === 0 && this.explore.length > 0;
+  }
+
+  /**
+   * **后台**问一次关注流（不 await、不挡首屏；失败无所谓）。
+   *
+   * 谁用：首屏是探索流接管的时候（见 loadFeed 的那条分支）。不这么补的话，探索流优先的
+   * 策略会让"新关注的人"永远不出现 —— 用户下次启动看到的还是推荐流。
+   * 拿到有内容的页就按正常规则并进关注流那一段（关注状态那道筛照旧）。
+   */
+  private refreshFollowingQuietly(): void {
+    NativeFeed.fetchPage(NATIVE_FIRST_COUNT, '').then((page: NativeFeedPage | null): void => {
+      if (page === null || page.items.length === 0) {
+        return;
+      }
+      // 走同一条落库路径（去重 / 关注状态筛 / 卡片位置重算都在里面）。
+      this.applyPayload(this.pagePayload(page), false, false).then((): void => {
+        this.nativeCursor = page.nextCursor;
+        this.nativeHasMore = page.hasMore;
+        hilog.info(DOMAIN, TAG, 'following quiet refresh n=%{public}d kept=%{public}d',
+          page.items.length, this.following.length);
+      }).catch((): void => {
+      });
+    }).catch((): void => {
+    });
   }
 
   /**
