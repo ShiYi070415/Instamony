@@ -83,7 +83,7 @@ const MENU_OFFSET_Y: number = 6;
  */
 const PAGE_PADDING: number = 12;
 const CARD_ROW_PADDING: number = 14;
-const CARD_RADIUS: number = 16;
+const CARD_RADIUS: number = 20;
 const CARD_BORDER: number = 1;
 
 /**
@@ -335,7 +335,8 @@ export struct SettingsPanel {
       .fontSize(12)
       .fontColor($r('app.color.secondary_text'))
       .width('100%')
-      .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING, top: 2, bottom: 12 })
+      // 与上面那条分隔线之间留出间距（用户反馈：太贴分割线了）：10vp。
+      .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING, top: 10, bottom: 14 })
   }
 
   /** 卡片内部相邻两行之间的细分隔线（左右与行文字对齐）。 */
