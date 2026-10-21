@@ -10,8 +10,12 @@
  * "走网页时排版对、走原生时不对"这种最难查的问题。
  */
 
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { FeedItemDto, FeedMediaItemDto } from '../model/FeedDto';
 import { MediaQuality, PickedMedia } from './MediaQuality';
+
+const DOMAIN: number = 0xFF00;
+const TAG: string = 'NativeTimelineParser';
 
 /** 连接键：响应 `.data` 里放首页信息流的那个键。 */
 const FEED_KEY: string = 'xdt_api__v1__feed__timeline__connection';
@@ -181,6 +185,25 @@ export class NativeTimelineParser {
     }
     const rows: Array<Object> = NativeTimelineParser.rowsOf(root);
     const items: Array<FeedItemDto> = [];
+    if (!NativeTimelineParser.rootDiagDone) {
+      NativeTimelineParser.rootDiagDone = true;
+      const keys: Array<string> = Object.keys(root);
+      const parts: Array<string> = [];
+      for (let index: number = 0; index < keys.length; index++) {
+        const value: Object = root[keys[index]];
+        if (value === null) {
+          parts.push(`${keys[index]}:null`);
+        } else if (Array.isArray(value)) {
+          const first: Record<string, Object> | null = (value as Array<Object>).length > 0
+            ? NativeTimelineParser.asRecord((value as Array<Object>)[0]) : null;
+          parts.push(`${keys[index]}[${(value as Array<Object>).length}`
+            + `|${first === null ? '-' : Object.keys(first).slice(0, 6).join('+')}]`);
+        } else {
+          parts.push(`${keys[index]}:${typeof value}`);
+        }
+      }
+      hilog.info(DOMAIN, TAG, 'mobile feed root: %{public}s', parts.join(' ').substring(0, 900));
+    }
     for (let index: number = 0; index < rows.length; index++) {
       const row: Record<string, Object> | null = NativeTimelineParser.asRecord(rows[index]);
       if (row === null) {
@@ -197,6 +220,11 @@ export class NativeTimelineParser {
       items.push(NativeTimelineParser.toItem(media as IgMedia));
     }
     if (items.length === 0) {
+      // 解析不出来时打一行现场：拿到几行、第一行有哪些键（别又像"空数组"那样沉默）。
+      const first: Record<string, Object> | null = rows.length > 0
+        ? NativeTimelineParser.asRecord(rows[0]) : null;
+      hilog.info(DOMAIN, TAG, 'mobile feed no item: rows=%{public}d rowKeys=%{public}s',
+        rows.length, first === null ? '-' : Object.keys(first).slice(0, 12).join(','));
       return null;
     }
     const cursor: string = NativeTimelineParser.cursorOf(root);
@@ -204,16 +232,103 @@ export class NativeTimelineParser {
     return new NativeTimeline(items, cursor, hasNext);
   }
 
-  /** 移动端响应里"那一串条目"在哪（`feed_items` / `items`）。 */
+  /**
+   * 移动端响应里"那一串条目"在哪。
+   *
+   * ⚠️ 真机踩过的两个坑（2026-10-21，`feed/timeline/` 这一版）：
+   *   ① `feed_items: []` 是空数组，内容在另一个键里 —— "取第一个存在的数组"就拿到了空的那个；
+   *   ② 某一个候选数组里只有一行 `{"end_of_feed_demarcator": …}`（占位），
+   *      拿到它就等于"整页 0 条"，而响应其实是好的（323~383KB、HTTP 200、4~6 秒）。
+   * 所以判据不再看键名顺序，而是**看哪条数组里真的有媒体行**（`media_or_ad` / `media`），
+   * 取媒体行最多的那条；都投不出媒体行才算这一页没内容。
+   */
   private static rowsOf(root: Record<string, Object>): Array<Object> {
-    const keys: Array<string> = ['feed_items', 'items'];
+    const keys: Array<string> = ['feed_items', 'items', 'media_or_ad'];
+    let best: Array<Object> = [];
+    let bestMedia: number = 0;
+    const shape: Array<string> = [];
     for (let index: number = 0; index < keys.length; index++) {
       const value: Object | undefined = root[keys[index]];
-      if (value !== undefined && value !== null && Array.isArray(value)) {
-        return value as Array<Object>;
+      if (value === undefined || value === null || !Array.isArray(value)) {
+        continue;
+      }
+      const list: Array<Object> = value as Array<Object>;
+      let media: number = 0;
+      for (let at: number = 0; at < list.length; at++) {
+        const row: Record<string, Object> | null = NativeTimelineParser.asRecord(list[at]);
+        if (row === null) {
+          continue;
+        }
+        if (row['media_or_ad'] !== undefined && row['media_or_ad'] !== null
+          || row['media'] !== undefined && row['media'] !== null) {
+          media++;
+        }
+      }
+      shape.push(`${keys[index]}[${list.length}/${media}]`);
+      if (media > bestMedia) {
+        bestMedia = media;
+        best = list;
       }
     }
-    return [];
+    if (bestMedia === 0) {
+      hilog.info(DOMAIN, TAG, 'mobile feed rows none: candidates=%{public}s', shape.join(' '));
+    } else if (!NativeTimelineParser.rowsDiagDone) {
+      NativeTimelineParser.rowsDiagDone = true;
+      hilog.info(DOMAIN, TAG, 'mobile feed rows pick=%{public}d candidates=%{public}s',
+        bestMedia, shape.join(' '));
+    }
+    return best;
+  }
+
+  /** "候选数组各几行"那条诊断只打一次（见 rowsOf）。 */
+  private static rowsDiagDone: boolean = false;
+  /** "顶层键长什么样"那条诊断只打一次（见 parseMobileFeed）。 */
+  private static rootDiagDone: boolean = false;
+
+  /**
+   * 这一页是不是**"关注的人的最新帖子已看完"**那个占位（`end_of_feed_demarcator`）。
+   *
+   * 为什么要单独认它：IG 会把"你看完了关注的人的最新帖子，下面是为你推荐"做成
+   * `feed_items` 里的**一条占位**（不是媒体），带着 `group_set.active_group_id=feed_recs`。
+   * 它既不是内容、也不该被当成"这一页没数据"重试 —— 认清它之后，调用方可以记下这个状态、
+   * 短时间内别再白问（见 core/NativeFeed.fetchPage / markCaughtUp）。
+   */
+  static isCaughtUp(body: string): boolean {
+    let root: Record<string, Object>;
+    try {
+      root = JSON.parse(body) as Record<string, Object>;
+    } catch (error) {
+      return false;
+    }
+    /*
+     * 注意**不能**用 rowsOf：它只在"有媒体行"时才返回数组（这个占位页恰好没有），
+     * 所以这里自己扫原始的候选数组。
+     */
+    const keys: Array<string> = ['feed_items', 'items'];
+    let sawPlaceholder: boolean = false;
+    for (let index: number = 0; index < keys.length; index++) {
+      const value: Object | undefined = root[keys[index]];
+      if (value === undefined || value === null || !Array.isArray(value)) {
+        continue;
+      }
+      const list: Array<Object> = value as Array<Object>;
+      if (list.length === 0) {
+        continue;
+      }
+      for (let at: number = 0; at < list.length; at++) {
+        const row: Record<string, Object> | null = NativeTimelineParser.asRecord(list[at]);
+        if (row === null) {
+          return false;
+        }
+        const mark: Object | undefined = row['end_of_feed_demarcator'];
+        if (mark === undefined || mark === null) {
+          // 只要还有一行不是那个占位，就不能当"看完了"。
+          return false;
+        }
+        sawPlaceholder = true;
+      }
+    }
+    return sawPlaceholder;
   }
 
   /** 翻页游标（`next_max_id` 优先，其次 `pagination_info.max_id`）。 */

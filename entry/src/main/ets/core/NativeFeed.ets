@@ -12,6 +12,8 @@ import { FeedItemDto } from '../model/FeedDto';
 import { NativeTimeline, NativeTimelineParser } from './NativeTimelineParser';
 // 首页时间线的移动端通道（实测 POST feed/timeline/ → 200；见那个文件的文件头）。
 import { MobileFeedPage, MobileFeedTimeline } from './mobileapi/MobileFeedTimeline';
+// "关注流已看完"这个状态要落盘（见 markCaughtUp）。
+import { FeedCache } from './FeedCache';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeFeed';
@@ -136,6 +138,20 @@ export class NativeFeed {
    * 失败一律返回 null（无会话 / 非 200 / 形状变了 / 解析不出条目）。
    */
   static async fetchPage(first: number, cursor: string): Promise<NativeFeedPage | null> {
+    /*
+     * **"关注的人看完了"就短暂别问了**（见 markCaughtUp 的说明）。
+     *
+     * 真机现场：那个状态的时间线响应是 230~380KB、耗时 3~6 秒，但 `feed_items` 里只有
+     * 一条 `end_of_feed_demarcator`（不是媒体），解析必然 0 条 —— 首页照样只能退回"推荐网格"。
+     * 于是每一次进首页/下拉刷新都白花 4~10 秒，这正是用户说的"帖子刷新很慢"。
+     * 记住这个状态（默认 10 分钟）之后，这段时间直接跳过这一发，刷新立刻出内容。
+     */
+    if (Date.now() - NativeFeed.caughtUpAt() < NativeFeed.CAUGHT_UP_TTL_MS
+      && NativeFeed.caughtUpAt() > 0) {
+      hilog.info(DOMAIN, TAG, 'feed timeline skipped: caught up %{public}dms ago (not asked)',
+        Date.now() - NativeFeed.caughtUpAt());
+      return null;
+    }
     const viaMobile: NativeFeedPage | null = await NativeFeed.viaMobile(cursor);
     if (viaMobile !== null) {
       return viaMobile;
@@ -143,6 +159,33 @@ export class NativeFeed {
     hilog.warn(DOMAIN, TAG, 'feed mobile failed (%{public}s)', MobileFeedTimeline.detail());
     return null;
   }
+
+  /**
+   * 记下"关注的人的最新帖子已看完"这个状态（时间线只回了 `end_of_feed_demarcator`）。
+   *
+   * 同时**落盘**（见 core/FeedCache.saveCaughtUp）：不落盘的话每次冷启动又要先白等
+   * 4~10 秒才退回推荐源。
+   */
+  static markCaughtUp(): void {
+    const now: number = Date.now();
+    NativeFeed.caughtUpMs = now;
+    NativeFeed.caughtUpLoaded = true;
+    FeedCache.saveCaughtUp(now);
+  }
+
+  /** "关注流已看完"的时刻（0 = 没记过；首次调用时从落盘读回来）。 */
+  private static caughtUpAt(): number {
+    if (!NativeFeed.caughtUpLoaded) {
+      NativeFeed.caughtUpLoaded = true;
+      NativeFeed.caughtUpMs = FeedCache.loadCaughtUp();
+    }
+    return NativeFeed.caughtUpMs;
+  }
+
+  private static caughtUpMs: number = 0;
+  private static caughtUpLoaded: boolean = false;
+  /** 这个状态记多久（10 分钟：够挡住一串刷新，又不至于一直不问时间线）。 */
+  private static readonly CAUGHT_UP_TTL_MS: number = 600000;
 
   /**
    * 移动端那一发（拿不到给 null）。
@@ -159,11 +202,54 @@ export class NativeFeed {
     if (parsed === null) {
       hilog.info(DOMAIN, TAG, 'feed mobile unparsable bytes=%{public}d (%{public}s)',
         page.body.length, MobileFeedTimeline.detail());
+      /*
+       * **明确是"关注流已看完"**（这一页只有 `end_of_feed_demarcator` 占位，没有媒体行）时
+       * 记一笔，之后 10 分钟不再白问（见 fetchPage 的跳过逻辑）。
+       * 网络错误/形状不明（rows=0 但没有占位）不记 —— 那种要照常重试。
+       */
+      if (NativeTimelineParser.isCaughtUp(page.body)) {
+        NativeFeed.markCaughtUp();
+        hilog.info(DOMAIN, TAG, 'feed timeline says caught up → skip it for a while');
+      }
       return null;
     }
     hilog.info(DOMAIN, TAG, 'feed via mobile n=%{public}d more=%{public}s cursor=%{public}d ms=%{public}d',
       parsed.items.length, `${parsed.hasNext}`, parsed.nextCursor.length, page.ms);
     return new NativeFeedPage(parsed.items, parsed.nextCursor, parsed.hasNext, page.ms);
+  }
+
+  /** 分组实验只跑一次（见 groupTest）。 */
+  private static groupTestDone: boolean = false;
+
+  /**
+   * **一次性实验**：时间线"看完关注的人"之后，内容在哪个分组里。
+   *
+   * 结论（真机 2026-10-21，四发全部 n=0）：`group_id=feed_recs` / `reason=feed_recs` /
+   * `feed_pill_text=feed_recs` / `group_id=past_posts` **都给不出媒体行** ——
+   * 这个账号在移动端时间线上就是"关注流已看完、推荐组不给"的状态。
+   * 所以这里不再尝试换分组，改成"记住这个状态、短时间内直接走推荐网格"（见 markCaughtUp）。
+   * 代码留着：以后换账号/换版本要复验时把 `groupTestDone` 置 false 就能再跑一遍。
+   */
+  private static async groupTest(): Promise<void> {
+    const variants: Array<Array<string>> = [
+      ['recs', 'group_id=feed_recs'],
+      ['reason+recs', 'reason=feed_recs&group_id=feed_recs'],
+      ['pill', 'feed_pill_text=feed_recs'],
+      ['past', 'group_id=past_posts']
+    ];
+    for (let index: number = 0; index < variants.length; index++) {
+      const label: string = variants[index][0];
+      const extra: string = variants[index][1];
+      const page: MobileFeedPage | null = await MobileFeedTimeline.page('', extra);
+      if (page === null) {
+        hilog.info(DOMAIN, TAG, 'groupTest %{public}s -> miss', label);
+        continue;
+      }
+      const parsed: NativeTimeline | null = NativeTimelineParser.parseMobileFeed(page.body);
+      hilog.info(DOMAIN, TAG, 'groupTest %{public}s -> n=%{public}d bytes=%{public}d',
+        label, parsed === null ? 0 : parsed.items.length, page.body.length);
+    }
+    hilog.info(DOMAIN, TAG, 'groupTest done');
   }
 
 }

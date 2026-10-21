@@ -53,7 +53,7 @@ export class MobileFeedTimeline {
    *
    * @param maxId 上一页的游标（空串 = 最新一页）
    */
-  static async page(maxId: string = ''): Promise<MobileFeedPage | null> {
+  static async page(maxId: string = '', extraParams: string = ''): Promise<MobileFeedPage | null> {
     const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
     if (identity === null) {
       MobileFeedTimeline.lastDetail = 'no-session';
@@ -72,6 +72,9 @@ export class MobileFeedTimeline {
       + `&auto_refresh=true&is_shelf_life_enabled=true`;
     if (maxId.length > 0) {
       params += `&max_id=${encodeURIComponent(maxId)}`;
+    }
+    if (extraParams.length > 0) {
+      params += `&${extraParams}`;
     }
     // POST（GET 会 405，见文件头的实测）：体里一个空格，参数走查询串。
     const result: MobileResult = await MobileRequest.send(

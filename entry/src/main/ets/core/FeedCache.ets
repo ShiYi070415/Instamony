@@ -32,6 +32,14 @@ const TAG: string = 'FeedCache';
 /** 落盘的 preferences 文件名与键。 */
 const STORE: string = 'instarmony_feed_cache';
 const KEY: string = 'page1_v1';
+/**
+ * "关注流已看完"这个状态落盘的键（存一个毫秒时间戳）。
+ *
+ * 为什么要落盘：真机上这个状态意味着 `feed/timeline/` 只会回一条占位、必然解析出 0 条
+ * （见 core/NativeFeed.markCaughtUp）。不记住的话**每次冷启动**都要先白等 4~10 秒
+ * 才退回推荐源 —— 这正是用户说的"帖子刷新很慢"。
+ */
+const KEY_STATE: string = 'timeline_state_v1';
 /** 缓存格式版本：改了结构就 +1，旧的一律当没有。 */
 const FORMAT: number = 1;
 /** 缓存有效期（毫秒）：30 分钟。 */
@@ -74,9 +82,41 @@ export class FeedCache {
     try {
       FeedCache.store = preferences.getPreferencesSync(context, { name: STORE });
       // 按账号分区（见 core/AccountScope）：换账号绝不能读到上一个人的首页缓存。
-      AccountScope.register(FeedCache.store, [KEY]);
+      AccountScope.register(FeedCache.store, [KEY, KEY_STATE]);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'open store failed: %{public}s', (error as Error).message);
+    }
+  }
+
+  /** 存一下"关注流已看完"的时刻（见 core/NativeFeed.markCaughtUp）。 */
+  static saveCaughtUp(atMs: number): void {
+    const store: preferences.Preferences | null = FeedCache.store;
+    if (store === null) {
+      return;
+    }
+    try {
+      store.putSync(AccountScope.slot(KEY_STATE), `${atMs}`);
+      store.flushSync();
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'save caught-up failed: %{public}s', (error as Error).message);
+    }
+  }
+
+  /** 读"关注流已看完"的时刻（0 = 没记过）。 */
+  static loadCaughtUp(): number {
+    const store: preferences.Preferences | null = FeedCache.store;
+    if (store === null) {
+      return 0;
+    }
+    try {
+      const text: string = store.getSync(AccountScope.slot(KEY_STATE), '') as string;
+      if (text.length === 0) {
+        return 0;
+      }
+      const value: number = Number.parseInt(text, 10);
+      return Number.isFinite(value) && value > 0 ? value : 0;
+    } catch (error) {
+      return 0;
     }
   }
 
