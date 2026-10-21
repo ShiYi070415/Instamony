@@ -18,13 +18,13 @@
  * 所以 GET 是主路、POST 只留作兜底。判据要严：响应里必须真的有 `video_versions` ——
  * IG 对不认识的请求会回 200 + 一整页 HTML，只看 HTTP 码会把失败报成成功。
  *
- * 会话材料（头 + fb_dtsg/jazoest）走 core/RestSession —— 和关注那条路完全同一套。
+ * 请求由 core/mobileapi 统一签名（App 身份 + 会话字段），不需要任何网页模板。
  */
 
 import { http } from '@kit.NetworkKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { MediaQuality, PickedMedia } from './MediaQuality';
-import { RestSession } from './RestSession';
+import { MobileRequest, MobileResult, MobileOptions } from './mobileapi/MobileRequest';
 import { ApiThrottle } from './ApiThrottle';
 import { MobileEngage } from './mobileapi/MobileEngage';
 
@@ -254,26 +254,23 @@ export class NativeMediaInfo {
       NativeMediaInfo.detail = 'no-media-id';
       return null;
     }
-    const headers: Record<string, string> = await RestSession.headers();
-    if (Object.keys(headers).length === 0) {
-      NativeMediaInfo.detail = 'no-session';
-      return null;
-    }
-    const url: string = `https://www.instagram.com/api/v1/media/${encodeURIComponent(id)}/info/`;
     /*
-     * **先 GET**：真机实测这条端点上 POST 一律回 **405**（方法不允许），GET 才是通的那条
-     * （200 + 37KB JSON，里面有 video_versions）。所以 GET 主路、POST 只当兜底留着 ——
-     * 万一以后 IG 换回去，不用再改代码。
+     * **只走移动端私有接口**（`media/{pk}/info/`，App 身份 + 会话字段）。
      */
-    const got: string = await NativeMediaInfo.send(url, headers, '', false);
-    let out: MediaDetail | null = NativeMediaInfo.parse(got);
-    if (out === null) {
-      const tokens: string = await RestSession.formTokens();
-      const body: string = tokens.length > 0
-        ? `${tokens}&media_id=${encodeURIComponent(id)}`
-        : `media_id=${encodeURIComponent(id)}`;
-      const posted: string = await NativeMediaInfo.send(url, headers, body, true);
-      out = NativeMediaInfo.parse(posted);
+    let out: MediaDetail | null = null;
+    try {
+      const result: MobileResult = await MobileRequest.send(`media/${encodeURIComponent(id)}/info/`,
+        '', '', true, null, new MobileOptions(ApiThrottle.MEDIA_INFO, ApiThrottle.interactive()));
+      if (!result.ok) {
+        NativeMediaInfo.detail = result.summary();
+        hilog.info(DOMAIN, TAG, 'media info miss id=%{public}s %{public}s',
+          id, result.summary());
+        return null;
+      }
+      out = NativeMediaInfo.parse(result.body);
+    } catch (error) {
+      NativeMediaInfo.detail = `throw:${(error as Error).message ?? '-'}`.substring(0, 60);
+      return null;
     }
     hilog.info(DOMAIN, TAG,
       'detailFor id=%{public}s ok=%{public}s video=%{public}s images=%{public}d time=%{public}s detail=%{public}s',
@@ -281,54 +278,6 @@ export class NativeMediaInfo {
       out === null ? 0 : out.images.length,
       `${out !== null && out.takenAtMs > 0}`, NativeMediaInfo.detail);
     return out;
-  }
-
-  /** 发一次（POST/GET 只差 method 与 body）。返回响应文本（失败给空串）。 */
-  private static async send(url: string, headers: Record<string, string>, body: string,
-                            post: boolean): Promise<string> {
-    const request: http.HttpRequest = http.createHttp();
-    try {
-      const response: http.HttpResponse = await request.request(url, {
-        method: post ? http.RequestMethod.POST : http.RequestMethod.GET,
-        header: headers,
-        extraData: post ? body : undefined,
-        connectTimeout: CONNECT_TIMEOUT_MS,
-        readTimeout: READ_TIMEOUT_MS,
-        expectDataType: http.HttpDataType.STRING
-      });
-      const text: string = typeof response.result === 'string'
-        ? response.result as string : JSON.stringify(response.result);
-      const code: number = response.responseCode;
-      const looksJson: boolean = text.indexOf('"video_versions"') >= 0
-        || (text.indexOf('"items"') >= 0 && text.indexOf('"status":"ok"') >= 0);
-      hilog.info(DOMAIN, TAG, 'rsp %{public}s code=%{public}d json=%{public}s len=%{public}d',
-        post ? 'POST' : 'GET', code, `${looksJson}`, text.length);
-      // 被限流：认出来就退避，别接着一条条打（见 core/ApiThrottle）。
-      if (ApiThrottle.looksLimited(text)) {
-        ApiThrottle.note(ApiThrottle.MEDIA_INFO);
-        NativeMediaInfo.detail = 'rate-limited';
-        hilog.warn(DOMAIN, TAG, 'media info rate limited → back off %{public}min',
-          ApiThrottle.remainingMinutes(ApiThrottle.MEDIA_INFO));
-        return '';
-      }
-      if (code === 200 && looksJson) {
-        return text;
-      }
-      NativeMediaInfo.detail = `http-${code}${looksJson ? '' : '/non-json'}`;
-      if (!looksJson) {
-        hilog.warn(DOMAIN, TAG, 'body: %{public}s',
-          text.substring(0, 140).replace(/[\r\n]+/g, ' '));
-      }
-      return '';
-    } catch (error) {
-      NativeMediaInfo.detail = `throw:${(error as Error).message ?? 'request-threw'}`.substring(0, 60);
-      return '';
-    } finally {
-      try {
-        request.destroy();
-      } catch (error) {
-      }
-    }
   }
 
   /** 响应文本 → 整份详情（什么都没有就给 null）。 */

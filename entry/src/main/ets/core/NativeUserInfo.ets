@@ -17,15 +17,12 @@
  * （见 core/ApiThrottle）。
  */
 
-import { http } from '@kit.NetworkKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { RestSession } from './RestSession';
+import { MobileRequest, MobileResult, MobileOptions } from './mobileapi/MobileRequest';
 import { ApiThrottle } from './ApiThrottle';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeUserInfo';
-const CONNECT_TIMEOUT_MS: number = 8000;
-const READ_TIMEOUT_MS: number = 8000;
 
 /** 一个用户对象里我们只要头像。 */
 interface UserDto {
@@ -70,12 +67,24 @@ export class NativeUserInfo {
     if (ApiThrottle.blocked(ApiThrottle.MEDIA_INFO)) {
       return '';
     }
-    const headers: Record<string, string> = await RestSession.headers();
-    if (Object.keys(headers).length === 0) {
-      return '';
+    /*
+     * **只走移动端私有接口**（`users/{pk}/info/`，App 身份）——
+     * 原先那条"网页 REST + RestSession 模板头"已随模板机制删除。
+     */
+    let text: string = '';
+    try {
+      const result: MobileResult = await MobileRequest.send(
+        `users/${encodeURIComponent(id)}/info/`, '', '', true, null,
+        new MobileOptions(ApiThrottle.MEDIA_INFO, ApiThrottle.interactive()));
+      if (result.ok) {
+        text = result.body;
+      } else {
+        hilog.info(DOMAIN, TAG, 'user info miss id=%{public}s %{public}s', id, result.summary());
+      }
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'user info failed: %{public}s', (error as Error).message);
+      text = '';
     }
-    const url: string = `https://www.instagram.com/api/v1/users/${encodeURIComponent(id)}/info/`;
-    const text: string = await NativeUserInfo.get(url, headers);
     const avatar: string = NativeUserInfo.parse(text);
     // 问过就记住（包括"确实没有"），免得同一个人反复问。
     NativeUserInfo.avatars.set(id, avatar);
@@ -83,38 +92,6 @@ export class NativeUserInfo {
     return avatar;
   }
 
-  /** 发一次 GET（失败给空串）。 */
-  private static async get(url: string, headers: Record<string, string>): Promise<string> {
-    const request: http.HttpRequest = http.createHttp();
-    try {
-      const response: http.HttpResponse = await request.request(url, {
-        method: http.RequestMethod.GET,
-        header: headers,
-        connectTimeout: CONNECT_TIMEOUT_MS,
-        readTimeout: READ_TIMEOUT_MS,
-        expectDataType: http.HttpDataType.STRING
-      });
-      const text: string = typeof response.result === 'string'
-        ? response.result as string : JSON.stringify(response.result);
-      if (ApiThrottle.looksLimited(text)) {
-        ApiThrottle.note(ApiThrottle.MEDIA_INFO);
-        hilog.warn(DOMAIN, TAG, 'user info rate limited → back off');
-        return '';
-      }
-      if (response.responseCode !== 200) {
-        return '';
-      }
-      return text;
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'user info failed: %{public}s', (error as Error).message);
-      return '';
-    } finally {
-      try {
-        request.destroy();
-      } catch (error) {
-      }
-    }
-  }
 
   /** 响应 → 头像（字段名与 NativeProfile.avatarOf 一致：direct → hd → hd_info）。 */
   private static parse(text: string): string {

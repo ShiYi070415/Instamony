@@ -24,7 +24,6 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { common } from '@kit.AbilityKit';
 import { JsonRead } from './JsonRead';
 import { MediaQuality, PickedMedia } from './MediaQuality';
-import { RestSession } from './RestSession';
 import { SearchCache } from './SearchCache';
 import { ApiThrottle } from './ApiThrottle';
 import { SessionGate } from './SessionGate';
@@ -154,117 +153,16 @@ export class NativeSearch {
   }
 
   /**
-   * 搜账号：**移动端 `fbsearch/account_serp/` 优先**，失败退 REST。
+   * 搜账号：**只走移动端**（`fbsearch/account_serp/`，见 core/mobileapi/MobileDiscover）。
    *
-   * @returns 扫到的账号；两条都没成给 null（调用方据此报错）。
+   * 原先那条 `/web/search/topsearch/` 的 REST 兜底要借网页会话头（RestSession 的模板头），
+   * 已随模板机制删除；失败就如实回报。
+   *
+   * @returns 扫到的账号；没成给 null（调用方据此报错）。
    */
   static async searchUsers(query: string): Promise<Array<SearchUser> | null> {
     NativeSearch.viaRest = false;
-    const viaMobile: Array<SearchUser> | null = await NativeSearch.searchUsersViaMobile(query);
-    if (viaMobile !== null) {
-      return viaMobile;
-    }
-    const viaRest: Array<SearchUser> | null = await NativeSearch.searchUsersViaRest(query);
-    if (viaRest !== null) {
-      NativeSearch.viaRest = true;
-      NativeSearch.source = `rest:${NativeSearch.restDiag}`;
-      return viaRest;
-    }
-    return null;
-  }
-
-  /** 上一次 REST 兜底的结果（诊断：`ok:0` = 第一条 URL 就成了 / `http-404` / `no-session`）。 */
-  private static restDiag: string = '-';
-
-  /**
-   * **不用模板搜账号**：直接打 `/web/search/topsearch/` 那几条 REST（见 REST_SEARCH_URLS）。
-   *
-   * 头和会话材料走 `core/RestSession`；最后一条 `i.instagram.com` 换安卓身份。
-   *
-   * @returns 扫到的账号；一条 URL 都没成给 null（原因记在 `restDiag` 里）。
-   */
-  static async searchUsersViaRest(query: string): Promise<Array<SearchUser> | null> {
-    const text: string = query.trim();
-    if (text.length === 0) {
-      NativeSearch.restDiag = 'no-query';
-      return null;
-    }
-    if (ApiThrottle.blocked(ApiThrottle.CLIPS)) {
-      // 搜索和推荐共用 clips 那把锁（见 core/ApiThrottle）：冷却期内别再打，如实说明原因。
-      NativeSearch.restDiag = `throttled-${ApiThrottle.remainingMinutes(ApiThrottle.CLIPS)}min`;
-      return null;
-    }
-    const baseHeaders: Record<string, string> = await RestSession.headers();
-    if (Object.keys(baseHeaders).length === 0) {
-      NativeSearch.restDiag = 'no-session';
-      return null;
-    }
-    const tail: string = encodeURIComponent(text);
-    for (let index: number = 0; index < REST_SEARCH_URLS.length; index++) {
-      const headers: Record<string, string> = {};
-      const keys: Array<string> = Object.keys(baseHeaders);
-      for (let k: number = 0; k < keys.length; k++) {
-        headers[keys[k]] = baseHeaders[keys[k]];
-      }
-      if (REST_SEARCH_URLS[index].indexOf('i.instagram.com') >= 0) {
-        headers['user-agent'] = ANDROID_UA;
-        headers['x-ig-app-id'] = ANDROID_APP_ID;
-      }
-      const body: string | null = await NativeSearch.getText(REST_SEARCH_URLS[index] + tail, headers);
-      if (body === null) {
-        continue;
-      }
-      const users: Array<SearchUser> = NativeSearch.usersOf(body);
-      hilog.info(DOMAIN, TAG, 'search rest try=%{public}d users=%{public}d len=%{public}d',
-        index, users.length, body.length);
-      if (users.length > 0) {
-        NativeSearch.restDiag = `ok:${index}`;
-        return users;
-      }
-      NativeSearch.restDiag = `empty:${index}`;
-    }
-    return null;
-  }
-
-  /** 一次 GET（返回响应文本；失败/非 JSON 给 null，原因写进 restDiag）。 */
-  private static async getText(url: string, headers: Record<string, string>): Promise<string | null> {
-    const request: http.HttpRequest = http.createHttp();
-    try {
-      const response: http.HttpResponse = await request.request(url, {
-        method: http.RequestMethod.GET,
-        header: headers,
-        connectTimeout: CONNECT_TIMEOUT_MS,
-        readTimeout: READ_TIMEOUT_MS,
-        expectDataType: http.HttpDataType.STRING
-      });
-      const text: string = typeof response.result === 'string'
-        ? response.result as string : JSON.stringify(response.result);
-      const head: string = text.length > 0 ? text.charAt(0) : '';
-      const json: boolean = head === '{' || head === '[';
-      hilog.info(DOMAIN, TAG, 'search rest http code=%{public}d json=%{public}s len=%{public}d',
-        response.responseCode, `${json}`, text.length);
-      if (response.responseCode !== 200 || !json) {
-        if (ApiThrottle.looksLimited(text)) {
-          ApiThrottle.note(ApiThrottle.CLIPS);
-          NativeSearch.restDiag = 'rate-limited';
-        } else {
-          NativeSearch.restDiag = `http-${response.responseCode}${json ? '' : '/non-json'}`;
-        }
-        hilog.info(DOMAIN, TAG, 'search rest body=%{public}s',
-          text.substring(0, 160).replace(/[\r\n]+/g, ' '));
-        return null;
-      }
-      return text;
-    } catch (error) {
-      NativeSearch.restDiag = `throw:${(error as Error).message ?? '-'}`.substring(0, 50);
-      hilog.warn(DOMAIN, TAG, 'search rest failed: %{public}s', NativeSearch.restDiag);
-      return null;
-    } finally {
-      try {
-        request.destroy();
-      } catch (error) {
-      }
-    }
+    return await NativeSearch.searchUsersViaMobile(query);
   }
 
   /**
