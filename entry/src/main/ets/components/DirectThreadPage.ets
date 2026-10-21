@@ -713,6 +713,16 @@ export struct DirectThreadPage {
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.page_background'))
+    /*
+     * **任何触摸都算"人还在看"**：这直接决定要不要继续轮询
+     * （空闲 90 秒就停，见 DirectThreadViewModel.THREAD_IDLE_STOP_MS）。
+     * 一开始那次也算动作，所以进页面立刻恢复。
+     */
+    .onTouch((event: TouchEvent): void => {
+      if (event.type === TouchType.Down) {
+        this.vm.touchActivity();
+      }
+    })
   }
 
   /** 悬浮的输入条（和评论浮层里那条完全同一个组件）。 */

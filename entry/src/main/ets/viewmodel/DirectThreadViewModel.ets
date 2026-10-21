@@ -61,6 +61,14 @@ const THREAD_POLL_BURST_MIN_MS: number = 4000;
 const THREAD_POLL_BURST_MAX_MS: number = 6000;
 const THREAD_POLL_BURST_WINDOW_MS: number = 30000;
 /**
+ * **无人操作就停**（毫秒）。
+ *
+ * 图里那条"取消自动循环抓取、全部操作必须由真人点击触发"落到这里就是：
+ * 用户在这条会话上 90 秒没有任何动作（触摸/输入/发送）→ 停掉轮询，**等下一次动作**再续。
+ * 我们的轮询本来就是"替用户看有没有新消息"，人已经不看了，继续发就是纯自动化流量。
+ */
+const THREAD_IDLE_STOP_MS: number = 90000;
+/**
  * 乐观气泡的**确认窗口**（毫秒）。
  *
  * 发送成功后要等"服务端那条"回到视图里，才把本地气泡撤掉；本地时间戳与服务端时间戳
@@ -135,6 +143,10 @@ export class DirectThreadViewModel {
   private visibilityHooked: boolean = false;
   /** 突发窗口截止时刻：自己刚发完消息后的 30 秒里允许密一点（见 THREAD_POLL_BURST_*）。 */
   private burstUntilMs: number = 0;
+  /** 用户最后一次在这条会话上动作的时刻（见 THREAD_IDLE_STOP_MS）。 */
+  private lastActivityMs: number = 0;
+  /** 是否"应当"在轮询（startPolling 起、stopPolling 止；空闲停下时不改它，见 touchActivity）。 */
+  private isPollingWanted: boolean = false;
   /** 有新消息时的回调（界面据此贴到底部）。 */
   private onNew: (() => void) | undefined = undefined;
 
@@ -715,11 +727,26 @@ export class DirectThreadViewModel {
    */
   startPolling(onNew: () => void): void {
     this.onNew = onNew;
+    this.lastActivityMs = Date.now();
+    this.isPollingWanted = true;
     this.hookVisibility();
     if (this.pollTimer >= 0) {
       return;
     }
     this.armTimer();
+  }
+
+  /**
+   * 用户在会话页上动了（触摸 / 输入 / 发送）。
+   *
+   * 见 `THREAD_IDLE_STOP_MS`：空闲超过阈值就停轮询，**下一次动作把它叫醒**。
+   * 这样"自动循环"只在人真的在看的时候存在。
+   */
+  touchActivity(): void {
+    this.lastActivityMs = Date.now();
+    if (this.pollTimer < 0 && this.foreground && this.isPollingWanted) {
+      this.armTimer();
+    }
   }
 
   /**
@@ -733,7 +760,13 @@ export class DirectThreadViewModel {
       clearTimeout(this.pollTimer);
       this.pollTimer = -1;
     }
-    if (!this.foreground) {
+    if (!this.foreground || !this.isPollingWanted) {
+      return;
+    }
+    // 空闲超过阈值就不排下一拍：等 touchActivity 再叫醒（见 THREAD_IDLE_STOP_MS）。
+    if (Date.now() - this.lastActivityMs > THREAD_IDLE_STOP_MS) {
+      hilog.info(DOMAIN, TAG, 'poll paused: idle %{public}dms',
+        Date.now() - this.lastActivityMs);
       return;
     }
     const delay: number = this.nextDelay();
@@ -779,6 +812,7 @@ export class DirectThreadViewModel {
 
   /** 停止实时接收（页面销毁时调用）。 */
   stopPolling(): void {
+    this.isPollingWanted = false;
     if (this.pollTimer >= 0) {
       clearTimeout(this.pollTimer);
       this.pollTimer = -1;

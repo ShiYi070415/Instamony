@@ -25,7 +25,10 @@ const IG_APP_ID: string = '936619743392459';
  * `/accounts/...` route can give.
  */
 export const SESSION_WATCHER: string = '(function(){try{' +
-    'if(window.__ogSessionWatch){return;}window.__ogSessionWatch=1;' +
+    // 挂在 window 上的注入痕迹：一律**不可枚举**（页面脚本 Object.keys(window) 看不到）。
+    'if(window.__ogSessionWatch){return;}' +
+    'try{Object.defineProperty(window,"__ogSessionWatch",' +
+    '{value:1,enumerable:false,configurable:true,writable:true});}catch(e){window.__ogSessionWatch=1;}' +
     'var sendSession=function(value){try{' + PROXY + '.onSessionState(value?"1":"0");}catch(e){}};' +
     'var sendRoute=function(){try{' + PROXY + '.onRouteChange(String(location.href));}catch(e){}};' +
     'var signed=null;' +
@@ -48,13 +51,26 @@ export const SESSION_WATCHER: string = '(function(){try{' +
     '!!document.querySelector(\'svg[aria-label="Notifications"]\');}}' +
     'if(now!==signed){signed=now;sendSession(now);}' +
     '}catch(e){}};' +
-    'if(!window.__ogHistoryHooked){window.__ogHistoryHooked=1;' +
+    'if(!window.__ogHistoryHooked){' +
+    'try{Object.defineProperty(window,"__ogHistoryHooked",' +
+    '{value:1,enumerable:false,configurable:true,writable:true});}catch(e){window.__ogHistoryHooked=1;}' +
     'var push=history.pushState;var replace=history.replaceState;' +
     'history.pushState=function(){var result=push.apply(this,arguments);sendRoute();return result;};' +
     'history.replaceState=function(){var result=replace.apply(this,arguments);sendRoute();return result;};' +
     'window.addEventListener("popstate",sendRoute);window.addEventListener("hashchange",sendRoute);}' +
     'try{document.addEventListener("DOMContentLoaded",detect);}catch(e){}' +
-    'detect();sendRoute();setInterval(detect,3000);' +
+    /*
+     * **不再 setInterval(detect,3000)**。
+     *
+     * 页面上挂固定周期定时器是"被注入脚本"的经典特征；而登录态只会在几个时机变：
+     * DOM 就绪 / 标签页回到前台 / 页面从 bfcache 恢复 / SPA 路由变化（history 补丁 +
+     * popstate 已覆盖）。原生侧在 onPageEnd 还会自己核对一次 Cookie 罐
+     * （见 InstagramWebHost.detectSession），所以这里不需要轮询。
+     */
+    'detect();sendRoute();' +
+    'try{document.addEventListener("visibilitychange",function(){' +
+    'if(!document.hidden){detect();sendRoute();}});}catch(e){}' +
+    'try{window.addEventListener("pageshow",function(){detect();sendRoute();});}catch(e){}' +
     '}catch(e){}})();';
 /** 探针用：把页面滚到底，触发它自己的翻页请求。 */
 /** 探针/翻页用：把页面滚到底，触发它自己的翻页请求。 */
