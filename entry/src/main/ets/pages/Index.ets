@@ -20,7 +20,7 @@ import { pasteboard, BusinessError } from '@kit.BasicServicesKit';
 // curves：下沉收缩的补间用系统那套弹簧（springMotion，带过冲，比 EaseOut 更"弹"）。
 // uiMaterial：只用来读应用级沉浸光感开关的状态（见 aboutToAppear 的日志）。
 // display：量屏宽，底栏胶囊的左右留白按它反算。
-import { curves, display, uiMaterial, window } from '@kit.ArkUI';
+import { curves, display, ImmersiveMode, uiMaterial, window } from '@kit.ArkUI';
 import {
   HdsAnimationMode,
   HdsNavDestination,
@@ -87,13 +87,17 @@ import {
   BAR_HIDE_SINK,
   BAR_HIDE_SYSTEM,
   MATERIAL_LEVEL_ADAPTIVE,
+  MATERIAL_THICKNESS_REGULAR,
   SEARCH_BOX_COLLAPSED,
   SEARCH_BOX_FOCUS_REQUEST,
   SETTING_BAR_HIDE,
   SETTING_DARK_UI,
   SETTING_MATERIAL_LEVEL,
+  SETTING_MATERIAL_THICKNESS,
   SETTING_VIDEO_MUTED
 } from '../core/AppSettings';
+// 沉浸光感材质：验证弹窗的外观（见 showChallengeDialog）与首页胶囊共用同一套档位。
+import { immersiveMaterial } from '../components/MaterialSurface';
 import { BackdropTone } from '../core/BackdropTone';
 // 沉浸光感的档位/类型换算（设定页里的字符串 → hdsMaterial 的枚举，含设备能力降级）。
 import { BarChromeModifier, immersiveLevel, immersiveMaterialType, titleScrollEffectType } from '../core/ImmersiveLight';
@@ -877,9 +881,19 @@ struct Index {
    *
    * IG 回 `challenge_required` 时（新注册账号最常见）重试多少次都没用 —— 必须让用户在
    * 隐藏网页里过人机/设备验证。这个地址来自响应体的 `challenge.api_path`
-   * （见 core/mobileapi/MobileChallenge），界面上给一条横幅 + 「去验证」按钮。
+   * （见 core/mobileapi/MobileChallenge），界面上弹一个**系统警示弹窗**（见 showChallengeDialog）。
    */
   @State challengeUrl: string = '';
+  /**
+   * 这次的验证提示**被用户取消过**（只关弹窗，不清台账）。
+   *
+   * 为什么要它：台账里的地址在"同一次挑战"里是不变的，`MobileChallenge.note` 见到同一个地址
+   * 就早退，界面不会自己再弹。用户点了「取消」之后不该被反复打扰 —— 直到清单被清掉
+   * （换账号 / 从网页验证回来，见 MobileChallenge.clear）或换了一个新地址。
+   */
+  private challengeDismissed: boolean = false;
+  /** 验证弹窗当前是否在屏幕上（防重复 show；AlertDialog 没有 query 接口，只能自己记）。 */
+  private challengeDialogOpen: boolean = false;
   @State statusText: ResourceStr = '';
   /** 状态行是否显示。ResourceStr 是联合类型，没法直接取 .length 判空，所以单独记。 */
   @State statusShown: boolean = false;
@@ -2321,6 +2335,8 @@ struct Index {
   aboutToDisappear(): void {
     BackdropTone.stop();
     MainThreadWatchdog.stop();
+    // 验证弹窗跟着页面走：页面销毁时关掉它，别留一个悬着的 modal。
+    this.closeChallengeDialog();
     if (this.commentsExitTimer >= 0) {
       clearTimeout(this.commentsExitTimer);
       this.commentsExitTimer = -1;
@@ -4508,6 +4524,11 @@ struct Index {
     this.restoreBar();
     // 切页时顺带看一眼"账号是不是被要求验证了"（见 refreshChallengeState）。
     this.refreshChallengeState();
+    /*
+     * 台账里还挂着验证、而弹窗因为"用户取消过"或"打开时机太早"没在屏幕上时，
+     * 切页这一刻补一次 —— 这里也是用户最可能主动回来处理验证的地方。
+     */
+    this.showChallengeDialog();
     // 搜索框每次进「搜索」页都从**展开**开始（上一轮可能滚着滚着收起来了；
     // 新进来还没滚过，右上角只挂一颗放大镜会很莫名）。只改状态，**不要**顺带弹输入法。
     AppStorage.setOrCreate(SEARCH_BOX_COLLAPSED, false);
@@ -5851,11 +5872,90 @@ struct Index {
       return;
     }
     this.challengeUrl = url;
+    // 换了地址（或清单被清）：取消标记复位，新的挑战要重新提示。
+    this.challengeDismissed = false;
     if (url.length > 0) {
       hilog.info(DOMAIN, TAG, 'challenge pending: %{public}s', MobileChallenge.summary());
+      this.showChallengeDialog();
     } else {
       hilog.info(DOMAIN, TAG, 'challenge cleared');
+      this.closeChallengeDialog();
     }
+  }
+
+  /**
+   * 弹「账号需要安全验证」—— **直接用系统的警示弹窗**（`AlertDialog`）。
+   *
+   * 为什么用系统弹窗而不是自绘：位置（置中）、遮罩、安全区、无障碍、返回键行为都由系统负责，
+   * 不用再跟状态栏较劲（原来那条自绘横幅就是被状态栏压住、点不到）。外观用官方给的那套
+   * 沉浸光感：`systemMaterial`（`uiMaterial.ImmersiveMaterial`，与全应用同一档厚度）
+   * + `immersiveMode: EXTEND`（遮罩延伸到状态栏/导航栏）。低版本设备上这两个参数不传，
+   * 系统用默认外观 —— 不会出现"材质没生效、底色透明"的情况。
+   *
+   * 幂等：用户取消过（challengeDismissed）或已经在屏幕上（challengeDialogOpen）就不弹。
+   */
+  private showChallengeDialog(): void {
+    if (this.challengeDismissed || this.challengeDialogOpen || this.challengeUrl.length === 0) {
+      return;
+    }
+    this.challengeDialogOpen = true;
+    const params: AlertDialogParamWithButtons = {
+      title: $r('app.string.challenge_title'),
+      message: $r('app.string.challenge_hint'),
+      // 「取消」= 只关弹窗（台账不清），下次撞上新的挑战还会提示。
+      primaryButton: {
+        value: $r('app.string.common_cancel'),
+        action: (): void => {
+          this.challengeDialogOpen = false;
+          this.challengeDismissed = true;
+          hilog.info(DOMAIN, TAG, 'challenge dialog cancelled by user');
+        }
+      },
+      // 「前往验证」= 在我们的隐藏网页里打开 IG 的验证页（同一个会话，验完 Cookie 罐自动更新）。
+      secondaryButton: {
+        value: $r('app.string.challenge_action_verify'),
+        action: (): void => {
+          this.challengeDialogOpen = false;
+          this.openChallengeWeb();
+        }
+      },
+      // 点遮罩/返回键：当成「取消」处理（和主按钮一致，不留一个"什么都不算"的关闭）。
+      autoCancel: true,
+      cancel: (): void => {
+        this.challengeDialogOpen = false;
+        this.challengeDismissed = true;
+      },
+      alignment: DialogAlignment.Center
+    };
+    if (PlatformCap.hasArkMaterial()) {
+      // 沉浸光感（官方示例 9 的写法）：材质 + 遮罩延伸到系统栏。
+      params.immersiveMode = ImmersiveMode.EXTEND;
+      params.systemMaterial = immersiveMaterial(Index.materialThicknessNow());
+    }
+    try {
+      AlertDialog.show(params);
+    } catch (error) {
+      this.challengeDialogOpen = false;
+      hilog.warn(DOMAIN, TAG, 'challenge dialog show failed: %{public}s',
+        (error as Error).message ?? '-');
+    }
+  }
+
+  /** 当前材质厚度档位（与设定页/标题栏/底栏同一份设置，见 AppSettings.MATERIAL_THICKNESS_*）。 */
+  private static materialThicknessNow(): string {
+    const value: string | undefined = AppStorage.get<string>(SETTING_MATERIAL_THICKNESS);
+    return value !== undefined && value.length > 0 ? value : MATERIAL_THICKNESS_REGULAR;
+  }
+
+  /**
+   * 「关掉验证弹窗」。
+   *
+   * 系统 `AlertDialog` 没有编程式关闭接口，所以这里只把界面状态复位：弹窗本身只会在
+   * 用户点两个按钮（或遮罩/返回键）时消失。真实场景里清单被清的时刻（从网页验证回来）
+   * 弹窗早就被「前往验证」关掉了，这里不会留下悬着的窗。
+   */
+  private closeChallengeDialog(): void {
+    this.challengeDialogOpen = false;
   }
 
   /** 横幅上那颗「去验证」：在本 App 自己的隐藏网页里打开 IG 的验证页（会话是同一个）。 */
@@ -5869,49 +5969,16 @@ struct Index {
   }
 
   /**
-   * 「账号需要安全验证」横幅（需求：新号注册后可能弹真人验证）。
+   * 「账号需要安全验证」的界面入口。
    *
-   * IG 回 `challenge_required` 时，这类挑战（真人 / 自拍 / reCAPTCHA / Bloks 原生流程）
-   * **只能在网页里完成** —— instagrapi 对它们同样是"请人工处理"（见 MobileChallenge 的文件头）。
-   * 所以这里给出网页入口：点「去验证」在我们的隐藏网页里打开 IG 的验证页（同一个会话），
-   * 验证完点网页上的「关闭」回来，会自动重新取数。
+   * 以前这里是一个 `@Builder challengeBanner()`，挂在**内容层顶部**；而内容层是贴到屏幕顶端的
+   * 全屏布局，于是横幅被状态栏压住、点不到（用户报的问题）。现在改成**置中弹窗**
+   * （见 components/ChallengeDialog 与 challengeDialog 字段），入口由 refreshChallengeState 触发。
+   *
+   * IG 这类挑战（真人 / 自拍 / reCAPTCHA / Bloks 原生流程）**只能在网页里完成** ——
+   * instagrapi 对它们同样是"请人工处理"（见 MobileChallenge 的文件头）。
+   * 所以弹窗只给一个动作：在我们的隐藏网页里打开验证页（同一个会话），验完回来即可。
    */
-  @Builder
-  challengeBanner() {
-    Row({ space: 10 }) {
-      SymbolGlyph($r('sys.symbol.lock_shield'))
-        .fontSize(18)
-        .fontColor([$r('app.color.accent')])
-      Column({ space: 2 }) {
-        Text($r('app.string.challenge_title'))
-          .fontSize(13)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.primary_text'))
-          .width('100%')
-        Text($r('app.string.challenge_hint'))
-          .fontSize(11)
-          .fontColor($r('app.color.secondary_text'))
-          .width('100%')
-          .maxLines(2)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
-
-      Button($r('app.string.challenge_action'))
-        .height(30)
-        .fontSize(13)
-        .backgroundColor($r('app.color.accent'))
-        .fontColor($r('app.color.on_accent'))
-        .borderRadius(15)
-        .onClick((): void => {
-          this.openChallengeWeb();
-        })
-    }
-    .width('100%')
-    .padding({ left: 16, right: 12, top: 10, bottom: 10 })
-    .backgroundColor($r('app.color.field_background'))
-  }
 
   private async refreshFeed(): Promise<void> {
     this.refreshing = true;
@@ -5945,9 +6012,9 @@ struct Index {
           .layoutWeight(1)
       } else if (this.challengeUrl.length > 0) {
         /*
-         * 账号被要求安全验证（新号最常见）：横幅在**内容层顶部**（见 nativeShellContent），
-         * 这里就不再重复铺它了；此时时间线 / 推荐流都取不到东西，铺内容只会让人以为
-         * "加载失败"，所以给骨架屏。点「去验证」进网页，验完回来再取数。
+         * 账号被要求安全验证（新号最常见）：提示是**置中弹窗**（见 challengeDialog），
+         * 这里就不再铺内容了 —— 此时时间线 / 推荐流都取不到东西，铺内容只会让人以为
+         * "加载失败"，所以给骨架屏。点弹窗里的「前往验证」进网页，验完回来再取数。
          */
         FeedSkeleton()
           .layoutWeight(1)
@@ -6155,14 +6222,11 @@ struct Index {
       // ---- 内容层：按 selectedIndex 切页（栏那层不参与切页）----
       Column() {
         /*
-         * **账号安全验证横幅放在这一层**（五个页签共用）：挑战不是"首页才有的问题" ——
-         * 我的 / Reels / 搜索 / 私信 走同一套私有接口，日志里 `reels_media` 与
-         * `feed/user/<id>/story/` 都撞过 `challenge_required`。挂在内容层顶部，
-         * 用户在哪个页签都能看到「去验证」入口（见 MobileChallenge 的文件头）。
+         * 账号安全验证的提示**不再挂在这一层**：原来那条横幅贴在内容层顶部，而内容层是
+         * 贴到屏幕顶端的全屏布局 —— 横幅一半在状态栏后面、点不到（用户报的问题）。
+         * 现在是**置中弹窗**（见 challengeDialog / components/ChallengeDialog），
+         * 由 refreshChallengeState 触发；挑战不是"首页才有"，弹窗天然覆盖五个页签。
          */
-        if (this.challengeUrl.length > 0) {
-          this.challengeBanner()
-        }
         Column() {
           if (this.selectedIndex === 0) {
             this.homeTab()
