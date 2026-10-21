@@ -3477,47 +3477,16 @@ struct Index {
     hilog.info(DOMAIN, TAG, 'probe capture feed ok=%{public}s', ok ? 'y' : 'n');
   }
 
+
   /**
-   * 探针面板用：把「我的」**四个分页**的接口模板都抓一遍。
-   *
-   * 四个分页在网页上是四个地址（`/用户名/`、`/用户名/reels/`、`/用户名/saved/`、`/用户名/tagged/`），
-   * 各自发一条查询；原生 HTTP 那条路（core/NativeProfile）靠这些模板才能把对应分页拉下来。
-   * 这里逐个导航 + capture，最后回到首页并把当前分页重新加载一次（模板齐了就走原生）。
-   *
-   * 用户名从"自己的主页地址"脚本里拿（`/用户名/`）—— 探针按钮可能在信息流页上被按，
-   * 那时 ProfileViewModel 还没有 header 可用。
+   * 探针面板用：用**移动端接口**自检「我的」四个分页（模板机制退役后不再抓模板）。
    */
   private async captureProfileTemplates(): Promise<void> {
-
-
-    let username: string = '';
-    try {
-      const href: string = await this.bridge.runBridge(OWN_PROFILE_SCRIPT, 8000, 'own-profile');
-      // 形如 `/用户名/`（也可能带查询串）。
-      const parts: Array<string> = href.split('/').filter((one: string): boolean => one.length > 0);
-      if (parts.length > 0) {
-        username = parts[0].split('?')[0];
-      }
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'probe profile: own-profile failed: %{public}s',
-        (error as Error).message);
-    }
-    if (username.length === 0) {
-      hilog.warn(DOMAIN, TAG, 'probe profile: no own username');
-      this.setLocalStatus($r('app.string.follow_failed'));
-      return;
-    }
     this.setLocalStatus($r('app.string.probe_profile_templates'));
-    for (let tab: number = 0; tab < 4; tab++) {
-      await this.profileVm.captureTab(username, tab);
-    }
-    // 抓完顺手落一份**四条接口的结构摘要**（`probe_profile_*.txt`）：哪个分页的媒体
-    // 挂在哪一层、游标有没有，看这一份就知道（见 NativeProfile.digest）。
-    this.dumpProbeFile('profile', await this.profileVm.digestTabs());
-    // 模板齐了：把「我的」当前分页重新拉一次（这次会走原生 HTTP）。
     this.profileVm.load(true);
-    hilog.info(DOMAIN, TAG, 'probe profile templates done %{public}s',
-      ApiRegistry.getInstance().storedSummary());
+    const detail: string = NativeProfile.lastDetail();
+    this.dumpProbeFile('profile', `mobile tabs via NativeProfile.fetchPosts detail=${detail}`);
+    hilog.info(DOMAIN, TAG, 'probe profile (mobile) detail=%{public}s', detail);
   }
 
   /**

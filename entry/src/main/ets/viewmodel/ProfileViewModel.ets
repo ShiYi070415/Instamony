@@ -502,8 +502,7 @@ export class ProfileViewModel {
       return;
     }
     this.tab = tab;
-    // 记下自己的账号名：原生失败要重抓模板时靠它导航到 `/用户名/saved/` 这类地址
-    // （见 recaptureAndRetry）。切页时页面会把它一起传进来。
+    // 记下自己的账号名：别人的主页要按用户名换 id 时才用得上（见 NativeProfile.fetchPosts）。
     if (ownUsername.length > 0 && ProfileViewModel.isUsername(ownUsername)) {
       this.ownName = ownUsername;
     }
@@ -530,29 +529,6 @@ export class ProfileViewModel {
       return;
     }
     if (state.loading) {
-      return;
-    }
-    if (this.tabOpName().length === 0) {
-      // 页面传进来的账号名为空时用自己记下的那份（头部到了就有，见 ownName）——
-      // 少了这一步，"头部还没回来就点收藏/被标注"会直接卡在"模板还没有"上不动。
-      const owner: string = ownUsername.length > 0 ? ownUsername : this.ownName;
-      if (owner.length > 0 && !state.capturing) {
-        state.capturing = true;
-        this.onStatus('这个分页的接口还没抓到，后台抓一次…');
-        // 不 await：抓模板要导航隐藏网页（秒级），不能挡在切页路径上。
-        this.captureTab(owner, tab).then((ok: boolean): void => {
-          state.capturing = false;
-          if (ok) {
-            this.load(true);
-          } else {
-            this.onStatus(`这个分页的接口还没抓到（已存：${this.tabDiag()}）`);
-          }
-        }).catch((): void => {
-          state.capturing = false;
-        });
-        return;
-      }
-      this.onStatus(`这个分页的接口模板还没有（已存：${this.tabDiag()}）`);
       return;
     }
     // 这一分页还没拉过：起一次加载（不阻塞切页，界面已经显示上面的空态/缓存）。
@@ -648,24 +624,6 @@ export class ProfileViewModel {
       state.cursor = '';
       state.more = true;
     }
-    const op: string = this.opNameOf(tab);
-    if (op.length === 0) {
-      // 连模板都没有：先走冷启动那条路（打开一次自己的主页，把默认分页的模板抓下来）。
-      const ok: boolean = await this.ensureTemplates();
-      if (!ok) {
-        this.onStatus('拿不到接口模板');
-        return;
-      }
-      if (this.opNameOf(tab).length === 0) {
-        state.posts = [];
-        state.more = false;
-        if (this.tab === tab) {
-          this.syncFrom(state);
-        }
-        this.onStatus(`这个分页的接口模板还没有（已存：${this.tabDiag()}）`);
-        return;
-      }
-    }
     state.loading = true;
     this.busy = true;
     this.onBusy(true);
@@ -710,17 +668,6 @@ export class ProfileViewModel {
         await this.fetchPage(this.opNameOf(tab), state.cursor, tab);
       if (page === null) {
         /*
-         * 原生失败最常见的原因是**那份模板过期了**（IG 对旧 doc_id 回一整页 HTML，
-         * 见 NativeProfile 的判据）。这时正确的做法不是退回 DOM 回放（收藏 / 被标注 / 视频
-         * 那三段回放出来的数据没有媒体 id 与作者，见 fetchPage 的说明），而是
-         * **重新抓一次这一段的模板再试一遍原生**。
-         *
-         * 抓模板要导航隐藏网页（秒级），所以只在"真的失败了"之后做，而且只做一次。
-         */
-        page = await this.recaptureAndRetry(tab, state);
-      }
-      if (page === null) {
-        /*
          * 失败后**再给一次机会**（用户报的"偶尔加载不出来"）：绝大多数偶发失败是网络抖动 /
          * 一发超时，隔 700ms 重试一次基本就过了。限流期间不重试（那只会把冷却窗口拖更长）。
          */
@@ -748,11 +695,10 @@ export class ProfileViewModel {
             : '接口被限流，稍后自动恢复');
         } else {
           // 带上诊断：这个项目的 hilog 常被系统刷掉，界面上的这一行是可靠的排查通道。
-          // 原生与回放分开写，一眼能看出是"请求没成"还是"回放没跑起来"。
-          this.onStatus(`读取失败：native=${this.diag} ${this.replayDiag}`);
+          this.onStatus(`读取失败：${this.diag}`);
         }
-        hilog.info(DOMAIN, TAG, 'tab load gave up tab=%{public}d diag=%{public}s replay=%{public}s',
-          tab, this.diag, this.replayDiag);
+        hilog.info(DOMAIN, TAG, 'tab load gave up tab=%{public}d diag=%{public}s',
+          tab, this.diag);
         return;
       }
       if (refresh && state.posts.length > 0) {
@@ -804,10 +750,6 @@ export class ProfileViewModel {
         this.onStatus('加载出错');
       }
     } finally {
-      // 走过冷启动就一定要把网页送回首页，否则首页信息流会被留在"我的主页"上（见 returnToFeed）。
-      if (this.usedColdPath) {
-        this.returnToFeed();
-      }
       /*
        * **过期的一轮不要再动状态**：reset() 之后 `tabs[]` 已经全部回到"没加载过"，
        * 这里要是还去清 loading/busy 或补一次 requestMore，就会把新账号那一轮搅乱
@@ -940,172 +882,36 @@ export class ProfileViewModel {
     this.onPosts(this.posts, this.more);
   }
 
+
   /**
-   * 拉一页：**原生 HTTP 优先**，回放只给「帖子」那一段兜底（见 fetchPage 的说明）。
+   * 拉一页（**只走移动端**，见 core/NativeProfile.fetchPosts）。
    *
-   * @param tab 这一页属于哪一段（决定要不要允许 DOM 回放兜底，见 fetchPage）。
+   * @param tab 这一页属于哪一段（只用于日志与失败原因）。
    */
   private async fetchPage(op: string, cursor: string,
                           tab: number = PROFILE_TAB_POSTS): Promise<ProfilePostsPage | null> {
-    let opName: string = op;
-    /*
-     * **合成操作名先打移动端**（这是"我的页面四个分页有时加载不出来"的修复点）。
-     *
-     * 以前这里第一句是 `if (hasTemplate(op))` —— 合成名 `mobile:clips` 永远没有模板，
-     * 于是直接掉到下面"只有帖子段允许回放"的判断，**返回 null，移动端那一发根本没发**。
-     * 结果：收藏 / 视频 / 被标注三段只有在"恰好抓到过模板"的时候才加载得出来，
-     * 其余时候就是空的 + 一句"读取失败"，而且每次表现还不一样（取决于模板缓存）。
-     *
-     * 现在：先真打一发移动端；没成再看有没有这一段的模板，有就带着 `skipMobile` 走模板。
-     */
-    if (NativeProfile.isMobileOp(opName)) {
-      const mobilePage: ProfilePostsPage | null =
-        await NativeProfile.fetchPosts(opName, cursor, this.target);
-      if (mobilePage !== null) {
-        this.diag = '-';
-        hilog.info(DOMAIN, TAG, 'posts mobile op=%{public}s n=%{public}d more=%{public}s',
-          opName, mobilePage.posts.length, mobilePage.hasMore ? 'y' : 'n');
-        return mobilePage;
-      }
-      this.diag = 'mobile:' + NativeProfile.lastDetail();
-      hilog.info(DOMAIN, TAG, 'posts mobile failed op=%{public}s why=%{public}s → template?',
-        opName, NativeProfile.lastDetail());
-      const template: string = this.templateOpName(tab);
-      if (template.length === 0) {
-        this.replayDiag = 'no-template-for-kind';
-        return null;
-      }
-      // 有这一段模板：跳过移动端（刚失败过），直接回放它。
-      opName = template;
-      const viaTemplate: ProfilePostsPage | null =
-        await NativeProfile.fetchPosts(opName, cursor, this.target, true);
-      if (viaTemplate !== null) {
-        hilog.info(DOMAIN, TAG, 'posts template op=%{public}s n=%{public}d',
-          opName, viaTemplate.posts.length);
-        return viaTemplate;
-      }
-      this.diag = `${this.diag} tpl:${NativeProfile.lastDetail()}`;
-      return null;
+    const page: ProfilePostsPage | null =
+      await NativeProfile.fetchPosts(op, cursor, this.target);
+    if (page !== null) {
+      this.diag = '-';
+      hilog.info(DOMAIN, TAG, 'posts op=%{public}s tab=%{public}d n=%{public}d more=%{public}s',
+        op, tab, page.posts.length, page.hasMore ? 'y' : 'n');
+      return page;
     }
-    if (NativeProfile.hasTemplate(opName)) {
-      const page: ProfilePostsPage | null = await NativeProfile.fetchPosts(opName, cursor, this.target);
-      if (page !== null) {
-        hilog.info(DOMAIN, TAG, 'posts native op=%{public}s n=%{public}d more=%{public}s',
-          opName, page.posts.length, page.hasMore ? 'y' : 'n');
-        return page;
-      }
-      // 原生失败的原因要带出去：界面上那行状态就是排查通道（hilog 会被系统刷掉）。
-      this.diag = 'native:' + NativeProfile.lastDetail();
-      hilog.info(DOMAIN, TAG, 'posts native failed op=%{public}s why=%{public}s → replay',
-        opName, NativeProfile.lastDetail());
-    }
-    // 别人主页**不走回放兜底**：回放是把模板原样重发（页面脚本只合并顶层的 after / username），
-    // 视频那条的目标用户藏在 `data.target_user_id` 里改不动 —— 回放出来会是我的内容显示在他的
-    // 主页上（比读不出来糟糕得多）。原生那条已经能覆盖四个分页，失败就如实报错。
-    if (!this.target.isSelf()) {
-      this.replayDiag = 'replay-skipped(not-self)';
-      return null;
-    }
-    /*
-     * **只有「帖子」那一段允许 DOM 回放兜底**。
-     *
-     * 回放读的是网页 DOM 上那一屏格子，而 `ProfilePostsDto` 里**只有
-     * code/video/cover/w/h/likes/comments** —— 没有媒体 id、没有作者、没有头像
-     * （见 model/Profile 的说明）。对「帖子」段这些字段本来也不参与点赞/转发（那一段
-     * 走的是信息流卡片，媒体 id 来自别处），但**收藏 / 被标注 / 视频**这三段就靠它：
-     *   - 用户看到的是"头像空着"（ownerUsername / avatarUrl 都是空串）；
-     *   - 点赞 / 转发拿不到真实媒体 id（`ProfileMapper.toMediaPost` 只能塞一个
-     *     `profile-<shortcode>` 占位 id），原生那发必然被 IG 拒 → 掉回网页驱动那条慢路，
-     *     用户感知就是"点了半天没反应"。
-     * 所以这三段**宁可如实报"读取失败"**（状态行会说明），也不拿这种数据顶上去 ——
-     * 用户报的"收藏和被标注的帖子页面要正确显示头像、点赞/转发要能发出去"就是这一条。
-     */
-    if (tab !== PROFILE_TAB_POSTS) {
-      this.replayDiag = 'replay-skipped(no-media-id)';
-      hilog.info(DOMAIN, TAG, 'replay skipped tab=%{public}d (needs native http)', tab);
-      return null;
-    }
-    return this.fetchPostsWithRetry(opName, cursor);
+    this.diag = NativeProfile.lastDetail();
+    hilog.info(DOMAIN, TAG, 'posts failed op=%{public}s tab=%{public}d why=%{public}s',
+      op, tab, this.diag);
+    return null;
   }
 
-  /**
-   * 四个分页模板的结构摘要（探针面板那颗「存个人页四页模板」跑完顺手落一份）。
-   *
-   * 为什么值得落：三个新分页"请求成功但解析出 0 条"和"请求本身就失败"是两种毛病，
-   * 这一份摘要把每条分页的 data 键、连接、第一条 edge 里媒体挂在哪全写出来，
-   * 照着它写/改解析就不用猜。
-   */
-  async digestTabs(): Promise<string> {
-    const ops: Array<string> = [NativeProfile.OP_HEADER, NativeProfile.OP_POSTS];
-    for (let tab: number = 1; tab < this.tabs.length; tab++) {
-      const op: string = this.opNameOf(tab);
-      if (op.length > 0 && ops.indexOf(op) < 0) {
-        ops.push(op);
-      }
-    }
-    // 再把**所有**名字里带 Profile 的模板都带上：四个分页的键名认不出来时，
-    // 真正的"带媒体那条"可能就藏在别的名字里（实测见过 `..._connection` 这种变体）。
-    const names: Array<string> = this.registry.storedNames();
-    for (let index: number = 0; index < names.length; index++) {
-      if (names[index].indexOf('Profile') >= 0 && ops.indexOf(names[index]) < 0) {
-        ops.push(names[index]);
-      }
-    }
-    return await NativeProfile.digest(ops);
-  }
-
-  /** 当前分页对应的操作名（认不出返回空串）。 */
+  /** 当前分页对应的操作名。 */
   private tabOpName(): string {
     return this.opNameOf(this.tab);
   }
 
-  /**
-   * 某个分页对应的操作名（认不出返回空串）。
-   *
-   * 顺序：**有模板就用模板名**（那条路本来会先试移动端、失败再回放模板，最全）；
-   * 没模板就给**合成名** `mobile:kind`（移动端四条端点不需要模板）。
-   */
+  /** 某个分页对应的操作名（合成名 `mobile:<kind>`，见 NativeProfile.mobileOpFor）。 */
   private opNameOf(tab: number): string {
-    const template: string = this.templateOpName(tab);
-    if (template.length > 0) {
-      return template;
-    }
     return NativeProfile.mobileOpFor(PROFILE_TAB_KINDS[tab]);
-  }
-
-  /**
-   * 某一分页**已存模板**的操作名（没有给空串）。
-   *
-   * 帖子那条是已知名；另外三条按模板名里的片段猜（`...Reels...` / `...Saved...` / `...Tagged...`），
-   * 猜的时候要把已经用掉的三个已知操作名排除，免得"帖子"那条被当成别的分页。
-   */
-  private templateOpName(tab: number): string {
-    const kind: string = PROFILE_TAB_KINDS[tab];
-    if (tab === PROFILE_TAB_POSTS) {
-      return NativeProfile.hasTemplate(NativeProfile.OP_POSTS) ? NativeProfile.OP_POSTS : '';
-    }
-    const keys: Array<string> = [TAB_PATTERNS[tab]];
-    const names: Array<string> = this.registry.storedNames();
-    for (let index: number = 0; index < names.length; index++) {
-      const name: string = names[index];
-      if (name.indexOf('Profile') < 0) {
-        continue;
-      }
-      const lower: string = name.toLowerCase();
-      // 已经用掉的三个已知操作名不参与匹配（PageContent / Posts / NoteBubble…），
-      // 免得"帖子"那条被当成别的分页。
-      if (lower.indexOf('pagecontent') >= 0 || lower.indexOf('postsquery') >= 0
-        || lower.indexOf('note') >= 0 || lower.indexOf('storyhighlights') >= 0
-        || lower.indexOf('suggestedusers') >= 0 || lower.indexOf('insights') >= 0
-        || lower.indexOf('badge') >= 0) {
-        continue;
-      }
-      if (lower.indexOf(keys[0]) >= 0) {
-        return name;
-      }
-    }
-    // 名字里没命中（IG 改过名）：退回按 kind 查一遍（见 NativeProfile.templateOpOfKind）。
-    return NativeProfile.templateOpOfKind(kind);
   }
 
   /**
@@ -1405,120 +1211,6 @@ export class ProfileViewModel {
   }
 
   /**
-   * 原生那发失败之后：**重新抓一次这一段的模板，再试一遍原生**（调用点见 load）。
-   *
-   * 为什么要它：模板是有寿命的（IG 换了 doc_id 之后旧模板会被回一整页 HTML，见
-   * NativeProfile 的判据），而收藏 / 被标注 / 视频这三段**没有可用的回放兜底**
-   * （回放数据里没有媒体 id 与作者，见 fetchPage 的说明）—— 不重抓一次的话，用户看到的
-   * 就是"读取失败"，或者更糟：一堆头像空着、点赞转发发不出去的帖子。
-   *
-   * 抓完**顺手重发一次**：`captureTab` 会把隐藏网页送回首页，而模板已经落在原生侧了，
-   * 所以这一次重试不会再碰网页。
-   */
-  private async recaptureAndRetry(tab: number, state: ProfileTabState): Promise<ProfilePostsPage | null> {
-    if (this.ownName.length === 0) {
-      // 不知道自己的账号名就抓不了（抓模板要导航到 /用户名/saved/）。
-      return null;
-    }
-    /*
-     * `tab` 由调用方传进来（审计 G1）：原来这里读 `this.tab` —— 而它的上游（`load`）
-     * 已经 await 过好几次，用户切页之后就会给**另一个分页**抓模板 + 重试，
-     * 拿回来的帖子还会被写进那一页。
-     */
-    this.onStatus('这一段读失败，正在重新抓模板…');
-    const ok: boolean = await this.captureTab(this.ownName, tab);
-    if (!ok) {
-      return null;
-    }
-    const op: string = this.opNameOf(tab);
-    if (op.length === 0) {
-      return null;
-    }
-    hilog.info(DOMAIN, TAG, 'recapture tab=%{public}d op=%{public}s → retry native', tab, op);
-    return await this.fetchPage(op, state.cursor, tab);
-  }
-
-  /**
-   * 把隐藏网页导航到某个分页的地址并抓一次模板。
-   *
-   * 为什么是"导航"而不是"点网页上的分页按钮"：IG 网页上那四个分页就是四个 URL
-   * （`/用户名/reels/`、`/用户名/saved/`、`/用户名/tagged/`），直接导航比在 DOM 里找按钮稳得多，
-   * 页面自己会把对应的查询发出去，网络钩子把模板交上来（capture）。
-   *
-   * **别人主页上抓的时候只抓那一条分页查询**（`filter` 见 tabCaptureFilter）：模板是**按操作名
-   * 共用**的，把"别人的那一发"整包存下来会把 `PolarisProfilePageContentQuery` 也覆盖成
-   * 他的目标 —— 之后"我的"页照着那份模板发请求，就会显示成别人的资料（用户报过）。
-   * 自己的主页上抓则是整包抓（那一份本来就是我自己的）。
-   *
-   * 只抓这一件事：抓完由调用方（setTab / 探针按钮）继续。失败也不抛 —— 状态行会说明。
-   */
-  async captureTab(username: string, tab: number): Promise<boolean> {
-    if (username.length === 0) {
-      return false;
-    }
-    const suffix: string = tab === PROFILE_TAB_REELS ? 'reels/'
-      : (tab === PROFILE_TAB_SAVED ? 'saved/' : (tab === PROFILE_TAB_TAGGED ? 'tagged/' : ''));
-    const url: string = `${AppConfig.INSTAGRAM_HOME_URL.replace(/\/$/, '')}/${username}/${suffix}`;
-    const filter: string = this.target.isSelf() ? '' : ProfileViewModel.tabCaptureFilter(tab);
-    hilog.info(DOMAIN, TAG, 'capture tab=%{public}d url=%{public}s filter=%{public}s',
-      tab, suffix.length > 0 ? suffix : '-', filter.length > 0 ? filter : '(all)');
-    try {
-      this.bridge.loadUrl(url);
-      await this.bridge.awaitPageReady(NAV_READY_TIMEOUT_MS);
-      await ProfileViewModel.sleep(HYDRATE_WAIT_MS);
-      // 抓**全部**操作名（filter 传空串），并且抓两轮：那三个分页的网格请求实测**晚于**
-      // 首屏信息请求（第一轮只抓到 `fetch__XDTUserDict` 那种），隔一会儿再抓一次才抓得齐。
-      let ok: boolean = await this.registry.capture(filter);
-      await ProfileViewModel.sleep(CAPTURE_POLL_GAP_MS);
-      const second: boolean = await this.registry.capture(filter);
-      ok = ok || second;
-      hilog.info(DOMAIN, TAG, 'capture tab=%{public}d ok=%{public}s %{public}s',
-        tab, ok ? 'y' : 'n', this.registry.storedSummary());
-      // 抓完必须把网页送回首页：它是全 App 共用的，留在个人页会让首页信息流读不出来。
-      this.returnToFeed();
-      return ok;
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'capture tab failed: %{public}s', (error as Error).message);
-      this.returnToFeed();
-      return false;
-    }
-  }
-
-  /**
-   * 某个分页对应的**模板名片段**（只在别人主页上抓时用，见 captureTab）。
-   *
-   * 用名字片段而不是整包抓：这几段各自的查询名都带着自己的特征词
-   * （`PolarisProfileReelsTabContentQuery` / `SavedPostsTabContentQuery` / `TaggedTabContentQuery`、
-   * 帖子那条 `PolarisProfilePostsQuery`），而头部那条 `PolarisProfilePageContentQuery` 一个都不沾
-   * —— 于是它不会被别人的那一发覆盖。
-   */
-  private static tabCaptureFilter(tab: number): string {
-    if (tab === PROFILE_TAB_REELS) {
-      return 'ReelsTab';
-    }
-    if (tab === PROFILE_TAB_SAVED) {
-      return 'SavedPosts';
-    }
-    if (tab === PROFILE_TAB_TAGGED) {
-      return 'Tagged';
-    }
-    return 'ProfilePosts';
-  }
-
-  /**
-   * 重新抓一次**我自己**主页那几条模板（本人头部对不上账号名时用，见 loadHeader）。
-   *
-   * 走的是自己的主页地址（`/我的用户名/`），所以整包抓是安全的。
-   */
-  private async captureOwnProfile(): Promise<boolean> {
-    await this.ensureOwnName();
-    if (this.ownName.length === 0) {
-      return false;
-    }
-    return await this.captureTab(this.ownName, PROFILE_TAB_POSTS);
-  }
-
-  /**
    * 确保知道**自己的账号名**（本人这一路发请求之前先拿到它）。
    *
    * 为什么必须提前拿到：模板是按操作名共用的，可能在别人的主页上被抓过 —— 那份模板里的
@@ -1607,84 +1299,6 @@ export class ProfileViewModel {
    * 网络钩子把模板交上来（capture）。
    *
    * ⚠️ 判断"有没有模板"要用 **storedJson**（已存模板），不能用 `has()` ——
-   * 后者查的是**接口索引**（操作名/URL 那份元信息，按 TTL 从页面同步来的），
-   * 刚 capture 完索引还没同步，会误判成"没有"直接放弃（实测就是界面一直显示
-   * "拿不到接口模板"的原因）。
-   */
-  private async ensureTemplates(): Promise<boolean> {
-    this.usedColdPath = false;
-    if (this.hasTemplates()) {
-      return true;
-    }
-    this.onStatus('首次加载：正在读取网页');
-    // 先等网页就绪再做"自己的主页地址"那一步。
-    await this.bridge.awaitPageReady(NAV_READY_TIMEOUT_MS);
-    let href: string = '';
-    for (let attempt: number = 1; attempt <= OWN_PROFILE_ATTEMPTS; attempt++) {
-      try {
-        href = await this.bridge.runBridge(OWN_PROFILE_SCRIPT, OWN_PROFILE_TIMEOUT_MS, 'own-profile');
-      } catch (error) {
-        href = '';
-      }
-      if (href.length > 1 && href.charAt(0) === '/') {
-        break;
-      }
-      hilog.info(DOMAIN, TAG, 'own-profile try=%{public}d empty', attempt);
-      if (attempt < OWN_PROFILE_ATTEMPTS) {
-        await ProfileViewModel.sleep(OWN_PROFILE_GAP_MS);
-      }
-    }
-    const base: string = AppConfig.INSTAGRAM_HOME_URL.replace(/\/$/, '');
-    const url: string = href.length > 1 && href.charAt(0) === '/'
-      ? base + href
-      : AppConfig.INSTAGRAM_HOME_URL;
-    hilog.info(DOMAIN, TAG, 'cold path url=%{public}s (own=%{public}s)',
-      url === AppConfig.INSTAGRAM_HOME_URL ? 'home-fallback' : 'profile', href.length > 1 ? 'y' : 'n');
-    this.bridge.loadUrl(url);
-    // 这一轮走了冷启动，读完要把网页送回首页（见 returnToFeed）—— 标记立刻立起来，
-    // 后面无论成功失败（哪怕导航一直不就绪），收尾那一步都能知道"网页被我导航走了"。
-    this.usedColdPath = true;
-    await this.bridge.awaitPageReady(NAV_READY_TIMEOUT_MS);
-    // 先等一段水合时间再抓第一次（页面这时候才刚把查询发出去）。
-    await ProfileViewModel.sleep(HYDRATE_WAIT_MS);
-    let stored: boolean = false;
-    for (let attempt: number = 1; attempt <= CAPTURE_POLLS; attempt++) {
-      stored = await this.registry.capture(CAPTURE_FILTER);
-      if (this.hasTemplates()) {
-        hilog.info(DOMAIN, TAG, 'cold path templates ready try=%{public}d %{public}s',
-          attempt, this.registry.storedSummary());
-        return true;
-      }
-      if (attempt < CAPTURE_POLLS) {
-        await ProfileViewModel.sleep(CAPTURE_POLL_GAP_MS);
-      }
-    }
-    hilog.info(DOMAIN, TAG, 'cold path stored=%{public}s %{public}s',
-      stored ? 'y' : 'n', this.registry.storedSummary());
-    return this.hasTemplates();
-  }
-
-  /**
-   * 冷启动那条路读完，把隐藏网页送回首页信息流。
-   *
-   * 为什么必须送回去：这个隐藏网页是**全 App 共用**的，首页信息流的首屏与翻页都指望它停在
-   * 首页 —— 页面内存里那份 feed 请求配置只活在当前文档里。冷启动这条路是整页导航到自己的
-   * 主页，读完不管它的话网页就一直留在那儿，之后就变成「首页一条帖子都读不出来」。
-   */
-  private returnToFeed(): void {
-    try {
-      this.bridge.loadUrl(AppConfig.INSTAGRAM_HOME_URL);
-      hilog.info(DOMAIN, TAG, 'cold path done → back to feed');
-    } catch (error) {
-    }
-  }
-
-  /** 帖子模板在不在（见 ensureTemplates 的说明：要查模板，不是接口索引）。 */
-  private hasTemplates(): boolean {
-    return NativeProfile.hasTemplate(NativeProfile.OP_POSTS);
-  }
-
-  /**
    * 确保"本人这份状态"属于**当前登录的账号**（见 selfId 的说明）。
    *
    * 换账号时把 `ownName` / `headerVerified` / `header` / `target` 全部作废：
@@ -1912,12 +1526,12 @@ export class ProfileViewModel {
        */
       if (this.target.isSelf() && ProfileViewModel.isUsername(this.ownName)
         && native.username.toLowerCase() !== this.ownName.toLowerCase()) {
-        hilog.warn(DOMAIN, TAG, 'header mismatch @%{public}s vs own @%{public}s → ignore',
+        hilog.warn(DOMAIN, TAG, 'header mismatch @%{public}s vs own @%{public}s → retry once',
           native.username, this.ownName);
         if (!this.headerVerified) {
-          // 只重抓一次（抓模板要导航隐藏网页）：多半是模板串了别人的目标。
+          // 只重试一次（移动端那一发偶尔会把旧会话的缓存带回来）。
           this.headerVerified = true;
-          await this.captureOwnProfile();
+          await ProfileViewModel.sleep(400);
           await this.loadHeader();
           return;
         }
@@ -1957,134 +1571,8 @@ export class ProfileViewModel {
       }
       return;
     }
-    hilog.info(DOMAIN, TAG, 'header failed (%{public}s) → replay', NativeProfile.lastDetail());
-    // 同 fetchPage：别人主页不走回放兜底（回放是原样重发模板，会把**我的**资料画成他的）。
-    if (!this.target.isSelf()) {
-      this.onStatus('头部读取失败：' + this.diag);
-      return;
-    }
-    /*
-     * 走到回放这条路**才**补"我是谁"（见上面那句说明：账号名只有回放要用）。
-     * 回放的模板会把目标键替换成 `selfName`，没有账号名就可能把我自己的资料画成别人。
-     */
-    await this.ensureOwnName();
-    const cfg: string = this.registry.storedJson(NativeProfile.OP_HEADER);
-    if (cfg.length === 0) {
-      /*
-       * 走不到移动端、又没模板可回放：**必须把原因写到状态行**（以前只打一行日志就 return，
-       * 界面上什么都没有 = 用户说的"头部数据没有加载"却看不出为什么）。
-       */
-      hilog.info(DOMAIN, TAG, 'header: no template and mobile failed');
-      this.onStatus('头部读取失败：' + NativeProfile.lastDetail());
-      return;
-    }
-    for (let attempt: number = 1; attempt <= EXTRACT_ATTEMPTS; attempt++) {
-      let raw: string = '';
-      try {
-        raw = await this.bridge.runBridge(profileHeaderScript(cfg), EXTRACT_TIMEOUT_MS,
-          'profile-header');
-      } catch (error) {
-        hilog.warn(DOMAIN, TAG, 'header bridge threw: %{public}s', (error as Error).message);
-        raw = '';
-      }
-      const header: ProfileHeader | null = ProfileMapper.headerFromJson(raw);
-      if (header !== null) {
-        // 本人这份也要核对（同上面原生那一路）：回放读的是**当前 DOM**，网页要是正停在
-        // 别人的主页上，读回来的就是别人的资料（用户报的"我的页面显示成其他用户"）。
-        if (this.target.isSelf() && ProfileViewModel.isUsername(this.ownName)
-          && header.username.toLowerCase() !== this.ownName.toLowerCase()) {
-          hilog.warn(DOMAIN, TAG, 'header replay mismatch @%{public}s vs own @%{public}s → ignore',
-            header.username, this.ownName);
-          if (!this.headerVerified) {
-            this.headerVerified = true;
-            await this.captureOwnProfile();
-            return await this.loadHeader();
-          }
-          this.onStatus('头部读取异常：拿到的不是本账号的资料');
-          return;
-        }
-        this.header = header;
-        this.headerFromSnapshot = false;
-        if (this.target.isSelf() && header.username.length > 0) {
-          this.ownName = header.username;
-          this.target = this.target.withSelfName(header.username);
-        }
-        hilog.info(DOMAIN, TAG,
-          'header replay ok @%{public}s posts=%{public}d try=%{public}d',
-          header.username, header.posts, attempt);
-        this.onHeader(header);
-        return;
-      }
-      hilog.info(DOMAIN, TAG, 'header try=%{public}d failed raw=%{public}s',
-        attempt, raw.substring(0, 120));
-      this.diag = '头部第' + attempt + '次未成 raw=' + raw.substring(0, 60);
-      await ProfileViewModel.sleep(EXTRACT_RETRY_GAP_MS);
-    }
-    this.onStatus('头部读取失败：' + this.diag);
-  }
-
-  /**
-   * 回放兜底：在网页里用同一份模板 fetch 一次，失败自动重试。
-   *
-   * 为什么要重试：刚导航完（冷启动那一次）网页还在水合，注入脚本经常要等到桥超时都
-   * 抢不到执行机会；而页面闲下来之后回放是毫秒级。
-   */
-  private async fetchPostsWithRetry(op: string, cursor: string): Promise<ProfilePostsPage | null> {
-    const firstPage: boolean = cursor.length === 0;
-    // 第一页回空时先记着：重试全都还是空，才认它（这个人确实没帖子）。
-    let emptyPage: ProfilePostsPage | null = null;
-    let page: ProfilePostsPage | null = null;
-    for (let attempt: number = 1; attempt <= EXTRACT_ATTEMPTS; attempt++) {
-      page = await this.fetchPostsReplay(op, cursor, attempt);
-      if (page !== null && page.posts.length > 0) {
-        return page;
-      }
-      if (page !== null && firstPage) {
-        emptyPage = page;
-      } else if (page === null) {
-        // 把最后一次的原因留着（不再往前叠字符串，见 replayDiag 的说明）。
-        this.replayDiag = `replay=${this.replayDiag}`;
-      }
-      if (attempt < EXTRACT_ATTEMPTS) {
-        await ProfileViewModel.sleep(EXTRACT_RETRY_GAP_MS);
-      }
-    }
-    return emptyPage;
-  }
-
-  private async fetchPostsReplay(op: string, cursor: string,
-                                 attempt: number): Promise<ProfilePostsPage | null> {
-    const cfg: string = this.registry.storedJson(op);
-    if (cfg.length === 0) {
-      hilog.info(DOMAIN, TAG, 'posts: no template op=%{public}s', op);
-      this.replayDiag = 'no-template';
-      return null;
-    }
-    // 只改游标，**不碰 first**：模板里那条请求本来就带着页面自己用的 first，我们覆盖它纯属
-    // 多余动作，而 IG 的 GraphQL 对变量**类型**很挑 —— 覆盖之后服务端直接回
-    // `noncoercible_variable_value`、`data` 为 null。
-    const vars: string = cursor.length > 0
-      ? '{"after":' + JSON.stringify(cursor) + '}'
-      : '{"after":null}';
-    let raw: string = '';
-    try {
-      raw = await this.bridge.runBridge(profilePostsScript(cfg, vars), EXTRACT_TIMEOUT_MS,
-        'profile-posts');
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'posts bridge threw: %{public}s', (error as Error).message);
-      return null;
-    }
-    const page: ProfilePostsPage | null = ProfileMapper.postsFromJson(raw);
-    if (page === null) {
-      this.replayDiag = 'raw=' + raw.substring(0, 90);
-      hilog.info(DOMAIN, TAG, 'posts replay try=%{public}d failed raw=%{public}s',
-        attempt, raw.substring(0, 500));
-      return null;
-    }
-    this.replayDiag = '-';
-    hilog.info(DOMAIN, TAG, 'posts replay ok op=%{public}s n=%{public}d',
-      op, page.posts.length);
-    return page;
+    // 移动端这一发没拿到：如实写到状态行（网页模板回放那条路已随模板机制删除）。
+    this.onStatus('头部读取失败：' + NativeProfile.lastDetail());
   }
 
   private static sleep(ms: number): Promise<void> {
