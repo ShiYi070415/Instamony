@@ -28,6 +28,8 @@ import { CommentsPayload, CommentItem } from '../model/Comment';
 import { RestSession } from './RestSession';
 import { JsonRead } from './JsonRead';
 import { ApiThrottle } from './ApiThrottle';
+// 评论的移动端私有通道（对应 instagrapi 的 media_comments_v1_chunk，不需要网页模板）。
+import { MobileComments } from './mobileapi/MobileComments';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeComments';
@@ -109,8 +111,15 @@ export class NativeComments {
   private static noTextSample: string = '';
   /** 上一次评论点赞走的哪条路（诊断，见 like）。 */
   private static likeVia: string = '-';
-  /** 上一次评论数据来自哪条路（rest / graphql，见 fetch）。 */
+  /** 上一次评论数据来自哪条路（mobile / rest / graphql，见 fetch）。 */
   private static source: string = '-';
+  /**
+   * **迁移期对照开关**：true = 只走移动端那条（不走 REST / GraphQL 兜底）。
+   *
+   * 存在的意义只有一个：验证"**没有网页模板也能取评论**"（这是把评论从抓包迁出来的前提）。
+   * 平时 false（两条并存，移动端失败自动退回）；确认稳定后可以把兜底整段删掉。
+   */
+  private static mobileOnly: boolean = false;
   /** 这次会话里评论用的是不是 GraphQL 那条（决定翻页跟着哪条游标走，见 fetch）。 */
   private static useGraphql: boolean = false;
   /** 翻页游标是 `min_id`（头部加载）还是 `max_id`（尾部）：由第一页决定。 */
@@ -177,6 +186,27 @@ export class NativeComments {
       }
       NativeComments.useGraphql = false;
     }
+    /*
+     * **先走移动端私有通道**（见 core/mobileapi/MobileComments）：
+     * 与 instagrapi 的 `media_comments_v1_chunk` 同一个端点、同一套 App 身份，
+     * **不需要任何网页模板** —— 这是"评论不再依赖抓包"的那一步。
+     * 失败（无会话/非 200/被限流）再退回下面网页那条 REST（迁移期两条并存）。
+     */
+    const viaMobile: CommentsPayload | null = await NativeComments.fetchViaMobile(id, maxId);
+    if (viaMobile !== null && viaMobile.state === 'ok') {
+      NativeComments.source = 'mobile';
+      if (maxId.length === 0) {
+        NativeComments.cursorMin = viaMobile.nextMin === true;
+      }
+      return viaMobile;
+    }
+    // 迁移期的对照开关：打开后只走移动端（用来验证"没有模板也能取评论"）。
+    if (NativeComments.mobileOnly) {
+      NativeComments.detail = `mobile-only:${MobileComments.detail()}`;
+      hilog.warn(DOMAIN, TAG, 'comments mobile-only failed: %{public}s',
+        MobileComments.detail());
+      return viaMobile;
+    }
     const rest: CommentsPayload | null = await NativeComments.fetchViaRest(id, maxId);
     if (rest === null || rest.state !== 'ok') {
       return rest;
@@ -225,6 +255,22 @@ export class NativeComments {
       }
     }
     return count;
+  }
+
+  /** 私有 REST：`GET /api/v1/media/{id}/comments/`（**移动端身份**，见 core/mobileapi/MobileComments）。 */
+  private static async fetchViaMobile(id: string, maxId: string): Promise<CommentsPayload | null> {
+    const body: string | null = await MobileComments.page(id, maxId, NativeComments.cursorMin);
+    if (body === null) {
+      return null;
+    }
+    const payload: CommentsPayload | null = NativeComments.parse(body);
+    if (payload === null) {
+      return null;
+    }
+    hilog.info(DOMAIN, TAG,
+      'comments(mobile) id=%{public}s n=%{public}d total=%{public}d more=%{public}s',
+      id, (payload.items ?? []).length, NativeComments.total, `${payload.hasMore}`);
+    return payload;
   }
 
   /** 私有 REST：`GET /api/v1/media/{id}/comments/`。 */
