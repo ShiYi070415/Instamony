@@ -19,12 +19,21 @@ import { MediaQuality, PickedMedia } from './MediaQuality';
 import { ApiThrottle } from './ApiThrottle';
 import { JsonRead } from './JsonRead';
 import { MobileDiscover, MobileMediaPage } from './mobileapi/MobileDiscover';
+// Reels 的移动端通道（对应 instagrapi 的 reels / explore_reels，不需要网页模板）。
+import { MobileClips } from './mobileapi/MobileClips';
 import { EngageState } from './NativeEngage';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeReels';
 /** 模板按这个名字片段找（ApiRegistry 里存的就是它）。 */
 const REELS_OP: string = 'ClipsTabRoot';
+/**
+ * **迁移期对照开关**：true = 只走移动端 `clips/discover/`，不走模板回放。
+ *
+ * 用来验证"**没有网页模板也能出 Reels**"（这是把 Reels 从抓包迁出来的前提）。
+ * 平时 false（移动端失败自动退回模板回放）。
+ */
+const MOBILE_ONLY: boolean = false;
 /** Clips 连接键。 */
 const CLIPS_KEY: string = 'xdt_api__v1__clips__home__connection_v2';
 
@@ -203,6 +212,88 @@ export class NativeReels {
    * 要一页 reels 并解析好。失败一律 null（没模板 / 没登录 / HTTP 非 200 / 解析不出条目）。
    */
   /**
+   * 移动端 `clips/discover/` 那一发（拿不到给 null）。
+   *
+   * 返回结构与网页 GraphQL 不同（`items[].media` + `paging_info`），但**媒体对象是同一套 v1 字段**，
+   * 所以直接复用 `toReel`（见 core/mobileapi/MobileClips 文件头的说明）。
+   */
+  private static async viaClips(cursor: string): Promise<NativeReelsPage | null> {
+    const started: number = Date.now();
+    const body: string | null = await MobileClips.page(cursor);
+    if (body === null) {
+      return null;
+    }
+    const page: NativeReelsPage | null = NativeReels.parseMobile(body, Date.now() - started);
+    if (page === null) {
+      hilog.info(DOMAIN, TAG, 'clips unparsable bytes=%{public}d diag=%{public}s',
+        body.length, NativeReels.diagnose(body));
+      return null;
+    }
+    hilog.info(DOMAIN, TAG, 'reels via clips n=%{public}d more=%{public}s cursor=%{public}d ms=%{public}d',
+      page.reels.length, `${page.hasMore}`, page.nextCursor.length, page.ms);
+    return page;
+  }
+
+  /**
+   * 解析移动端 `clips/*` 的响应（`items[].media` + `paging_info`）。
+   *
+   * 与 `parse`（网页 GraphQL 那套 `data.<conn>.edges[].node.media`）是**两个形状**，
+   * 所以单独一个函数，而不是硬塞进 `parse` 里判断。
+   */
+  static parseMobile(body: string, ms: number): NativeReelsPage | null {
+    if (body.length === 0) {
+      return null;
+    }
+    let root: Record<string, Object>;
+    try {
+      root = JSON.parse(body) as Record<string, Object>;
+    } catch (error) {
+      return null;
+    }
+    // `items_with_ads` 与 `items` 同形，二选一（都为空就是这一页没内容）。
+    let items: Array<Object> = [];
+    const plain: Object | undefined = root['items'];
+    if (plain !== undefined && plain !== null && Array.isArray(plain)) {
+      items = plain as Array<Object>;
+    }
+    if (items.length === 0) {
+      const ads: Object | undefined = root['items_with_ads'];
+      if (ads !== undefined && ads !== null && Array.isArray(ads)) {
+        items = ads as Array<Object>;
+      }
+    }
+    const reels: Array<Reel> = [];
+    for (let index: number = 0; index < items.length; index++) {
+      const item: Record<string, Object> | null = JsonRead.asRecord(items[index]);
+      if (item === null) {
+        continue;
+      }
+      const media: Record<string, Object> | null = JsonRead.asRecord(item['media']);
+      if (media === null) {
+        continue;
+      }
+      const reel: Reel | null = NativeReels.toReel(media as IgClipsMedia);
+      if (reel !== null) {
+        reels.push(reel);
+      }
+    }
+    if (reels.length === 0) {
+      return null;
+    }
+    let cursor: string = '';
+    let more: boolean = false;
+    const paging: Record<string, Object> | null = JsonRead.asRecord(root['paging_info']);
+    if (paging !== null) {
+      const maxId: string = `${paging['max_id'] ?? ''}`.trim();
+      if (maxId.length > 0 && maxId !== 'null') {
+        cursor = maxId;
+      }
+      more = paging['more_available'] === true;
+    }
+    return new NativeReelsPage(reels, cursor, more, ms);
+  }
+
+  /**
    * @param allowExplore 允许用**移动端探索流**兜底吗（见 viaExplore）。
    *
    *   · `true` = 调用方是**用户驱动**的（进 reels 页 / 上滑翻页，见 ReelsViewModel）；
@@ -213,14 +304,23 @@ export class NativeReels {
   static async fetchPage(first: number, cursor: string,
                          allowExplore: boolean = false): Promise<NativeReelsPage | null> {
     /*
-     * **被限流期间**（见 core/ApiThrottle）：GraphQL 那条一发都不打，但**移动端探索流还能顶**
-     * （`discover/topical_explore/` 给的也是 clips 媒体，带 `video_versions`，可直接播）。
+     * **先走移动端 `clips/discover/`**（见 core/mobileapi/MobileClips）：
+     * 与 instagrapi 的 `explore_reels` 同一个端点、同一套 App 身份，**不需要网页模板**。
+     * 成功就直接返回；失败（无会话 / 被限流 / 解析不出）再走下面老的 GraphQL 回放。
      *
-     * 为什么要这条兜底：真机日志里 clips 那条被 IG 直接回
-     * `{"errors":[{"message":"Rate limit exceeded","code":1675004}]}`（12 分钟冷却）——
-     * 这段时间用户点进视频标签原来是"什么都没有"。换一条端点虽然个性化差一点，
-     * 但**有内容**远好过空着。
+     * 顺序放在限流判断之前是故意的：clips 那条 GraphQL 一旦被限流（12 分钟冷却），
+     * 这里仍然能拿到内容 —— 而它和下面那条 `viaExplore` 的区别是：
+     * 那个用的是 `discover/topical_explore/`（图片+视频混合流），这个才是**真正的 Reels 流**。
      */
+    const viaMobile: NativeReelsPage | null = await NativeReels.viaClips(cursor);
+    if (viaMobile !== null) {
+      return viaMobile;
+    }
+    // 对照开关：只走移动端（验证用，见 MOBILE_ONLY）。
+    if (MOBILE_ONLY) {
+      hilog.info(DOMAIN, TAG, 'reels mobile-only: no page (%{public}s)', MobileClips.detail());
+      return null;
+    }
     if (ApiThrottle.blocked(ApiThrottle.CLIPS)) {
       const viaExplore: NativeReelsPage | null = allowExplore
         ? await NativeReels.viaExplore(cursor) : null;
