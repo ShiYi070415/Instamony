@@ -420,12 +420,6 @@ function clampVp(value: number, lo: number, hi: number): number {
   return value > hi ? hi : value;
 }
 /**
- * 收藏 / 取消收藏模板的操作名片段（见 captureSaveTemplates）。
- *
- * 一次就能同时命中两条：收藏那条名字含 `save`，取消收藏那条含 `unsave`（也含 `save`）。
- */
-const SAVE_TEMPLATE_KEY: string = 'save';
-/**
  * 顺手抓评论模板的最小间隔（毫秒）。
  *
  * 它挂在路由变化/加载完成/切页上，网页里一次浏览会连着改好几次路由；节流到 8 秒一次，
@@ -1799,16 +1793,11 @@ struct Index {
   /**
    * 收藏 / 取消收藏的**唯一实现**（reels 页与 feeds 流共用）。
    *
-   * 三条路，从快到慢（需求："所有收藏按钮都走 http 请求**用探针抓模板**"）：
-   *   ① **探针抓到的模板**（最理想）：页面自己发过一次收藏请求之后，模板就已经存进
-   *      ApiRegistry（见 captureSaveTemplates）。这里把它原样回放、只把媒体 id 换成这一条 ——
-   *      网页会话与 csrf 都在模板头里，是最快也最稳的一条；
-   *   ② **App 主机的 route**：`POST i.instagram.com/api/v1/media/{id}/save|unsave/`
-   *      （core/NativeSave）。真机实测这条路由**要 App 身份的会话**，我们只有网页会话，
-   *      所以经常落空（回 `{"status":"fail"}`）—— 但它是"最快的那条"，留着；
-   *   ③ **网页驱动**：把隐藏网页导航到这条的页面，注入 saveOnPostPageScript 点它自己的书签，
-   *      做完再导航回首页（和点赞 / 转发失败时退回去的那条完全一样）。
-   *      **这一发会顺带把模板抓下来**（见 captureSaveTemplates），于是下一次点收藏就走 ①。
+   * 两条路，从快到慢：
+   *   ① **移动端私有接口**：`POST i.instagram.com/api/v1/media/{pk}/save|unsave/`
+   *      （core/NativeSave → core/mobileapi/MobileEngage，instagrapi 同源，不需要任何模板）；
+   *   ② **网页驱动**：把隐藏网页导航到这条的页面，注入 saveOnPostPageScript 点它自己的书签，
+   *      做完再导航回首页（见 saveByWeb）。它发出去的就是**网页自己那一发**，没有额外痕迹。
    *
    * 成功之后写进会话覆盖表 core/SaveState：信息流那颗书签、reels 那颗、以及翻页重建后的
    * 卡片，全靠它保持实心（见 FeedList.syncUiList / ReelOverlay.syncSaved）。
@@ -1818,22 +1807,13 @@ struct Index {
     const id: string = mediaId.trim();
     /*
      * **只有短码也照样收藏**（同 likeReel 的理由）：个人页那几个分页的条目经常没有媒体 id，
-     * NativeSave 会用短码去换真 pk（见 MobileEngage.mediaPkFor）。
+     * NativeSave 会用短码去换真 pk（见 MobileEngage.mediaIdOf）。
      */
     if (id.length === 0 && shortcode.trim().length === 0) {
       this.toast($r('app.string.save_failed'));
       return false;
     }
-    // ① 探针抓到的模板（最省事的一条）。
-    const viaTemplate: SaveResult | null = await NativeSave.byTemplate(id, save);
-    if (viaTemplate !== null && viaTemplate.ok) {
-      SaveState.remember(id, save);
-      this.profileVm.refreshSavedTab();
-      hilog.info(DOMAIN, TAG, 'save ok via=%{public}s id=%{public}s save=%{public}s',
-        NativeSave.lastVia(), id, `${save}`);
-      return true;
-    }
-    // ② App 主机的 route。
+    // ① 移动端私有接口。
     const direct: SaveResult = await NativeSave.setSaved(id, save, shortcode);
     if (direct.ok) {
       SaveState.remember(id, save);
@@ -1859,13 +1839,12 @@ struct Index {
     }
     hilog.info(DOMAIN, TAG, 'save native failed (%{public}s) id=%{public}s → web',
       direct.detail, id);
-    // ③ 网页驱动（顺手抓模板，下次走 ①）。
+    // ② 网页驱动（网页自己那一发，和用户点书签一模一样）。
     const ok: boolean = await this.saveByWeb(shortcode, isVideo, save);
     if (!ok) {
       this.toast($r('app.string.save_failed'));
       return false;
     }
-    await this.captureSaveTemplates();
     SaveState.remember(id, save);
     // **收藏分页要刷新**（需求）：不然用户切到「收藏」看不到刚存的这一条 / 取消收藏后它还在。
     this.profileVm.refreshSavedTab();
@@ -1873,7 +1852,7 @@ struct Index {
   }
 
   /**
-   * 收藏的**网页驱动**那条路（见 saveMedia 的第 ③ 步）。
+   * 收藏的**网页驱动**那条路（见 saveMedia 的第 ② 步）。
    *
    * 导航到这条的页面 → 注入 saveOnPostPageScript（它会先核对 URL 里就是这条 shortcode，
    * 再点 `main article` 里那颗书签）→ 无论成败都导航回首页（同 likeOnPostPage / returnToFeed：
@@ -1913,29 +1892,6 @@ struct Index {
       return false;
     } finally {
       await this.returnToFeed();
-    }
-  }
-
-  /**
-   * 把网页刚发过的**收藏请求**存成模板（需求："用探针抓模板"）。
-   *
-   * 和 captureEngageTemplates 同一个套路（那是点赞/转发的自举）：页面一发出这类请求就会
-   * 通过 PageBridge 通知原生（见 WebScripts 里那条正则），这里把它抓进 ApiRegistry 并落盘
-   * —— 之后所有收藏按钮都走 **HTTP 回放**，不必再导航网页。
-   *
-   * 只抓 `save` 这一个词：`capture` 是按名字片段过滤的，词太大（比如 `Polaris`）会把一堆
-   * 查询挤进模板表（坑位有限），真正要用的两条反而被挤掉（点赞那边踩过这个坑）。
-   * 收藏与取消收藏的模板名里都含 `save`（`…SaveMedia…` / `rest_/api/v1/media/{id}/save/`、
-   * `…/unsave/`），所以一次能同时抓到两条。
-   */
-  private async captureSaveTemplates(): Promise<void> {
-    try {
-      const ok: boolean = await ApiRegistry.getInstance().capture(SAVE_TEMPLATE_KEY);
-      hilog.info(DOMAIN, TAG, 'save templates captured=%{public}s have=%{public}s',
-        `${ok}`, NativeSave.describeTemplates());
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'save template capture failed: %{public}s',
-        (error as Error).message);
     }
   }
 
@@ -2285,16 +2241,12 @@ struct Index {
       hilog.info(DOMAIN, TAG, 'comment request seen name=%{public}s', name);
       ApiRegistry.getInstance().capture(COMMENT_TEMPLATE_KEY);
     });
-    // 页面刚发出**点赞 / 转发 / 收藏**的写请求 → 同一条道理，立刻存模板
-    // （core/NativeEngage 与 core/NativeSave 全靠它）。**立刻**是关键：网页里这条请求随时可能
-    // 被下一次整页导航冲掉（去帖子页点那种情况）。
+    // 页面刚发出**点赞 / 转发**的写请求 → 立刻存模板（core/NativeEngage 靠它）。
+    // **立刻**是关键：网页里这条请求随时可能被下一次整页导航冲掉（去帖子页点那种情况）。
+    //
+    // 收藏不再需要这一步：它已经只走移动端私有接口（core/NativeSave → MobileEngage）。
     this.bridge.setEngageTemplateHandler((name: string): void => {
       hilog.info(DOMAIN, TAG, 'engage request seen name=%{public}s', name);
-      // 收藏那条与点赞/转发分开抓：`capture` 一次只按一个词过滤，抓太宽会把模板表挤满。
-      if (name.toLowerCase().indexOf('save') >= 0) {
-        this.captureSaveTemplates();
-        return;
-      }
       this.captureEngageTemplates();
     });
     this.bridge.setSessionHandler((signedIn: boolean): void => {

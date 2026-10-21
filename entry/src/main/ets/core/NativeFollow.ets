@@ -1,40 +1,35 @@
 /*
- * 关注 / 取关：走 HTTP 直发（不驱动网页）。
+ * 关注 / 取关 + 批量问关注状态 —— **只走移动端私有接口**（instagrapi 同源）。
  *
- * ## 端点与依据
- * IG 网页/客户端关注用的是 REST 那一套（不是 GraphQL）：
- *   POST https://www.instagram.com/api/v1/friendships/create/{user_id}/
- *   POST https://www.instagram.com/api/v1/friendships/destroy/{user_id}/
- *   body: user_id={user_id}（form-urlencoded）
- * 和我们已经在用的 `graphql/query` 一样，鉴权全靠 **Cookie + x-csrftoken**，所以直接复用
- * 信息流模板里那份会话头（NativeFeed.sessionHeaders）—— 里面已经有真机抓到的
- * `x-ig-app-id` / `x-asbd-id` / `x-csrftoken` / `user-agent` 等，见 core/NativeFeed.buildHeaders。
+ * ## 端点
+ *   POST i.instagram.com/api/v1/friendships/create/{user_id}/
+ *   POST i.instagram.com/api/v1/friendships/destroy/{user_id}/
+ *   POST i.instagram.com/api/v1/friendships/show_many/   （表单 `user_ids=1,2,3`）
+ * 响应形如 `{"status":"ok","friendship_status":{"following":true,…}}`，所以"到底成没成"
+ * 以服务端回的 friendship_status.following 为准，不看我们自己发的是 create 还是 destroy
+ * （IG 有时候对重复关注直接回 idempotent 成功）。
  *
- * 为什么不再另抓一份模板：探针（ProbePanel）抓模板是"把网页发过的请求原样存下来回放"，
- * 用来对付那些带了一大堆签名字段的 GraphQL 请求；关注这条只是表单 POST + 会话头，
- * 模板里真正有用的部分（Cookie / csrf / app-id / UA）信息流模板已经全都有了。
- * 真机上如果 IG 回 400/403，用探针在网页里点一次关注、抓到 `friendships/create` 那条，
- * 把它的额外头（如 `x-ig-www-claim`、`x-requested-with`）补进 NativeFeed.HEADER_EXTRA 即可。
+ * 请求由 core/mobileapi 统一发出（App 身份 + 会话字段 + 签名），**不需要网页模板**。
+ *
+ * ## 历史
+ * 这里原来还有两条基于网页会话的兜底（`www.instagram.com` + RestSession 头、
+ * `friendships/show_many` 的 GET 版），它们都依赖探针抓来的模板里的 `fb_dtsg` /
+ * `x-ig-www-claim` —— 页面注入退役之后那两份令牌抓不到也早已过期，一并删除。
  *
  * ## 返回什么
- * 响应体形如 `{"status":"ok","friendship_status":{"following":true,...}}`，
- * 所以"到底成没成"以服务端回的 friendship_status.following 为准，不看我们自己发的是 create
- * 还是 destroy（IG 有时候对重复关注直接回 idempotent 成功）。
+ * 失败一律不抛异常：`FollowResult.ok=false` + `detail` 由调用方决定是否退回"网页驱动"
+ * （那条路是把隐藏网页导航到对方主页点它自己的按钮，与模板无关，仍保留在 pages/Index）。
  */
 
-import { http } from '@kit.NetworkKit';
-import { MobileEngage } from './mobileapi/MobileEngage';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { ApiTemplate } from '../bridge/ApiRegistry';
-import { RestSession } from './RestSession';
+import { MobileEngage } from './mobileapi/MobileEngage';
+import { MobileNews } from './mobileapi/MobileNews';
+import { MobileRequest, MobileResult } from './mobileapi/MobileRequest';
+import { ApiThrottle } from './ApiThrottle';
 import { JsonRead } from './JsonRead';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeFollow';
-const CONNECT_TIMEOUT_MS: number = 8000;
-const READ_TIMEOUT_MS: number = 8000;
-/** `statesFor` 那次批量查询的超时（比关注本身短一点：它只是补状态，等不到就算了）。 */
-const TIMEOUT_MS: number = 6000;
 
 /** 关注请求的结果（不抛异常，失败用 ok=false + detail 表达）。 */
 export class FollowResult {
@@ -58,76 +53,32 @@ export class NativeFollow {
    * @param follow true = 关注，false = 取关。
    */
   static async setFollowing(userId: string, follow: boolean): Promise<FollowResult> {
-    /*
-     * **移动端 REST 优先**（见 core/mobileapi/MobileEngage）：
-     * friendships/create|destroy/{pk}/，不需要网页模板。失败再走原路。
-     */
-    try {
-      const mobileOk: boolean = await MobileEngage.setFollowing(userId, follow);
-      if (mobileOk) {
-        return new FollowResult(true, follow, 'mobile');
-      }
-    } catch (error) {
-    }
     const id: string = userId.trim();
     if (id.length === 0) {
       return new FollowResult(false, follow, 'no-user-id');
     }
-    // 先要 REST 模板那份头（网页专有：claim / instagram-ajax / asbd-id）：
-    // 少了它这条 POST 会被 IG 当成页面导航，回一整页 HTML。
-    // 头与表单令牌都由 core/RestSession 统一给（和 media info 那条路同一套）。
-    const tpl: ApiTemplate | null = RestSession.template();
-    const headers: Record<string, string> = await RestSession.headers();
-    if (Object.keys(headers).length === 0) {
-      return new FollowResult(false, follow, 'no-session');
-    }
-    const action: string = follow ? 'create' : 'destroy';
-    const url: string = `https://www.instagram.com/api/v1/friendships/${action}/${id}/`;    // 表单体：优先用模板里的 `fb_dtsg` / `jazoest`（两者必须成对，校验和是对得上的）；
-    // 模板还没抓到就**现从页面读**（见 RestSession.formTokens）。再带上目标 id（id 本来在路径里，
-    // 写进表单只是让服务端多一个确认来源，多余参数会被忽略）。
-    const tokens: string = await RestSession.formTokens(tpl);
-    const body: string = tokens.length > 0
-      ? `${tokens}&user_id=${encodeURIComponent(id)}`
-      : `user_id=${encodeURIComponent(id)}`;
-    hilog.info(DOMAIN, TAG, 'follow req action=%{public}s id=%{public}s tpl=%{public}s tokens=%{public}s hdr=[%{public}s]',
-      action, id, `${tpl !== null}`, `${tokens.length > 0}`, Object.keys(headers).join(','));
-    const request: http.HttpRequest = http.createHttp();
+    // 关注/取关也是**写**：走人速间隔，别让几次点击挤在一秒里（见 ApiThrottle.writeSlot）。
+    await ApiThrottle.writeSlot();
+    let ok: boolean = false;
     try {
-      const response: http.HttpResponse = await request.request(url, {
-        method: http.RequestMethod.POST,
-        header: headers,
-        extraData: body,
-        connectTimeout: CONNECT_TIMEOUT_MS,
-        readTimeout: READ_TIMEOUT_MS,
-        expectDataType: http.HttpDataType.STRING
-      });
-      const text: string = typeof response.result === 'string'
-        ? response.result as string : JSON.stringify(response.result);
-      const code: number = response.responseCode;
-      // **判据要严**：IG 对不认识的请求会回 200 + 一整页 HTML（信息流那边踩过同一个坑），
-      // 只看 HTTP 码会把"其实没关注成功"报成成功。这里要求响应体里真的有
-      // friendship_status（关注接口的 JSON 标志），否则一律算失败并打出响应片段。
-      const looksJson: boolean = text.indexOf('"friendship_status"') >= 0
-        || text.indexOf('"status":"ok"') >= 0;
-      const following: boolean = NativeFollow.readFollowing(text, follow);
-      const ok: boolean = code === 200 && looksJson;
-      hilog.info(DOMAIN, TAG, 'follow rsp action=%{public}s code=%{public}d json=%{public}s following=%{public}s len=%{public}d',
-        action, code, `${looksJson}`, `${following}`, text.length);
-      if (!ok) {
-        hilog.warn(DOMAIN, TAG, 'follow rsp body: %{public}s',
-          text.substring(0, 160).replace(/[\r\n]+/g, ' '));
-      }
-      return new FollowResult(ok, following, ok ? '' : `http-${code}${looksJson ? '' : '/non-json'}`);
+      ok = await MobileEngage.setFollowing(id, follow);
     } catch (error) {
-      const message: string = (error as Error).message ?? 'request-threw';
-      hilog.warn(DOMAIN, TAG, 'follow failed: %{public}s', message);
-      return new FollowResult(false, follow, `throw:${message}`.substring(0, 60));
-    } finally {
-      try {
-        request.destroy();
-      } catch (error) {
-      }
+      hilog.warn(DOMAIN, TAG, 'follow threw: %{public}s', (error as Error).message);
+      ok = false;
     }
+    hilog.info(DOMAIN, TAG, 'follow action=%{public}s id=%{public}s ok=%{public}s detail=%{public}s',
+      follow ? 'create' : 'destroy', id, ok ? 'y' : 'n', MobileRequest.detail());
+    if (!ok) {
+      const detail: string = MobileRequest.detail().length > 0
+        ? MobileRequest.detail() : 'mobile-failed';
+      return new FollowResult(false, follow, detail);
+    }
+    /*
+     * 成功时状态以**意图值**为准：移动端这条写接口的响应体里也会带
+     * `friendship_status.following`，但私密账号可能出现"请求成功、following 仍为 false"，
+     * 那种情况由调用方按 `following` 与 `ok` 的组合处理（见 pages/Index.followUser）。
+     */
+    return new FollowResult(true, follow, 'mobile');
   }
 
   /**
@@ -135,8 +86,7 @@ export class NativeFollow {
    *
    * 为什么要它：Reels 页那颗关注按钮的状态来自数据源（clips / 推荐流那条载荷里的
    * `user.friendship_status.following`），但**有的载荷没这个字段** —— 那就只能问一次。
-   * 这个端点一次能问一批人（`user_ids=1,2,3`），GET 就能通（和 NativeNotifications 里
-   * 那条同一个端点、同一套头）。
+   * 这个端点一次能问一批人（`user_ids=1,2,3`）。
    *
    * @returns id → following 的表（问不到的人不在表里）。
    */
@@ -152,81 +102,33 @@ export class NativeFollow {
     if (wanted.length === 0) {
       return out;
     }
-    const headers: Record<string, string> = await RestSession.headers();
-    if (Object.keys(headers).length === 0) {
-      return out;
-    }
-    const url: string = 'https://www.instagram.com/api/v1/friendships/show_many/'
-      + `?user_ids=${encodeURIComponent(wanted.join(','))}`;
-    const request: http.HttpRequest = http.createHttp();
+    let result: MobileResult;
     try {
-      const response: http.HttpResponse = await request.request(url, {
-        method: http.RequestMethod.GET,
-        header: headers,
-        connectTimeout: TIMEOUT_MS,
-        readTimeout: TIMEOUT_MS,
-        expectDataType: http.HttpDataType.STRING
-      });
-      const text: string = typeof response.result === 'string'
-        ? response.result as string : JSON.stringify(response.result);
-      const code: number = response.responseCode;
-      if (code !== 200 || text.indexOf('"friendship_statuses"') < 0) {
-        hilog.info(DOMAIN, TAG, 'show_many code=%{public}d len=%{public}d (no states)',
-          code, text.length);
-        return out;
-      }
-      const dto: Record<string, Object> = JsonRead.parse(text);
-      const statuses: Record<string, Object> | null = JsonRead.recordOf(dto, 'friendship_statuses');
-      if (statuses === null) {
-        return out;
-      }
-      for (let index: number = 0; index < wanted.length; index++) {
-        const one: Record<string, Object> | null = JsonRead.recordOf(statuses, wanted[index]);
-        if (one === null) {
-          continue;
-        }
-        out.set(wanted[index], JsonRead.boolOf(one, 'following'));
-      }
-      hilog.info(DOMAIN, TAG, 'show_many asked=%{public}d got=%{public}d',
-        wanted.length, out.size);
-      return out;
+      result = await MobileNews.showMany(wanted, ApiThrottle.interactive());
     } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'show_many failed: %{public}s', (error as Error).message);
+      hilog.warn(DOMAIN, TAG, 'show_many threw: %{public}s', (error as Error).message);
       return out;
-    } finally {
-      try {
-        request.destroy();
-      } catch (error) {
+    }
+    if (!result.ok) {
+      hilog.info(DOMAIN, TAG, 'show_many failed ids=%{public}d (%{public}s)',
+        wanted.length, result.summary());
+      return out;
+    }
+    const dto: Record<string, Object> = JsonRead.parse(result.body);
+    const statuses: Record<string, Object> | null = JsonRead.recordOf(dto, 'friendship_statuses');
+    if (statuses === null) {
+      hilog.info(DOMAIN, TAG, 'show_many no statuses len=%{public}d', result.body.length);
+      return out;
+    }
+    for (let index: number = 0; index < wanted.length; index++) {
+      const one: Record<string, Object> | null = JsonRead.recordOf(statuses, wanted[index]);
+      if (one === null) {
+        continue;
       }
+      out.set(wanted[index], JsonRead.boolOf(one, 'following'));
     }
-  }
-
-  /**
-   * 从响应体里读最终关注状态。
-   *
-   * 不引 JSON 结构体（这里的形状可能会变），只在文本里找 `"following":true/false`：
-   * 与 NativeFeed 里统计数据那套"按字段名找"的做法一致。
-   *
-   * **优先在 `friendship_status` 里面找**：同一个响应里别处也可能出现 `"following"`（推荐位、
-   * 建议关注列表等），从文档开头一路 indexOf 有可能先撞上它们 —— 那样取关明明成功、
-   * 我们却读到 `true`，于是"取关后界面又弹回已关注"（用户报的"无法取消关注"）。
-   * 找不到 `friendship_status` 才退回全文查找；再找不到就用调用方给的**意图值**兜底。
-   */
-  private static readFollowing(text: string, fallback: boolean): boolean {
-    const lower: string = text.toLowerCase();
-    const anchor: number = lower.indexOf('"friendship_status"');
-    const from: number = anchor >= 0 ? anchor : 0;
-    const at: number = lower.indexOf('"following"', from);
-    if (at < 0) {
-      return fallback;
-    }
-    const tail: string = lower.substring(at, Math.min(lower.length, at + 24));
-    if (tail.indexOf('true') >= 0) {
-      return true;
-    }
-    if (tail.indexOf('false') >= 0) {
-      return false;
-    }
-    return fallback;
+    hilog.info(DOMAIN, TAG, 'show_many asked=%{public}d got=%{public}d',
+      wanted.length, out.size);
+    return out;
   }
 }
