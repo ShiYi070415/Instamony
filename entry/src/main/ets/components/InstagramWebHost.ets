@@ -11,7 +11,7 @@ import { webview } from '@kit.ArkWeb';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppConfig } from '../config/AppConfig';
 import { InstagramPageBridge, InstagramBridgeProxy } from '../bridge/PageBridge';
-import { NETWORK_WATCHER, SESSION_WATCHER } from '../bridge/WebScripts';
+import { SESSION_WATCHER } from '../bridge/WebScripts';
 import { AppLifecycle } from '../core/AppLifecycle';
 import { InstagramCookieJar, InstagramCookieSnapshot } from '../core/InstagramCookieJar';
 
@@ -166,7 +166,7 @@ export struct InstagramWebHost {
         object: this.proxy,
         name: 'ogNative',
         methodList: ['onBridgeResult', 'onRouteChange', 'onSessionState', 'onApiDetail', 'onReplayReady',
-          'onCommentTemplate', 'onEngageTemplate', 'onMqttEvent', 'shouldWatch'],
+          'onCommentTemplate', 'onEngageTemplate', 'onMqttEvent'],
         controller: this.bridge.controller
       })
       .onControllerAttached(() => {
@@ -178,9 +178,15 @@ export struct InstagramWebHost {
         // 引擎已经起来了，这时读 Cookie 罐才是安全的（见 Index.aboutToAppear 的说明）。
         this.detectSession();
       })
+      /*
+       * 只注入**会话/路由观察**那一条（它只读 `document.cookie` 与 DOM，体量很小）。
+       *
+       * `NETWORK_WATCHER`（包住 fetch/XHR 抓请求模板）**已不再注入**：所有取数与写操作
+       * 都迁到了移动端私有 API（见 core/mobileapi），页面里不再需要任何网络钩子 ——
+       * 这是"不像自动化"的关键一步。模板机制现在只剩兜底读取（盘上已有的那些）。
+       */
       .runJavaScriptOnDocumentStart([
-        { script: SESSION_WATCHER, scriptRules: ['*'] },
-        { script: NETWORK_WATCHER, scriptRules: ['*'] }
+        { script: SESSION_WATCHER, scriptRules: ['*'] }
       ])
       .onPageBegin((event) => {
         this.bridge.markUnready();

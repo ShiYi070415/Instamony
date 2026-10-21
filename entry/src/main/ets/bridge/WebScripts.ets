@@ -1522,6 +1522,14 @@ export const DOM_SURVEY_SCRIPT: string = '(function(){try{' +
  * 只挂 `fetch` / `XMLHttpRequest`，并额外用 Resource Timing 兜底，
  * 不改请求、不改响应，只上报「方法 + URL + 触发方式」。
  */
+/**
+ * **已退役（2026-10-21）**：页面抓包钩子不再注入。
+ *
+ * 取数与写操作都迁到了移动端私有 API（见 `core/mobileapi/Mobile*`：feed / reels / comments /
+ * 搜索 / 点赞 / 关注 / 收藏 / 私信 / 快拍 / 主页分页），页面里不再需要包 `fetch`/`XHR`
+ * —— 那是"被注入脚本"最明显的痕迹。这段脚本保留下来只作历史参考，
+ * `InstagramWebHost` 的 `runJavaScriptOnDocumentStart` 已经只注入 SESSION_WATCHER。
+ */
 export const NETWORK_WATCHER: string = '(function(){try{' +
     /*
      * **只在闸门打开时才装钩子**（见 core/WatchGate）。
