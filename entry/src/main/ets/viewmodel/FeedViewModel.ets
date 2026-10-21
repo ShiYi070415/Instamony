@@ -96,7 +96,7 @@ const NATIVE_WARM_MAX_AGE_MS: number = 120000;
  * 1 页而不是 2：探索流一页约 12 条 / 0.5~1MB / 4~9 秒，比关注流那页贵得多；
  * 排 1 页就够盖住"一次触底"，再多就是替用户白花流量（他可能滑两条就退出）。
  */
-const EXPLORE_CACHE_PAGES: number = 1;
+const EXPLORE_CACHE_PAGES: number = 2;
 /** 探索流新到的那一页，最多给几条热封面（同 ProfileViewModel.precacheMedia 的口径）。 */
 const PRECACHE_POSTS: number = 6;
 /** 多图帖最多预下载两张（需求：滑到前两张不白）。 */
@@ -169,6 +169,8 @@ export class FeedViewModel {
   private exploreQueue: Array<FeedRecommendedPage> = [];
   /** 探索流预取正在飞（别对同一个游标连发两发）。 */
   private exploreFetching: boolean = false;
+  /** 在飞的那一发预取（触底时 join 它，避免同一游标重复发，见 loadExplore 的说明）。 */
+  private exploreInflight: Promise<void> | null = null;
   /**
    * 关注流那一段**翻出来全是没关注的帖子**（时间线在灌推荐/广告）。
    *
@@ -621,6 +623,35 @@ export class FeedViewModel {
         this.prefetchExplore();
         return;
       }
+      /*
+       * ---- ② 队列空的、但**预取正在飞**：等它回来吃那一页 ----
+       *
+       * 关键：这一发用的就是**同一个游标**（预取也是从 exploreCursor 出发）。如果不等它、
+       * 自己再发一发，两发会排在同一个节流闸后面 —— 用户等完第一发（4~9 秒）再等第二发，
+       * 而且拿回来的是同一页。这就是"触底还要等两三秒（甚至更久)"的主要来源。
+       * 所以这里 join 那一发。
+       */
+      const inflight: Promise<void> | null = this.exploreInflight;
+      if (inflight !== null) {
+        hilog.info(DOMAIN, TAG, 'explore touch: join in-flight prefetch (no duplicate request)');
+        try {
+          await inflight;
+        } catch (error) {
+        }
+        const joined: FeedRecommendedPage | null = this.takeExplorePage();
+        if (joined !== null) {
+          this.applyExplorePage(joined, false);
+          hilog.info(DOMAIN, TAG, 'explore page from joined prefetch n=%{public}d total=%{public}d',
+            joined.posts.length, this.explore.length);
+          this.prefetchExplore();
+          return;
+        }
+        if (!this.exploreHasMore) {
+          // 预取那一发回的是空/到底：这一轮就别再白打一发了。
+          this.setStatus(FeedStatus.NoMore);
+          return;
+        }
+      }
       if (this.exploreCursor.length === 0) {
         return;
       }
@@ -738,19 +769,29 @@ export class FeedViewModel {
       return;
     }
     this.exploreFetching = true;
-    this.loadRecommended(cursor).then((page: FeedRecommendedPage): void => {
+    /*
+     * 把"在飞的那一发"存下来：触底时队列若还空着，`loadExplore` 会 **join** 它，
+     * 而不是拿同一个游标再发一发（两发会排同一个节流闸后面，等于白等一倍）。
+     */
+    const inflight: Promise<void> = this.loadRecommended(cursor).then((page: FeedRecommendedPage): void => {
       this.exploreFetching = false;
+      this.exploreInflight = null;
       if (page.posts.length === 0) {
         this.exploreHasMore = false;
         this.exploreEndAtMs = Date.now();
+        hilog.info(DOMAIN, TAG, 'explore prefetch empty → end of stream');
         return;
       }
       this.exploreQueue.push(page);
       hilog.info(DOMAIN, TAG, 'explore prefetch ready n=%{public}d queued=%{public}d',
         page.posts.length, this.exploreQueue.length);
+      // 队列还没满就接着补（深度由 EXPLORE_CACHE_PAGES 封顶；每一发都是串行，不会叠请求）。
+      this.prefetchExplore();
     }).catch((): void => {
       this.exploreFetching = false;
+      this.exploreInflight = null;
     });
+    this.exploreInflight = inflight;
   }
   /**
    * **把两段拼成列表**（关注流 → 提示卡片 → 探索流），并算出卡片该画在第几条之前。
