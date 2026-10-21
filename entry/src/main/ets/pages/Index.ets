@@ -2120,11 +2120,7 @@ struct Index {
       ApiRegistry.init(host);
       hilog.info(DOMAIN, TAG, 'templates (fallback only) n=%{public}d',
         ApiRegistry.getInstance().count());
-      // 搜索页冷路径抓完模板会把"结构摘要"交回来 → 落进探针文件（见 dumpProbeFile）。
-      this.searchVm.onDigest = (text: string): void => {
-        this.dumpProbeFile('search', text);
-      };
-      // 「我的」四个分页同理：探针按钮跑完把四条接口的结构摘要落一份。
+      // 「我的」四个分页：探针按钮跑完把四条接口的结构摘要落一份。
       this.profileVm.onDigest = (text: string): void => {
         this.dumpProbeFile('profile', text);
       };
@@ -3640,18 +3636,16 @@ struct Index {
   }
 
   /**
-   * 探针面板用：抓**搜索页**的接口模板（需求："用探针抓一下模板"）。
+   * 探针面板用：用**移动端接口**自检搜索页那两路（账号搜索 + 推荐网格）。
    *
-   * 走的是 SearchViewModel 的冷路径：导航到搜索页 → 抓该页全部请求 → 在页面搜索框里打一次字
-   * 逼出"结果那条" → 回首页；跑完把结构摘要落进沙箱（`probe_search_*.txt`，见 dumpSearchDigest）。
+   * 模板机制退役后，这个按钮不再"抓模板"，而是发两发真请求验通道，
+   * 把来源与条数落进沙箱（`probe_search_*.txt`，见 dumpProbeFile）。
    */
   private async captureSearchTemplates(): Promise<void> {
-
-
     this.setLocalStatus($r('app.string.probe_search_templates'));
     const digest: string = await this.searchVm.captureTemplates();
-    hilog.info(DOMAIN, TAG, 'probe search templates done %{public}s | digest=%{public}d chars',
-      ApiRegistry.getInstance().storedSummary(), digest.length);
+    this.dumpProbeFile('search', digest);
+    hilog.info(DOMAIN, TAG, 'probe search done %{public}d chars', digest.length);
   }
 
   /** 探针面板用：读当前页面里内嵌的评论数据，结果进 hilog 与探针报告。 */

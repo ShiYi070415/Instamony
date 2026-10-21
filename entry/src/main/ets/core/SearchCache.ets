@@ -1,15 +1,10 @@
 /*
  * 搜索页推荐流的**落盘缓存**（需求："搜索页推荐帖子加载刷新的有点慢，优化一下缓存和加载逻辑"）。
  *
- * ## 两件事
- *   1. **记住"推荐是哪条模板给的"**（`rec_op_v1`）。原来 `NativeSearch.chosenOp` 只在内存里，
- *      进程一重启就得重新按线索挑候选、一条条试 —— 每条候选都是一次完整 HTTP（400KB 起），
- *      试错就是几百毫秒到几秒。存下来之后，下次直接用上次成功的那条。
- *   2. **存推荐第一页**（`page1_v1`）。切到搜索页时先把它铺出来（读盘 + 映射几十毫秒），
- *      网络那份回来再整体替换 —— 和首页信息流同一套"先画后刷"（见 core/FeedCache）。
+ * **存推荐第一页**（`page1_v1`）。切到搜索页时先把它铺出来（读盘 + 映射几十毫秒），
+ * 网络那份回来再整体替换 —— 和首页信息流同一套"先画后刷"（见 core/FeedCache）。
  *
  * ## 存多久
- *   - 模板名：24 小时（接口模板本身也是 24 小时，见 ApiRegistry 的 storedForNative）；
  *   - 第一页：30 分钟（推荐流本来就变得快，放太久铺出来只会让人觉得"怎么都是老内容"）。
  *
  * ## 失败一律当作"没有缓存"
@@ -29,23 +24,13 @@ const MAX_SAVED: number = 36;
 
 /** 落盘的 preferences 文件名与键。 */
 const STORE: string = 'instarmony_search_cache';
-const KEY_OP: string = 'rec_op_v1';
 const KEY_PAGE: string = 'page1_v1';
 /** 缓存格式版本：改了结构就 +1，旧的一律当没有。 */
 const FORMAT: number = 2;
-/** 模板名的有效期（毫秒）：24 小时（和接口模板一致）。 */
-const OP_MAX_AGE_MS: number = 24 * 60 * 60 * 1000;
 /** 第一页的有效期（毫秒）：30 分钟。 */
 const PAGE_MAX_AGE_MS: number = 30 * 60 * 1000;
 /** 单份上限（字符）：防呆（一页 36 条的小结构约 10KB）。 */
 const MAX_CHARS: number = 256 * 1024;
-
-/** 落盘的模板名。 */
-interface StoredOp {
-  v?: number;
-  at?: number;
-  name?: string;
-}
 
 /**
  * 落盘的一条格子（字段名短，因为它要塞进 preferences）。
@@ -118,55 +103,9 @@ export class SearchCache {
     try {
       SearchCache.store = preferences.getPreferencesSync(context, { name: STORE });
       // 按账号分区（见 core/AccountScope）：搜索推荐也是按人给的。
-      AccountScope.register(SearchCache.store, [KEY_OP, KEY_PAGE]);
+      AccountScope.register(SearchCache.store, [KEY_PAGE]);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'open store failed: %{public}s', (error as Error).message);
-    }
-  }
-
-  // ---- 推荐来源那条模板 ----------------------------------------------------
-
-  /** 上次成功取到推荐的那条模板名（过期/没有就给空串）。 */
-  static loadOp(): string {
-    const store: preferences.Preferences | null = SearchCache.store;
-    if (store === null) {
-      return '';
-    }
-    try {
-      const text: string = store.getSync(AccountScope.slot(KEY_OP), '') as string;
-      if (text.length === 0) {
-        return '';
-      }
-      const dto: StoredOp = JSON.parse(text) as StoredOp;
-      if ((dto.v ?? 0) !== FORMAT) {
-        return '';
-      }
-      if (Date.now() - (dto.at ?? 0) > OP_MAX_AGE_MS) {
-        return '';
-      }
-      const name: string = dto.name ?? '';
-      if (name.length > 0) {
-        hilog.info(DOMAIN, TAG, 'op hit %{public}s', name);
-      }
-      return name;
-    } catch (error) {
-      return '';
-    }
-  }
-
-  /** 记住这次成功的那条模板名。 */
-  static saveOp(name: string): void {
-    const store: preferences.Preferences | null = SearchCache.store;
-    if (store === null || name.length === 0) {
-      return;
-    }
-    try {
-      const payload: StoredOp = { v: FORMAT, at: Date.now(), name: name };
-      store.putSync(AccountScope.slot(KEY_OP), JSON.stringify(payload));
-      store.flushSync();
-      hilog.info(DOMAIN, TAG, 'op saved %{public}s', name);
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'op save failed: %{public}s', (error as Error).message);
     }
   }
 
