@@ -714,12 +714,16 @@ export struct FeedList {
    */
   @Prop showStories: boolean = false;
   /**
-   * 这份列表是不是「为你推荐」（首页时间线为空时铺的探索流，见 FeedViewModel.mode）。
+   * 提示卡片画在**第几条之前**（-1 = 不画）。
    *
-   * 为真时在列表最上面画一行提示（"为你推荐 · 关注一些人后下拉刷新即是信息流"），
-   * 它跟着列表一起滚走，不占固定空间。
+   * 首页的列表是两段拼起来的：**关注流 → 提示卡片 → 探索流**（见 FeedViewModel.composePosts）。
+   * 卡片位置就是"关注流那几条之后"，所以：
+   *   · 关注流有内容 → 卡片夹在关注流末尾与第一条探索流之间；
+   *   · 关注流一条都没有（"关注的人的最新帖子已看完"）→ 卡片在**列表最顶上**，下面全是探索流。
+   * 用法见下面的 ForEach：卡片画在那条帖子的卡片**上面**（同一个 ListItem 里的 Column），
+   * 这样不用把列表拆成两段 ForEach，也不影响卡片重建的键值规则。
    */
-  @Prop recommended: boolean = false;
+  @Prop hintAt: number = -1;
   /**
    * 宿主手上那份托盘数据 + 它的时间戳，原样交给 StoriesTray 当**首帧内容**。
    *
@@ -1948,9 +1952,44 @@ export struct FeedList {
    * 不承载"开关"语义，只是材质的宿主，所以点它不做事，并且放开触摸测试 ——
    * 沉浸式视频里这一行盖在画面上，视频顶部这 52vp 里的双击点赞不能被它吃掉。
    */
+  /**
+   * 「为你推荐」那张**提示卡片**（夹在关注流与探索流之间，或在列表最顶上）。
+   *
+   * 为什么不是一行小字了：列表现在是两段拼起来的（关注流 → 卡片 → 探索流），
+   * 这张卡片是两段的**分界**，要让人一眼看出"上面是关注的人、下面开始是推荐"。
+   * 位置由 `hintAt` 决定（见那里），这里只管画。
+   */
   @Builder
-  profileRow(post: MediaPost, index: number, overMedia: boolean) {
-    Row({ space: 10 }) {
+  hintRow() {
+    Column({ space: 6 }) {
+      Row({ space: 8 }) {
+        SymbolGlyph($r('sys.symbol.star_fill'))
+          .fontSize(15)
+          .fontColor([$r('app.color.accent')])
+        Text($r('app.string.feed_recommended_title'))
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.primary_text'))
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+
+      Text($r('app.string.feed_recommended_hint'))
+        .fontSize(12)
+        .fontColor($r('app.color.secondary_text'))
+        .width('100%')
+        .maxLines(3)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding({ left: 16, right: 16, top: 18, bottom: 10 })
+    // 一条细分隔线：这是两段内容的分界，不是某条帖子的附属。
+    .border({ width: { top: 0.5 }, color: $r('app.color.divider') })
+  }
+
+  @Builder
+  profileRow(post: MediaPost, index: number, overMedia: boolean) {    Row({ space: 10 }) {
       // 头像 + 账号名那一块：**外面套一层 Row 吃掉多余宽度**（`layoutWeight(1)`），
       // 后面的「关注 / 更多」两个按钮自然排到右边。
       //
@@ -3078,35 +3117,19 @@ export struct FeedList {
               .padding({ bottom: TRAY_FEED_GAP_VP })
             }
             /*
-             * 「为你推荐」提示行（宿主在"时间线为空、改铺探索流"时置位，见
-             * FeedViewModel.mode）。放在列表里而不是页面外层：它会跟着信息流一起滚走，
-             * 不占用固定的纵向空间。
+             * **提示卡片**：画在 `hintAt` 那条帖子的上面（见 hintAt 的说明）。
+             * 关注流有内容时它就夹在关注流末尾与探索流之间；关注流是空的（已看完）时
+             * 它在列表最顶上，后面直接是探索流。
              */
-            if (this.recommended) {
-              ListItem() {
-                Row({ space: 8 }) {
-                  SymbolGlyph($r('sys.symbol.star_fill'))
-                    .fontSize(15)
-                    .fontColor([$r('app.color.accent')])
-                  Text($r('app.string.feed_recommended_title'))
-                    .fontSize(14)
-                    .fontWeight(FontWeight.Medium)
-                    .fontColor($r('app.color.primary_text'))
-                  Text($r('app.string.feed_recommended_hint'))
-                    .fontSize(12)
-                    .fontColor($r('app.color.secondary_text'))
-                    .layoutWeight(1)
-                    .maxLines(2)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
-                }
-                .width('100%')
-                .alignItems(VerticalAlign.Center)
-                .padding({ left: 16, right: 16, top: 12, bottom: 4 })
-              }
-            }
             ForEach(this.posts, (post: MediaPost, index: number): void => {
               ListItem() {
-                this.postCard(post, index)
+                Column() {
+                  if (index === this.hintAt) {
+                    this.hintRow()
+                  }
+                  this.postCard(post, index)
+                }
+                .width('100%')
               }
             }, (post: MediaPost, index: number): string => {
               const base: string = post.shortcode.length > 0
@@ -3133,7 +3156,11 @@ export struct FeedList {
               return `${base}|v${post.isVideo() && post.videoUrl.length > 0 ? 1 : 0}`
                 + `|n${post.imageUrls.length}`
                 + `|t${post.takenAtMs > 0 ? 1 : 0}`
-                + `|a${post.ownerAvatarUrl.length > 0 ? 1 : 0}`;
+                + `|a${post.ownerAvatarUrl.length > 0 ? 1 : 0}`
+                // **这一条身上挂着提示卡片吗**：卡片是按 `hintAt` 画在某一帖上面的，而 ForEach
+                // 对键值没变的项**不会重跑** item builder —— 不放这一位，关注流变长/刷新之后
+                // 卡片就会停在旧位置（或者干脆不出现）。
+                + `|h${index === this.hintAt ? 1 : 0}`;
             })
             if (this.loadingMore) {
               // 触底加载：列表末尾放一个圆环，跟着内容滚，不占正文位置、也不用文字。

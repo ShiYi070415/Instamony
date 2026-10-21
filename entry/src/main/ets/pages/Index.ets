@@ -162,7 +162,7 @@ import { MobileRequest } from '../core/mobileapi/MobileRequest';
 import { FeedProbeLine, MobileFeedProbe } from '../core/mobileapi/MobileFeedProbe';
 import { SessionGate } from '../core/SessionGate';
 import { InstagramProbe } from '../probe/InstagramProbe';
-import { FeedViewModel } from '../viewmodel/FeedViewModel';
+import { FeedRecommendedPage, FeedViewModel } from '../viewmodel/FeedViewModel';
 
 const TAG: string = 'InstarmonyHome';
 const DOMAIN: number = 0xFF00;
@@ -847,6 +847,13 @@ struct Index {
    * 显示一行「为你推荐 · 关注后会变成信息流」；关注了人之后下拉刷新会自动切回来。
    */
   @State feedRecommended: boolean = false;
+  /**
+   * 提示卡片画在第几条帖子之前（-1 = 不画）。
+   *
+   * 首页列表现在是两段：**关注流 → 提示卡片 → 探索流**（见 FeedViewModel.composePosts）。
+   * 关注流为空时这个值是 0，卡片就落在列表最顶上 —— 用户要的"刷新后关注流已看完"形态。
+   */
+  @State feedHintAt: number = -1;
   /**
    * 账号被要求**安全验证**时的网页地址（空 = 没有待处理的验证）。
    *
@@ -2140,8 +2147,17 @@ struct Index {
         this.scheduleSuggestRetry();
       }
     };
-    this.viewModel.loadRecommended = (): Promise<Array<MediaPost>> => {
-      return this.loadHomeRecommended();
+    this.viewModel.loadRecommended = (cursor: string): Promise<FeedRecommendedPage> => {
+      return this.loadHomeRecommended(cursor);
+    };
+    /*
+     * 提示卡片的位置（-1 = 不画）：关注流 → 卡片 → 探索流。
+     * 关注流为空（"关注的人的最新帖子已看完"）时它就是 0，卡片落在列表最顶上。
+     */
+    this.viewModel.onHint = (index: number): void => {
+      if (this.feedHintAt !== index) {
+        this.feedHintAt = index;
+      }
     };
     this.bridge.setReadyHandler((): void => {
       this.bridgeReady = true;
@@ -5269,19 +5285,32 @@ struct Index {
    * 它不需要任何模板、专门就是推荐内容，而且是"原生一发"。转成 `MediaPost` 之后首页
    * 那套 FeedList 直接就能画（点赞 / 收藏 / 进帖子页全部照旧）。
    */
-  private async loadHomeRecommended(): Promise<Array<MediaPost>> {
+  /**
+   * 取一页「为你推荐」内容（首页的两段式列表里，卡片下面那一段；见 FeedViewModel.composePosts）。
+   *
+   * 复用搜索页那条**探索流**（`discover/topical_explore/`，见 core/NativeSearch.recommendedPage）：
+   * 它不需要任何模板、专门就是推荐内容，而且是"原生一发"。转成 `MediaPost` 之后首页
+   * 那套 FeedList 直接就能画（点赞 / 收藏 / 进帖子页全部照旧）。
+   *
+   * `cursor` 是**上一页给回来的游标**（空串 = 第一页）：以前这里不带游标，于是探索流这一段
+   * 永远只有一页 —— 用户说的"探索流无法获取更多帖子"就是它。现在游标和 `more_available`
+   * 一起交回去，触底就能接着翻（见 FeedViewModel.loadExplore / requestMore）。
+   */
+  private async loadHomeRecommended(cursor: string): Promise<FeedRecommendedPage> {
     try {
-      const page: SearchPostPage | null = await NativeSearch.recommendedPage('');
+      const page: SearchPostPage | null = await NativeSearch.recommendedPage(cursor);
       if (page === null || page.posts.length === 0) {
-        hilog.info(DOMAIN, TAG, 'home recommended empty (%{public}s)', NativeSearch.lastDiag());
-        return [];
+        hilog.info(DOMAIN, TAG, 'home recommended empty cursor=%{public}d (%{public}s)',
+          cursor.length, NativeSearch.lastDiag());
+        return new FeedRecommendedPage([], '', false);
       }
       const list: Array<MediaPost> = Index.searchPostsToMedia(page.posts);
-      hilog.info(DOMAIN, TAG, 'home recommended n=%{public}d', list.length);
-      return list;
+      hilog.info(DOMAIN, TAG, 'home recommended n=%{public}d cursor=%{public}d more=%{public}s',
+        list.length, page.cursor.length, `${page.hasMore}`);
+      return new FeedRecommendedPage(list, page.cursor, page.hasMore);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'home recommended failed: %{public}s', (error as Error).message);
-      return [];
+      return new FeedRecommendedPage([], '', false);
     }
   }
 
@@ -5455,8 +5484,8 @@ struct Index {
          */
         FeedList({
           posts: this.posts,
-          // 「为你推荐」模式下的那一行提示（见 feedRecommended 的说明）。
-          recommended: this.feedRecommended,
+          // 提示卡片位置：关注流 → 卡片 → 探索流（-1 = 不画，见 feedHintAt）。
+          hintAt: this.feedHintAt,
           // 列表顶部放那条托盘（数据由托盘自己拉）。
           showStories: true,
           /*

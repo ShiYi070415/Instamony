@@ -30,6 +30,28 @@ const DOMAIN: number = 0xFF00;
 const TAG: string = 'FeedViewModel';
 
 /**
+ * 一页「为你推荐」（页面注入的探索流那一发的结果）。
+ *
+ * 为什么要带游标：首页的列表是**两段**拼起来的——关注流（时间线）在前、探索流在后，
+ * 两段各自翻页。探索流这一段以前只有一个"返回帖子数组"的注入接口，因此**永远只可能有一页**
+ * （用户报的"探索流翻不出更多帖子"就是这个）。带上 `cursor` / `hasMore` 之后，
+ * 触底就能接着要下一页（见 FeedViewModel.loadExplore / loadNextPage）。
+ */
+export class FeedRecommendedPage {
+  readonly posts: Array<MediaPost>;
+  /** 下一页游标（空串 = 这一页之后没有了）。 */
+  readonly cursor: string;
+  /** 服务端说还有没有下一页（`more_available`）。 */
+  readonly hasMore: boolean;
+
+  constructor(posts: Array<MediaPost>, cursor: string, hasMore: boolean) {
+    this.posts = posts;
+    this.cursor = cursor;
+    this.hasMore = hasMore;
+  }
+}
+
+/**
  * 「不走网页」的第一发要几条。
  *
  * 需求就是"开 app 先给几条"，7 条差不多铺满一屏多一点：够看、又比整页更快回来。
@@ -112,8 +134,32 @@ export class FeedViewModel {
    * —— 读失败会走 `FeedStatus.Failed`，仍然报错，不会被推荐内容盖掉。
    */
   private mode: string = 'feed';
-  /** 上一次为「为你推荐」拿到的那一份（刷新时先复用，避免列表闪空）。 */
-  private recommended: Array<MediaPost> = [];
+  /**
+   * **关注流那一段**（`feed/timeline/` 给的帖子）。
+   *
+   * 首页列表现在是两段拼起来的，顺序就是用户要的：
+   *   关注流 → 提示卡片 → 探索流
+   * 关注流一条都没有（这个账号"关注的人的最新帖子已看完"，见 core/NativeFeed.markCaughtUp）时，
+   * 提示卡片就落在**列表最顶上**，后面直接是探索流 —— 同一套规则，不用两个分支。
+   */
+  private following: Array<MediaPost> = [];
+  /** **探索流那一段**（`discover/topical_explore/`，见 NativeSearch.recommendedPage）。 */
+  private explore: Array<MediaPost> = [];
+  /** 探索流的下一页游标（空串 = 还没拉过 / 到底了）。 */
+  private exploreCursor: string = '';
+  /** 探索流还有没有下一页（服务端 `more_available`）。 */
+  private exploreHasMore: boolean = false;
+  /** 服务端说"探索流到底了"的时刻（见 END_RECHECK_MS：这个判断有时效）。 */
+  private exploreEndAtMs: number = 0;
+  /** 提示卡片在合并列表里的下标（-1 = 不显示，见 composePosts）。 */
+  private hintIndex: number = -1;
+  /**
+   * 这一轮取数要去翻**探索流**（见 requestMore）。
+   *
+   * 用标志位而不是直接 await：翻页必须走 `loadFeed` 那条排队/空闲判断，
+   * 否则触底连点会并发发请求（`busy`/`pending` 就是为这个存在的）。
+   */
+  private wantExploreNext: boolean = false;
   private statusKind: FeedStatus = FeedStatus.Idle;
   private statusDetail: string = '';
   private debug: string = '';
@@ -196,12 +242,17 @@ export class FeedViewModel {
   onMode: (mode: string) => void = (mode: string): void => {
   };
   /**
-   * 取一份「为你推荐」内容（页面注入：走探索流，见 core/NativeSearch.recommendedPage）。
+   * 取一页「为你推荐」（页面注入：走探索流，见 core/NativeSearch.recommendedPage）。
    *
-   * 默认返回空数组 —— 没注入时行为与以前完全一致（时间线空就空着）。
+   * @param cursor 空串 = 第一页；否则是上一页给的游标（两段的游标互不通用，别混）。
+   * 默认返回空页 —— 没注入时行为与以前完全一致（关注流空着就空着）。
    */
-  loadRecommended: () => Promise<Array<MediaPost>> = (): Promise<Array<MediaPost>> => {
-    return Promise.resolve([]);
+  loadRecommended: (cursor: string) => Promise<FeedRecommendedPage> =
+    (cursor: string): Promise<FeedRecommendedPage> => {
+      return Promise.resolve(new FeedRecommendedPage([], '', false));
+    };
+  /** 提示卡片该画在第几条之前（-1 = 不画，见 composePosts）。 */
+  onHint: (index: number) => void = (index: number): void => {
   };
 
   list(): MediaPost[] {
@@ -281,12 +332,18 @@ export class FeedViewModel {
     this.sawEndAtMs = 0;
     this.pending = false;
     this.wantFirstPage = false;
-    // 换账号后"为你推荐"那份也是上一个人的内容，一起作废（见 mode 的说明）。
+    // 换账号后两段内容都是上一个人的，一起作废（见 mode 与 following/explore 的说明）。
     this.mode = 'feed';
-    this.recommended = [];
+    this.following = [];
+    this.explore = [];
+    this.exploreCursor = '';
+    this.exploreHasMore = false;
+    this.exploreEndAtMs = 0;
+    this.hintIndex = -1;
     // 转发状态是本机记的，换了账号就完全不可信了。
     this.repostedKeys.clear();
     this.setPosts([]);
+    this.onHint(-1);
     this.setStatus(FeedStatus.Idle);
   }
 
@@ -410,46 +467,118 @@ export class FeedViewModel {
   }
 
   /**
-   * 时间线是空的时候补一份「为你推荐」，有内容时切回信息流（见 mode 的说明）。
+   * 第一页到手之后：决定这一屏是"关注流为主"还是"关注流已看完、全是推荐"，
+   * 并**重新要一页探索流**（见 loadExplore）。
    *
-   * 判据只有一条：**服务端这一页给了几条**。所以：
-   *   · 有内容 → `mode='feed'`（如果上一轮是推荐，这里就切回来，列表用新内容整体替换）；
-   *   · 0 条 → 走注入的 `loadRecommended()`；拿到了就铺上并 `mode='recommended'`，
-   *     拿不到就保持原样（状态行仍然是它原来的语义，不会被悄悄改成"空列表"）。
+   * 为什么每次都要重新要探索流：用户说的"feeds 现在没办法刷新新的帖子"——关注流对这个账号
+   * 是空的（`end_of_feed_demarcator`，见 core/NativeFeed.markCaughtUp），屏幕上那屏内容**全部**
+   * 来自探索流；不重取它，下拉刷新就什么都变不出来（以前就是这样）。
    *
-   * 推荐内容**不分页**：`hasMore=false`，避免触底哨兵对着一条不翻页的流空转。
+   * 判据只看"关注流这一段是几条"，不猜：
+   *   · 0 条（看完了）→ 提示卡片落**列表最顶上**，后面全是探索流，`mode='recommended'`；
+   *   · 有内容 → 关注流在前，提示卡片夹在它后面，探索流接在后面，`mode='feed'`。
    */
   private async maybeLoadRecommended(): Promise<void> {
-    if (this.posts.length > 0) {
-      if (this.mode !== 'feed') {
-        this.mode = 'feed';
-        this.onMode('feed');
-        hilog.info(DOMAIN, TAG, 'feed mode → feed (timeline has content)');
-      }
-      return;
+    const caughtUp: boolean = this.following.length === 0;
+    const nextMode: string = caughtUp ? 'recommended' : 'feed';
+    if (this.mode !== nextMode) {
+      this.mode = nextMode;
+      this.onMode(nextMode);
+      hilog.info(DOMAIN, TAG, 'feed mode → %{public}s (following=%{public}d)',
+        nextMode, this.following.length);
     }
-    let list: Array<MediaPost> = this.recommended;
-    if (list.length === 0) {
-      try {
-        list = await this.loadRecommended();
-      } catch (error) {
-        hilog.warn(DOMAIN, TAG, 'recommended load failed: %{public}s', (error as Error).message);
-        return;
-      }
-    }
-    if (list.length === 0) {
+    // 刷新/首屏都重新要探索流第一页：这一发才是"新帖子"的来源（见上面那段说明）。
+    await this.loadExplore(true);
+    if (this.explore.length === 0 && this.following.length === 0) {
       hilog.info(DOMAIN, TAG, 'timeline empty and no recommended content');
+      this.setStatus(FeedStatus.NoneVisible);
+    }
+  }
+
+  /**
+   * 拉一页探索流（`forReset = true` 时重新要第一页，整体替换探索那一段）。
+   *
+   * 失败不清屏：屏幕上已经有的那几段照旧，只把状态行留给上一次的语义。
+   */
+  private async loadExplore(forReset: boolean): Promise<void> {
+    const cursor: string = forReset ? '' : this.exploreCursor;
+    if (!forReset && cursor.length === 0) {
       return;
     }
-    this.recommended = list;
-    this.mode = 'recommended';
-    this.hasMore = false;
-    this.sawEnd = true;
-    this.sawEndAtMs = Date.now();
+    let page: FeedRecommendedPage;
+    try {
+      page = await this.loadRecommended(cursor);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'explore load failed: %{public}s', (error as Error).message);
+      return;
+    }
+    if (page.posts.length === 0) {
+      // 服务端这一页没东西：到底了。别把屏幕上的探索流清掉（下次刷新会重取）。
+      this.exploreHasMore = false;
+      this.exploreEndAtMs = Date.now();
+      hilog.info(DOMAIN, TAG, 'explore page empty reset=%{public}s', `${forReset}`);
+      return;
+    }
+    if (forReset) {
+      this.explore = page.posts;
+      this.exploreCursor = page.cursor;
+    } else {
+      const merged: MergeResult = FeedMapper.merge(this.explore, page.posts);
+      this.explore = merged.posts;
+      if (page.cursor.length > 0) {
+        this.exploreCursor = page.cursor;
+      }
+    }
+    const hasNext: boolean = page.hasMore && this.exploreCursor.length > 0;
+    this.exploreHasMore = hasNext;
+    if (!hasNext) {
+      this.exploreEndAtMs = Date.now();
+    }
+    this.composePosts();
     this.setStatus(FeedStatus.Idle);
+    hilog.info(DOMAIN, TAG,
+      'explore page n=%{public}d reset=%{public}s total=%{public}d more=%{public}s cursor=%{public}d',
+      page.posts.length, `${forReset}`, this.explore.length, `${hasNext}`, this.exploreCursor.length);
+  }
+
+  /**
+   * **把两段拼成列表**（关注流 → 提示卡片 → 探索流），并算出卡片该画在第几条之前。
+   *
+   * 卡片位置就是"关注流这几条之后"：
+   *   · 关注流有 N 条 → 卡片画在第 N 条（也就是第一条探索流）之前；
+   *   · 关注流 0 条 → 卡片画在第 0 条之前，也就是**列表最顶上**（用户要的那个"刷新后已看完"形态）。
+   * 只有探索流这一段**确实有内容**时才画卡片：否则会出现"卡片下面什么都没有"的空档。
+   *
+   * 两段之间按 key 去重（探索流里完全可能夹着关注流已经有了的帖子）。
+   */
+  private composePosts(): void {
+    const seen: Set<string> = new Set<string>();
+    const list: Array<MediaPost> = [];
+    for (let index: number = 0; index < this.following.length; index++) {
+      const post: MediaPost = this.following[index];
+      seen.add(FeedMapper.keyOf(post));
+      list.push(post);
+    }
+    for (let index: number = 0; index < this.explore.length; index++) {
+      const post: MediaPost = this.explore[index];
+      const key: string = FeedMapper.keyOf(post);
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      list.push(post);
+    }
+    this.hintIndex = this.explore.length > 0 ? this.following.length : -1;
     this.setPosts(list);
-    this.onMode('recommended');
-    hilog.info(DOMAIN, TAG, 'timeline empty → recommended n=%{public}d', list.length);
+    this.onHint(this.hintIndex);
+  }
+
+  /** 关注流这一段还有没有下一页（有就继续翻关注流，翻完才轮到探索流）。 */
+  private followingHasMore(): boolean {
+    if (this.sawEnd) {
+      return false;
+    }
+    return this.nativeCursor.length > 0 && this.nativeHasMore;
   }
 
   /**
@@ -481,7 +610,8 @@ export class FeedViewModel {
       return;
     }
     this.fromCache = true;
-    this.setPosts(mapped);
+    this.following = mapped;
+    this.composePosts();
     // 游标/翻页状态也先用缓存里的：万一网络那份迟迟不回，上滑照样能接着翻（新的一页会覆盖它）。
     this.nativeCursor = cached.cursor;
     this.nativeHasMore = cached.hasMore;
@@ -499,8 +629,12 @@ export class FeedViewModel {
   /**
    * 触底 / 接近底部时的「取更多」入口。
    *
-   * 列表滚动过程中这个入口会被反复调用；`busy` + `pending` 已经保证不会并发，
-   * 这里只在**服务端明确说过到底**时才彻底挡住，否则一律允许再试一次。
+   * 列表滚动过程中这个入口会被反复调用；`busy` + `pending` 已经保证不会并发。
+   *
+   * **顺序跟着列表走**（列表是"关注流 → 提示卡片 → 探索流"）：
+   *   ① 关注流还有下一页 → 先翻关注流（新的一页接在关注流末尾，卡片随之往后挪）；
+   *   ② 关注流翻完了 → 翻探索流那一段（这才是用户说的"探索流无法获取更多帖子"要修的地方）；
+   *   ③ 两段都到底 → 报"没有更多"，并且这个判断**有时效**（见 END_RECHECK_MS）。
    */
   requestMore(): void {
     if (this.busy) {
@@ -511,8 +645,16 @@ export class FeedViewModel {
       this.loadFeed();
       return;
     }
-    if (this.sawEnd && !this.endRecheckDue()) {
-      return;
+    if (this.followingHasMore()) {
+      // 还有关注流的页：照旧交给 loadFeed → loadNextPage。
+    } else if (this.exploreHasMore || this.exploreRecheckDue()) {
+      this.wantExploreNext = true;
+    } else {
+      // 两段都到底了。
+      if (this.sawEnd && !this.endRecheckDue()) {
+        this.setStatus(FeedStatus.NoMore);
+        return;
+      }
     }
     // 上一轮翻页无论走哪条路都换不来新内容：这一轮改成「重读第一页」把链路重启
     // （限流，见 RESTART_COOLDOWN_MS）。不这么做的话，用户就是对着一个已经失效的
@@ -528,6 +670,24 @@ export class FeedViewModel {
       hilog.info(DOMAIN, TAG, 'paging stuck → restart from first page');
     }
     this.loadFeed();
+  }
+
+  /**
+   * 「探索流到底了」这个判断是不是过了有效期（同 END_RECHECK_MS）。
+   *
+   * 到点后允许拿**第一页**再试一次：探索流的游标过期时，继续用旧游标只会一直空，
+   * 重新要第一页才能接上（而且第一页本身就是新内容）。
+   */
+  private exploreRecheckDue(): boolean {
+    if (this.exploreEndAtMs === 0) {
+      return true;
+    }
+    const due: boolean = Date.now() - this.exploreEndAtMs >= END_RECHECK_MS;
+    if (due) {
+      hilog.info(DOMAIN, TAG, 'explore end recheck: retry after %{public}dms',
+        Date.now() - this.exploreEndAtMs);
+    }
+    return due;
   }
 
   /**
@@ -613,6 +773,30 @@ export class FeedViewModel {
 
   /** 翻下一页：先吃原生缓存，再走原生现抓，最后退到滚动。 */
   private async loadNextPage(): Promise<void> {
+    // ---- 0) 关注流翻完了：这一轮要的是**探索流**那一段（见 requestMore 的顺序）----
+    if (this.wantExploreNext || !this.followingHasMore()) {
+      const want: boolean = this.wantExploreNext;
+      this.wantExploreNext = false;
+      /*
+       * 还能不能要探索流：`want` = 用户刚触底要的；`exploreHasMore` = 上一页说还有；
+       * `exploreRecheckDue()` = 上次那个"到底了"已经过期（见 END_RECHECK_MS）。
+       * 三者都不成立就是**两段都到底**，如实报出来，别在这儿空转。
+       */
+      if (want || this.exploreHasMore || this.exploreRecheckDue()) {
+        this.setStatus(FeedStatus.LoadingMore);
+        const beforeExplore: number = this.explore.length;
+        // 游标还在就接着翻；游标没了（到底/过期）就重新要第一页，那一页本身就是新内容。
+        await this.loadExplore(!this.exploreHasMore);
+        if (this.explore.length > beforeExplore || this.exploreHasMore) {
+          this.pagingStuck = false;
+          return;
+        }
+        this.setStatus(FeedStatus.NoMore);
+        return;
+      }
+      this.setStatus(FeedStatus.NoMore);
+      return;
+    }
     if (this.sawEnd) {
       // 服务端已经明确说过没有下一页，不必再发请求 —— 除非这个判断已经过期（见 END_RECHECK_MS）。
       if (!this.endRecheckDue()) {
@@ -621,7 +805,8 @@ export class FeedViewModel {
       }
     }
     this.setStatus(FeedStatus.LoadingMore);
-    const before: number = this.posts.length;
+    // 比较基准是**关注流那一段**的长度：合并列表里还夹着探索流，用总长度比会算错"新增了几条"。
+    const before: number = this.following.length;
 
     // ---- 1) 原生缓存：上滑时**零等待**（那些页是上一屏显示完就抓好放在内存里的）----
     const cached: NativeFeedPage | null = this.takeNativePage();
@@ -630,10 +815,10 @@ export class FeedViewModel {
       this.nativeCursor = cached.nextCursor;
       this.nativeHasMore = cached.hasMore;
       hilog.info(DOMAIN, TAG, 'native page from cache n=%{public}d added=%{public}d queued=%{public}d',
-        cached.items.length, this.posts.length - before, this.nativeQueue.length);
+        cached.items.length, this.following.length - before, this.nativeQueue.length);
       // 铺完立刻把队列补满 —— 这样"上滑加载"永远是在吃已经取好的那几页。
       this.prefetchNativePage();
-      if (this.posts.length > before) {
+      if (this.following.length > before) {
         this.pagingStuck = false;
         return;
       }
@@ -646,7 +831,7 @@ export class FeedViewModel {
         this.nativeCursor = live.nextCursor;
         this.nativeHasMore = live.hasMore;
         hilog.info(DOMAIN, TAG, 'native page live n=%{public}d ms=%{public}d added=%{public}d',
-          live.items.length, live.ms, this.posts.length - before);
+          live.items.length, live.ms, this.following.length - before);
         this.prefetchNativePage();
         if (this.posts.length > before) {
           this.pagingStuck = false;
@@ -658,11 +843,11 @@ export class FeedViewModel {
      * 两条路都没换来新内容：**把这个游标丢掉**（游标失效时拿它反复请求只会拿到同一页）。
      * 原先这里还有"滚页面 → 等页面自己发下一页 → 回放它的模板"那条兜底，已随模板机制删除。
      */
-    if (this.posts.length === before) {
+    if (this.following.length === before) {
       this.pagingStuck = true;
       if (this.nextCursor.length > 0) {
         hilog.info(DOMAIN, TAG, 'cursor yielded nothing → dropped (posts=%{public}d)',
-          this.posts.length);
+          this.following.length);
         this.nextCursor = '';
       }
       this.setStatus(this.sawEnd ? FeedStatus.NoMore : FeedStatus.Idle);
@@ -738,15 +923,18 @@ export class FeedViewModel {
 
     // 累积去重，不再整体替换。下拉刷新反过来：新一页放头部（见 mergePrepend）。
     // `replace` 是给首屏用的：**重新要来的第一页整体顶掉列表**（见 loadFirstPage 的说明）。
+    // 注意合并的对象是**关注流那一段**（`this.following`），不是屏幕上那份合并列表 ——
+    // 否则探索流的内容会被并进关注流、下次翻页还会被当成"关注流"重复去重。
     let merged: MergeResult;
     if (replace) {
       merged = new MergeResult(mapped, mapped.length);
     } else if (prepend) {
-      merged = FeedMapper.mergePrepend(mapped, this.posts);
+      merged = FeedMapper.mergePrepend(mapped, this.following);
     } else {
-      merged = FeedMapper.merge(this.posts, mapped);
+      merged = FeedMapper.merge(this.following, mapped);
     }
-    this.setPosts(merged.posts);
+    this.following = merged.posts;
+    this.composePosts();
     FeedMapper.logKeys(prepend ? 'prepended' : 'merged', merged.posts);
 
     this.debug = `${this.debug} +${merged.changed}/${mapped.length}`;

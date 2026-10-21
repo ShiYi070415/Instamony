@@ -46,7 +46,7 @@
     },
     {
       "name": "feed_recommended_hint",
-      "value": "新账号还没有可推送的内容，关注一些人后下拉刷新即可看到信息流"
+      "value": "关注的人的最新帖子你已经看完了，下面是为你推荐的内容"
     },
     {
       "name": "challenge_title",

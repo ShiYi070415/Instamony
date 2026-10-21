@@ -184,8 +184,15 @@ export class NativeFeed {
 
   private static caughtUpMs: number = 0;
   private static caughtUpLoaded: boolean = false;
-  /** 这个状态记多久（10 分钟：够挡住一串刷新，又不至于一直不问时间线）。 */
-  private static readonly CAUGHT_UP_TTL_MS: number = 600000;
+  /**
+   * 这个状态记多久（30 分钟）。
+   *
+   * 为什么从 10 分钟提到 30：每次重问都是一发 3~6 秒、300KB 的请求，而回答**不会变**
+   * （"关注的人的最新帖子看完了"是账号级状态）。10 分钟一过，用户下一次刷新就要白等它；
+   * 而真正的内容（探索流那一段）每次刷新都会重取，所以放宽这个间隔不会让用户少看到新帖子。
+   * 关注了新的人之后，最多 30 分钟（或换账号 / 重装）就会重新问一次。
+   */
+  private static readonly CAUGHT_UP_TTL_MS: number = 1800000;
 
   /**
    * 移动端那一发（拿不到给 null）。
