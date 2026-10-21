@@ -590,56 +590,11 @@ export struct StoriesTray {
    * 尺寸与真头像**逐项对齐**（同一个外圈直径 + 同一行文字高度），所以数据到时是"灰圈里
    * 长出内容"，不会有任何跳动。颜色用主题里那两个灰：`field_background` 正好也是真头像
    * 加载不出来时的兜底色，`divider` 比它深/浅一档，用来画外环和下面那条名字位。
+   *
+   * 具体形状在下面的 **`StoryTraySkeleton`** 组件里 —— 那个组件是**公开**的：信息流的骨架屏
+   * （`components/FeedSkeleton`）也用它，这样"托盘还没到"时首页顶部那一排占位和真实托盘
+   * 尺寸完全一致（用户要求："占位组件需要按照原组件大小，并且分各部分单独占位"）。
    */
-  @Builder
-  skeletonItem() {
-    Column({ space: 6 }) {
-      Stack({ alignContent: Alignment.Center }) {
-        Column()
-          .width(AVATAR_VP + RING_GAP_VP * 2)
-          .height(AVATAR_VP + RING_GAP_VP * 2)
-          .borderRadius((AVATAR_VP + RING_GAP_VP * 2) / 2)
-          .border({ width: RING_WIDTH_VP, color: $r('app.color.divider') })
-        Column()
-          .width(AVATAR_VP)
-          .height(AVATAR_VP)
-          .borderRadius(AVATAR_VP / 2)
-          .backgroundColor($r('app.color.field_background'))
-      }
-      .width(AVATAR_VP + (RING_GAP_VP + RING_WIDTH_VP) * 2)
-      .height(AVATAR_VP + (RING_GAP_VP + RING_WIDTH_VP) * 2)
-      // 名字那一行也占住：真数据到时高度不变（见文件里"列表不要上下跳"的一贯要求）。
-      Column()
-        .width(ITEM_WIDTH_VP - 32)
-        .height(SKELETON_LABEL_H_VP)
-        .borderRadius(SKELETON_LABEL_H_VP / 2)
-        .backgroundColor($r('app.color.field_background'))
-    }
-    .width(ITEM_WIDTH_VP)
-  }
-
-  /** 一排灰色占位（横向排列，和真托盘同一套间距 + 同一个首端留白）。 */
-  @Builder
-  skeletonRow() {
-    Row({ space: 0 }) {
-      // 首端留白（EDGE_PAD_VP）：和真托盘那个空 ListItem 对齐，否则数据一到位整排会横跳。
-      Row()
-        .width(EDGE_SPACER_VP)
-        .height(1)
-      ForEach([0, 1, 2, 3, 4], (index: number): void => {
-        if (index < SKELETON_COUNT) {
-          this.skeletonItem()
-        }
-      }, (index: number): string => `sk-${index}`)
-    }
-    .width('100%')
-    .height(TRAY_HEIGHT_VP)
-    // 右侧不留白（滑动区仍是整屏宽，和真托盘一致）。
-    .padding({ left: 0, right: 0 })
-    // 占位不接手指：它只是"还没到"的观感，别让它抢掉列表的滑动。
-    .hitTestBehavior(HitTestMode.Transparent)
-  }
-
   build() {
     /*
      * **三态，高度完全一致**：
@@ -709,7 +664,7 @@ export struct StoriesTray {
       .height(TRAY_HEIGHT_VP)
     } else if (!this.loaded) {
       // 正在拉：先摆一排灰色占位（而不是空一块），观感是"内容马上来"。
-      this.skeletonRow()
+      StoryTraySkeleton()
     } else {
       // 拉完了确实没有：占一块同高的空位，信息流不跳。但「你的快拍」**永远在**（需求）。
       Row({ space: 0 }) {
@@ -721,5 +676,62 @@ export struct StoriesTray {
       .width('100%')
       .height(TRAY_HEIGHT_VP)
     }
+  }
+}
+/*
+ * **快拍托盘的骨架**（公开组件：托盘自己与信息流骨架屏共用）。
+ *
+ * 尺寸与真实托盘逐项对齐：头像 80 + 外环（3 间距 + 2.5 环宽）、项宽 106、名字条 11 高、
+ * 整排高 109（同 TRAY_HEIGHT_VP），首端留白 EDGE_SPACER_VP（和真托盘那个空 ListItem 对齐）。
+ * 所以数据一到是"灰圈里长出内容"，整排不会横跳、也不会上下跳。
+ */
+@Component
+export struct StoryTraySkeleton {
+  /** 单个占位：外环（divider 色）+ 灰头像 + 下面一条名字位。 */
+  @Builder
+  item() {
+    Column({ space: 6 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        Column()
+          .width(AVATAR_VP + RING_GAP_VP * 2)
+          .height(AVATAR_VP + RING_GAP_VP * 2)
+          .borderRadius((AVATAR_VP + RING_GAP_VP * 2) / 2)
+          .border({ width: RING_WIDTH_VP, color: $r('app.color.divider') })
+        Column()
+          .width(AVATAR_VP)
+          .height(AVATAR_VP)
+          .borderRadius(AVATAR_VP / 2)
+          .backgroundColor($r('app.color.field_background'))
+      }
+      .width(AVATAR_VP + (RING_GAP_VP + RING_WIDTH_VP) * 2)
+      .height(AVATAR_VP + (RING_GAP_VP + RING_WIDTH_VP) * 2)
+      // 名字那一行也占住：真数据到时高度不变（见文件里"列表不要上下跳"的一贯要求）。
+      Column()
+        .width(ITEM_WIDTH_VP - 32)
+        .height(SKELETON_LABEL_H_VP)
+        .borderRadius(SKELETON_LABEL_H_VP / 2)
+        .backgroundColor($r('app.color.field_background'))
+    }
+    .width(ITEM_WIDTH_VP)
+  }
+
+  build() {
+    Row({ space: 0 }) {
+      // 首端留白（EDGE_PAD_VP）：和真托盘那个空 ListItem 对齐，否则数据一到位整排会横跳。
+      Row()
+        .width(EDGE_SPACER_VP)
+        .height(1)
+      ForEach([0, 1, 2, 3, 4], (index: number): void => {
+        if (index < SKELETON_COUNT) {
+          this.item()
+        }
+      }, (index: number): string => `tray-sk-${index}`)
+    }
+    .width('100%')
+    .height(TRAY_HEIGHT_VP)
+    // 右侧不留白（滑动区仍是整屏宽，和真托盘一致）。
+    .padding({ left: 0, right: 0 })
+    // 占位不接手指：它只是"还没到"的观感，别让它抢掉列表的滑动。
+    .hitTestBehavior(HitTestMode.Transparent)
   }
 }

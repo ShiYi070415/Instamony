@@ -1,19 +1,27 @@
 /*
- * 信息流**骨架屏**（冷启动/首屏加载期间唯一的占位）。
+ * 信息流**骨架屏**：冷启动/首屏加载期间唯一的占位。
  *
- * 用户要求（原话）："冷启动主页显示占位加载动画，包括快拍列表、帖子、文字等都需要占位加载动画，
- * 抛弃加载上一次缓存覆盖的功能。" —— 也就是：宁可先看一屏规整的骨架，也不要"先铺上次的缓存、
- * 几秒后再整体换掉"（那种观感像是内容闪了一下又重排）。
+ * 用户要求：
+ *   · "冷启动主页显示占位加载动画，包括快拍列表、帖子、文字等都需要占位加载动画，
+ *     抛弃加载上一次缓存覆盖的功能"；
+ *   · "占位组件需要按照原组件大小，并且分各部分单独占位"。
  *
- * 所以这一屏要按**真实版式**摆齐三块：
- *   ① 快拍托盘：一排圆环 + 圆环下面的名字条（和 StoriesTray 的形状对齐）；
- *   ② 帖子：作者行（头像 + 名字条 + 关注胶囊）、媒体块、动作行（四颗图标 + 右侧收藏）、
- *      正文两三行 —— 帖子给两张，滚动一屏之内都是骨架而不是空白；
- *   ③ 文字：正文与计数都用灰色横条表示。
- * 上面再扫过一条竖直光雾（shimmer），避免"整屏死灰"让人以为卡住了。
+ * 所以这里不是"一块大灰块"，而是**逐块对齐真实组件**：
  *
- * 占位色用 `field_background`（和真实卡片的媒体占位色一致），骨架 → 真实内容不会跳色。
+ * | 占位 | 对齐的真实组件 / 尺寸 |
+ * | --- | --- |
+ * | 快拍托盘 | `StoriesTray`：头像 80 + 外环 3(环宽 2.5)、项宽 106、名字条 11 高、托盘高 109、首端留白 EDGE_SPACER（直接复用 `StoryTraySkeleton`） |
+ * | 作者行 | `FeedList.profileRow`：行高 52、头像 34(r17)、名字 14pt、关注胶囊 72×40、更多按钮 40×40 |
+ * | 媒体 | 真实卡片的媒体块：`aspectRatio(0.8)`（4:5 竖图，IG 最常见） |
+ * | 动作行 | `PostActions`：按钮高 40、内缩 8、图标 24~27、计数 13pt |
+ * | 正文 | `CAPTION_FONT_SIZE` 14pt / 左右内缩 12 / 上 6，最多两行 |
+ * | 发布时间 | 12pt 那一行（正文下面、底部留 16） |
+ *
+ * 尺寸常量能复用就复用（`StoryTraySkeleton`、`PROFILE_ROW_HEIGHT` 等按同值写在这里并注明来源），
+ * 占位色统一 `field_background`（与真实媒体未加载时的底色同源），骨架 → 内容不跳色。
  */
+
+import { StoryTraySkeleton } from './StoriesTray';
 
 /** 光雾带宽（vp）。 */
 const SHIMMER_WIDTH: number = 220;
@@ -23,14 +31,35 @@ const SHIMMER_TO: number = 560;
 /** 一趟扫动的时长（毫秒）。 */
 const SHIMMER_DURATION_MS: number = 1500;
 
-/** 托盘骨架画几个圆环（真机一屏大约能放下 5 个多一点）。 */
-const TRAY_PLACEHOLDERS: number = 5;
-/** 托盘圆环直径（vp）：比真实头像略小一点，看起来更"占位"。 */
-const TRAY_CIRCLE: number = 62;
-/** 帖子骨架画几张。 */
+/** 帖子骨架画几张（一屏大约 1.5 张，给两张足够铺满且不浪费）。 */
 const CARD_PLACEHOLDERS: number = 2;
-/** 动作行里的小块尺寸（vp）。 */
-const ACTION_DOT: number = 22;
+
+/* ---- 下面这些数字全部取自真实组件，改真实组件时要一起改 ---- */
+/** 作者行行高（同 FeedList.PROFILE_ROW_HEIGHT）。 */
+const PROFILE_ROW_H: number = 52;
+/** 作者头像直径（同 FeedList.authorAvatar 的 34×34 / 圆角 17）。 */
+const AVATAR: number = 34;
+/** 关注胶囊尺寸（同 MaterialSurface.MATERIAL_PILL_WIDTH / MATERIAL_PILL_HEIGHT）。 */
+const PILL_W: number = 72;
+const PILL_H: number = 40;
+/** 右侧「更多」按钮（同 MaterialIconButton 的 buttonSize 40）。 */
+const MORE_BTN: number = 40;
+/** 动作区：按钮高 40、整行左右内缩 8（同 PostActions）。 */
+const ACTION_ROW_H: number = 40;
+const ACTION_ROW_PAD: number = 8;
+/** 动作区图标字号（同 FeedList 的 ICON_HEART / ICON_MESSAGE / ICON_TRANSFER / ICON_PLANE / ICON_BOOKMARK）。 */
+const ICON_HEART: number = 24;
+const ICON_MESSAGE: number = 27;
+const ICON_TRANSFER: number = 25;
+const ICON_PLANE: number = 24;
+const ICON_BOOKMARK: number = 27;
+/** 正文：字号 14、左右内缩 12、上 6（同 FeedList.CAPTION_FONT_SIZE / CAPTION_SIDE_PADDING）。 */
+const CAPTION_FONT: number = 14;
+const CAPTION_PAD: number = 12;
+const CAPTION_TOP: number = 6;
+/** 发布时间那一行：12pt，底部留 16。 */
+const TIME_FONT: number = 12;
+const CAPTION_BOTTOM: number = 16;
 /** 统一的占位灰（与真实媒体未加载时的底色同源）。 */
 const PLACEHOLDER_BG: ResourceStr = $r('app.color.field_background');
 
@@ -65,7 +94,7 @@ export struct FeedSkeleton {
     });
   }
 
-  /** 一条灰色横条，代表一行未加载的文字（或一个未知尺寸的元素）。 */
+  /** 一条灰色横条（代表一行文字或一个未知尺寸的元素）。 */
   @Builder
   bar(barWidth: Length, barHeight: number) {
     Column()
@@ -75,98 +104,153 @@ export struct FeedSkeleton {
       .backgroundColor(PLACEHOLDER_BG)
   }
 
+  /** 一块圆形占位（头像 / 图标 / 按钮）。 */
   @Builder
-  dot(size: number, radius: number) {
+  circle(size: number) {
     Column()
       .width(size)
       .height(size)
-      .borderRadius(radius)
+      .borderRadius(size / 2)
+      .backgroundColor(PLACEHOLDER_BG)
+  }
+
+  /* ================= 帖子：按真实组件的每一块单独占位 ================= */
+
+  /**
+   * **作者行**：高 52（同 PROFILE_ROW_HEIGHT）。
+   *
+   * 左：头像 34 + 名字（14pt 那行，占位条给个"典型宽度"）；
+   * 右：「关注」胶囊 72×40 + 「更多」圆按钮 40 高。
+   */
+  @Builder
+  profileRow() {
+    Row({ space: 10 }) {
+      this.circle(AVATAR)
+      this.bar(118, 14)
+      Blank()
+      // 关注胶囊（真实那颗是 72×40 的材质胶囊）
+      Column()
+        .width(PILL_W)
+        .height(PILL_H)
+        .borderRadius(PILL_H / 2)
+        .backgroundColor(PLACEHOLDER_BG)
+      // 更多（真实那颗是 40×40 的圆按钮，里面的图标 20）
+      this.circle(MORE_BTN)
+    }
+    .width('100%')
+    .height(PROFILE_ROW_H)
+    .padding({ left: CAPTION_PAD, right: CAPTION_PAD })
+    .alignItems(VerticalAlign.Center)
+  }
+
+  /**
+   * **媒体块**：真实卡片的媒体是 `aspectRatio(mediaAspect)`（4:5 竖图 0.8、方形 1.0、横图 >1）。
+   *
+   * 骨架里取 **1:1**：0.8 的话一张占位就吃掉整屏（下方动作行 / 正文那几块占位全被推到屏幕外，
+   * 看起来还是"一大块灰色"）；方形既在真实尺寸范围内，又能在首屏看到"作者行 / 媒体 / 动作行 /
+   * 正文"四块各自独立的占位（用户要求："分各部分单独占位"）。真实卡片到达后按自己的比例排版。
+   */
+  @Builder
+  mediaBlock() {
+    Column()
+      .width('100%')
+      .aspectRatio(1)
       .backgroundColor(PLACEHOLDER_BG)
   }
 
   /**
-   * **快拍托盘骨架**：一排圆环 + 下面的名字条。
-   *
-   * 形状照着 StoriesTray 的真实布局做（圆环 62 + 名字条 10 高、间距一致），
-   * 这样真实托盘长出来时只是"灰块变成头像"，不会整块重排。
+   * **动作行**：与 PostActions 同一套尺寸 ——
+   * 按钮高 40、整行左右内缩 8；四颗图标（心/评论/转发/分享）各带一条计数条，右端是收藏。
    */
   @Builder
-  trayRow() {
-    Row({ space: 16 }) {
-      ForEach([0, 1, 2, 3, 4], (index: number): void => {
-        Column({ space: 10 }) {
-          this.dot(TRAY_CIRCLE, TRAY_CIRCLE / 2)
-          this.bar(46, 10)
+  actionsRow() {
+    Row({ space: 0 }) {
+      this.actionItem(ICON_HEART)
+      this.actionItem(ICON_MESSAGE)
+      this.actionItem(ICON_TRANSFER)
+      this.actionItem(ICON_PLANE)
+      Blank()
+      // 收藏：真实那颗是 40×40 的方按钮、图标 27
+      Column()
+        .width(40)
+        .height(40)
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center) {
+          this.circle(ICON_BOOKMARK)
         }
-        .alignItems(HorizontalAlign.Center)
-      }, (index: number): string => `tray-${index}`)
     }
     .width('100%')
-    .height(TRAY_CIRCLE + 24)
-    .alignItems(VerticalAlign.Top)
-    .padding({ left: 16, right: 16, top: 12 })
+    .height(ACTION_ROW_H)
+    .padding({ left: ACTION_ROW_PAD, right: ACTION_ROW_PAD })
+    .alignItems(VerticalAlign.Center)
+  }
+
+  /** 动作区的一颗「图标 + 计数」：按钮高 40、左右各 6 内缩（同 PostActions 的 Button）。 */
+  @Builder
+  actionItem(iconSize: number) {
+    Row({ space: 4 }) {
+      this.circle(iconSize)
+      // 计数（真实那条是 13pt 数字，宽度不定 —— 给一个典型宽）
+      this.bar(22, 13)
+    }
+    .height(40)
+    .padding({ left: 6, right: 6 })
+    .alignItems(VerticalAlign.Center)
   }
 
   /**
-   * **一张帖子骨架**：版式与真实卡片一致。
+   * **正文 + 发布时间**：正文 14pt（两行）、发布时间 12pt。
    *
-   * 从上到下：作者行（34 头像 + 名字条 + 右侧「关注」胶囊）、媒体块（4:5，和常见竖图一致）、
-   * 动作行（心 / 评论 / 转发 / 分享 + 右侧收藏）、正文两行 + 时间条。
+   * 内缩与真实卡片一致（左右 12、正文上 6、底部 16），所以真实文字到货时不会把卡片撑高一截。
    */
   @Builder
-  skeletonCard() {
+  captionBlock() {
     Column({ space: 0 }) {
-      // 作者行
-      Row({ space: 10 }) {
-        this.dot(34, 17)
-        this.bar(118, 12)
-        Blank()
-        this.bar(62, 26)
-        this.dot(24, 12)
-      }
-      .width('100%')
-      .height(52)
-      .padding({ left: 12, right: 12 })
-
-      // 媒体块
-      Column()
-        .width('100%')
-        .aspectRatio(0.8)
-        .backgroundColor(PLACEHOLDER_BG)
-
-      // 动作行：四颗图标 + 右侧收藏
-      Row({ space: 18 }) {
-        this.dot(ACTION_DOT, ACTION_DOT / 2)
-        this.dot(ACTION_DOT, ACTION_DOT / 2)
-        this.dot(ACTION_DOT, ACTION_DOT / 2)
-        this.dot(ACTION_DOT, ACTION_DOT / 2)
-        Blank()
-        this.dot(ACTION_DOT, ACTION_DOT / 2)
-      }
-      .width('100%')
-      .height(44)
-      .alignItems(VerticalAlign.Center)
-      .padding({ left: 12, right: 12 })
-
-      // 正文 + 发布时间
-      Column({ space: 8 }) {
-        this.bar('92%', 12)
-        this.bar('64%', 12)
-        this.bar(72, 10)
+      Column({ space: 6 }) {
+        this.bar('92%', CAPTION_FONT + 4)
+        this.bar('58%', CAPTION_FONT + 4)
       }
       .width('100%')
       .alignItems(HorizontalAlign.Start)
-      .padding({ left: 12, right: 12, top: 6, bottom: 18 })
+      .padding({ left: CAPTION_PAD, right: CAPTION_PAD, top: CAPTION_TOP })
+
+      // 发布时间那一行（12pt）
+      Row() {
+        this.bar(72, TIME_FONT)
+      }
+      .width('100%')
+      .padding({ left: CAPTION_PAD, right: CAPTION_PAD, top: 8, bottom: CAPTION_BOTTOM })
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  /** 一张骨架帖子 = 作者行 + 媒体 + 动作行 + 正文（和真实卡片同序、同尺寸）。 */
+  @Builder
+  skeletonCard() {
+    Column({ space: 0 }) {
+      this.profileRow()
+      this.mediaBlock()
+      this.actionsRow()
+      this.captionBlock()
     }
     .width('100%')
   }
 
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
-      Column() {
-        this.trayRow()
-        this.skeletonCard()
-        this.skeletonCard()
+      Column({ space: 0 }) {
+        /*
+         * 快拍托盘：**直接用真实的托盘骨架组件**（`StoryTraySkeleton`），尺寸天然对齐
+         * （头像 80 + 外环、项宽 106、名字条 11 高、托盘高 109）。托盘的取数还在路上时
+         * 首页顶部就是这一排灰圆环，不会是一块空白。
+         */
+        StoryTraySkeleton()
+        ForEach([0, 1], (index: number): void => {
+          if (index < CARD_PLACEHOLDERS) {
+            this.skeletonCard()
+          }
+        }, (index: number): string => `sk-card-${index}`)
       }
       .width('100%')
 
