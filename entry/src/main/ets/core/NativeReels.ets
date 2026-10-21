@@ -1,20 +1,17 @@
 /*
- * 原生直接要 Reels（不经过网页）——和首页信息流那套（core/NativeFeed）同一条路数。
+ * 原生直接要 Reels（不经过网页、也不回放模板）——与 instagrapi 的 explore_reels 同一套 App 身份。
  *
- * 为什么值得做：reels 原来必须"打开 /reels/ 页面 → 等它自己发 Clips 请求 → 存模板 → 回放"，
- * 换页时也是回放发请求；现在有了落盘模板 + Cookie 罐，可以直接 POST，于是：
- *   1) 冷启动预热（app 一起来就发，见 warmStart）→ 切到 Reels 时已有数据；
- *   2) 翻页提前缓存（见 ReelsViewModel 的队列）→ 上滑切换不再等网络。
+ * 历史说明：reels 原来必须"打开 /reels/ 页面 → 等它自己发 Clips 请求 → 存模板 → 回放"，
+ * 现在模板机制已随页面注入一起退役（`NETWORK_WATCHER` 不再注入），
+ * 数据只来自移动端 `clips/discover/`（主路）与 `discover/topical_explore/`（用户驱动时的兜底）。
  *
- * 解析结构与页面脚本 reelsScript 保持一致：
- *   `.data.xdt_api__v1__clips__home__connection_v2.edges[].node.media`
- *   （视频 video_versions[].url、封面 image_versions2.candidates[]、作者 media.user、
- *    音乐 clips_metadata.original_sound_info）。
+ * 解析结构：移动端 v1 媒体对象（`items[].media` / `paging_info`），
+ * 视频 video_versions[].url、封面 image_versions2.candidates[]、作者 media.user、
+ * 音乐 clips_metadata.original_sound_info —— 与 instagrapi 的 Media 字段同源。
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { Reel } from '../model/Reel';
-import { NativeFeed, NativeFetchResult } from './NativeFeed';
 import { MediaQuality, PickedMedia } from './MediaQuality';
 import { ApiThrottle } from './ApiThrottle';
 import { JsonRead } from './JsonRead';
@@ -25,10 +22,8 @@ import { EngageState } from './NativeEngage';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeReels';
-/** 模板按这个名字片段找（ApiRegistry 里存的就是它）。 */
-const REELS_OP: string = 'ClipsTabRoot';
 
-/** Clips 连接键。 */
+/** Clips 连接键（只给历史解析函数用，数据获取已不走它）。 */
 const CLIPS_KEY: string = 'xdt_api__v1__clips__home__connection_v2';
 
 interface IgCandidate {
@@ -203,9 +198,6 @@ export class NativeReels {
   }
 
   /**
-   * 要一页 reels 并解析好。失败一律 null（没模板 / 没登录 / HTTP 非 200 / 解析不出条目）。
-   */
-  /**
    * 移动端 `clips/discover/` 那一发（拿不到给 null）。
    *
    * 返回结构与网页 GraphQL 不同（`items[].media` + `paging_info`），但**媒体对象是同一套 v1 字段**，
@@ -288,6 +280,13 @@ export class NativeReels {
   }
 
   /**
+   * 要一页 reels 并解析好。失败一律 null（没登录 / 被限流 / HTTP 非 200 / 解析不出条目）。
+   *
+   * **只走移动端**（与 instagrapi 的 `explore_reels` 同一套 App 身份，不需要网页模板）：
+   * `clips/discover/` 为主，探索流 `discover/topical_explore/` 在**用户驱动**时兜底。
+   * 网页 GraphQL 模板回放已删：页面不再注入抓包钩子（`NETWORK_WATCHER` 已退役），
+   * 模板既抓不到，也不该再当数据源。
+   *
    * @param allowExplore 允许用**移动端探索流**兜底吗（见 viaExplore）。
    *
    *   · `true` = 调用方是**用户驱动**的（进 reels 页 / 上滑翻页，见 ReelsViewModel）；
@@ -298,68 +297,25 @@ export class NativeReels {
   static async fetchPage(first: number, cursor: string,
                          allowExplore: boolean = false): Promise<NativeReelsPage | null> {
     /*
-     * **先走移动端 `clips/discover/`**（见 core/mobileapi/MobileClips）：
-     * 与 instagrapi 的 `explore_reels` 同一个端点、同一套 App 身份，**不需要网页模板**。
-     * 成功就直接返回；失败（无会话 / 被限流 / 解析不出）再走下面老的 GraphQL 回放。
-     *
-     * 顺序放在限流判断之前是故意的：clips 那条 GraphQL 一旦被限流（12 分钟冷却），
-     * 这里仍然能拿到内容 —— 而它和下面那条 `viaExplore` 的区别是：
+     * 顺序：clips 在前是故意的 —— 它和 `viaExplore` 的区别是：
      * 那个用的是 `discover/topical_explore/`（图片+视频混合流），这个才是**真正的 Reels 流**。
      */
     const viaMobile: NativeReelsPage | null = await NativeReels.viaClips(cursor);
     if (viaMobile !== null) {
       return viaMobile;
     }
-
-    if (ApiThrottle.blocked(ApiThrottle.CLIPS)) {
-      const viaExplore: NativeReelsPage | null = allowExplore
-        ? await NativeReels.viaExplore(cursor) : null;
-      if (viaExplore !== null) {
-        return viaExplore;
-      }
-      hilog.info(DOMAIN, TAG, 'reels skipped: rate limited, %{public}dmin left (no explore fallback)',
-        ApiThrottle.remainingMinutes(ApiThrottle.CLIPS));
+    if (!allowExplore) {
+      hilog.info(DOMAIN, TAG, 'reels miss: clips failed, explore skipped (background) cursor=%{public}d',
+        cursor.length);
       return null;
     }
-    let result: NativeFetchResult = await NativeFeed.firstPage(first, cursor, REELS_OP, CLIPS_KEY);
-    // 限流要**当场认出来并记账**：不认的话下面会"原样重发一次"，等于又打一发。
-    if (ApiThrottle.looksLimited(result.body)) {
-      ApiThrottle.note(ApiThrottle.CLIPS);
-      /*
-       * 把**响应的开头**打出来。为什么必须打：这条判定会直接封掉 reels + 搜索推荐 12 分钟，
-       * 而真机上曾经因为"响应里恰好出现了 rate limit 几个字"（其实是别的东西）误判过一次
-       * —— 没有 body 就只能靠猜（见 core/ApiThrottle.looksLimited 收紧后的判据）。
-       */
-      hilog.warn(DOMAIN, TAG, 'reels rate limited → back off %{public}dmin body=%{public}s',
-        ApiThrottle.remainingMinutes(ApiThrottle.CLIPS),
-        result.body.substring(0, 160).replace(/[\r\n]+/g, ' '));
-      const viaExplore: NativeReelsPage | null = allowExplore
-        ? await NativeReels.viaExplore(cursor) : null;
+    const viaExplore: NativeReelsPage | null = await NativeReels.viaExplore(cursor);
+    if (viaExplore !== null) {
       return viaExplore;
     }
-    let parsed: NativeReelsPage | null = result.ok ? NativeReels.parse(result.body, result.ms) : null;
-    if (parsed === null && cursor.length === 0) {
-      // **原样重发一次**：实测 Clips 这条接口对我们改写过的 variables 会回 HTML（200 + 63KB
-      // 的整页文档），而页面里用同一份模板回放却是好的 —— 差别就在"我们动了 variables"。
-      // 首屏不挑条数（下面按服务端给多少算多少），所以这里退回"原样发模板"最稳；
-      // 翻页（cursor 非空）必须带 after，没法原样发，就只走上面那一次。
-      hilog.info(DOMAIN, TAG, 'native reels retry with raw template (first attempt body=%{public}s)',
-        result.body.substring(0, 120).replace(/[\r\n]+/g, ' '));
-      result = await NativeFeed.firstPage(0, '', REELS_OP, CLIPS_KEY);
-      if (ApiThrottle.looksLimited(result.body)) {
-        ApiThrottle.note(ApiThrottle.CLIPS);
-        hilog.warn(DOMAIN, TAG, 'reels rate limited on retry → back off %{public}dmin body=%{public}s',
-          ApiThrottle.remainingMinutes(ApiThrottle.CLIPS),
-          result.body.substring(0, 160).replace(/[\r\n]+/g, ' '));
-        return allowExplore ? await NativeReels.viaExplore(cursor) : null;
-      }
-      parsed = result.ok ? NativeReels.parse(result.body, result.ms) : null;
-    }
-    if (parsed === null) {
-      hilog.info(DOMAIN, TAG, 'native reels unparsable ok=%{public}s bytes=%{public}d diag=%{public}s',
-        result.ok ? 'y' : 'n', result.bytes, NativeReels.diagnose(result.body));
-    }
-    return parsed;
+    hilog.info(DOMAIN, TAG, 'reels miss: clips + explore both empty cursor=%{public}d limited=%{public}s',
+      cursor.length, `${ApiThrottle.blocked(ApiThrottle.CLIPS)}`);
+    return null;
   }
 
   /**

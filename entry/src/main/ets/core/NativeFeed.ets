@@ -1,20 +1,17 @@
 /*
- * 原生直接发 GraphQL（**不经过网页**）——"冷启动第一屏不等网页"那条路的执行者。
+ * 原生直接要首页信息流（**不经过网页、也不回放模板**）——
+ * "冷启动第一屏不等网页"那条路的执行者，数据来自移动端 `feed/timeline/`
+ * （见 core/mobileapi/MobileFeedTimeline，与 instagrapi 同源的 App 私有接口）。
  *
- * 为什么能做：首页信息流那条请求的一切要素，我们都已经有了 ——
- *   1) 请求模板（方法 / URL / 请求头 / 请求体，带 doc_id 与 variables）：
- *      由 ApiRegistry 从网页里抓下来并**落盘**（见 ApiRegistry.persistTemplates）；
- *   2) 会话：Cookie 罐是持久的（登录一次就一直在），用 WebCookieManager 就能读出 Cookie 串，
- *      `csrftoken` 就在里面（IG 的 GraphQL 要求请求头 `x-csrftoken` 与它对得上）；
- *   3) 网络：ArkTS 的 http 模块不受浏览器同源/CORS 限制，Cookie 也能自己带头里发。
+ * 历史说明：这条路原来靠"页面里抓一份 GraphQL 模板再回放"，现在模板机制已随页面注入一起退役
+ * （`NETWORK_WATCHER` 不再注入），模板回放代码已删除。
  *
- * 于是冷启动时可以先发这一发（几百毫秒拿到 5 条），网页那条路继续在后台跑：
- * 网页准备好之后照旧抓响应/回放并覆盖列表 —— 快的那条先出画面，慢的那条负责"最新最全"。
+ * 本文件里剩下的模板相关函数（`headersFor` / `sessionHeaders` / `buildHeaders`）只是**请求头**来源，
+ * 服务于尚未迁移完的写类接口（点赞 / 关注 / 通知…）；数据获取已经不再依赖它们。
  *
- * 失败一律**不抛**，返回带 error 字段的结果，调用方直接退回网页路径。
+ * 失败一律**不抛**，返回 null，调用方据此提示重试。
  */
 
-import { http } from '@kit.NetworkKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ApiRegistry, ApiTemplate } from '../bridge/ApiRegistry';
 import { InstagramCookieJar, InstagramCookieSnapshot } from './InstagramCookieJar';
@@ -25,11 +22,9 @@ import { MobileFeedPage, MobileFeedTimeline } from './mobileapi/MobileFeedTimeli
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeFeed';
-/** 首页信息流那条操作的名字片段（模板按它找）。 */
+/** 首页信息流那条操作的名字片段（模板按它找请求头）。 */
 const FEED_OP: string = 'FeedTimeline';
 
-/** 连接键：响应里出现它就说明这一发真的拿到了信息流。 */
-const FEED_KEY: string = 'xdt_api__v1__feed__timeline__connection';
 /**
  * 原生请求里**必须丢掉**的请求头。
  *
@@ -39,10 +34,6 @@ const FEED_KEY: string = 'xdt_api__v1__feed__timeline__connection';
  */
 const HEADER_DROP: Array<string> = ['content-length', 'host', 'connection', 'accept-encoding',
   'transfer-encoding', 'upgrade', 'te', 'trailer'];
-/**
- * 默认超时与要几条。 */
-const CONNECT_TIMEOUT_MS: number = 6000;
-const READ_TIMEOUT_MS: number = 8000;
 /**
  * 网页版 Instagram 的 app id（`x-ig-app-id`）。
  *
@@ -173,31 +164,20 @@ export class NativeFeed {
   /**
    * 要一页并解析好（预热、首屏、翻页都走这里，保证解析规则只有一份）。
    *
-   * 失败一律返回 null（HTTP 非 200 / 没有模板 / 没登录 / 解析不出条目）。
+   * **只走移动端 `feed/timeline/`**（见 core/mobileapi/MobileFeedTimeline）。
+   * 模板回放那条兜底已经删了：四批迁移（评论 / Reels / 搜索 / 首页）之后，
+   * 页面里不再注入抓包钩子（`NETWORK_WATCHER` 已退役），模板既抓不到，
+   * 也不该再当数据源 —— 失败就让用户重试，而不是悄悄换一条自动化痕迹更重的路。
+   *
+   * 失败一律返回 null（无会话 / 非 200 / 形状变了 / 解析不出条目）。
    */
   static async fetchPage(first: number, cursor: string): Promise<NativeFeedPage | null> {
-    /*
-     * **先走移动端 `feed/timeline/`**（见 core/mobileapi/MobileFeedTimeline）：
-     * 实测 `POST feed/timeline/` → 200 / 253KB，参数走查询串。
-     * 这是**最后一块模板依赖** —— 走通了，模板回放就只剩兜底作用。
-     * 失败（无会话 / 非 200 / 形状变了 / 解析不出）再走下面老的模板回放。
-     */
     const viaMobile: NativeFeedPage | null = await NativeFeed.viaMobile(cursor);
     if (viaMobile !== null) {
       return viaMobile;
     }
-
-    const result: NativeFetchResult = await NativeFeed.firstPage(first, cursor);
-    if (!result.ok) {
-      hilog.info(DOMAIN, TAG, 'native page failed %{public}s', result.summary());
-      return null;
-    }
-    const parsed: NativeTimeline | null = NativeTimelineParser.parse(result.body);
-    if (parsed === null) {
-      hilog.info(DOMAIN, TAG, 'native page unparsable bytes=%{public}d', result.bytes);
-      return null;
-    }
-    return new NativeFeedPage(parsed.items, parsed.nextCursor, parsed.hasNext, result.ms);
+    hilog.warn(DOMAIN, TAG, 'feed mobile failed (%{public}s)', MobileFeedTimeline.detail());
+    return null;
   }
 
   /**
@@ -220,137 +200,6 @@ export class NativeFeed {
     hilog.info(DOMAIN, TAG, 'feed via mobile n=%{public}d more=%{public}s cursor=%{public}d ms=%{public}d',
       parsed.items.length, `${parsed.hasNext}`, parsed.nextCursor.length, page.ms);
     return new NativeFeedPage(parsed.items, parsed.nextCursor, parsed.hasNext, page.ms);
-  }
-
-  /**
-   * 原生要一页（`first` 条）。
-   *
-   * @param first  要几条（接口的 variables.first）。
-   * @param cursor 翻页游标：空串 = 第一页；非空 = `variables.after = cursor`（上一页的 end_cursor）。
-   * @param op     操作名片段（默认首页信息流；reels 传 ClipsTabRoot，见 core/NativeReels）。
-   * @param expectKey 响应里**必须出现**的连接键（默认信息流那条；reels 传 clips 那条）——
-   *                  它只是"这一发是不是拿到了我们要的那页"的判据，解析仍然交给各自的 parser。
-   * @param first  传 0 表示**不要动模板的 variables**（原样发出）。有的接口（实测 Clips）
-   *               我们对 variables 的改写会让服务端回 HTML 而不是 JSON，那就原样发一次。
-   */
-  static async firstPage(first: number, cursor: string = '', op: string = FEED_OP,
-                         expectKey: string = FEED_KEY): Promise<NativeFetchResult> {
-    const started: number = Date.now();
-    const tpl: ApiTemplate | null = ApiRegistry.getInstance().storedForNative(op);
-    if (tpl === null) {
-      return NativeFeed.fail('no-template', started);
-    }
-    let jar: InstagramCookieSnapshot;
-    try {
-      jar = await InstagramCookieJar.inspect();
-    } catch (error) {
-      return NativeFeed.fail('cookie-read-failed', started);
-    }
-    if (!jar.signedIn) {
-      return NativeFeed.fail('not-signed-in', started);
-    }
-    const headers: Record<string, string> = NativeFeed.buildHeaders(tpl, jar.cookie);
-    // first <= 0 = 原样发模板（只换 __req）：见 firstPage 的参数说明。
-    const body: string = first > 0
-      ? NativeFeed.patchBody(tpl.body, first, cursor)
-      : NativeFeed.randomizeReq(tpl.body);
-    // 模板里的 URL 可能是**相对路径**（页面里 fetch('/graphql/query') 是合法的，同源自动补全），
-    // 原生这边必须自己补成绝对地址 —— 否则 http 模块直接回 "Invalid URL format or missing URL"。
-    const url: string = NativeFeed.absoluteUrl(tpl.url);
-    const method: http.RequestMethod = tpl.method.trim().toUpperCase() === 'GET'
-      ? http.RequestMethod.GET : http.RequestMethod.POST;
-    hilog.info(DOMAIN, TAG, 'native POST op=%{public}s m=%{public}s url=%{public}s hdr=[%{public}s] body=%{public}d %{public}s',
-      op, tpl.method, url, Object.keys(headers).join(','), body.length, NativeFeed.describeBody(body));
-    const request: http.HttpRequest = http.createHttp();
-    try {
-      const response: http.HttpResponse = await request.request(url, {
-        method: method,
-        header: headers,
-        extraData: body,
-        connectTimeout: CONNECT_TIMEOUT_MS,
-        readTimeout: READ_TIMEOUT_MS,
-        expectDataType: http.HttpDataType.STRING
-      });
-      const text: string = typeof response.result === 'string'
-        ? response.result as string : JSON.stringify(response.result);
-      const hasConn: boolean = text.indexOf(expectKey) >= 0;
-      const codes: number = NativeFeed.countCodes(text);
-      const ok: boolean = response.responseCode === 200 && hasConn;
-      return new NativeFetchResult(ok, ok ? '' : `http-${response.responseCode}`,
-        response.responseCode, Date.now() - started, text.length, hasConn, codes, text);
-    } catch (error) {
-      const message: string = (error as Error).message ?? 'request-threw';
-      hilog.warn(DOMAIN, TAG, 'native feed request failed: %{public}s', message);
-      return NativeFeed.fail(`throw:${message}`.substring(0, 60), started);
-    } finally {
-      try {
-        request.destroy();
-      } catch (error) {
-      }
-    }
-  }
-
-  private static fail(reason: string, started: number): NativeFetchResult {
-    return new NativeFetchResult(false, reason, 0, Date.now() - started, 0, false, 0, '');
-  }
-
-  /**
-   * 请求体摘要：操作名 + doc_id + variables（用于对比"信息流那发"和"reels 那发"差在哪）。
-   *
-   * 为什么要它：实测 reels 那一发 HTTP 200 但回的是 HTML（不是 JSON），而**同一个模板**用页面
-   * 里的回放却是好的 —— 差别只可能在"我们原生这一发到底发了什么"，所以把关键字段摊开看。
-   */
-  private static describeBody(body: string): string {
-    const name: string = NativeFeed.fieldOf(body, 'fb_api_req_friendly_name');
-    const doc: string = NativeFeed.fieldOf(body, 'doc_id');
-    const vars: string = NativeFeed.fieldOf(body, 'variables');
-    const shown: string = vars.length > 160 ? vars.substring(0, 160) : vars;
-    return `name=${name} doc=${doc} vars=${shown}`;
-  }
-
-  /** 取表单串里某个键的值（不解码，够看就行）。 */
-  private static fieldOf(body: string, key: string): string {
-    const parts: Array<string> = body.split('&');
-    for (let index: number = 0; index < parts.length; index++) {
-      if (parts[index].indexOf(`${key}=`) === 0) {
-        return parts[index].substring(key.length + 1);
-      }
-    }
-    return '';
-  }
-
-  /**
-   * 把模板里的 URL 补成绝对地址。
-   *
-   * 页面里 `fetch("/graphql/query")` 是合法的（同源会自己补），原生 http 模块不行。
-   * 只补 instagram.com 这一种相对形式：模板都是从 IG 页面抓的，不存在别的来源。
-   */
-  private static absoluteUrl(url: string): string {
-    const text: string = url.trim();
-    if (text.startsWith('http://') || text.startsWith('https://')) {
-      return text;
-    }
-    if (text.startsWith('//')) {
-      return `https:${text}`;
-    }
-    if (text.startsWith('/')) {
-      return `https://www.instagram.com${text}`;
-    }
-    return `https://www.instagram.com/${text}`;
-  }
-
-  /**
-   * 落盘那份模板的年龄（秒），没有就回 "none"。
-   *
-   * 只用于日志：这条快路径靠的是"上次抓到的模板还能不能用"，出问题时第一眼要能看出
-   * 是"压根没有模板"还是"模板太旧被丢弃了"。
-   */
-  static templateAge(): string {
-    const tpl: ApiTemplate | null = ApiRegistry.getInstance().storedForNative(FEED_OP);
-    if (tpl === null) {
-      return 'none';
-    }
-    return `${Math.round((Date.now() - tpl.at) / 1000)}s/${tpl.body.length}b`;
   }
 
   /**
@@ -492,61 +341,6 @@ export class NativeFeed {
     return out;
   }
 
-  /** 只把 `__req` 换个随机值（原样发送模板时用，避免与页面正在进行的请求撞号）。 */
-  private static randomizeReq(body: string): string {
-    return body.replace(/__req=[^&]*/, `__req=${Math.random().toString(36).substring(2, 4)}`);
-  }
-
-  /**
-   * 请求体：只动三个字段 —— `variables.first`（要几条）、`variables.after`（翻页游标）、
-   * `__req`（换个随机值）。
-   *
-   * 别的一律照抄模板（doc_id / __d / __a / __hs / jazoest / lsd 都在里面）。
-   * `variables` 必须 `JSON.parse` 之后再改：直接字符串拼会变成 `{"0":"{",...}`，
-   * 服务端回一句 noncoercible_variable_value（这个坑在「我的」上踩过）。
-   *
-   * 翻页只改 `after`，和网页那条回放路径（timelineScript 里的 setCursor）保持一致 ——
-   * 多动 `last`/`before` 反而容易踩 Relay 的参数校验。
-   */
-  private static patchBody(body: string, first: number, cursor: string = ''): string {
-    const parts: Array<string> = body.split('&');
-    const out: Array<string> = [];
-    for (let index: number = 0; index < parts.length; index++) {
-      const part: string = parts[index];
-      if (part.indexOf('__req=') === 0) {
-        out.push(`__req=${Math.random().toString(36).substring(2, 4)}`);
-        continue;
-      }
-      if (part.indexOf('variables=') !== 0) {
-        out.push(part);
-        continue;
-      }
-      try {
-        const src: Record<string, Object> =
-          JSON.parse(decodeURIComponent(part.substring('variables='.length))) as Record<string, Object>;
-        // 重建一份 variables：把 after 剔掉再按游标决定加不加（不能写 null ——
-        // Record<string, Object> 不收 null，而 `after: null` 本来就是"第一页"的语义：
-        // 键不存在就是第一页，和网页那条回放路径一致）。
-        const vars: Record<string, Object> = {};
-        const keys: Array<string> = Object.keys(src);
-        for (let k: number = 0; k < keys.length; k++) {
-          if (keys[k] === 'after') {
-            continue;
-          }
-          vars[keys[k]] = src[keys[k]];
-        }
-        vars['first'] = first;
-        if (cursor.length > 0) {
-          vars['after'] = cursor;
-        }
-        out.push(`variables=${encodeURIComponent(JSON.stringify(vars))}`);
-      } catch (error) {
-        out.push(part);
-      }
-    }
-    return out.join('&');
-  }
-
   private static cookieValue(cookie: string, name: string): string {
     const parts: Array<string> = cookie.split(';');
     for (let index: number = 0; index < parts.length; index++) {
@@ -556,16 +350,5 @@ export class NativeFeed {
       }
     }
     return '';
-  }
-
-  /** 粗数响应里有几条帖子（`"code":"xxx"` 的出现次数）——只用于日志。 */
-  private static countCodes(text: string): number {
-    let count: number = 0;
-    let at: number = text.indexOf('"code":"');
-    while (at >= 0 && count < 999) {
-      count++;
-      at = text.indexOf('"code":"', at + 8);
-    }
-    return count;
   }
 }

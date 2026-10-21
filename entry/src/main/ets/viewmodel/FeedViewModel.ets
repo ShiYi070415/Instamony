@@ -698,10 +698,10 @@ export class FeedViewModel {
       hilog.info(DOMAIN, TAG, 'native first from warm n=%{public}d ms=%{public}d',
         first.items.length, Date.now() - startedMs);
     } else {
-      // 预热没赶上（或没有模板/没登录）：自己发一发，仍然是原生、仍然不碰网页。
+      // 预热没赶上（或没登录）：自己发一发，仍然是原生、仍然不碰网页。
       first = await NativeFeed.fetchPage(NATIVE_FIRST_COUNT, '');
-      hilog.info(DOMAIN, TAG, 'native first fetched tpl=%{public}s n=%{public}d',
-        NativeFeed.templateAge(), first === null ? 0 : first.items.length);
+      hilog.info(DOMAIN, TAG, 'native first fetched n=%{public}d ms=%{public}d',
+        first === null ? 0 : first.items.length, Date.now() - startedMs);
     }
     if (first !== null) {
       // 首屏是缓存铺的 → 网络这份要**整体替换**（否则新 7 条后面还挂着旧的 7 条，见 fromCache）。
