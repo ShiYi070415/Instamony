@@ -45,6 +45,7 @@ import {
 import { MATERIAL_PILL_HEIGHT, SelectSurfaceModifier, SurfaceModifier } from './MaterialSurface';
 import { PlatformCap } from '../core/PlatformCap';
 import { StoryDiag } from '../core/StoryDiag';
+import { StoryTray } from '../model/Story';
 import { NativeStories } from '../core/NativeStories';
 import { MobileProbe } from '../core/mobileapi/MobileProbe';
 import { fileIo, picker } from '@kit.CoreFileKit';
@@ -191,25 +192,19 @@ export struct SettingsPanel {
   }
 
   /**
-   * **抓一次"故事页"模板**（见 setStoryCaptureHook 的说明）。
+   * **自检一次快拍取数**（移动端私有接口）。
    *
-   * 故事页地址需要用户名：用**自己的**用户名（从 Cookie 罐读不到就在网页里问一次，
-   * 都不行就报一句"拿不到用户名"）。抓到什么模板由 `StoryDiag` 一句日志说清
-   * （`story template captured try=… op|op`）—— 这条日志是"新退路到底可不可用"的唯一判据。
+   * 原来这里跑的是"抓故事页模板 / 读页面媒体"两条网页退路；模板机制退役后改为：
+   * 用移动端 `feed/reels_tray/` 拉一次托盘，把条数与失败原因如实报出来。
    */
   private captureStoryTemplateForDiag(): void {
-    // 先试"抓模板"，再试"直接读页面媒体"（两条都走一遍，结果如实报出来）。
-    NativeStories.runStoryCapture().then((ok: boolean): void => {
-      if (ok) {
+    NativeStories.tray().then((tray: StoryTray | null): void => {
+      const count: number = tray === null ? 0 : tray.items.length;
+      if (count > 0) {
         this.toast($r('app.string.diag_story_captured'));
         return;
       }
-      NativeStories.runStoryPageRead().then((read: boolean): void => {
-        this.toast(read ? $r('app.string.diag_story_captured')
-          : $r('app.string.diag_story_capture_failed', NativeStories.lastDetail()));
-      }).catch((): void => {
-        this.toast($r('app.string.diag_story_capture_failed', NativeStories.lastDetail()));
-      });
+      this.toast($r('app.string.diag_story_capture_failed', NativeStories.lastDetail()));
     }).catch((error: Error): void => {
       this.toast($r('app.string.diag_story_capture_failed', error.message ?? '-'));
     });
