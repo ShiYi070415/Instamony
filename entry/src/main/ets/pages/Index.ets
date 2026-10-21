@@ -8332,6 +8332,27 @@ struct Index {
    * 搜索推荐流点进去那页"没有显示点赞评论转发数量"，关注按钮也因为没有作者 id 走不通
    * （用户报的两个问题；字段由 core/NativeSearch.readPost 采出来）。
    */
+  /**
+   * 轮播帖的逐页图片地址（探索流那条路用）。
+   *
+   * `MediaCarousel` 的约定：`slides` 里已经带了"图 + 视频"的逐页信息时以它为准；
+   * 只有纯图片轮播才退回 `imageUrls`。所以这里给出全部**图片页**的地址；
+   * 拿不到轮播（单页）时就退回封面那一张。
+   */
+  private static carouselImages(post: SearchPost): Array<string> {
+    const out: Array<string> = [];
+    for (let index: number = 0; index < post.mediaItems.length; index++) {
+      const img: string = post.mediaItems[index].img ?? '';
+      if (img.length > 0) {
+        out.push(img);
+      }
+    }
+    if (out.length === 0 && post.coverUrl.length > 0) {
+      out.push(post.coverUrl);
+    }
+    return out;
+  }
+
   private static searchPostsToMedia(posts: Array<SearchPost>): Array<MediaPost> {
     const out: Array<MediaPost> = [];
     for (let index: number = 0; index < posts.length; index++) {
@@ -8365,7 +8386,15 @@ struct Index {
         ownerFollowing: post.following === true,
         ownerFollowKnown: post.following !== undefined,
         videoUrl: post.videoUrl,
-        imageUrls: [post.coverUrl],
+        /*
+         * **多图 / 图文视频混排**：把探索流带回来的 `carousel_media` 交给同一套映射
+         * （见 FeedMapper.slidesFromItems）。只给一张封面的话，探索流的多图帖在 feeds 里
+         * 永远只显示第一张（用户报的"多图片/视频媒体帖子是不是没适配"）。
+         * `imageUrls` 也要按页给出（MediaCarousel 在没有 slides 时按它退化成纯图片轮播）。
+         */
+        imageUrls: Index.carouselImages(post),
+        mediaSlides: FeedMapper.slidesFromItems(post.mediaItems),
+        imageAspectMin: 0,
         mediaWidth: post.width,
         mediaHeight: post.height,
         originalVideoUrl: post.originalVideoUrl,

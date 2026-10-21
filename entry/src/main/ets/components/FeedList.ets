@@ -2067,9 +2067,12 @@ export struct FeedList {
       .layoutWeight(1)
       .height(PROFILE_ROW_HEIGHT)
       .alignItems(VerticalAlign.Center)
-      // 名字再长也**不许溢出到兄弟节点上**：这一层兜底裁剪（名字自己已经按 nameMaxWidth
-      // 截断了，这里是"万一量出来还是超了"的最后一道保险）。
-      .clip(true)
+      /*
+       * **这里不能裁**：材质容器（头像 + 名字那块 Toggle）的阴影是画在 Toggle 边界**之外**的，
+       * 这一层 `clip(true)` 会把它切掉 —— 用户报的"用户资讯栏的背景阴影被外部容器裁剪了"就是它。
+       * 名字溢出的兜底交给文本自己（`maxLines(1)` + `Ellipsis`，见 authorName / nameMaxWidth）。
+       */
+      .clip(false)
       // 「关注 / 已关注」按钮（挨着"更多"）。
       //
       // **不再因为"没有作者 id"就不画**：以前这里是 `if (post.ownerId.length > 0)`，

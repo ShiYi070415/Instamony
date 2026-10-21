@@ -30,6 +30,8 @@ import { SessionGate } from './SessionGate';
 import { MobileDiscover, MobileMediaPage, MobileUserPage } from './mobileapi/MobileDiscover';
 import { MobileFeedPage, MobileFeedTimeline } from './mobileapi/MobileFeedTimeline';
 import { SearchPost, SearchUser } from '../model/Search';
+// 轮播帖的逐页媒体（与时间线那份 DTO 同形，见 readPost / carouselPage）。
+import { FeedMediaItemDto } from '../model/FeedDto';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeSearch';
@@ -447,10 +449,87 @@ export class NativeSearch {
     if (takenAt > 100000000000) {
       takenAt = Math.floor(takenAt / 1000);
     }
+    /*
+     * **多图 / 图文视频混排（轮播）**：探索流里同样有 `carousel_media`，字段形状与时间线那份一致。
+     * 以前这条路只取第一张封面，于是探索流的多图帖在 feeds 里永远只显示一张
+     * （用户报的"多图片/视频媒体帖子是不是没适配"）。
+     * 这里逐页挑"展示档"的图和视频（同一套 MediaQuality 判据），交给
+     * `FeedMapper.slidesFromItems` 转成 MediaSlide[]。
+     */
+    const carousel: Array<Object> = JsonRead.arrayOf(node, 'carousel_media');
+    const mediaItems: Array<FeedMediaItemDto> = [];
+    if (carousel.length > 1) {
+      for (let index: number = 0; index < carousel.length; index++) {
+        const page: Record<string, Object> | null = JsonRead.asRecord(carousel[index]);
+        if (page === null) {
+          continue;
+        }
+        const one: FeedMediaItemDto = NativeSearch.carouselPage(page);
+        if (one.img.length === 0 && one.vid.length === 0) {
+          continue;
+        }
+        mediaItems.push(one);
+      }
+    }
     return new SearchPost(code, picked.url, picked.width, picked.height, videos.length > 0,
       `${rawId}`.trim(), display.url, original.url, username, avatar, authorId, caption,
       JsonRead.numOf(node, 'like_count'), JsonRead.numOf(node, 'comment_count'),
-      JsonRead.numOf(node, 'media_repost_count'), liked, following, takenAt);
+      JsonRead.numOf(node, 'media_repost_count'), liked, following, takenAt, mediaItems);
+  }
+
+  /**
+   * 轮播里的一页 → 逐页媒体（图和视频都按"展示档"挑，口径同单图/单视频帖）。
+   *
+   * 视频页的 `img` 用它的**封面**（`image_versions2`），与 `MediaSlide` 的约定一致
+   * （见 model/MediaPost 的 MediaSlide 注释）。
+   */
+  private static carouselPage(page: Record<string, Object>): FeedMediaItemDto {
+    const images: Record<string, Object> | null = JsonRead.recordOf(page, 'image_versions2');
+    const candidates: Array<Object> = images === null ? [] : JsonRead.arrayOf(images, 'candidates');
+    const urls: Array<string> = [];
+    const widths: Array<number> = [];
+    const heights: Array<number> = [];
+    for (let index: number = 0; index < candidates.length; index++) {
+      const one: Record<string, Object> | null = JsonRead.asRecord(candidates[index]);
+      if (one === null) {
+        continue;
+      }
+      const url: string = JsonRead.strOf(one, 'url');
+      if (url.length === 0) {
+        continue;
+      }
+      urls.push(url);
+      widths.push(JsonRead.numOf(one, 'width'));
+      heights.push(JsonRead.numOf(one, 'height'));
+    }
+    const picked: PickedMedia = MediaQuality.displayImageAt(urls, widths, heights, COVER_WIDTH);
+    const versions: Array<Object> = JsonRead.arrayOf(page, 'video_versions');
+    const vidUrls: Array<string> = [];
+    const vidWidths: Array<number> = [];
+    const vidHeights: Array<number> = [];
+    for (let index: number = 0; index < versions.length; index++) {
+      const one: Record<string, Object> | null = JsonRead.asRecord(versions[index]);
+      if (one === null) {
+        continue;
+      }
+      const url: string = JsonRead.strOf(one, 'url');
+      if (url.length === 0) {
+        continue;
+      }
+      vidUrls.push(url);
+      vidWidths.push(JsonRead.numOf(one, 'width'));
+      vidHeights.push(JsonRead.numOf(one, 'height'));
+    }
+    const video: PickedMedia = MediaQuality.displayVideo(vidUrls, vidWidths, vidHeights);
+    // 宽高优先用视频自己的（视频页要按视频比例排版），图片页用封面自己的。
+    const w: number = video.url.length > 0 ? video.width : picked.width;
+    const h: number = video.url.length > 0 ? video.height : picked.height;
+    return {
+      img: picked.url,
+      vid: video.url,
+      w: w,
+      h: h
+    } as FeedMediaItemDto;
   }
 
   /** 整包里所有"像用户"的对象（去重、限量）。 */

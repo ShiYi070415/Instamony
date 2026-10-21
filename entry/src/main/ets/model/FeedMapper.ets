@@ -106,7 +106,18 @@ export class FeedMapper {
    * 一个字都不用改）；多图帖才需要逐页区分图/视频。
    */
   private static toSlides(item: FeedItemDto): Array<MediaSlide> {
-    const raw: Array<FeedMediaItemDto> = item.mediaItems ?? [];
+    return FeedMapper.slidesFromItems(item.mediaItems ?? []);
+  }
+
+  /**
+   * 逐页媒体 DTO → `MediaSlide[]`（**只收多图帖**；≤1 页返回空数组）。
+   *
+   * 公开是因为**探索流的帖子**也要走同一套：它的数据来自 `SearchPost`
+   * （`discover/topical_explore/` 的 `carousel_media`），字段形状与时间线那份一致。
+   * 早先搜索/探索那条路只带一张封面，于是多图帖在 feeds 里只剩第一张图
+   * （用户报的"多图片/视频媒体帖子是不是没适配"）。
+   */
+  static slidesFromItems(raw: Array<FeedMediaItemDto>): Array<MediaSlide> {
     if (raw.length <= 1) {
       return [];
     }

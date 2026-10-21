@@ -6,6 +6,9 @@
  */
 
 /** 拿不到尺寸时用的宽高比（宽/高，4:5）：IG 上最常见的一档竖图。 */
+// 逐页媒体（轮播）用的就是时间线那份 DTO，见 SearchPost.mediaItems。
+import { FeedMediaItemDto } from './FeedDto';
+
 const DEFAULT_ASPECT: number = 0.8;
 /** 比例的安全边界（防脏数据把格子拉成一根柱子，见 SearchPost.aspect）。 */
 const MIN_ASPECT: number = 0.4;
@@ -125,13 +128,22 @@ export class SearchPost {
    * 用法：`SearchPost.takenAt` → `MediaPost.takenAtMs`（×1000，见 Index.searchPostsToMedia）。
    */
   readonly takenAt: number;
+  /**
+   * **逐页媒体**（多图 / 图文视频混排的轮播帖；≤1 页 = 空数组）。
+   *
+   * 为什么要有：探索流（`discover/topical_explore/`）里同样有 `carousel_media`，
+   * 但这条路以前只取第一张封面 —— 于是探索流的多图帖在 feeds 里永远只显示一张
+   * （用户报的"多图片/视频媒体帖子是不是没适配"）。字段形状与时间线那份完全一致，
+   * 所以直接用 `FeedMediaItemDto`，再由 `FeedMapper.slidesFromItems` 转成 `MediaSlide[]`。
+   */
+  readonly mediaItems: Array<FeedMediaItemDto>;
 
   constructor(code: string, coverUrl: string, width: number, height: number, isVideo: boolean,
               mediaId: string = '', videoUrl: string = '', originalVideoUrl: string = '',
               ownerUsername: string = '', ownerAvatarUrl: string = '', ownerId: string = '',
               caption: string = '', likeCount: number = 0, commentCount: number = 0,
               repostCount: number = 0, liked: boolean = false, following?: boolean,
-              takenAt: number = 0) {
+              takenAt: number = 0, mediaItems: Array<FeedMediaItemDto> = []) {
     this.code = code;
     this.coverUrl = coverUrl;
     this.width = width;
@@ -150,6 +162,7 @@ export class SearchPost {
     this.liked = liked;
     this.following = following;
     this.takenAt = takenAt > 0 ? takenAt : 0;
+    this.mediaItems = mediaItems;
   }
 
   /**

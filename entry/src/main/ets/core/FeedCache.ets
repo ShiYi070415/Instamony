@@ -217,7 +217,7 @@ export class FeedCache {
         posts.push(new SearchPost(one.code, one.coverUrl, one.width, one.height, one.isVideo,
           one.mediaId, one.videoUrl, one.originalVideoUrl, one.ownerUsername, one.ownerAvatarUrl,
           one.ownerId, one.caption, one.likeCount, one.commentCount, one.repostCount, one.liked,
-          one.following, one.takenAt));
+          one.following, one.takenAt, one.mediaItems ?? []));
       }
       if (posts.length === 0) {
         return null;
