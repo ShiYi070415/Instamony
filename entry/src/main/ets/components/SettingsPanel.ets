@@ -38,9 +38,13 @@ import {
   MATERIAL_THICKNESS_THIN,
   MATERIAL_THICKNESS_ULTRA_THICK,
   MATERIAL_THICKNESS_ULTRA_THIN,
+  MEDIA_QUALITY_AUTO,
+  MEDIA_QUALITY_ORDER,
   SETTING_BAR_HIDE,
+  SETTING_IMAGE_QUALITY,
   SETTING_MATERIAL_LEVEL,
-  SETTING_MATERIAL_THICKNESS
+  SETTING_MATERIAL_THICKNESS,
+  SETTING_VIDEO_QUALITY
 } from '../core/AppSettings';
 import { MATERIAL_PILL_HEIGHT, SelectSurfaceModifier, SurfaceModifier } from './MaterialSurface';
 import { PlatformCap } from '../core/PlatformCap';
@@ -96,12 +100,25 @@ export struct SettingsPanel {
   /** 点「退出登录」。 */
   onSignOut: () => void = (): void => {
   };
+  /**
+   * 清晰度改完之后通知宿主（pages/Index 用它顺手刷新一次信息流）。
+   *
+   * 为什么需要：展示档的地址是**解析那一刻**就定死的（见 core/MediaQuality），改设置不会
+   * 把已经拿到的帖子变清晰 —— 得让调用方重新取一次数才生效。用户改完马上想看到效果，
+   * 所以这里主动通知一声，宿主下拉刷新一遍即可。
+   */
+  onQualityChanged: () => void = (): void => {
+  };
   /** 沉浸光感的材质等级（@StorageLink：这里改，标题栏/底栏/本页材质一起变）。 */
   @StorageLink(SETTING_MATERIAL_LEVEL) materialLevel: string = MATERIAL_LEVEL_ADAPTIVE;
   /** 材质厚度（@StorageLink：这里改，全工程 ArkUI 材质组件的厚薄一起变）。 */
   @StorageLink(SETTING_MATERIAL_THICKNESS) materialThickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
   /** 底栏行为（@StorageLink：这里切，栏的滚动行为换一套）。 */
   @StorageLink(SETTING_BAR_HIDE) barHideMode: string = BAR_HIDE_SINK;
+  /** 图片清晰度（@StorageLink：设定页改，core/MediaQuality 下次解析就按新档位挑地址）。 */
+  @StorageLink(SETTING_IMAGE_QUALITY) imageQuality: string = MEDIA_QUALITY_AUTO;
+  /** 视频清晰度（同上）。 */
+  @StorageLink(SETTING_VIDEO_QUALITY) videoQuality: string = MEDIA_QUALITY_AUTO;
   /**
    * 移动 API 自检的结论（见 core/mobileapi/MobileProbe）。
    *
@@ -448,8 +465,113 @@ export struct SettingsPanel {
     .padding({ left: SIDE_PADDING, right: SIDE_PADDING })
   }
 
-  /** 厚度下拉里的五项（顺序必须与 MATERIAL_THICKNESS_ORDER 一致）。 */
-  private thicknessOptions(): SelectOption[] {
+  /**
+   * 「图片和视频」板块的两行下拉：**图片质量** / **视频质量**。
+   *
+   * 需求（用户原话）："媒体分辨率有点糊，新增一个按照网络质量提供不同清晰度的媒体，
+   * 在设置中可供调节：'图片和视频'板块，显示'图片质量'和'视频质量'选项，
+   * 使用沉静光感下拉按钮，两个选项的下拉菜单分别都是 自适应/省流/高清/原画。"
+   *
+   * 选项与外观都照抄上面的「材质」那两行（同一个 `SelectSurfaceModifier` = 沉静光感下拉按钮，
+   * 同一套菜单对齐与选中样式），只是取值换成 mediaQuality。改完立刻生效：
+   * `core/MediaQuality` 每次解析媒体都会读 `AppSettings.imageQualityNow/videoQualityNow`，
+   * 下一次取数（下拉刷新 / 切页 / 翻页）就按新档位挑地址。
+   */
+  @Builder
+  imageQualityRow() {
+    Row({ space: 12 }) {
+      Text($r('app.string.settings_image_quality'))
+        .fontSize(15)
+        .fontColor($r('app.color.primary_text'))
+        .layoutWeight(1)
+      Select(this.qualityOptions())
+        .selected(this.qualityIndex(this.imageQuality))
+        .value(this.qualityDisplay(this.imageQuality))
+        .font({ size: 15 })
+        .fontColor($r('app.color.primary_text'))
+        .attributeModifier(new SelectSurfaceModifier(this.materialThickness))
+        .menuAlign(MenuAlignType.END, { dx: 0, dy: MENU_OFFSET_Y })
+        .selectedOptionBgColor($r('app.color.dropdown_selected_bg'))
+        .selectedOptionFont({ size: 15, weight: FontWeight.Bold })
+        .selectedOptionFontColor($r('app.color.dropdown_selected_text'))
+        .onSelect((index: number, value?: string): void => {
+          if (index >= 0 && index < MEDIA_QUALITY_ORDER.length) {
+            AppSettings.setImageQuality(MEDIA_QUALITY_ORDER[index]);
+            this.onQualityChanged();
+          }
+        })
+    }
+    .width('100%')
+    .height(ROW_HEIGHT)
+    .padding({ left: SIDE_PADDING, right: SIDE_PADDING })
+  }
+
+  /** 「视频质量」那一行（同上，只是写 videoQuality）。 */
+  @Builder
+  videoQualityRow() {
+    Row({ space: 12 }) {
+      Text($r('app.string.settings_video_quality'))
+        .fontSize(15)
+        .fontColor($r('app.color.primary_text'))
+        .layoutWeight(1)
+      Select(this.qualityOptions())
+        .selected(this.qualityIndex(this.videoQuality))
+        .value(this.qualityDisplay(this.videoQuality))
+        .font({ size: 15 })
+        .fontColor($r('app.color.primary_text'))
+        .attributeModifier(new SelectSurfaceModifier(this.materialThickness))
+        .menuAlign(MenuAlignType.END, { dx: 0, dy: MENU_OFFSET_Y })
+        .selectedOptionBgColor($r('app.color.dropdown_selected_bg'))
+        .selectedOptionFont({ size: 15, weight: FontWeight.Bold })
+        .selectedOptionFontColor($r('app.color.dropdown_selected_text'))
+        .onSelect((index: number, value?: string): void => {
+          if (index >= 0 && index < MEDIA_QUALITY_ORDER.length) {
+            AppSettings.setVideoQuality(MEDIA_QUALITY_ORDER[index]);
+            this.onQualityChanged();
+          }
+        })
+    }
+    .width('100%')
+    .height(ROW_HEIGHT)
+    .padding({ left: SIDE_PADDING, right: SIDE_PADDING })
+  }
+
+  /** 清晰度下拉的四项（顺序必须与 MEDIA_QUALITY_ORDER 一致）。 */
+  private qualityOptions(): SelectOption[] {
+    return [
+      { value: $r('app.string.settings_quality_auto') },
+      { value: $r('app.string.settings_quality_saver') },
+      { value: $r('app.string.settings_quality_high') },
+      { value: $r('app.string.settings_quality_original') }
+    ];
+  }
+
+  /** 当前档位在下拉里的下标（读到没见过的值时退回第一项 = 自适应）。 */
+  private qualityIndex(quality: string): number {
+    for (let i: number = 0; i < MEDIA_QUALITY_ORDER.length; i++) {
+      if (MEDIA_QUALITY_ORDER[i] === quality) {
+        return i;
+      }
+    }
+    return 0;
+  }
+
+  /** 当前档位的显示文案（下拉按钮收起时显示的就是它）。 */
+  private qualityDisplay(quality: string): ResourceStr {
+    const index: number = this.qualityIndex(quality);
+    if (index === 1) {
+      return $r('app.string.settings_quality_saver');
+    }
+    if (index === 2) {
+      return $r('app.string.settings_quality_high');
+    }
+    if (index === 3) {
+      return $r('app.string.settings_quality_original');
+    }
+    return $r('app.string.settings_quality_auto');
+  }
+
+  /** 厚度下拉里的五项（顺序必须与 MATERIAL_THICKNESS_ORDER 一致）。 */  private thicknessOptions(): SelectOption[] {
     return [
       { value: $r('app.string.settings_thickness_ultra_thin') },
       { value: $r('app.string.settings_thickness_thin') },
@@ -583,6 +705,22 @@ export struct SettingsPanel {
         }
       }
 
+      /*
+       * 「图片和视频」：清晰度两行（图片质量 / 视频质量），四档
+       * 自适应 / 省流 / 高清 / 原画。这一组不依赖设备能力（纯取数策略），所以**恒定显示**。
+       */
+      ListItem() {
+        this.groupHeader($r('app.string.settings_group_media'))
+      }
+      ListItem() {
+        this.imageQualityRow()
+      }
+      ListItem() {
+        this.videoQualityRow()
+      }
+      ListItem() {
+        this.groupHint($r('app.string.settings_media_quality_hint'))
+      }
       if (this.materialOptionsSupported()) {
         ListItem() {
           this.groupHeader($r('app.string.settings_group_appearance'))

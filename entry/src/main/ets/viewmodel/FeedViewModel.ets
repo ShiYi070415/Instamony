@@ -369,6 +369,26 @@ export class FeedViewModel {
     return true;
   }
 
+  /**
+   * **清晰度改了**：把已经解析好的地址作废，下一次取数按新档位重新挑。
+   *
+   * 为什么必须清：展示档的地址是**解析那一刻**按当时的设置定死的（见 core/MediaQuality），
+   * 不清的话改完设置看到的还是旧地址（用户会以为"改了没用"）。只清页面状态、不动落盘缓存
+   * （缓存里存的是 DTO，重新映射时会重新走 MediaQuality 吗？—— 不会，DTO 里已经存了挑好的
+   * url，所以这里顺带把探索流那一页也标记成"要重新取"）。
+   */
+  resetForQualityChange(): void {
+    this.exploreSeeded = false;
+    this.exploreQueue = [];
+    this.exploreCursor = '';
+    this.exploreHasMore = false;
+    this.nativeQueue = [];
+    this.nativeCursor = '';
+    this.nativeHasMore = false;
+    this.followingDry = false;
+    this.wantFirstPage = true;
+  }
+
   /** 登录态刚变化时清空：换账号或刚登录，旧帖子与旧游标都不该留着。 */
   reset(): void {
     this.debug = '';

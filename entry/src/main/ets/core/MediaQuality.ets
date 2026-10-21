@@ -1,22 +1,41 @@
 /*
- * 媒体清晰度策略：**展示用降级、下载用原图**。
+ * 媒体清晰度策略：**按设置 + 网络类型挑选展示档，下载永远用原图**。
  *
  * 背景：Instagram 的每个媒体都给一组候选（图片是 `image_versions2.candidates[]`，视频是
- * `video_versions[]`），原来我们的解析一律"取最大的那张" —— 实测因此经常拉到 1440/2160 宽的
- * 原图和水位最高的视频，流量与解码内存都白白多花。
+ * `video_versions[]`）。早先一律"取最大的那张"→ 流量与解码内存白花；后来一律降到 1080 →
+ * 用户反馈"媒体分辨率有点糊"。现在两头都可调：设定页的「图片和视频」板块里
+ * 「图片质量 / 视频质量」各有 自适应 / 省流 / 高清 / 原画 四档（见 SETTING_IMAGE_QUALITY）。
  *
- * 这里的策略：
- *   - **展示**：取"宽度 ≥ 目标宽度里最接近的那档"，没有更大的就用最大的。
- *     目标是屏幕宽度的 1.5 倍左右（这里取 1080）—— 手机上肉眼已无差别，
- *     而 IG 的 1080 档通常只有 1440/2160 档的 1/2 ~ 1/3 大小。
+ * 策略：
+ *   - **展示**：取"宽度 ≥ 目标里最接近的那档"，没有更大的就用最大的。
+ *     目标是屏幕宽度的 1 倍多（默认档见下面 TARGET_* 与 targetOf）。
  *   - **下载**：单独保留"最大的一档"（见 originalImage/originalVideo）——
  *     用户点下载要的是原图/原视频，不能因为省流把画质降了。
  *
- * 所以解析出来的每条媒体都带两份地址：展示用的（降级）+ 原始用的（最大）。
+ * 所以解析出来的每条媒体都带两份地址：展示用的 + 原始用的（最大）。
  */
+
+import { AppSettings, MEDIA_QUALITY_HIGH, MEDIA_QUALITY_ORIGINAL, MEDIA_QUALITY_SAVER } from './AppSettings';
+import { NetworkState } from './NetworkState';
 
 /** 展示用目标宽度（像素）。1080 足够本机（1280px 宽屏幕）全宽显示且看不出差别。 */
 const TARGET_WIDTH: number = 1080;
+
+/*
+ * 清晰度档位（需求："图片质量/视频质量"两个下拉：自适应 / 省流 / 高清 / 原画）。
+ * 值来自 `core/AppSettings`（设定页里改，存盘并在 AppStorage 里发布）。
+ *
+ * 这里只决定**展示用**那一档的"目标宽度"：
+ *   省流 → 720（够看，流量最小）
+ *   高清 → 1440（手机上肉眼已到顶，仍比原画小很多）
+ *   原画 → 取 IG 给的最大一档（= 原来的 original* 那套）
+ *   自适应 → 按网络类型：Wi-Fi / 不计费 → 高清；蜂窝 → 省流
+ * 下载（originalImage/originalVideo）永远取最大档，不受这里影响。
+ */
+const TARGET_SAVER: number = 720;
+const TARGET_HIGH: number = 1440;
+/** 目标宽度低于这个值时当成"未知"，按兜底处理（防脏数据）。 */
+const TARGET_MIN: number = 240;
 
 /** 一组图片候选里挑出来的结果。 */
 export class PickedMedia {
@@ -39,18 +58,19 @@ export class MediaQuality {
    * 用的是同一套判据（页面脚本里那份是等价实现，见 WebScripts 的 pickImage）。
    */
   static displayImage(urls: Array<string>, widths: Array<number>, heights: Array<number>): PickedMedia {
-    return MediaQuality.pick(urls, widths, heights, TARGET_WIDTH);
+    return MediaQuality.pick(urls, widths, heights, MediaQuality.imageTarget());
   }
 
   /**
-   * 图片候选 → 展示用那一张，**目标宽度自己指定**。
+   * 图片候选 → 展示用那一张，**目标基数自己指定**。
    *
-   * 给"格子比屏幕小得多"的地方用：搜索页三列网格每格约 141vp，按全宽的 1080 档取是白给带宽
+   * 给"格子比屏幕小得多"的地方用：搜索页三列网格每格约 141vp，按全宽的档取是白给带宽
    * （解码 + 上屏都慢），调用方传自己的目标宽度就行（见 NativeSearch.COVER_WIDTH）。
+   * 目标基数仍会按清晰度设置缩放（见 scaledTarget）——"高清/原画"下网格图也跟着变清晰。
    */
   static displayImageAt(urls: Array<string>, widths: Array<number>, heights: Array<number>,
                         target: number): PickedMedia {
-    return MediaQuality.pick(urls, widths, heights, target);
+    return MediaQuality.pick(urls, widths, heights, MediaQuality.scaledTarget(target, true));
   }
 
   /** 图片候选 → 下载用的原图（最大的一张）。 */
@@ -60,12 +80,58 @@ export class MediaQuality {
 
   /** 视频候选 → 展示用那一档（宽度 ≥ 目标里最接近的；都不够就取最大的）。 */
   static displayVideo(urls: Array<string>, widths: Array<number>, heights: Array<number>): PickedMedia {
-    return MediaQuality.pick(urls, widths, heights, TARGET_WIDTH);
+    return MediaQuality.pick(urls, widths, heights, MediaQuality.videoTarget());
   }
 
   /** 视频候选 → 下载用的原视频（最大的一档）。 */
   static originalVideo(urls: Array<string>, widths: Array<number>, heights: Array<number>): PickedMedia {
     return MediaQuality.pick(urls, widths, heights, -1);
+  }
+
+  /** 当前**图片**清晰度对应的目标宽度（-1 = 原画，取最大档）。 */
+  static imageTarget(): number {
+    return MediaQuality.targetOf(AppSettings.imageQualityNow());
+  }
+
+  /** 当前**视频**清晰度对应的目标宽度（-1 = 原画，取最大档）。 */
+  static videoTarget(): number {
+    return MediaQuality.targetOf(AppSettings.videoQualityNow());
+  }
+
+  /** 档位值 → 目标宽度。 */
+  private static targetOf(quality: string): number {
+    if (quality === MEDIA_QUALITY_SAVER) {
+      return TARGET_SAVER;
+    }
+    if (quality === MEDIA_QUALITY_HIGH) {
+      return TARGET_HIGH;
+    }
+    if (quality === MEDIA_QUALITY_ORIGINAL) {
+      return -1;
+    }
+    // auto：按网络类型自己挑（拿不准时按计费网络处理 → 省流）。
+    return NetworkState.allowPrefetch() ? TARGET_HIGH : TARGET_SAVER;
+  }
+
+  /**
+   * 给"格子/封面"那类**自带目标基数**的调用方按清晰度缩放。
+   *
+   * 为什么不直接返回 -1（原画）：网格封面本来就比屏幕小得多，原画等于白花好几倍带宽；
+   * 这里只在"高清"时放大一档，"原画"时也只用 TARGET_HIGH 封顶。
+   */
+  private static scaledTarget(base: number, image: boolean): number {
+    const quality: string = image ? AppSettings.imageQualityNow() : AppSettings.videoQualityNow();
+    if (quality === MEDIA_QUALITY_SAVER) {
+      return Math.max(TARGET_MIN, Math.floor(base * 0.72));
+    }
+    if (quality === MEDIA_QUALITY_HIGH) {
+      return Math.max(base, Math.floor(base * 1.4));
+    }
+    if (quality === MEDIA_QUALITY_ORIGINAL) {
+      return Math.max(base, TARGET_HIGH);
+    }
+    // auto：蜂窝网络下按省流处理，Wi-Fi 下用原始基数。
+    return NetworkState.allowPrefetch() ? base : Math.max(TARGET_MIN, Math.floor(base * 0.72));
   }
 
   /**

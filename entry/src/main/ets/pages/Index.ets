@@ -7754,6 +7754,16 @@ struct Index {
         SettingsPanel({
           onSignOut: (): void => {
             this.signOut();
+          },
+          /*
+           * 清晰度改完：**顺手把首屏那几段重新取一遍**（展示档的地址是解析那一刻定死的，
+           * 见 core/MediaQuality）。这里只刷首屏与探索流，不动其它页签的缓存。
+           */
+          onQualityChanged: (): void => {
+            hilog.info(DOMAIN, TAG, 'media quality changed → refresh feed');
+            this.viewModel.resetForQualityChange();
+            this.viewModel.refresh().catch((): void => {
+            });
           }
         })
       }

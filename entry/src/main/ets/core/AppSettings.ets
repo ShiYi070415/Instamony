@@ -53,6 +53,38 @@ export const MATERIAL_THICKNESS_ULTRA_THICK: string = 'ultra_thick';
  * 低版本设备上栏是普通页签栏，两种行为都不成立（栏固定不动，见 pages/Index 的 onFeedScroll）。
  */
 export const SETTING_BAR_HIDE: string = 'barHideMode';
+/**
+ * AppStorage 键：**图片清晰度**（`auto` / `saver` / `high` / `original`）。
+ *
+ * 需求（用户原话）："媒体分辨率有点糊，新增一个按照网络质量提供不同清晰度的媒体，
+ * 在设置中可供调节：'图片和视频'板块，显示'图片质量'和'视频质量'选项，
+ * 使用沉静光感下拉按钮，两个选项的下拉菜单分别都是 自适应/省流/高清/原画。"
+ *
+ * 生效点：`core/MediaQuality` 按它（加上网络类型）决定"展示用"取哪一档候选
+ * （见 MediaQuality.imageTarget / videoTarget）。下载始终取最大档，不受这里影响。
+ */
+export const SETTING_IMAGE_QUALITY: string = 'mediaImageQuality';
+/** AppStorage 键：**视频清晰度**（取值同上）。 */
+export const SETTING_VIDEO_QUALITY: string = 'mediaVideoQuality';
+/**
+ * 清晰度四个档位（顺序即下拉顺序：自适应 → 省流 → 高清 → 原画，用户指定的顺序）。
+ *
+ *   auto     —— 自适应：按**网络类型**自己挑（Wi-Fi 走高清档、蜂窝走省流档）；
+ *   saver    —— 省流：能看就行，图片/视频都取较小的那一档；
+ *   high     —— 高清：手机上肉眼足够（1080 档），流量比原画小得多；
+ *   original —— 原画：直接取 IG 给的最大一档（等于放弃降级，最清晰也最费流量）。
+ */
+export const MEDIA_QUALITY_AUTO: string = 'auto';
+export const MEDIA_QUALITY_SAVER: string = 'saver';
+export const MEDIA_QUALITY_HIGH: string = 'high';
+export const MEDIA_QUALITY_ORIGINAL: string = 'original';
+/** 下拉里的四档顺序（下标 → 取值）。 */
+export const MEDIA_QUALITY_ORDER: Array<string> = [
+  MEDIA_QUALITY_AUTO,
+  MEDIA_QUALITY_SAVER,
+  MEDIA_QUALITY_HIGH,
+  MEDIA_QUALITY_ORIGINAL
+];
 /** AppStorage 键：当前界面是不是深色（由 refreshTheme 写入）。 */
 export const SETTING_DARK_UI: string = 'isDarkUi';
 /**
@@ -178,7 +210,41 @@ export class AppSettings {
     AppStorage.setOrCreate(SETTING_OVERLAY_BOTTOM, 0);
     // 静音默认关（有声音）：布尔值单独读一次（readString 那套只处理字符串）。
     AppStorage.setOrCreate(SETTING_VIDEO_MUTED, AppSettings.readBool(SETTING_VIDEO_MUTED, false));
+    // 图片/视频清晰度：默认**自适应**（按网络类型自己挑，见 core/MediaQuality）。
+    AppStorage.setOrCreate(SETTING_IMAGE_QUALITY,
+      AppSettings.readString(SETTING_IMAGE_QUALITY, MEDIA_QUALITY_AUTO));
+    AppStorage.setOrCreate(SETTING_VIDEO_QUALITY,
+      AppSettings.readString(SETTING_VIDEO_QUALITY, MEDIA_QUALITY_AUTO));
     AppSettings.refreshTheme(context);
+  }
+
+  /** 设置图片清晰度（存盘 + 发布到 AppStorage）。 */
+  static setImageQuality(quality: string): void {
+    AppStorage.setOrCreate(SETTING_IMAGE_QUALITY, quality);
+    AppSettings.write(SETTING_IMAGE_QUALITY, quality);
+  }
+
+  /** 设置视频清晰度（同上）。 */
+  static setVideoQuality(quality: string): void {
+    AppStorage.setOrCreate(SETTING_VIDEO_QUALITY, quality);
+    AppSettings.write(SETTING_VIDEO_QUALITY, quality);
+  }
+
+  /**
+   * 当前图片清晰度（**给非 UI 代码用**：`core/MediaQuality` 解析媒体时读它）。
+   *
+   * 读 AppStorage 而不是每次都读盘：这个值在解析每一条媒体时都会被问，读盘太贵。
+   * 没初始化（AppSettings.init 还没跑）时按默认值 `auto`。
+   */
+  static imageQualityNow(): string {
+    const value: string = AppStorage.get<string>(SETTING_IMAGE_QUALITY) ?? MEDIA_QUALITY_AUTO;
+    return value.length > 0 ? value : MEDIA_QUALITY_AUTO;
+  }
+
+  /** 当前视频清晰度（同上）。 */
+  static videoQualityNow(): string {
+    const value: string = AppStorage.get<string>(SETTING_VIDEO_QUALITY) ?? MEDIA_QUALITY_AUTO;
+    return value.length > 0 ? value : MEDIA_QUALITY_AUTO;
   }
 
   /** 视频静音开关（见 SETTING_VIDEO_MUTED 的说明）。 */

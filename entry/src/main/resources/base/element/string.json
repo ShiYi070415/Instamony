@@ -685,6 +685,38 @@
       "value": "IG 正在限流，约 %d 分钟后可再试"
     },
     {
+      "name": "settings_group_media",
+      "value": "图片和视频"
+    },
+    {
+      "name": "settings_image_quality",
+      "value": "图片质量"
+    },
+    {
+      "name": "settings_video_quality",
+      "value": "视频质量"
+    },
+    {
+      "name": "settings_quality_auto",
+      "value": "自适应"
+    },
+    {
+      "name": "settings_quality_saver",
+      "value": "省流"
+    },
+    {
+      "name": "settings_quality_high",
+      "value": "高清"
+    },
+    {
+      "name": "settings_quality_original",
+      "value": "原画"
+    },
+    {
+      "name": "settings_media_quality_hint",
+      "value": "自适应按当前网络自动挑：Wi-Fi 用高清、移动数据用省流；下载始终保存原图/原视频。"
+    },
+    {
       "name": "settings_group_diag",
       "value": "诊断"
     },
