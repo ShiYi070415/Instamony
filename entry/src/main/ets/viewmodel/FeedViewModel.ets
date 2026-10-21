@@ -25,6 +25,7 @@ import { MediaPost } from '../model/MediaPost';
 import { NativeFeed, NativeFeedPage, NativeFetchResult } from '../core/NativeFeed';
 import { CachedFeedPage, FeedCache } from '../core/FeedCache';
 import { PosterCache } from '../core/PosterCache';
+import { MediaPrefetch } from '../core/MediaPrefetch';
 // 关注流的筛选要批量问"这些人我关注了吗"（见 filterFollowing）。
 import { NativeFollow } from '../core/NativeFollow';
 
@@ -89,6 +90,17 @@ const NATIVE_CACHE_PAGES: number = 3;
  * app 可能在后台躺很久，那份数据早就不新了；超过这个年龄就当没有，老老实实再发一次。
  */
 const NATIVE_WARM_MAX_AGE_MS: number = 120000;
+/**
+ * 探索流那一段**排队几页**（触底零等待，见 FeedViewModel.prefetchExplore）。
+ *
+ * 1 页而不是 2：探索流一页约 12 条 / 0.5~1MB / 4~9 秒，比关注流那页贵得多；
+ * 排 1 页就够盖住"一次触底"，再多就是替用户白花流量（他可能滑两条就退出）。
+ */
+const EXPLORE_CACHE_PAGES: number = 1;
+/** 探索流新到的那一页，最多给几条热封面（同 ProfileViewModel.precacheMedia 的口径）。 */
+const PRECACHE_POSTS: number = 6;
+/** 多图帖最多预下载两张（需求：滑到前两张不白）。 */
+const PRECACHE_IMAGES: number = 2;
 
 
 const DOM_SCRIPT_MS: number = 15000;
@@ -153,6 +165,17 @@ export class FeedViewModel {
   private exploreHasMore: boolean = false;
   /** 服务端说"探索流到底了"的时刻（见 END_RECHECK_MS：这个判断有时效）。 */
   private exploreEndAtMs: number = 0;
+  /** 排好队的探索流下一页（触底直接吃，见 prefetchExplore）。 */
+  private exploreQueue: Array<FeedRecommendedPage> = [];
+  /** 探索流预取正在飞（别对同一个游标连发两发）。 */
+  private exploreFetching: boolean = false;
+  /**
+   * 关注流那一段**翻出来全是没关注的帖子**（时间线在灌推荐/广告）。
+   *
+   * 置上之后 ollowingHasMore() 直接 false，触底立刻改吃探索流（见那里的说明）；
+   * 下拉刷新 / 重新读第一页时清掉，让它再试一次。
+   */
+  private followingDry: boolean = false;
   /** 本进程试过"铺落盘那一页"了没有（一轮只做一次，见 loadExplore）。 */
   private exploreSeeded: boolean = false;
   /**
@@ -353,6 +376,7 @@ export class FeedViewModel {
     this.sawEndAtMs = 0;
     this.pending = false;
     this.wantFirstPage = false;
+    this.followingDry = false;
     // 换账号后两段内容都是上一个人的，一起作废（见 mode 与 following/explore 的说明）。
     this.mode = 'feed';
     this.following = [];
@@ -388,6 +412,8 @@ export class FeedViewModel {
     this.hasMore = true;
     this.sawEnd = false;
     this.sawEndAtMs = 0;
+    // 刷新重新试一次关注流（它可能上一轮被判成"全是推荐帖"，见 followingDry）。
+    this.followingDry = false;
     /*
      * **不再等网页就绪**：刷新走的是原生 `feed/timeline/`（core/NativeFeed），
      * 一个字节都不经过隐藏网页。以前这里先 `awaitPageReady(6000)` —— 网页正在水合 /
@@ -469,7 +495,18 @@ export class FeedViewModel {
     const refreshing: boolean = this.wantFirstPage;
     this.wantFirstPage = false;
     try {
-      if (firstLoad || refreshing) {
+      if (refreshing && this.exploreTakesOver()) {
+        /*
+         * **探索流已经接管这一屏时，刷新只刷探索流**（用户要求：
+         * "没关注的帖子不显示只针对关注流；当探索流接管 feeds 流时就只刷新探索流的帖子，没有限制"）。
+         *
+         * 判定见 `exploreTakesOver()`。这时再花 4~9 秒去问时间线纯属白等 —— 它回的
+         * 还是同一批"没关注的推荐帖"，全会被筛掉。冷启动那头（列表还空）仍照常问一次关注流，
+         * 所以新关注的账号下次启动还是能把关注流接回来。
+         */
+        hilog.info(DOMAIN, TAG, 'refresh: explore takes over → timeline skipped');
+        await this.loadExplore(true);
+      } else if (firstLoad || refreshing) {
         await this.loadFirstPage(firstLoad, refreshing);
         /*
          * 第一页到手之后：**时间为空就补「为你推荐」**（见 mode 的说明）。
@@ -555,20 +592,40 @@ export class FeedViewModel {
   /**
    * 拉一页探索流（`forReset = true` 时重新要第一页，整体替换探索那一段）。
    *
+   * **触底要快**（用户报："探索流触底加载有点慢"）：这条路一次要 0.5~1MB、4~9 秒
+   * （`discover/topical_explore/`，见 core/mobileapi/MobileDiscover），等它回来才铺就是干等。
+   * 所以和关注流那一段一样做成"**排队 + 预取**"：
+   *   · 每铺完一页就顺手把**下一页**抓好放队列（见 prefetchExplore）；
+   *   · 触底时**先吃队列**（零等待），吃完立刻再补一页。
+   * 队列深度 1 页（约 12 条 / 1MB）：够盖住一次触底，又不会在用户不滑的时候连发。
+   *
    * 失败不清屏：屏幕上已经有的那几段照旧，只把状态行留给上一次的语义。
    */
   private async loadExplore(forReset: boolean): Promise<void> {
-    const cursor: string = forReset ? '' : this.exploreCursor;
-    if (!forReset && cursor.length === 0) {
-      return;
-    }
     if (!this.exploreWanted) {
       this.exploreWanted = true;
       this.composePosts();
     }
     if (forReset) {
+      // 重新要第一页会把这一段整体换掉，排队的那页（基于旧第一页的游标）跟着作废。
+      this.exploreQueue = [];
       this.seedExploreFromCache();
+    } else {
+      // ---- ① 队列里有页：零等待直接铺（触底那次走的就是这条）----
+      const queued: FeedRecommendedPage | null = this.takeExplorePage();
+      if (queued !== null) {
+        this.applyExplorePage(queued, false);
+        hilog.info(DOMAIN, TAG, 'explore page from queue n=%{public}d total=%{public}d',
+          queued.posts.length, this.explore.length);
+        // 铺完立刻补一页，保证下一次触底还是零等待。
+        this.prefetchExplore();
+        return;
+      }
+      if (this.exploreCursor.length === 0) {
+        return;
+      }
     }
+    const cursor: string = forReset ? '' : this.exploreCursor;
     let page: FeedRecommendedPage;
     try {
       page = await this.loadRecommended(cursor);
@@ -588,15 +645,21 @@ export class FeedViewModel {
       hilog.info(DOMAIN, TAG, 'explore page empty reset=%{public}s', `${forReset}`);
       return;
     }
+    this.applyExplorePage(page, forReset);
+    // 首屏/翻页一铺好就把下一页预取上（用户不滑的时候最多也就多这一页）。
+    this.prefetchExplore();
+  }
+
+  /** 把一页探索流铺进那一段（`forReset` = 整体替换，否则按 key 合并）。 */
+  private applyExplorePage(page: FeedRecommendedPage, forReset: boolean): void {
     if (forReset) {
       this.explore = page.posts;
-      this.exploreCursor = page.cursor;
     } else {
       const merged: MergeResult = FeedMapper.merge(this.explore, page.posts);
       this.explore = merged.posts;
-      if (page.cursor.length > 0) {
-        this.exploreCursor = page.cursor;
-      }
+    }
+    if (page.cursor.length > 0) {
+      this.exploreCursor = page.cursor;
     }
     const hasNext: boolean = page.hasMore && this.exploreCursor.length > 0;
     this.exploreHasMore = hasNext;
@@ -605,11 +668,90 @@ export class FeedViewModel {
     }
     this.composePosts();
     this.setStatus(FeedStatus.Idle);
+    // 新到的那一页顺手把封面热起来（和「我的」四个分页 / 关注流那几处同一个做法，见 precacheMedia）。
+    this.precacheExplore(page.posts);
     hilog.info(DOMAIN, TAG,
       'explore page n=%{public}d reset=%{public}s total=%{public}d more=%{public}s cursor=%{public}d',
       page.posts.length, `${forReset}`, this.explore.length, `${hasNext}`, this.exploreCursor.length);
   }
 
+  /**
+   * 给新到的探索流帖子**预热封面**（沿用本项目既有那套：`PosterCache` 先解小图 + `MediaPrefetch`
+   * 预下载）。
+   *
+   * 为什么这件事对探索流特别重要：它本来就没有任何"后台补数据"的机会 —— 那一发 4~9 秒回来时
+   * 用户往往已经滑到列表底部、正盯着新内容，封面要是这一刻才开始下载，看到的就是一片白。
+   * 做法与 `ProfileViewModel.precacheMedia` 一致：最多前 6 条、每条最多 2 张图。
+   */
+  private precacheExplore(posts: Array<MediaPost>): void {
+    if (posts.length === 0) {
+      return;
+    }
+    const urls: Array<string> = [];
+    const warmed: Array<MediaPost> = [];
+    for (let index: number = 0; index < posts.length && index < PRECACHE_POSTS; index++) {
+      const post: MediaPost = posts[index];
+      warmed.push(post);
+      let taken: number = 0;
+      for (let at: number = 0; at < post.imageUrls.length && taken < PRECACHE_IMAGES; at++) {
+        if (post.imageUrls[at].length > 0) {
+          urls.push(post.imageUrls[at]);
+          taken++;
+        }
+      }
+      if (taken === 0 && post.displayUrl.length > 0) {
+        urls.push(post.displayUrl);
+      }
+    }
+    PosterCache.warm(warmed, PRECACHE_POSTS);
+    const started: number = MediaPrefetch.prefetch(urls);
+    hilog.info(DOMAIN, TAG, 'precache explore posts=%{public}d imgs=%{public}d/%{public}d',
+      warmed.length, started, urls.length);
+  }
+
+  /** 取走排队的那一页（先进先出）。 */
+  private takeExplorePage(): FeedRecommendedPage | null {
+    if (this.exploreQueue.length === 0) {
+      return null;
+    }
+    const page: FeedRecommendedPage | undefined = this.exploreQueue.shift();
+    return page === undefined ? null : page;
+  }
+
+  /**
+   * 后台预取探索流的**下一页**（队列最多 `EXPLORE_CACHE_PAGES` 页）。
+   *
+   * 游标跟着队列走：队列非空时用**队尾那页的 nextCursor**，否则用 `exploreCursor` ——
+   * 这样连续预取不会拿同一个游标反复要同一页。
+   */
+  private prefetchExplore(): void {
+    if (this.exploreFetching || this.exploreQueue.length >= EXPLORE_CACHE_PAGES) {
+      return;
+    }
+    if (!this.exploreHasMore) {
+      return;
+    }
+    const cursor: string = this.exploreQueue.length > 0
+      ? this.exploreQueue[this.exploreQueue.length - 1].cursor
+      : this.exploreCursor;
+    if (cursor.length === 0) {
+      return;
+    }
+    this.exploreFetching = true;
+    this.loadRecommended(cursor).then((page: FeedRecommendedPage): void => {
+      this.exploreFetching = false;
+      if (page.posts.length === 0) {
+        this.exploreHasMore = false;
+        this.exploreEndAtMs = Date.now();
+        return;
+      }
+      this.exploreQueue.push(page);
+      hilog.info(DOMAIN, TAG, 'explore prefetch ready n=%{public}d queued=%{public}d',
+        page.posts.length, this.exploreQueue.length);
+    }).catch((): void => {
+      this.exploreFetching = false;
+    });
+  }
   /**
    * **把两段拼成列表**（关注流 → 提示卡片 → 探索流），并算出卡片该画在第几条之前。
    *
@@ -651,7 +793,36 @@ export class FeedViewModel {
     if (this.sawEnd) {
       return false;
     }
+    /*
+     * **探索流接管了这一屏就不再翻关注流**（用户要求："当探索流接管 feeds 流时就只刷新
+     * 探索流的帖子，没有限制"）。
+     *
+     * 现场（也是"触底加载慢"的真正原因）：这个账号的时间线一页一页地回推荐帖，那些全被
+     * 关注状态那道筛筛掉，但 `more_available` 一直是 true。于是用户滑到底时，`requestMore`
+     * 每轮都去翻关注流、拿到 0 条可用的，探索流那一页（其实早预取好了）永远轮不到 ——
+     * 表现就是"触底转圈好久才有新帖"。
+     */
+    if (this.exploreTakesOver()) {
+      return false;
+    }
+    /*
+     * 某一页**一条都没留下**（全是没关注的推荐帖 / 广告）时同理：把这一段判为"没得翻了"，
+     * 让触底直接吃探索流；下拉刷新 / 重新读第一页会清掉它再试一次。
+     */
+    if (this.followingDry) {
+      return false;
+    }
     return this.nativeCursor.length > 0 && this.nativeHasMore;
+  }
+
+  /**
+   * **探索流是不是已经接管了这一屏**。
+   *
+   * 判据：关注流那一段是空的（一条都没留下）+ 探索流那一段有内容。
+   * 这正是用户看到的形态（提示卡片在列表最顶上、下面全是推荐）—— 此时触底、刷新都只该管探索流。
+   */
+  private exploreTakesOver(): boolean {
+    return this.following.length === 0 && this.explore.length > 0;
   }
 
   /**
@@ -1134,6 +1305,19 @@ export class FeedViewModel {
      * 探索流那一段（`this.explore`）本来就是推荐的，不做这件事。
      */
     this.following = await this.filterFollowing(merged.posts);
+    /*
+     * 这一页**一条都没留下**（全是没关注的推荐帖 / 广告）：把关注流判为"没得翻了"，
+     * 让用户的触底马上去吃探索流（见 followingHasMore 的说明）。留下一条就算还有货。
+     */
+    if (raw.length > 0 && this.following.length === 0) {
+      this.followingDry = true;
+      this.nativeHasMore = false;
+      hilog.info(DOMAIN, TAG,
+        'following dry: page had %{public}d items, none followed → stop paging following',
+        raw.length);
+    } else if (this.following.length > 0) {
+      this.followingDry = false;
+    }
     this.composePosts();
     FeedMapper.logKeys(prepend ? 'prepended' : 'merged', merged.posts);
 
