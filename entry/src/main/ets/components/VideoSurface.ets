@@ -29,6 +29,8 @@
 import { media } from '@kit.MediaKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError } from '@kit.BasicServicesKit';
+// 前后台信号：切后台要把解码器还回去（见 appForeground 的说明）。
+import { AppLifecycle, VisibilityHandler } from '../core/AppLifecycle';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'VideoSurface';
@@ -105,9 +107,26 @@ export struct VideoSurface {
   private urlAttempts: number = 0;
   /** 正在重试的那个地址（用来判断"换地址了、计数该归零"，见 applyUrl）。 */
   private attemptUrl: string = '';
+  /**
+   * 应用现在是不是前台。
+   *
+   * **为什么播放器要关心这件事**（真机量出来的）：以前它完全不管前后台 —— 用户按 Home 键
+   * 回桌面之后，`playing` 还是 true，解码器接着解、表面接着出帧，进程**后台仍吃 69% CPU**，
+   * 手机明显发烫。现在切后台就把播放器拆掉（`wanted()` 直接变 false → teardownPlayer），
+   * 回前台再按同一个 `playing` 重建、接着播。
+   */
+  @State private appForeground: boolean = true;
+  /** 前后台回调函数（销毁时要撤掉，见 AppLifecycle.removeVisibilityListener）。 */
+  private visibilityHandler: VisibilityHandler = (foreground: boolean): void => {
+    this.appForeground = foreground;
+    // 重新走一遍"该建/该拆/该播/该停"那套判断（见 onPropChanged）。
+    this.onPropChanged();
+  };
 
   aboutToAppear(): void {
     this.destroyed = false;
+    this.appForeground = AppLifecycle.isForeground();
+    AppLifecycle.addVisibilityListener(this.visibilityHandler);
     if (this.wanted()) {
       this.createPlayer();
     }
@@ -115,11 +134,16 @@ export struct VideoSurface {
 
   aboutToDisappear(): void {
     this.destroyed = true;
+    AppLifecycle.removeVisibilityListener(this.visibilityHandler);
     this.teardownPlayer();
   }
 
   /** 现在需不需要播放器（只播的那条 + 预加载的下一条才建，别让缓存区里每条都占一个解码器）。 */
   private wanted(): boolean {
+    if (!this.appForeground) {
+      // 后台一律不占解码器（见 appForeground 的说明）。
+      return false;
+    }
     return this.url.length > 0 && (this.playing || this.preload);
   }
 

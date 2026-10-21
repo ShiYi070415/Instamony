@@ -834,6 +834,19 @@ struct Index {
   @State sessionChecked: boolean = false;
   @State bridgeReady: boolean = false;
   @State webVisible: boolean = false;
+  /**
+   * 隐藏网页宿主**有没有挂载**（= build() 里有没有那颗 `InstagramWebHost`）。
+   *
+   * 为什么要按需挂载（真机量出来的）：常驻一个隐藏 WebView 的代价非常大 ——
+   * 即使把它从绘制树里摘掉、让内核降渲染，chromium 的帧回调仍然把日志刷到
+   * 2000~3000 行/秒（占全部日志的 60~80%），`hilogd` 被拖到 144% CPU，
+   * 进程在**前台**就要吃掉 40~65% 的 CPU，手机明显发烫；`:render` 子进程还常驻 199MB。
+   *
+   * 而现在网页只干三件事：登录/注册、安全验证、以及少数"只能靠网页"的动作；
+   * 会话判定本身走 `InstagramCookieJar`（`WebCookieManager`，引擎级接口，不需要挂载组件）。
+   * 所以：**需要时才挂**，用完（`closeWeb`）就卸掉。
+   */
+  @State webHostMounted: boolean = false;
   @State busy: boolean = false;
   /**
    * 是否已经跑完过至少一轮加载。
@@ -1936,6 +1949,16 @@ struct Index {
     // 起来就在后台预热 feeds / Reels / 我的（见 preloadTabs）。
     // 启动画面是系统那条启动窗口，应用里不自绘 —— 这里只是趁它显示的那几秒先取数据。
     this.preloadTabs();
+    /*
+     * **启动时自己判一次登录态**（不再依赖网页宿主）。
+     *
+     * 以前 `signedIn` 是隐藏网页 `onPageReady` / 会话信号那条路喂出来的；现在网页宿主按需挂载
+     * （见 webHostMounted），冷启动时根本没有它 —— 不补这一步，`signedIn` 会一直是 false，
+     * 预热链跳过、首页只剩骨架屏。判据就是 Cookie 罐（`WebCookieManager` 是引擎级接口，
+     * 不需要挂载任何 Web 组件就已经能读，见 core/InstagramCookieJar）。
+     */
+    this.refreshSessionFromJar().catch((): void => {
+    });
     // 快拍取数已经只走移动端私有接口（core/mobileapi/MobileStories）：
     // 原来那三个"抓网页模板 / 读页面媒体 / 补 claim"的钩子已随模板机制删除。
     // 起始分页的配色（正常是首页；万一恢复到了 Reels，这里也把深色落实一次）。
@@ -2620,9 +2643,16 @@ struct Index {
       // 必须显式关掉它的"接受滚动翻页"闸门（审计 C1：否则 active 与实际可见页不符）。
       this.searchVm.setActive(false);
       this.webVisible = false;
+      /*
+       * **登录完成后不再让网页常驻**（见 webHostMounted 的说明）。
+       *
+       * 以前这里要 `bridge.loadUrl(HOME)`：那时信息流是"回放网页那条查询"的，必须让隐藏网页
+       * 停在首页才拿得到数据。现在信息流、Reels、搜索、我的、私信全部走移动端私有接口，
+       * 网页只是登录/验证的入口 —— 登录完就没它的事了。留着它只会每帧合成、烧 CPU。
+       * 所以：直接走下面的原生取数链，然后把宿主卸掉。
+       */
+      this.unmountWebHost();
       this.viewModel.reset();
-      // 会话刚生效：把网页送回首页信息流，页面加载完成后再由 handlePageReady 读流。
-      this.bridge.loadUrl(AppConfig.INSTAGRAM_HOME_URL);
       /*
        * **登录完成后立刻按正常加载流程取数**（用户要求："登录后立刻通过 http 请求按正常
        * 加载流程获取数据（当前用户的 token）"）。
@@ -2726,7 +2756,14 @@ struct Index {
      *   点登录那一下页面早就绪，直接亮出来就行（见 openLoginWeb）。
      */
     this.webVisible = false;
-    this.bridge.loadUrl(AppConfig.INSTAGRAM_LOGIN_URL);
+    /*
+     * **直接把宿主卸掉**（比"在后台把它导航到干净登录页"更彻底）。
+     *
+     * 宿主现在是按需挂载的（见 webHostMounted）：卸掉 = 这一份 SPA 连同它的重定向一起没了；
+     * 用户点登录时 `mountWebHost()` 会建一个**全新实例**、从登录页开始 —— 原来那个
+     * "旧文档跟我们的 loadUrl 打架、页面反复刷新"的问题从根上不存在了。
+     */
+    this.unmountWebHost();
     hilog.info(DOMAIN, TAG, 'signed out; account data cleared (%{public}s)', AccountScope.describe());
   }
 
@@ -2936,7 +2973,38 @@ struct Index {
   // ==========================================================================
 
   /**
-   * 点登录页那颗「登录」按钮：把常驻网页亮出来，并确保它停在登录页。
+   * 把隐藏网页宿主挂上（`webHostMounted = true`）。
+   *
+   * 幂等：已经挂着就什么都不做，所以调用方可以无脑先调它再 `webVisible = true`。
+   * 挂载是**下一帧才构建组件**的，所以紧接着的 `bridge.loadUrl(...)` 可能赶在组件之前 ——
+   * `PageBridge` 那条"宿主没就绪先把加载请求记下"的逻辑会兜住（见 bridge/PageBridge）。
+   */
+  private mountWebHost(): void {
+    if (this.webHostMounted) {
+      return;
+    }
+    hilog.info(DOMAIN, TAG, 'mount web host (on demand)');
+    this.webHostMounted = true;
+  }
+
+  /**
+   * 把隐藏网页宿主**卸掉**（组件销毁 → 引擎释放那个 Web 实例）。
+   *
+   * 什么时候调：登录完成后（`applySession(true)`）、以及用户关掉网页时（`closeWeb`）。
+   * 之后任何需要网页的动作都会重新 `mountWebHost()`（登录 / 注册 / 安全验证 / 深链），
+   * 代价是那一次要多花 1~3 秒把页面加载起来，换来的是**平时完全不烧 CPU**。
+   */
+  private unmountWebHost(): void {
+    if (!this.webHostMounted) {
+      return;
+    }
+    hilog.info(DOMAIN, TAG, 'unmount web host (idle)');
+    this.webHostMounted = false;
+    this.bridgeReady = false;
+  }
+
+  /**
+   * 点登录页那颗「登录」按钮：把网页亮出来，并确保它停在登录页。
    *
    * 为什么不无条件 `loadUrl`：退出登录时已经**在后台**把它导航到登录页了（见 signOut 的 ⑤），
    * 用户点按钮那一刻页面早就在那儿 —— 再来一次整页导航只会白闪一下（用户报的"退出登录后
@@ -2944,6 +3012,7 @@ struct Index {
    * 已经在 Instagram 的 `/accounts/...` 那一族（登录页 / 二次验证 / 改密页）就直接亮出来。
    */
   private openLoginWeb(): void {
+    this.mountWebHost();
     this.webVisible = true;
     this.statusShown = false;
     const onInstagramAuth: boolean = this.currentUrl.indexOf('instagram.com') >= 0
@@ -2965,6 +3034,7 @@ struct Index {
    * 未登录时 `SessionGate` 只放行 `/accounts/…` 这类登录流程地址，注册页正好在这一族里。
    */
   private openSignupWeb(): void {
+    this.mountWebHost();
     this.webVisible = true;
     this.statusShown = false;
     hilog.info(DOMAIN, TAG, 'open signup web');
@@ -2972,6 +3042,7 @@ struct Index {
   }
 
   private openWeb(url: string): void {
+    this.mountWebHost();
     this.webVisible = true;
     this.statusShown = false;
     this.bridge.loadUrl(url);
@@ -3997,19 +4068,16 @@ struct Index {
     if (!snapshot.signedIn) {
       return;
     }
-    if (signedBefore && this.bridge.isReady()) {
-      // 登录态没变：网页没有被重载，但它这会儿多半**停在帖子页 / 活动页**上（用户刚看完）。
-      // 这一步整页导航回首页不能省：信息流的游标翻页靠的是"网页当前这份文档里记着的
-      // feed 请求配置"，停在别处就等于没有 —— 用户关掉网页以后回到信息流，再往下滑
-      // 就永远加载不出新帖子了（读通知 / 读评论 / 读个人页那几条路都有回首页这一步，
-      // 只有"用户自己打开网页再看回来"这条漏了）。
-      await this.returnToFeed();
-      if (this.viewModel.list().length === 0) {
-        // 列表本来就空：顺带把首屏读出来（有内容时不重读，免得列表闪一下）。
-        this.viewModel.loadFeed();
-      }
+    /*
+     * 登录态没变：以前这里要 `returnToFeed()` 把隐藏网页整页导航回信息流 —— 原因是当时
+     * 游标翻页靠"网页当前文档里记着的那份 feed 请求配置"。现在翻页全在原生
+     * （`NativeFeed.fetchPage` + 游标），网页关掉之后再滑照样出新帖，所以这一步可以省；
+     * 留着它反而会在 `applySession` 已经把宿主卸掉之后去操作一个已销毁的控制器。
+     * 只保留"列表本来就空就补一屏"这一条。
+     */
+    if (this.viewModel.list().length === 0) {
+      this.viewModel.loadFeed();
     }
-    // 刚确认登录时 applySession 已把网页送回首页，等它加载完会自动读流。
   }
 
   /** 网页 chrome 的返回：网页能后退就后退，否则当作关闭回到原生。 */
@@ -4209,6 +4277,8 @@ struct Index {
    * 这时 loadUrl 会被随后的初始化覆盖掉（表现就是"链接点了没反应"）。
    */
   private async openDeepLinkPost(intent: DeepLinkIntent): Promise<void> {
+    // 网页宿主是按需挂载的（见 webHostMounted）：深链要它，就先把它挂上再等就绪。
+    this.mountWebHost();
     if (!this.bridgeReady) {
       // PageBridge 没有"等就绪"的接口（只有 awaitPageReady / runBridge），而这里要等的是
       // "网页宿主建好并报过一次 ready"（见 setReadyHandler），所以按标志轮询。
@@ -9158,18 +9228,21 @@ struct Index {
 
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
-      InstagramWebHost({
-        visible: this.webVisible,
-        signedIn: this.signedIn,
-        onPageReady: (): void => {
-          this.handlePageReady();
-        },
-        onSessionChanged: (signedIn: boolean): void => {
-          this.applySession(signedIn);
-        }
-      })
-        .width('100%')
-        .height('100%')
+      // **按需挂载**：没用到网页时这里什么都没有（见 webHostMounted 的说明）。
+      if (this.webHostMounted) {
+        InstagramWebHost({
+          visible: this.webVisible,
+          signedIn: this.signedIn,
+          onPageReady: (): void => {
+            this.handlePageReady();
+          },
+          onSessionChanged: (signedIn: boolean): void => {
+            this.applySession(signedIn);
+          }
+        })
+          .width('100%')
+          .height('100%')
+      }
 
       if (!this.webVisible) {
         this.nativeShell()

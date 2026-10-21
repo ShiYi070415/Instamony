@@ -317,10 +317,12 @@ export default class EntryAbility extends UIAbility {
   onForeground(): void {
     // Ability has brought to foreground
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
-    // 让常驻的 WebView 恢复 JS 定时器与媒体（见 InstagramWebHost.applyVisibility）。
-    if (AppLifecycle.isRegistered()) {
-      AppLifecycle.notifyForeground();
-    }
+    /*
+     * 让常驻的 WebView 恢复 JS 定时器与媒体（见 InstagramWebHost.applyVisibility），
+     * 同时让**所有**监听者知道（视频播放器据此重建解码器，见 VideoSurface）。
+     * 这里不再用 `isRegistered()` 拦：Web 宿主可能还没挂载，而播放器已经在跑了。
+     */
+    AppLifecycle.notifyForeground();
   }
 
   onBackground(): void {
@@ -329,8 +331,11 @@ export default class EntryAbility extends UIAbility {
     // 离开应用（回桌面/切走）就把预下载的媒体清掉：那些是"这次浏览用的"，留着只会占磁盘
     // （见 MediaPrefetch.clearCache）。下次进来滑到哪几张再重新预下载。
     MediaPrefetch.clearCache();
-    if (AppLifecycle.isRegistered()) {
-      AppLifecycle.notifyBackground();
-    }
+    /*
+     * **必须无条件通知**：以前这里挂着 `isRegistered()`，而那个标志只由 Web 宿主设置 ——
+     * 结果"视频在后台继续解码"这条就漏掉了（真机实测：退到桌面后进程仍吃 69% CPU、
+     * 手机明显发烫）。现在通知一律发出去，`VideoSurface` 收到后会把播放器拆掉。
+     */
+    AppLifecycle.notifyBackground();
   }
 }

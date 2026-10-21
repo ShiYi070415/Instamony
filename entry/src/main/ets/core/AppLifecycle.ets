@@ -24,6 +24,13 @@ export class AppLifecycle {
    * 追加进来，互不影响。
    */
   private static extra: Array<VisibilityHandler> = [];
+  /**
+   * 现在是不是前台。
+   *
+   * 谁用：`VideoSurface` —— 它要在切后台时**把解码器还回去**（以前完全不看前后台，
+   * 于是 App 退到桌面之后视频还在解码，真机实测后台仍吃 69% CPU、手机发烫）。
+   */
+  private static foregroundNow: boolean = true;
 
   /** 由 Web 宿主组件在 aboutToAppear 时注册。 */
   static onVisibilityChanged(handler: VisibilityHandler): void {
@@ -39,12 +46,32 @@ export class AppLifecycle {
     AppLifecycle.extra.push(handler);
   }
 
+  /**
+   * 撤掉一个监听者（组件销毁时调）。
+   *
+   * 为什么必须有它：`VideoSurface` 也要跟着前后台停/起（见那里的说明），而它在列表里
+   * 随滚动反复创建销毁 —— 只加不减的话监听数组会无限长大，每次前后台切换都要跑几百个
+   * 已销毁组件留下的闭包，本身就成了新的耗电源。
+   */
+  static removeVisibilityListener(handler: VisibilityHandler): void {
+    const at: number = AppLifecycle.extra.indexOf(handler);
+    if (at >= 0) {
+      AppLifecycle.extra.splice(at, 1);
+    }
+  }
+
+  /** 现在是不是前台（新注册的监听者用它对齐初始状态）。 */
+  static isForeground(): boolean {
+    return AppLifecycle.foregroundNow;
+  }
+
   /** 是否已有组件接管；没有时能力层不必通知（避免冷启动早期空转）。 */
   static isRegistered(): boolean {
     return AppLifecycle.registered;
   }
 
   static notifyForeground(): void {
+    AppLifecycle.foregroundNow = true;
     AppLifecycle.handler(true);
     for (let index: number = 0; index < AppLifecycle.extra.length; index++) {
       AppLifecycle.extra[index](true);
@@ -52,6 +79,7 @@ export class AppLifecycle {
   }
 
   static notifyBackground(): void {
+    AppLifecycle.foregroundNow = false;
     AppLifecycle.handler(false);
     for (let index: number = 0; index < AppLifecycle.extra.length; index++) {
       AppLifecycle.extra[index](false);

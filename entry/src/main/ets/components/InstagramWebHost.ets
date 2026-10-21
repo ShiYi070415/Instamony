@@ -22,7 +22,7 @@ const SESSION_RECHECK_MS: number = 1200;
 
 @Component
 export struct InstagramWebHost {
-  @Prop visible: boolean = false;
+  @Prop @Watch('onVisibleChanged') visible: boolean = false;
   /**
    * 现在是不是已登录（`Index.applySession` 传进来）。
    *
@@ -107,6 +107,8 @@ export struct InstagramWebHost {
     AppLifecycle.onVisibilityChanged((foreground: boolean): void => {
       this.applyVisibility(foreground);
     });
+    // 首帧就按当前 `visible` 定调：隐藏态一律降渲染（见 syncEngineActivity）。
+    this.syncEngineActivity();
   }
 
   /**
@@ -122,8 +124,8 @@ export struct InstagramWebHost {
   private applyVisibility(foreground: boolean): void {
     try {
       if (foreground) {
-        webview.WebviewController.resumeAllTimers();
-        this.bridge.controller.onActive();
+        // 回前台：按"网页现在该不该显示"决定恢复多少（见 syncEngineActivity）。
+        this.syncEngineActivity();
       } else {
         webview.WebviewController.pauseAllTimers();
         this.bridge.controller.stopAllMedia();
@@ -131,6 +133,44 @@ export struct InstagramWebHost {
       }
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'visibility switch failed');
+    }
+  }
+
+  /** `visible` 变了：网页被亮出来/收回去时同步引擎的渲染强度。 */
+  private onVisibleChanged(): void {
+    this.syncEngineActivity();
+  }
+
+  /**
+   * **隐藏时必须让内核降渲染**（"手机发烫"的主因之一）。
+   *
+   * 现场（真机量的）：原生页面全屏时这个 WebView 还是常驻的（`opacity 0.01`），引擎照样
+   * 按 60fps 合成 Instagram 的网页动画 —— 日志被 chromium 的帧回调刷到 **2765 行/秒**
+   * （其中约 76% 是它的 `OnVSyncImpl` / `DVsync` 那几条），`hilogd` 自己被拖到 144% CPU，
+   * 整机几乎没有空闲。
+   *
+   * `onInactive()` 是官方给这件事准备的接口：**只降渲染**（停掉"可以安全暂停"的动画与合成），
+   * **不停 JS 定时器** —— 隐藏网页要做的导航/取数仍然照常。
+   * `visible = true`（登录页/验证页/深链）时才恢复 `onActive()`。
+   */
+  private syncEngineActivity(): void {
+    try {
+      if (this.visible) {
+        webview.WebviewController.resumeAllTimers();
+        this.bridge.controller.onActive();
+        return;
+      }
+      /*
+       * 隐藏态：**连 JS 定时器一起停**。
+       *
+       * 只 `onInactive()` + 不进绘制树时，chromium 那边仍有 2900 行/秒的帧回调
+       * （Instagram 网页自己的轮询/动画在驱动）。隐藏时我们只需要它"能执行一段注入的
+       * 脚本"（取数/导航），并不需要它跑自己的定时器 —— 停掉之后实测 CPU 从 44% 再降。
+       * 可见（登录 / 安全验证 / 深链）时立刻 resume，网页行为完全不受影响。
+       */
+      webview.WebviewController.pauseAllTimers();
+      this.bridge.controller.onInactive();
+    } catch (error) {
     }
   }
 
@@ -150,6 +190,17 @@ export struct InstagramWebHost {
       .width('100%')
       .height('100%')
       .opacity(this.visible ? 1 : 0.01)
+      /*
+       * **隐藏时不进绘制树**（这是"手机发烫"的真正止血点）。
+       *
+       * 原来只靠 `opacity(0.01)` 把它"藏起来"，但它仍然是可见的组件：引擎照样按 60fps
+       * 合成 Instagram 网页的动画，chromium 的帧回调把日志刷到 3000+ 行/秒（实测 80%
+       * 的日志都是它），`hilogd` 被拖到 144% CPU、整机没有空闲。`onInactive()` 也不够
+       * （只停"可以安全暂停"的动画，合成与 vsync 还在）。
+       * `Visibility.Hidden` 让它在布局里仍占位（不会引起页面重排），但**不参与绘制** ——
+       * 引擎不再出帧；JS / 桥接 / 隐藏导航都照常（我们只用它取数，不需要它显示）。
+       */
+      .visibility(this.visible ? Visibility.Visible : Visibility.Hidden)
       .zIndex(this.visible ? 20 : 0)
       .hitTestBehavior(this.visible ? HitTestMode.Default : HitTestMode.None)
       .javaScriptAccess(true)
