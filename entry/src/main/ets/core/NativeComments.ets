@@ -113,13 +113,7 @@ export class NativeComments {
   private static likeVia: string = '-';
   /** 上一次评论数据来自哪条路（mobile / rest / graphql，见 fetch）。 */
   private static source: string = '-';
-  /**
-   * **迁移期对照开关**：true = 只走移动端那条（不走 REST / GraphQL 兜底）。
-   *
-   * 存在的意义只有一个：验证"**没有网页模板也能取评论**"（这是把评论从抓包迁出来的前提）。
-   * 平时 false（两条并存，移动端失败自动退回）；确认稳定后可以把兜底整段删掉。
-   */
-  private static mobileOnly: boolean = false;
+
   /** 这次会话里评论用的是不是 GraphQL 那条（决定翻页跟着哪条游标走，见 fetch）。 */
   private static useGraphql: boolean = false;
   /** 翻页游标是 `min_id`（头部加载）还是 `max_id`（尾部）：由第一页决定。 */
@@ -200,13 +194,7 @@ export class NativeComments {
       }
       return viaMobile;
     }
-    // 迁移期的对照开关：打开后只走移动端（用来验证"没有模板也能取评论"）。
-    if (NativeComments.mobileOnly) {
-      NativeComments.detail = `mobile-only:${MobileComments.detail()}`;
-      hilog.warn(DOMAIN, TAG, 'comments mobile-only failed: %{public}s',
-        MobileComments.detail());
-      return viaMobile;
-    }
+
     const rest: CommentsPayload | null = await NativeComments.fetchViaRest(id, maxId);
     if (rest === null || rest.state !== 'ok') {
       return rest;

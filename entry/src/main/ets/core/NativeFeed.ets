@@ -27,12 +27,7 @@ const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeFeed';
 /** 首页信息流那条操作的名字片段（模板按它找）。 */
 const FEED_OP: string = 'FeedTimeline';
-/**
- * **迁移期对照开关**：true = 只走移动端 `feed/timeline/`，不走模板回放。
- *
- * 用来验证"**没有网页模板也能出信息流**"。平时 false（移动端失败自动退回模板）。
- */
-const MOBILE_ONLY: boolean = false;
+
 /** 连接键：响应里出现它就说明这一发真的拿到了信息流。 */
 const FEED_KEY: string = 'xdt_api__v1__feed__timeline__connection';
 /**
@@ -191,12 +186,7 @@ export class NativeFeed {
     if (viaMobile !== null) {
       return viaMobile;
     }
-    // 对照开关：只走移动端（验证用，见文件顶部的 MOBILE_ONLY 常量）。
-    if (MOBILE_ONLY) {
-      hilog.info(DOMAIN, TAG, 'feed mobile-only: no page (%{public}s)',
-        MobileFeedTimeline.detail());
-      return null;
-    }
+
     const result: NativeFetchResult = await NativeFeed.firstPage(first, cursor);
     if (!result.ok) {
       hilog.info(DOMAIN, TAG, 'native page failed %{public}s', result.summary());

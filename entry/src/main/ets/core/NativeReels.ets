@@ -27,13 +27,7 @@ const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeReels';
 /** 模板按这个名字片段找（ApiRegistry 里存的就是它）。 */
 const REELS_OP: string = 'ClipsTabRoot';
-/**
- * **迁移期对照开关**：true = 只走移动端 `clips/discover/`，不走模板回放。
- *
- * 用来验证"**没有网页模板也能出 Reels**"（这是把 Reels 从抓包迁出来的前提）。
- * 平时 false（移动端失败自动退回模板回放）。
- */
-const MOBILE_ONLY: boolean = false;
+
 /** Clips 连接键。 */
 const CLIPS_KEY: string = 'xdt_api__v1__clips__home__connection_v2';
 
@@ -316,11 +310,7 @@ export class NativeReels {
     if (viaMobile !== null) {
       return viaMobile;
     }
-    // 对照开关：只走移动端（验证用，见 MOBILE_ONLY）。
-    if (MOBILE_ONLY) {
-      hilog.info(DOMAIN, TAG, 'reels mobile-only: no page (%{public}s)', MobileClips.detail());
-      return null;
-    }
+
     if (ApiThrottle.blocked(ApiThrottle.CLIPS)) {
       const viaExplore: NativeReelsPage | null = allowExplore
         ? await NativeReels.viaExplore(cursor) : null;
