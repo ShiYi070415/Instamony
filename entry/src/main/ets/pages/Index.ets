@@ -165,6 +165,8 @@ import { ApiThrottle } from '../core/ApiThrottle';
 import { MobileRequest } from '../core/mobileapi/MobileRequest';
 // 抓包闸门：页面里的 fetch 钩子只在需要抓模板时才装（见 core/WatchGate）。
 import { WatchGate } from '../core/WatchGate';
+// 首页时间线"能不能走移动端"的一次性实验（见 core/mobileapi/MobileFeedProbe）。
+import { FeedProbeLine, MobileFeedProbe } from '../core/mobileapi/MobileFeedProbe';
 import { SessionGate } from '../core/SessionGate';
 import { InstagramProbe } from '../probe/InstagramProbe';
 import { FeedViewModel } from '../viewmodel/FeedViewModel';
@@ -2172,6 +2174,31 @@ struct Index {
      * 这条时间和同时段的业务日志一对，就能定位到具体那一段同步代码。
      */
     MainThreadWatchdog.start();
+    /*
+     * 一次性实验：首页时间线能不能走移动端（见 core/mobileapi/MobileFeedProbe）。
+     * 结果弹到屏幕上（这台设备日志偶发整进程无输出）。验完就删这一段。
+     */
+    /*
+     * 首页时间线"能不能走移动端"的实验（见 core/mobileapi/MobileFeedProbe）。
+     *
+     * **已得出结论**（2026-10-21）：
+     *   `feed/timeline/` GET → 405；**POST → 200 / 253 KB**（可用）；`feed/timeline/stream/` 404。
+     * 所以 feed 也能迁出来。需要复测时把下面这段的注释打开即可。
+     */
+    // setTimeout((): void => {
+    //   const ui: UIContext = this.getUIContext();
+    //   MobileFeedProbe.run().then((lines: Array<FeedProbeLine>): void => {
+    //     if (lines.length === 0) {
+    //       return;
+    //     }
+    //     const text: string = lines.map((one: FeedProbeLine): string => one.text()).join(' | ');
+    //     this.setLocalStatus(`FEED ${text}`);
+    //     ui.getPromptAction().showToast({ message: `FEED ${text}`, duration: 30000 });
+    //   }).catch((error: Error): void => {
+    //     hilog.warn(DOMAIN, TAG, 'feed probe rejected: %{public}s', error.message);
+    //     this.setLocalStatus(`FEED error: ${error.message}`);
+    //   });
+    // }, 22000);
     // 演示开关打开时注一条挑战，把验证弹窗调出来（见 DEMO_CHALLENGE_ON_START）。
     if (DEMO_CHALLENGE_ON_START) {
       setTimeout((): void => {
