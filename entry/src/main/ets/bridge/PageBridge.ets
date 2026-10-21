@@ -40,33 +40,6 @@ class PendingBridge {
   }
 }
 
-/**
- * 等待「页面已把某条请求存进 window.__ogReplay」的登记项。
- *
- * `baseSeq` 是发起动作（点击 / 滚动）之前取得的序号；只有序号更大的信号才算数，
- * 这样翻页时等的是「这一轮新发出的请求」，而不是沿用上一轮那条。
- */
-class ReplayWaiter {
-  readonly patterns: Array<string>;
-  readonly baseSeq: number;
-  readonly resolve: (outcome: string) => void;
-
-  constructor(patterns: Array<string>, baseSeq: number, resolve: (outcome: string) => void) {
-    this.patterns = patterns;
-    this.baseSeq = baseSeq;
-    this.resolve = resolve;
-  }
-
-  matches(name: string): boolean {
-    for (let index: number = 0; index < this.patterns.length; index++) {
-      if (name.indexOf(this.patterns[index]) >= 0) {
-        return true;
-      }
-    }
-    return false;
-  }
-}
-
 /** 手动兑现的 Promise 外壳，避免在 executor 里给外层变量赋值。 */
 class DeferredOutcome {
   resolve: (outcome: string) => void = (outcome: string): void => {
@@ -101,31 +74,6 @@ export class InstagramBridgeProxy {
     InstagramProbe.getInstance().record(json);
   }
 
-  /**
-   * 页面已经抓到某个可原样回放的请求配置。
-   *
-   * 与 onApiDetail 分开走：这条只报「时机」（操作名），不带请求内容，
-   * 所以不必进探针报告，也不必打码。
-   */
-  onReplayReady(name: string): void {
-    InstagramPageBridge.getInstance().publishReplayReady(name);
-  }
-
-  /**
-   * 页面刚发出了一条评论请求。
-   *
-   * 只报「发生了」，不带任何请求内容 —— 原生收到后自己去页面里把那份模板抓下来存住
-   * （见 InstagramPageBridge.commentTemplateHandler）。这样"网页里进一条帖子"这一下
-   * 就能把评论模板收进原生，下次打开评论不必再导航。
-   */
-  onCommentTemplate(name: string): void {
-    InstagramPageBridge.getInstance().publishCommentTemplate(name);
-  }
-
-  /** 页面刚发出了一条点赞 / 转发的写请求（见 engageTemplateHandler）。 */
-  onEngageTemplate(name: string): void {
-    InstagramPageBridge.getInstance().publishEngageTemplate(name);
-  }
 
   /**
    * **MQTT over WebSocket 的回传通道**（见 core/mobileapi/MobileMqttWs）。
@@ -153,11 +101,9 @@ export class InstagramPageBridge {
   readonly controller: webview.WebviewController = new webview.WebviewController();
   private readonly proxy: InstagramBridgeProxy = new InstagramBridgeProxy();
   private readonly pending: Map<string, PendingBridge> = new Map<string, PendingBridge>();
-  private readonly waiters: Array<ReplayWaiter> = [];
   /** 等页面加载完成的等候者。 */
   private readonly readyWaiters: Array<ReadyWaiter> = [];
   /** 单调递增，不随换页归零——归零会让换页前登记的等待永远等不到。 */
-  private replayCounter: number = 0;
   private ready: boolean = false;
   /**
    * "上一次等就绪超时"的时刻（毫秒）。见 `awaitPageReady`：短时间内别一段一段地陪等。
@@ -173,24 +119,6 @@ export class InstagramPageBridge {
   private sessionHandler: (signedIn: boolean) => void = (signedIn: boolean): void => {
   };
   private readyHandler: () => void = (): void => {
-  };
-  /**
-   * 页面刚发出了一条「评论」请求（请求名带 comment）。
-   *
-   * 页面自己知道这件事发生的**准确时刻**，原生那边靠猜时机是猜不准的（网页里点开一条帖子
-   * 是 SPA 换路由，不触发 pageReady）。收到就叫 ApiRegistry 把模板抓下来存住 ——
-   * 那次请求的配置只在当前文档里有效，回首页整页重载就没了（见 ApiRegistry 的说明）。
-   */
-  private commentTemplateHandler: (name: string) => void = (name: string): void => {
-  };
-  /**
-   * 页面刚发出了一条「点赞 / 转发」的写请求（`usePolarisLikeMediaXIG*` / `*MediaRepost*`）。
-   *
-   * 和评论那条同一个道理，而且更急：这两条请求只在**当前文档**里存在（`window.__ogReplay`），
-   * 而"点赞"这条路上随时可能整页导航（帖子不在信息流里时要先导航到帖子页再点），
-   * 晚一步模板就丢了 —— 原生那条 HTTP 路（core/NativeEngage）也就无从自举。
-   */
-  private engageTemplateHandler: (name: string) => void = (name: string): void => {
   };
 
   static getInstance(): InstagramPageBridge {
@@ -216,23 +144,6 @@ export class InstagramPageBridge {
     this.readyHandler = handler;
   }
 
-  setCommentTemplateHandler(handler: (name: string) => void): void {
-    this.commentTemplateHandler = handler;
-  }
-
-  /** 页面侧的网络钩子报上来"刚发了评论请求"（见 commentTemplateHandler）。 */
-  publishCommentTemplate(name: string): void {
-    this.commentTemplateHandler(name);
-  }
-
-  setEngageTemplateHandler(handler: (name: string) => void): void {
-    this.engageTemplateHandler = handler;
-  }
-
-  /** 页面侧的网络钩子报上来"刚发了点赞/转发请求"（见 engageTemplateHandler）。 */
-  publishEngageTemplate(name: string): void {
-    this.engageTemplateHandler(name);
-  }
 
   markReady(): void {
     this.ready = true;
@@ -354,79 +265,6 @@ export class InstagramPageBridge {
     }
     this.pending.delete(id);
     entry.resolve(json);
-  }
-
-  // ---- 页面请求观测 --------------------------------------------------------
-
-  /**
-   * 序号：在发起「会让页面发请求」的动作之前取，配合 awaitNewReplay 区分新旧。
-   */
-  replaySeq(): number {
-    return this.replayCounter;
-  }
-
-  /** 由页面侧 onReplayReady 调用。 */
-  publishReplayReady(name: string): void {
-    if (name.length === 0) {
-      return;
-    }
-    this.replayCounter++;
-    const due: Array<ReplayWaiter> = [];
-    const keep: Array<ReplayWaiter> = [];
-    for (let index: number = 0; index < this.waiters.length; index++) {
-      const waiter: ReplayWaiter = this.waiters[index];
-      if (this.replayCounter > waiter.baseSeq && waiter.matches(name)) {
-        due.push(waiter);
-      } else {
-        keep.push(waiter);
-      }
-    }
-    this.waiters.length = 0;
-    for (let index: number = 0; index < keep.length; index++) {
-      this.waiters.push(keep[index]);
-    }
-    for (let index: number = 0; index < due.length; index++) {
-      due[index].resolve('signal');
-    }
-  }
-
-  /**
-   * 等页面新抓到一条匹配任一 pattern 的可回放请求。
-   *
-   * 返回 'signal'（已就绪，可以立刻回放）或 'timeout'（到时未见）。
-   * 这取代了原先「干等固定毫秒」的做法：正常情况下页面一发请求就往下走，
-   * 等不到时也不会比原来的固定等待更久。
-   */
-  async awaitNewReplay(patterns: Array<string>, baseSeq: number, timeoutMs: number): Promise<string> {
-    const deferred: DeferredOutcome = new DeferredOutcome();
-    deferred.promise = new Promise<string>((resolve: (outcome: string) => void) => {
-      deferred.resolve = resolve;
-    });
-    const waiter: ReplayWaiter = new ReplayWaiter(patterns, baseSeq, deferred.resolve);
-    this.waiters.push(waiter);
-    const timeout: Promise<string> = new Promise<string>((resolve: (outcome: string) => void) => {
-      setTimeout((): void => {
-        resolve('timeout');
-      }, timeoutMs);
-    });
-    const outcome: string = await Promise.race([deferred.promise, timeout]);
-    if (outcome !== 'signal') {
-      this.removeWaiter(waiter);
-    }
-    return outcome;
-  }
-
-  private removeWaiter(target: ReplayWaiter): void {
-    const keep: Array<ReplayWaiter> = [];
-    for (let index: number = 0; index < this.waiters.length; index++) {
-      if (this.waiters[index] !== target) {
-        keep.push(this.waiters[index]);
-      }
-    }
-    this.waiters.length = 0;
-    for (let index: number = 0; index < keep.length; index++) {
-      this.waiters.push(keep[index]);
-    }
   }
 
   // ---- 导航 ----------------------------------------------------------------

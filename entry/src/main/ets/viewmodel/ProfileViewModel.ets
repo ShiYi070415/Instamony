@@ -22,7 +22,7 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { InstagramPageBridge } from '../bridge/PageBridge';
-import { OWN_PROFILE_SCRIPT, profileHeaderScript, profilePostsScript } from '../bridge/WebScripts';
+import { OWN_PROFILE_SCRIPT } from '../bridge/WebScripts';
 import { AppConfig } from '../config/AppConfig';
 import { NativeProfile, ProfileTarget } from '../core/NativeProfile';
 import { ProfileHeader, ProfileHighlight, ProfileMapper, ProfileMusic, ProfilePostsPage, ProfilePost } from '../model/Profile';

@@ -52,7 +52,6 @@ import {
   PROBE_WATCH_ON_SCRIPT,
   repostPostScript,
   saveOnPostPageScript,
-  storyMediaScript,
   TIMELINE_PROBE_SCRIPT
 } from '../bridge/WebScripts';
 import { CommentsPanel, CommentsListController, COMMENTS_DRAG_ZONE_VP } from '../components/CommentsPanel';

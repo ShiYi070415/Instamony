@@ -16,10 +16,7 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { InstagramPageBridge } from '../bridge/PageBridge';
 import {
-  FEED_SCRIPT,
-  SCROLL_BOTTOM_SCRIPT,
-  timelineScript,
-  TRIGGER_FEED_SCRIPT
+  FEED_SCRIPT
 } from '../bridge/WebScripts';
 import { FeedItemDto, FeedPayloadDto, PayloadState } from '../model/FeedDto';
 import { FeedStatus } from '../model/FeedStatus';
@@ -69,39 +66,8 @@ const NATIVE_CACHE_PAGES: number = 3;
  */
 const NATIVE_WARM_MAX_AGE_MS: number = 120000;
 
-/**
- * 首页信息流的 GraphQL 操作名片段。
- *
- * NETWORK_WATCHER 抓到带这些名字的请求后，会把请求配置存进页面的 __ogFeedCfg
- * 并回报 onReplayReady；我们等的就是这个信号。取片段而不是全名，是因为
- * Instagram 会在名字后面挂版本/变体后缀（如 PolarisFeedTimelineRootV2Query）。
- */
-const TIMELINE_OPS: Array<string> = ['FeedTimeline', 'FeedRootPagination'];
 
-/** 首屏回放一次就够用的条数：够了就不再触发页面重发，直接显示。 */
-const FIRST_PAGE_ENOUGH: number = 8;
-/**
- * 首屏最多试几轮去要「真的发过请求的第一页」（见 loadFirstPage）。
- *
- * 每轮 = 登记等待 + 点一次首页 + 等信号 + 回放，正常第 1 轮就成功；冷启动网页还没水合完时
- * 会多试几轮，总耗时可接受。拿到 SSR 就收工是**不行**的：那份 HTML 会被 HTTP 缓存复用，
- * 每次开 app 都显示同样几条（用户报的"固定显示那几个帖子"）。
- */
-const FRESH_ROUNDS: number = 3;
-/** 等「页面自己发出请求」的上限。等不到就按兜底路径走，不会比原来的固定等待更久。 */
-const FIRST_SIGNAL_MS: number = 6000;
-/** 屏幕上已经有内容时，再等整页的窗口就短一些，别让用户干等。 */
-const REFINE_SIGNAL_MS: number = 4000;
-const PAGING_SIGNAL_MS: number = 4000;
-/** 注入脚本自身的执行上限。 */
-const TRIGGER_SCRIPT_MS: number = 6000;
-const SCROLL_SCRIPT_MS: number = 5000;
-/** 回放脚本内部 fetch 自己 8 秒中止，所以这里的上限不必留太大。 */
-const TIMELINE_SCRIPT_MS: number = 12000;
-const ENRICH_SCRIPT_MS: number = 12000;
 const DOM_SCRIPT_MS: number = 15000;
-/** 滚动兜底最多滚几轮。 */
-const PAGING_ROUNDS: number = 2;
 /**
  * 「服务端说没有下一页了」之后，隔多久允许再试一次（毫秒）。
  *
@@ -714,111 +680,13 @@ export class FeedViewModel {
       PosterCache.warm(this.posts);
       // 首屏一铺上就**在后台把后面几页抓好**：用户上滑时那些页已经在内存里（见 prefetchNativePage）。
       this.prefetchNativePage();
-    }
-    const early: FeedPayloadDto | null = await this.replayTimeline('');
-    // 原生那条路已经给了"真·第一页"时，网页这边只允许**替换**，不允许把 SSR/旧的 prepend 进来 ——
-    // 那份 HTML 里的 SSR 数据是缓存的旧内容，混进新列表就成了"固定显示那几个帖子"。
-    const nativeOwnsFirstPage: boolean = this.nativeCursor.length > 0;
-    if (early !== null && !(nativeOwnsFirstPage && (early.src === 'ssr' || early.src === undefined))) {
-      // 同上：原生已经给了第一页时，网页这一份**只合并、不替换、也不 prepend 到最前**
-      // （prepend 会把缓存的 SSR 旧内容排到最新几条前面）。
-      await this.applyPayload(early, asFirstLoad, false,
-        nativeOwnsFirstPage ? false : prepend, false);
-      const got: number = (early.items ?? []).length;
-      this.debug = `${this.debug} first=${early.src}(${got})`;
-      hilog.info(DOMAIN, TAG, 'first early src=%{public}s n=%{public}d ms=%{public}d',
-        early.src ?? '-', got, Date.now() - startedMs);
-      if (!nativeOwnsFirstPage && early.src === 'replay' && got >= FIRST_PAGE_ENOUGH) {
-        // 已经是页面自己那条完整请求的结果，首屏到此就够，省掉触发 + 等信号。
-        return;
-      }
-      if (!nativeOwnsFirstPage && early.src === 'capture' && got > 0) {
-        // 快路径命中：这一份就是页面自己刚收到的响应（探针抓的 HTTP 响应体），
-        // 一个字节的网络都没花，也不必再触发页面重发请求。
-        // 这里不卡条数：捕获到的必然是"页面真实那一页"（一页就 3 条也是它）。
-        return;
-      }
-      if (nativeOwnsFirstPage) {
-        // 原生已经铺好 7 条了：网页那条路只是"补充"，没必要为它再触发一轮（省几秒等待）。
-        hilog.info(DOMAIN, TAG, 'first web refine only (native owns page) n=%{public}d', got);
-        return;
-      }
-    }
-
-    // 网页还没就绪时**这一轮就到此为止**：首屏现在不等网页（见 loadFeed），原生那条路已经把
-    // 第一页铺上了，而下面那几轮"触发页面重发 + 等信号"在没就绪时只会一轮轮白等（每轮几百
-    // 毫秒到几秒）。页面就绪之后 handlePageReady 会再读一次，那时再补网页这一份。
-    if (nativeOwnsFirstPage && !this.bridge.isReady()) {
-      hilog.info(DOMAIN, TAG, 'first web refine skipped: page not ready (native owns page)');
       return;
     }
-
-    // 首屏要**死等"真的发过请求"的那一页**，不能拿到 SSR 就收工。
-    //
-    // 为什么：冷启动时网页 HTML 里带的 SSR 那几条（`src=ssr`）会被 WebView 的 HTTP 缓存
-    // 原样复用 —— 每次打开 app 都是同一份 HTML、同几条帖子，用户看到的就是"固定显示那几个，
-    // 要往下滑（触发网页自己重新请求）才有新的"。所以这里最多试几轮：每轮重新登记等待 →
-    // 点一次首页（逼页面自己重发请求）→ 等信号 → 回放；一旦回放成功（`src=replay` 且有条目）
-    // 就**整体替换**列表（见 applyPayload 的 replace）并收工；那之前 SSR 那几条先顶着，
-    // 用户不至于对着空白等。
-    let sawFresh: boolean = false;
-    for (let round: number = 1; round <= FRESH_ROUNDS; round++) {
-      const budget: number = round === 1
-        ? (early !== null ? REFINE_SIGNAL_MS : FIRST_SIGNAL_MS)
-        : REFINE_SIGNAL_MS;
-      const base: number = this.bridge.replaySeq();
-      const ready: Promise<string> = this.bridge.awaitNewReplay(TIMELINE_OPS, base, budget);
-      try {
-        const trigger: string = await this.bridge.runBridge(TRIGGER_FEED_SCRIPT, TRIGGER_SCRIPT_MS);
-        hilog.info(DOMAIN, TAG, 'first trigger round=%{public}d -> %{public}s', round, trigger);
-      } catch (error) {
-        hilog.warn(DOMAIN, TAG, 'first trigger round=%{public}d failed: %{public}s',
-          round, (error as Error).message);
-      }
-      const signal: string = await ready;
-      const payload: FeedPayloadDto | null = await this.replayTimeline('');
-      if (payload === null) {
-        hilog.info(DOMAIN, TAG, 'first round=%{public}d signal=%{public}s payload=none',
-          round, signal);
-        continue;
-      }
-      // 「真·第一页」有两条来源：页面自己那条请求的原始响应（capture，探针抓的）
-      // 或者我们用页面模板回放出来的那一发（replay）。两者都是**页面真实请求的结果**，
-      // 不是 SSR 里那份被 HTTP 缓存复用的旧数据 —— 所以都算 fresh（要整体替换列表）。
-      //
-      // 注意**不要**拿 FIRST_PAGE_ENOUGH 卡这里：实测网页版一页就 3 条（游标翻页），
-      // 卡 8 条的话每轮都"不够"，会白白多等两轮信号（十几秒）才收工。条数够不够由
-      // 翻页去补，首屏只要求"拿到的是页面真实那一页"。
-      const got: number = (payload.items ?? []).length;
-      const fresh: boolean = (payload.src === 'capture' || payload.src === 'replay') && got > 0;
-      hilog.info(DOMAIN, TAG, 'first round=%{public}d signal=%{public}s src=%{public}s n=%{public}d ms=%{public}d',
-        round, signal, payload.src ?? '-', got, Date.now() - startedMs);
-      // 真·第一页 → 整体替换；否则（SSR/空）先 prepend 顶着，下一轮接着要。
-      //
-      // 但**原生那条路已经给了第一页时不许替换**：网页这边给的一页往往更少（实测 3~4 条 vs
-      // 原生 7 条），一替换就等于"冷启动先显示 7 条、一秒后缩回 4 条"——用户看到的是列表往回缩。
-      // 这种情况下按 shortcode 合并（prepend=false + replace=false），多的留下、重的去掉。
-      const keepNative: boolean = nativeOwnsFirstPage;
-      const replace: boolean = asFirstLoad && fresh && !keepNative;
-      await this.applyPayload(payload, asFirstLoad, false, keepNative ? false : true, replace);
-      if (fresh) {
-        sawFresh = true;
-        return;
-      }
-      if (!asFirstLoad && this.posts.length > 0) {
-        // 下拉刷新那一轮不折腾：有内容就够了。
-        return;
-      }
-    }
-    if (this.posts.length > 0) {
-      // 几轮都没等到"真·第一页"：SSR 那几条也算有内容，先留着（下次刷新/翻页会补上）。
-      hilog.info(DOMAIN, TAG, 'first no fresh page in %{public}d rounds (ssr kept)', FRESH_ROUNDS);
-      return;
-    }
-    if (this.posts.length > 0) {
-      // 屏幕上至少还有早先 SSR 的那几条，不必再报「读不到」。
-      return;
-    }
+    /*
+     * 原生也没拿到（没登录 / 被限流 / 形状变了）：退回 **DOM 抽取**这条最老的兜底
+     * —— 它读的是网页上已经画出来的那一屏，不需要任何模板。
+     * 原先"触发页面重发请求 → 等信号 → 回放模板"那几轮已随模板机制删除。
+     */
     const dom: FeedPayloadDto | null = await this.tryDom();
     if (dom !== null) {
       await this.applyPayload(dom, asFirstLoad, true, prepend);
@@ -827,7 +695,7 @@ export class FeedViewModel {
     this.setStatus(FeedStatus.Unparsable);
   }
 
-  /** 翻下一页：先吃原生缓存，再走游标回放，最后退到滚动。 */
+  /** 翻下一页：先吃原生缓存，再走原生现抓，最后退到滚动。 */
   private async loadNextPage(): Promise<void> {
     if (this.sawEnd) {
       // 服务端已经明确说过没有下一页，不必再发请求 —— 除非这个判断已经过期（见 END_RECHECK_MS）。
@@ -870,28 +738,10 @@ export class FeedViewModel {
         }
       }
     }
-
-    if (this.nextCursor.length > 0) {
-      const payload: FeedPayloadDto | null = await this.replayTimeline(this.nextCursor);
-      if (payload !== null) {
-        await this.applyPayload(payload, false, false);
-        if (this.posts.length > before) {
-          this.pagingStuck = false;
-          return;
-        }
-        hilog.info(DOMAIN, TAG, 'cursor page added nothing, falling back to scroll');
-      }
-    }
-
-    await this.scrollForNextPage();
-
-    // 两条路都没换来新内容：**把这个游标丢掉**。
-    //
-    // 为什么必须丢：游标失效（过期 / 被限流 / 服务端换了分页 token）时，拿它反复回放只会
-    // 一遍遍拿到同一页，而"拿不到新内容"本身不改变任何状态 —— 于是每一轮都重复同一个
-    // 死游标，永远不会去看页面自己那边的新请求。这就是「上滑很多轮之后再也要不出新帖子」
-    // 的直接原因。丢掉之后下一轮直接走滚动兜底：滚页面 → 页面自己发下一页 → 回放它刚发的
-    // 那一条（那条带着页面自己的游标），链路就重新接上了。
+    /*
+     * 两条路都没换来新内容：**把这个游标丢掉**（游标失效时拿它反复请求只会拿到同一页）。
+     * 原先这里还有"滚页面 → 等页面自己发下一页 → 回放它的模板"那条兜底，已随模板机制删除。
+     */
     if (this.posts.length === before) {
       this.pagingStuck = true;
       if (this.nextCursor.length > 0) {
@@ -899,42 +749,12 @@ export class FeedViewModel {
           this.posts.length);
         this.nextCursor = '';
       }
+      this.setStatus(this.sawEnd ? FeedStatus.NoMore : FeedStatus.Idle);
     } else {
       this.pagingStuck = false;
     }
   }
 
-  /**
-   * 滚动兜底：滚到底 → 等页面自己发出下一页请求 → 回放它刚存下的那条配置。
-   *
-   * 只在游标路径不可用时才走到这里，所以轮数刻意压到 2 轮、每轮等待也压短，
-   * 免得失败时把界面卡很久。
-   */
-  private async scrollForNextPage(): Promise<void> {
-    for (let round: number = 0; round < PAGING_ROUNDS; round++) {
-      const before: number = this.posts.length;
-      const base: number = this.bridge.replaySeq();
-      const arrived: Promise<string> =
-        this.bridge.awaitNewReplay(TIMELINE_OPS, base, PAGING_SIGNAL_MS);
-      const scrolled: string = await this.bridge.runBridge(SCROLL_BOTTOM_SCRIPT, SCROLL_SCRIPT_MS);
-      const signal: string = await arrived;
-      hilog.info(DOMAIN, TAG, 'scroll round=%{public}d scroll=%{public}s signal=%{public}s',
-        round, scrolled, signal);
-      const payload: FeedPayloadDto | null = await this.replayTimeline('');
-      if (payload !== null) {
-        await this.applyPayload(payload, false, false);
-        if (this.posts.length > before) {
-          return;
-        }
-      }
-      if (signal !== 'signal') {
-        // 这一轮页面压根没再发请求，再滚也不会有新页。
-        break;
-      }
-    }
-    // 没拿到新内容：服务端明确说没下一页就明说，否则保持安静，让用户再触发一次。
-    this.setStatus(this.sawEnd ? FeedStatus.NoMore : FeedStatus.Idle);
-  }
 
   /** 把一份载荷落到列表、游标与状态行上。 */
   private async applyPayload(payload: FeedPayloadDto | null, firstLoad: boolean,
@@ -1032,36 +852,10 @@ export class FeedViewModel {
       this.setStatus(FeedStatus.Idle);
     }
 
-    // 只有 DOM 兜底才需要补全：接口路径下 videoUrl / images / counts 已经齐了，
-    // 再回放一次纯属重复请求。
+    // DOM 兜底那份的 videoUrl / images / counts 已经在脚本里读齐了，不需要再补一次。
     if (usedDom && this.posts.length > 0) {
-      await this.enrichFromApi();
+      this.noteDebug('dom');
     }
-  }
-
-  /**
-   * 回放页面那条首页信息流查询。
-   *
-   * cursor 为空回放最近一次抓到的请求；非空则把 variables.after 换成该游标去要下一页。
-   * 返回 null 表示这次没拿到可用结构（桥未就绪 / 脚本超时 / 解析失败 / 游标插不进去）；
-   * state 为 ok 或 empty 都原样返回，由调用方决定怎么处理。
-   */
-  private async replayTimeline(cursor: string): Promise<FeedPayloadDto | null> {
-    try {
-      const raw: string = await this.bridge.runBridge(timelineScript(cursor), TIMELINE_SCRIPT_MS);
-      const payload: FeedPayloadDto = JSON.parse(raw) as FeedPayloadDto;
-      if (payload.state === PayloadState.OK || payload.state === PayloadState.EMPTY) {
-        // 把脚本带回的字段名清单（转发/分享计数到底叫什么）也记进 debug，
-        // 供 hilog 与探针查看 —— 这两个字段名不确定，靠它确认。
-        const extra: string = payload.debug ?? '';
-        this.noteDebug(`api=${(payload.items ?? []).length}${cursor.length > 0 ? '/cur' : ''}`
-          + (extra.length > 0 ? ` ${extra}` : ''), true);
-        return payload;
-      }
-      this.debug = `api:${payload.state}`;
-    } catch (error) {
-    }
-    return null;
   }
 
   // ---- 原生分页（缓存两页，上滑直接吃）-------------------------------------
@@ -1158,31 +952,6 @@ export class FeedViewModel {
       return;
     }
     hilog.info(DOMAIN, TAG, 'feed debug: %{public}s', text);
-  }
-
-  /**
-   * 用首页接口的结果按 shortcode 补齐原生卡片缺的东西：
-   * 视频的真实地址 `video_versions[].url`、多图 `carousel_media[]`、精确计数。
-   */
-  private async enrichFromApi(): Promise<void> {
-    let payload: FeedPayloadDto;
-    try {
-      const raw: string = await this.bridge.runBridge(timelineScript(''), ENRICH_SCRIPT_MS);
-      payload = JSON.parse(raw) as FeedPayloadDto;
-    } catch (error) {
-      return;
-    }
-    if (payload.state !== PayloadState.OK) {
-      this.debug = `api:${payload.state}`;
-      return;
-    }
-    const result: MergeResult = FeedMapper.enrich(this.posts, payload.items ?? []);
-    hilog.info(DOMAIN, TAG, 'enrich before=%{public}d after=%{public}d changed=%{public}d',
-      this.posts.length, result.posts.length, result.changed);
-    if (result.changed > 0) {
-      this.setPosts(result.posts);
-      this.noteDebug(`${this.debug} +api${result.changed}`);
-    }
   }
 
   // ---- 内部状态转发 --------------------------------------------------------

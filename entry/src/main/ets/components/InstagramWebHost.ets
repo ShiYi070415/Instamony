@@ -165,8 +165,7 @@ export struct InstagramWebHost {
       .javaScriptProxy({
         object: this.proxy,
         name: 'ogNative',
-        methodList: ['onBridgeResult', 'onRouteChange', 'onSessionState', 'onApiDetail', 'onReplayReady',
-          'onCommentTemplate', 'onEngageTemplate', 'onMqttEvent'],
+        methodList: ['onBridgeResult', 'onRouteChange', 'onSessionState', 'onMqttEvent'],
         controller: this.bridge.controller
       })
       .onControllerAttached(() => {
