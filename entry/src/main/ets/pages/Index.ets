@@ -475,6 +475,13 @@ const PROBE_MENU_VISIBLE: boolean = false;
  */
 /** 预热前等会话核对完的上限（毫秒）。 */
 const PRELOAD_SESSION_WAIT_MS: number = 3000;
+/**
+ * **演示开关**：启动时往证实台账里注一条挑战，把「账号需要安全验证」的弹窗调出来看。
+ *
+ * 只在需要人工核对弹窗外观/交互时打开（改这里 → 重装 → 看效果 → 改回 false）。
+ * 留着它的原因：挑战是服务端下发的，平时没法按需触发；要复现/验收这套界面只能靠注入。
+ */
+const DEMO_CHALLENGE_ON_START: boolean = false;
 /** 预热 feeds 前等网页就绪的上限（毫秒）。 */
 const PRELOAD_PAGE_WAIT_MS: number = 8000;
 /**
@@ -2150,6 +2157,14 @@ struct Index {
      * 这条时间和同时段的业务日志一对，就能定位到具体那一段同步代码。
      */
     MainThreadWatchdog.start();
+    // 演示开关打开时注一条挑战，把验证弹窗调出来（见 DEMO_CHALLENGE_ON_START）。
+    if (DEMO_CHALLENGE_ON_START) {
+      setTimeout((): void => {
+        MobileChallenge.note(
+          '{"message":"challenge_required","challenge":{"api_path":"/challenge/0000/demo/"}}');
+        this.refreshChallengeState();
+      }, 6000);
+    }
     // 底栏胶囊的左右留白要按屏宽反算（见 barSideMargin）。
     try {
       const widthPx: number = display.getDefaultDisplaySync().width;
