@@ -116,12 +116,22 @@ export class SearchPost {
    * （见 model/Reel 的 followKnown 与 core/NativeFollow.statesFor）。
    */
   readonly following?: boolean;
+  /**
+   * 发布时刻（**Unix 秒**，IG 的 `taken_at`；0 = 这条没给）。
+   *
+   * 首页把探索流那一段也铺进 FeedList 之后，卡片底部要有"3小时前" +「翻译」那一行
+   * （两者同属一行，见 FeedList.postCard）；这里以前压根没带时间，于是探索流的帖子
+   * **日期和翻译按钮一起消失**（用户报的问题）。
+   * 用法：`SearchPost.takenAt` → `MediaPost.takenAtMs`（×1000，见 Index.searchPostsToMedia）。
+   */
+  readonly takenAt: number;
 
   constructor(code: string, coverUrl: string, width: number, height: number, isVideo: boolean,
               mediaId: string = '', videoUrl: string = '', originalVideoUrl: string = '',
               ownerUsername: string = '', ownerAvatarUrl: string = '', ownerId: string = '',
               caption: string = '', likeCount: number = 0, commentCount: number = 0,
-              repostCount: number = 0, liked: boolean = false, following?: boolean) {
+              repostCount: number = 0, liked: boolean = false, following?: boolean,
+              takenAt: number = 0) {
     this.code = code;
     this.coverUrl = coverUrl;
     this.width = width;
@@ -139,6 +149,7 @@ export class SearchPost {
     this.repostCount = repostCount;
     this.liked = liked;
     this.following = following;
+    this.takenAt = takenAt > 0 ? takenAt : 0;
   }
 
   /**

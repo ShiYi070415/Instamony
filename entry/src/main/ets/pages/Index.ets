@@ -8277,7 +8277,12 @@ struct Index {
         displayUrl: post.coverUrl,
         likeCount: post.likeCount,
         commentCount: post.commentCount,
-        takenAtMs: 0,
+        /*
+         * 发布时间：`SearchPost.takenAt` 是 IG 的 Unix **秒**，卡片模型要**毫秒**。
+         * 这一位是 0 时 FeedList 会把"3小时前 + 翻译"整行都不画（见 FeedList.hasPostedTime）
+         * —— 探索流的发布日期和翻译按钮一起消失，根因就在这里。
+         */
+        takenAtMs: post.takenAt > 0 ? post.takenAt * 1000 : 0,
         ownerUsername: post.ownerUsername,
         ownerAvatarUrl: post.ownerAvatarUrl,
         ownerId: post.ownerId,

@@ -50,7 +50,7 @@ const KEY_STATE: string = 'timeline_state_v1';
  */
 const KEY_REC: string = 'rec_page1_v1';
 /** 缓存格式版本：改了结构就 +1，旧的一律当没有。 */
-const FORMAT: number = 1;
+const FORMAT: number = 2;
 /** 缓存有效期（毫秒）：30 分钟。 */
 const MAX_AGE_MS: number = 30 * 60 * 1000;
 /** 单份缓存上限（字符）：超过就不存（一页几十 KB，这个上限只是防呆）。 */
@@ -217,7 +217,7 @@ export class FeedCache {
         posts.push(new SearchPost(one.code, one.coverUrl, one.width, one.height, one.isVideo,
           one.mediaId, one.videoUrl, one.originalVideoUrl, one.ownerUsername, one.ownerAvatarUrl,
           one.ownerId, one.caption, one.likeCount, one.commentCount, one.repostCount, one.liked,
-          one.following));
+          one.following, one.takenAt));
       }
       if (posts.length === 0) {
         return null;

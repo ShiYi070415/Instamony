@@ -106,6 +106,8 @@ export class NativeSearch {
    * **给游标的那条路**回去，否则第二页必空。
    */
   private static mobileUsable: boolean = false;
+  /** "探索流给不给 taken_at"那条诊断只打一次（见 recommendedViaMobile）。 */
+  private static dateDiagDone: boolean = false;
   /** 上一次搜账号是不是**REST 兜底**给的（日志与界面后缀据此区分，见 searchUsers）。 */
   private static viaRest: boolean = false;
 
@@ -260,6 +262,19 @@ export class NativeSearch {
       return null;
     }
     const posts: Array<SearchPost> = NativeSearch.postsFromMedias(page.medias);
+    // 发布时刻命中率只打一次：这一位决定首页卡片底部那行（日期 + 翻译）画不画，
+    // 摸清"探索流到底给不给 taken_at"比事后猜省事（见 NativeSearch.readPost）。
+    if (!NativeSearch.dateDiagDone) {
+      NativeSearch.dateDiagDone = true;
+      let withDate: number = 0;
+      for (let index: number = 0; index < posts.length; index++) {
+        if (posts[index].takenAt > 0) {
+          withDate++;
+        }
+      }
+      hilog.info(DOMAIN, TAG, 'recommend dates with=%{public}d/%{public}d',
+        withDate, posts.length);
+    }
     NativeSearch.diag.push(`mobile explore -> medias=${page.medias.length} posts=${posts.length}`
       + ` more=${page.hasMore} ms=${page.ms}`);
     hilog.info(DOMAIN, TAG, 'recommend mobile medias=%{public}d posts=%{public}d more=%{public}s ms=%{public}d',
@@ -422,10 +437,20 @@ export class NativeSearch {
         }
       }
     }
+    /*
+     * 发布时刻：`taken_at` 是 **Unix 秒**。首页那些卡片底部要显示"3小时前"+「翻译」，
+     * 而那一行整体挂在"有没有发布时间"上（见 FeedList.postCard / hasPostedTime），
+     * 所以这个字段不接 = 探索流那一段**日期和翻译按钮一起消失**（用户报的问题）。
+     * 个别节点是毫秒（13 位），那样直接除 1000 —— 别让"1970 年"这种文案冒出来。
+     */
+    let takenAt: number = JsonRead.numOf(node, 'taken_at');
+    if (takenAt > 100000000000) {
+      takenAt = Math.floor(takenAt / 1000);
+    }
     return new SearchPost(code, picked.url, picked.width, picked.height, videos.length > 0,
       `${rawId}`.trim(), display.url, original.url, username, avatar, authorId, caption,
       JsonRead.numOf(node, 'like_count'), JsonRead.numOf(node, 'comment_count'),
-      JsonRead.numOf(node, 'media_repost_count'), liked, following);
+      JsonRead.numOf(node, 'media_repost_count'), liked, following, takenAt);
   }
 
   /** 整包里所有"像用户"的对象（去重、限量）。 */
