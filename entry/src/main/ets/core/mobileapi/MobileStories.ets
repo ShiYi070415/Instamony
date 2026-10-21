@@ -48,9 +48,10 @@ export class MobileStories {
    * 对应 instagrapi 的 `get_reels_tray_feed`：表单字段照抄（`reason` / `timezone_offset` /
    * `tray_session_id` / `request_id` / `page_size` / `_uuid` / `supported_capabilities_new`）。
    *
-   * @param priority 排队优先级（见 ApiThrottle.acquire）：默认 WARM。
+   * @param priority 排队优先级（见 ApiThrottle.acquire）：默认 INTERACTIVE ——
+   *   托盘是首页**第一屏顶部那条**，用户一进来就在看它，不能排在预取/自检后面。
    */
-  static async tray(priority: number = ApiThrottle.warm()): Promise<StoryTray | null> {
+  static async tray(priority: number = ApiThrottle.interactive()): Promise<StoryTray | null> {
     const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
     if (identity === null) {
       hilog.info(DOMAIN, TAG, 'tray skipped: no session');

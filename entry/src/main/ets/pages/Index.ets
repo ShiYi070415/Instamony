@@ -2306,12 +2306,23 @@ struct Index {
         return;
       }
       const started: number = Date.now();
-      // ===== 阶段一：feeds（首屏）=====
-      // 网页没就绪时注入脚本会被判 not-ready，所以先等它就绪（有上限）；
-      // 等不到就**跳过**这一步（页面就绪后 handlePageReady 会自己读一次），
-      // 别在这里硬读——那只会给列表下面挂一条"页面尚未就绪"。
-      const ready: string = await this.bridge.awaitPageReady(PRELOAD_PAGE_WAIT_MS);
-      if (ready === 'ready' && this.viewModel.list().length === 0) {
+      /*
+       * ===== 阶段零：**快拍托盘先发**（它在屏幕最上面，且比首屏探索流小得多）=====
+       *
+       * 托盘那一发（`feed/reels_tray/`，50 条 / 一两百 KB）比探索流（0.5~1MB）便宜，
+       * 而它显示在最顶上 —— 先发它，用户最先看到"快拍头像长出来"，然后才是帖子。
+       * 配合 `ApiThrottle` 现在允许**两发并发**（见那里的说明），两者互相不挡。
+       */
+      this.warmStoriesNow();
+      /*
+       * ===== 阶段一：feeds（首屏）=====
+       *
+       * ⚠️ **不再等网页就绪**：网页宿主现在是按需挂载的（见 `webHostMounted`），冷启动时
+       * 根本没有它 —— 以前这里 `awaitPageReady(PRELOAD_PAGE_WAIT_MS)` 会**白等满 8 秒**
+       * 才往下走，首屏探索流和后面的预热链全被它堵着（这就是"冷启动还要等好几秒"的一大块）。
+       * 数据全走移动端接口，一行都不需要网页；真要用网页的那几条路自己会等。
+       */
+      if (this.viewModel.list().length === 0) {
         await this.viewModel.loadFeed();
       }
       hilog.info(DOMAIN, TAG, 'preload feed posts=%{public}d %{public}dms',
@@ -2321,6 +2332,31 @@ struct Index {
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'preload failed: %{public}s', (error as Error).message);
     }
+  }
+
+  /**
+   * **立刻发一次快拍托盘**（首屏最上面那一排，不 await、失败无所谓）。
+   *
+   * 与 `warmOtherTabs` 里那一步是**同一件事**（那边 `warmStep('stories')` 会先看
+   * `storyQueue.length > 0` 再决定要不要跑）—— 这里是"抢在 feeds 之前先发"，
+   * 因为托盘在屏幕上排在最上面，而且比探索流小得多。
+   * `NativeStories.tray()` 自带复用（`lastTray`）与在飞合并（`tray join inflight`），
+   * 所以两处都调也只会真发一发。
+   */
+  private warmStoriesNow(): void {
+    if (this.storyQueue.length > 0) {
+      return;
+    }
+    const started: number = Date.now();
+    NativeStories.tray().then((tray: StoryTray | null): void => {
+      if (tray === null || tray.items.length === 0) {
+        return;
+      }
+      this.rememberStoryQueue(tray.items);
+      hilog.info(DOMAIN, TAG, 'warm stories n=%{public}d %{public}dms',
+        tray.items.length, Date.now() - started);
+    }).catch((): void => {
+    });
   }
 
   /**

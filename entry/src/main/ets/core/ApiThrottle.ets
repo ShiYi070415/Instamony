@@ -66,6 +66,22 @@ const PACE_MIN_INTERACTIVE_MS: number = 600;
 /** 交互请求的抖动量（毫秒）：0~600，别让"点开就发"也变成固定节奏。 */
 const PACE_JITTER_INTERACTIVE_MS: number = 600;
 /**
+ * **同一时刻最多几发在路上**（原来写死 1）。
+ *
+ * 为什么从 1 放到 2：真机上首页冷启动慢的根因不是"请求太慢"，而是**一条一条排队**——
+ * 托盘一发 3~6 秒、探索流一发 4~9 秒、时间线再一发，串起来就是十几秒（日志里能直接对上）。
+ * 而这些时间绝大部分是**在等服务端回包**，我们这边空转。
+ *
+ * 放到 2 之后：
+ *   · **开始的密度一点没变**（见 `gapMs`：间隔仍按"上一发开始"算 1.5~3.5 秒），
+ *     IG 看到的是同样的请求到达节奏 —— 限流看的是密度，不是并发数；
+ *   · 慢接口那 4~9 秒的空等被第二发利用起来，两段等待重叠，冷启动直接省掉一段。
+ *
+ * 为什么不再往上放：并发越高，"同一瞬间打进去两发以上"的概率越接近真实用户的上限，
+ * 而 2 已经是"人能同时干两件事"的量级；收益也递减（第三发之后排队里已经没有必争的了）。
+ */
+const MAX_IN_FLIGHT: number = 2;
+/**
  * 一次"持闸"最长多久（毫秒）——**防呆用**。
  *
  * 拿到闸门的一方发完请求必须 `release()`。万一路径上抛了异常、或者忘了 release，
@@ -141,18 +157,19 @@ export class ApiThrottle {
 
   /** 排队等闸门的请求（优先级小的先走，同级 FIFO）。 */
   private static waiters: Array<PaceWaiter> = [];
-  /** 现在有没有人持闸（= 有一发在路上，或正在等间隔）。 */
-  private static holding: boolean = false;
-  /** 上一次请求**结束**的时刻（间隔从它开始算）。 */
-  private static lastDoneAt: number = 0;
-  /** 拿闸后的防呆定时器 id（-1 = 没在计时）。 */
-  private static holdTimer: number = -1;
+  /** 现在有多少发在路上（拿到名额还没 release 的）。 */
+  private static inFlight: number = 0;
+  /** 在路上的那几发的防呆定时器 id（每个名额一个，见 PACE_HOLD_MAX_MS）。 */
+  private static holds: Array<number> = [];
+  /** 上一次请求**开始**的时刻（间隔从它开始算，见 gapMs）。 */
+  private static lastStartAt: number = 0;
   /** 这辈子因为间隔而等过几次（诊断用）。 */
   private static pacedCount: number = 0;
 
   /**
-   * 申请一个"发请求的名额"：**同一时刻只允许一发在路上**，且两发之间至少隔 `PACE_MIN_MS`
-   * （含抖动）。拿到之后**必须**在请求结束时调 `release()`（用 try/finally 包住）。
+   * 申请一个"发请求的名额"：**最多 `MAX_IN_FLIGHT` 发同时在路上**，且**两次开始的间隔**
+   * 至少 `PACE_MIN_MS`（含抖动）。拿到之后**必须**在请求结束时调 `release()`
+   * （用 try/finally 包住）。
    *
    * @param priority 见 `ApiThrottle.interactive()/warm()/idle()`；数小者优先。
    */
@@ -165,13 +182,8 @@ export class ApiThrottle {
 
   /** 放闸（请求结束了，无论成败都要调；见 acquire 的说明）。 */
   static release(): void {
-    if (ApiThrottle.holdTimer >= 0) {
-      clearTimeout(ApiThrottle.holdTimer);
-      ApiThrottle.holdTimer = -1;
-    }
-    ApiThrottle.holding = false;
-    ApiThrottle.lastDoneAt = Date.now();
-    ApiThrottle.pump();
+    ApiThrottle.dropHold(-1);
+    ApiThrottle.freeSlot();
   }
 
   /** 优先级：用户此刻点的东西。 */
@@ -197,34 +209,59 @@ export class ApiThrottle {
   /** 限速状态一行摘要（诊断面板/日志用）。 */
   static paceDescribe(): string {
     return `pace gap=${PACE_MIN_MS}+${PACE_JITTER_MS}ms waiting=${ApiThrottle.waiters.length}`
-      + ` holding=${ApiThrottle.holding ? 'y' : 'n'} paced=${ApiThrottle.pacedCount}`
+      + ` inflight=${ApiThrottle.inFlight}/${MAX_IN_FLIGHT} paced=${ApiThrottle.pacedCount}`
       + ` writes=${ApiThrottle.writeWaits}`
       + (ApiThrottle.suspended()
         ? ` SUSPENDED ${ApiThrottle.suspendMinutesLeft()}min(${ApiThrottle.suspendReason})` : '');
   }
 
-  /** 放一发（内部）：挑优先级最高的那个，按间隔延迟后唤醒它，并上防呆。 */
+  /**
+   * 放名额（内部）：有空位就按优先级往外发，直到发满 `MAX_IN_FLIGHT`。
+   *
+   * 用 `while` 而不是 `if`：上一个版本一次只放一发，所以 `if` 够用；现在有空位时
+   * 可能一次就能放两发出去（这也是整个改动的目的 —— 让第二发不用等第一发的回包）。
+   */
   private static pump(): void {
-    if (ApiThrottle.holding || ApiThrottle.waiters.length === 0) {
-      return;
-    }
-    let best: number = 0;
-    for (let index: number = 1; index < ApiThrottle.waiters.length; index++) {
-      if (ApiThrottle.waiters[index].priority < ApiThrottle.waiters[best].priority) {
-        best = index;
+    while (ApiThrottle.inFlight < MAX_IN_FLIGHT && ApiThrottle.waiters.length > 0) {
+      let best: number = 0;
+      for (let index: number = 1; index < ApiThrottle.waiters.length; index++) {
+        if (ApiThrottle.waiters[index].priority < ApiThrottle.waiters[best].priority) {
+          best = index;
+        }
       }
+      const next: PaceWaiter = ApiThrottle.waiters[best];
+      ApiThrottle.waiters.splice(best, 1);
+      ApiThrottle.startOne(next);
     }
-    const next: PaceWaiter = ApiThrottle.waiters[best];
-    ApiThrottle.waiters.splice(best, 1);
-    ApiThrottle.holding = true;
-    // 防呆：万一调用方没有 release，30 秒后强制放闸（见 PACE_HOLD_MAX_MS）。
-    ApiThrottle.holdTimer = setTimeout((): void => {
+  }
+
+  /**
+   * 真发一个名额出去（内部）。
+   *
+   * 名额**当场**就算"在路上"（而不是等间隔到了才算）：否则并发那一路会被 `pump` 的 while
+   * 在同一次循环里重复发出去，实际在路上的会比 `MAX_IN_FLIGHT` 多。
+   */
+  private static startOne(next: PaceWaiter): void {
+    ApiThrottle.inFlight = ApiThrottle.inFlight + 1;
+    /*
+     * 防呆：万一调用方没有 release，30 秒后强制放闸（见 PACE_HOLD_MAX_MS）。
+     * 每个名额一个定时器，`holds` 按发放顺序排队 —— 谁先结束就摘掉最早那个，
+     * 数量始终和 `inFlight` 对得上（极端乱序下无非是"少等一会儿"，不会漏放）。
+     */
+    let timer: number = -1;
+    timer = setTimeout((): void => {
       hilog.warn(DOMAIN, TAG, 'pace hold timeout %{public}dms — force release',
         PACE_HOLD_MAX_MS);
-      ApiThrottle.holdTimer = -1;
-      ApiThrottle.release();
+      ApiThrottle.dropHold(timer);
+      ApiThrottle.freeSlot();
     }, PACE_HOLD_MAX_MS);
+    ApiThrottle.holds.push(timer);
     const wait: number = ApiThrottle.gapMs(next.priority);
+    /*
+     * 记下它**将要**发出去的时刻（不是现在）：并发那一发的间隔要从这一刻起算，
+     * 否则两个名额会被算成"现在发"，间隔形同失效。
+     */
+    ApiThrottle.lastStartAt = Date.now() + wait;
     if (wait <= 0) {
       next.resolve();
       return;
@@ -235,13 +272,51 @@ export class ApiThrottle {
     }, wait);
   }
 
-  /** 距离"可以发下一发"还差多少毫秒（已经够了给 0）；交互请求用更短的那道闸。 */
+  /** 还一个名额（内部）：名额减一，然后看还有没有人在排队。 */
+  private static freeSlot(): void {
+    if (ApiThrottle.inFlight > 0) {
+      ApiThrottle.inFlight = ApiThrottle.inFlight - 1;
+    }
+    ApiThrottle.pump();
+  }
+
+  /** 摘掉一个防呆定时器（`timer < 0` = 摘最早那个，见 release/freeSlot）。 */
+  private static dropHold(timer: number): void {
+    if (ApiThrottle.holds.length === 0) {
+      return;
+    }
+    if (timer < 0) {
+      const earliest: number | undefined = ApiThrottle.holds.shift();
+      if (earliest !== undefined) {
+        clearTimeout(earliest);
+      }
+      return;
+    }
+    const at: number = ApiThrottle.holds.indexOf(timer);
+    if (at >= 0) {
+      ApiThrottle.holds.splice(at, 1);
+    }
+    clearTimeout(timer);
+  }
+
+  /**
+   * 距离"可以发下一发"还差多少毫秒（已经够了给 0）；交互请求用更短的那道闸。
+   *
+   * 间隔按 **上一发开始** 到这一发开始算（start-to-start），不是"上一发结束之后"。
+   * 为什么改：并发 2 之后如果还按结束算，慢接口那 4~9 秒会让第二个名额也一起干等，
+   * 等于白开一个并发；按开始算则"单位时间内的请求到达数"完全不变（这才是 IG 看的那个量），
+   * 只是把等回包的时间叠起来了。
+   */
   private static gapMs(priority: number): number {
+    if (ApiThrottle.lastStartAt === 0) {
+      // 这一次启动以来的第一发：直接放，不给自己加戏。
+      return 0;
+    }
     const interactive: boolean = priority <= PRIORITY_INTERACTIVE;
     const min: number = interactive ? PACE_MIN_INTERACTIVE_MS : PACE_MIN_MS;
     const jitterRange: number = interactive ? PACE_JITTER_INTERACTIVE_MS : PACE_JITTER_MS;
     const jitter: number = Math.floor(Math.random() * (jitterRange + 1));
-    const since: number = ApiThrottle.lastDoneAt === 0 ? min : Date.now() - ApiThrottle.lastDoneAt;
+    const since: number = Date.now() - ApiThrottle.lastStartAt;
     const left: number = min + jitter - since;
     return left > 0 ? left : 0;
   }
