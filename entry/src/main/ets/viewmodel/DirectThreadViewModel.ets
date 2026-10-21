@@ -2,21 +2,13 @@
  * 一条私信会话（会话详情）的视图模型。
  *
  * ## 和 DirectViewModel 的分工
- *   DirectViewModel  = 收件箱（会话列表，回放存下来的 GraphQL 模板，见 core/NativeDirect）；
- *   这个              = **一条会话的消息**，走私有 REST `GET /api/v1/direct_v2/threads/{id}/`，
- *                       外加**发送**（`POST …/broadcast/text/`）。
+ *   DirectViewModel  = 收件箱（会话列表）；
+ *   这个              = **一条会话的消息** + **发送**。
  *
- * ## 为什么详情走 REST 而不是回放 GraphQL
- * 会话详情那条 GraphQL 查询在原生侧**不一定有模板**（要先让隐藏网页打开一次会话才能抓到），
- * 而 REST 这条路一条请求就能读、形状也固定（`thread.items[]`）—— 少一次"必须让网页活着"的
- * 依赖，正好是这次要把私信整体搬到 HTTP 上的原因。
- *
- * ## 取数顺序（和收件箱对齐，见 DirectViewModel）
- *   ① 原生 REST `GET /api/v1/direct_v2/threads/{id}/`（安卓身份）；
- *   ② REST 被 IG 挡了（真机实测 404 + `not-logged-in`）→ 原生回放**会话模板**
- *      （`NativeDirect.threadViaTemplate`，模板 body 里的会话 id 换成目标 id）；
- *   ③ 连模板都没有 → 冷启动：让常驻网页真打开一次 `/direct/t/{id}/`，页面自己会发那条
- *      `PolarisDirect*Thread*` 查询，网络钩子把模板交给原生存住（capture），**再回到 ②**。
+ * ## 取数
+ * 只有一条链：`NativeDirect.thread` → 移动端私有接口 `direct_v2/threads/{id}/`
+ * （core/mobileapi/MobileDirect，instagrapi 同源）。**不需要网页模板，也不驱动隐藏网页。**
+ * 历史：本文件原来还有"回放会话模板"与"冷启动抓模板"两条路，页面注入退役后一并删除。
  *
  * ## 状态
  * 只留一条会话的状态：进哪条就读哪条（`open()`），读到的消息**按时间正序**（老的在前），
@@ -25,11 +17,6 @@
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { InstagramPageBridge } from '../bridge/PageBridge';
-import { ApiRegistry } from '../bridge/ApiRegistry';
-import { directThreadProbeScript } from '../bridge/WebScripts';
-import { AppConfig } from '../config/AppConfig';
-import { directScrollUpScript } from '../bridge/WebScripts';
 import { NativeDirect } from '../core/NativeDirect';
 import { DirectCache } from '../core/DirectCache';
 // 进会话就把它标成已读（见 markThreadSeen）。
@@ -86,28 +73,8 @@ const PENDING_RECHECK_MS: number = 1200;
  * 服务端一旦恢复可用，用户继续上拉就能自己接上。
  */
 const LOAD_OLDER_RETRY_GAP_MS: number = 30000;
-/**
- * 冷启动抓模板用的片段：**空串 = 全抓**。
- *
- * 收件箱那边能用 `'Direct'` 过滤，是因为那条查询的名字已知（`PolarisDirectInboxMobileQuery`）。
- * 会话详情这条的名字不知道（试过 `PolarisDirect…Thread…`、`useIGD…` 都不对，见
- * NativeDirect.threadOps），所以干脆全抓，再按"像会话的候选名"逐个回放 —— 全抓的代价只是
- * 多存几份模板（预置那份本来就是 30 份）。
- */
-const CAPTURE_FILTER: string = '';
-/** 冷启动那次：先等页面水合多久再抓第一次。 */
-const HYDRATE_WAIT_MS: number = 1800;
-/** 抓模板的轮询次数与间隔（页面水合慢时那条查询发得晚，抓一次往往抓不到）。 */
-const CAPTURE_POLLS: number = 8;
-const CAPTURE_POLL_GAP_MS: number = 1500;
-/** 导航到会话页的等待上限。 */
-const NAV_READY_TIMEOUT_MS: number = 20000;
 
 export class DirectThreadViewModel {
-  private readonly bridge: InstagramPageBridge = InstagramPageBridge.getInstance();
-  private readonly registry: ApiRegistry = ApiRegistry.getInstance();
-  /** 这一轮是不是走了"网页抓会话模板"那条冷路（界面据此提示，见 load）。 */
-  private usedColdPath: boolean = false;
   /** 当前会话 id（空 = 还没选会话）。 */
   private threadId: string = '';
   /** 收件箱里那一行的标题（读消息之前先拿它当标题，读到了再用真名覆盖）。 */
@@ -202,7 +169,6 @@ export class DirectThreadViewModel {
     }
     this.onView(this.view);
     this.diag = '-';
-    this.usedColdPath = false;
     this.pending = [];
     this.onPending(this.pending);
   }
@@ -279,23 +245,6 @@ export class DirectThreadViewModel {
       let view: DirectThreadView | null =
         await NativeDirect.thread(this.threadId, '', this.fallbackUserId);
       if (view === null) {
-        /*
-         * 原生那两条都不通（REST 被 IG 回 404 not-logged-in、原生侧又没有**会话模板**）→
-         * 让常驻网页真开一次这条会话，页面自己会发那条 `PolarisDirect*Thread*` 查询，
-         * 网络钩子把模板交给原生存住，然后再走一次原生（见 ensureTemplate）。
-         *
-         * 这就是用户报的"打开会话显示 404 / 加载错误"的那条兜底：模板一旦抓下来，
-         * 之后每次进会话都是原生直发，不再依赖网页。
-         */
-        this.diag = NativeDirect.lastDetail();
-        hilog.info(DOMAIN, TAG, 'load cold path: native failed (%{public}s), capture template',
-          this.diag);
-        const captured: boolean = await this.ensureTemplate(true);
-        if (captured) {
-          view = await NativeDirect.thread(this.threadId, '', this.fallbackUserId);
-        }
-      }
-      if (view === null) {
         this.diag = NativeDirect.lastDetail();
         // 网络那一发没成：**手里有快照就继续用**（总比把预取好的内容换成"读取失败"强）。
         if (this.view !== null && this.view.messages.length > 0) {
@@ -336,8 +285,7 @@ export class DirectThreadViewModel {
       DirectCache.save(shown.messages.length > 0 ? shown : view);
       this.view = shown;
       this.onView(shown);
-      this.onStatus(shown.messages.length > 0
-        ? (this.usedColdPath ? '已加载（首次走网页抓接口）' : '已加载') : '');
+      this.onStatus(shown.messages.length > 0 ? '已加载' : '');
       /*
        * **进会话就算看过了**：照 instagrapi 的 `direct_send_seen` 把这条会话标成已读
        * （`direct_v2/threads/{id}/items/{最新消息id}/seen/`，见 MobileDirect.markSeen）。
@@ -384,110 +332,10 @@ export class DirectThreadViewModel {
     });
   }
 
-  /**
-   * 确保**会话（消息）那条模板**在原生侧；没有就让常驻网页打开一次这条会话。
-   *
-   * 和 DirectViewModel.ensureTemplate 是同一套路数（收件箱那条就是这么救回来的），
-   * 区别只在要抓的是**会话详情**那条查询、导航的是 `/direct/t/{id}/`。
-   *
-   * @param force true = 即使原生模板还在也去网页抓一次（这里用不上，留给以后诊断）。
-   */
-  private async ensureTemplate(force: boolean = false): Promise<boolean> {
-    this.usedColdPath = false;
-    if (!force && NativeDirect.hasThreadTemplate()) {
-      return true;
-    }
-    this.onStatus('首次加载：正在读取网页');
-    this.bridge.loadUrl(this.webUrl());
-    // 标记立刻立起来：无论抓没抓到模板，收尾都要把网页送回首页（这个网页全 App 共用）。
-    this.usedColdPath = true;
-    await this.bridge.awaitPageReady(NAV_READY_TIMEOUT_MS);
-    await DirectThreadViewModel.sleep(HYDRATE_WAIT_MS);
-    // 诊断：页面自己能不能读到这条会话（见 directThreadProbeScript 的说明）。
-    try {
-      const probe: string = await this.bridge.runBridge(
-        directThreadProbeScript(this.threadId), 15000, 'dm-thread-probe');
-      hilog.info(DOMAIN, TAG, 'thread probe %{public}s', probe.substring(0, 600));
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'thread probe threw: %{public}s', (error as Error).message);
-    }
-    for (let attempt: number = 1; attempt <= CAPTURE_POLLS; attempt++) {
-      await this.registry.capture(CAPTURE_FILTER);
-      /*
-       * 诊断：把**刚刚更新过**的模板名列出来。
-       *
-       * 会话页到底发的是哪条查询，光看"有没有名字带 thread 的模板"判断不出来（IG 这版会话页
-       * 是 Bloks 渲染的，可能压根不发单独的消息查询）。这里按更新时间筛，一眼就能看到页面
-       * 实际发了什么 —— 真机排查时就是靠它定方向的。
-       */
-      hilog.info(DOMAIN, TAG, 'cold path recent try=%{public}d %{public}s',
-        attempt, this.registry.recentNames(30000).join('|'));
-      if (NativeDirect.hasThreadTemplate()) {
-        hilog.info(DOMAIN, TAG, 'cold path thread template ready try=%{public}d op=%{public}s',
-          attempt, NativeDirect.threadOp());
-        this.returnToFeed();
-        return true;
-      }
-      if (attempt < CAPTURE_POLLS) {
-        await DirectThreadViewModel.sleep(CAPTURE_POLL_GAP_MS);
-      }
-    }
-    hilog.info(DOMAIN, TAG, 'cold path no thread template %{public}s',
-      this.registry.storedSummary());
-    this.returnToFeed();
-    return false;
-  }
-
-  /** 冷启动那条路读完，把网页送回首页信息流（理由同 DirectViewModel.returnToFeed）。 */
-  private returnToFeed(): void {
-    try {
-      this.bridge.loadUrl(AppConfig.INSTAGRAM_HOME_URL);
-      hilog.info(DOMAIN, TAG, 'cold path done → back to feed');
-    } catch (error) {
-    }
-  }
-
-  /**
-   * **翻页游标探针**（诊断用）：让隐藏网页自己把会话往上滚一屏，再抓一次模板。
-   *
-   * 为什么必须让页面自己翻：`min_uq_seq_id` 该填什么，只有页面翻页时发出的那条请求能说清
-   * （我们的 `end_cursor` / `mid.$…` 都被 IG 忽略，回同一页 —— 真机日志 `loadOlder: +0`）。
-   * 流程：导航到这条会话 → 抓一次（打一份变量基线）→ 注入"往上滚一屏" → 等它自己发请求
-   * → 再抓一次 → 打变量。两步的 `min_uq_seq_id` 一对比就知道该填什么。
-   */
-  async probePagingCursor(): Promise<void> {
-    if (this.threadId.length === 0) {
-      return;
-    }
-    try {
-      this.bridge.loadUrl(this.webUrl());
-      await this.bridge.awaitPageReady(NAV_READY_TIMEOUT_MS);
-      await DirectThreadViewModel.sleep(HYDRATE_WAIT_MS);
-      await this.registry.capture('');
-      NativeDirect.logThreadVars('before-scroll');
-      const scrolled: string = await this.bridge.runBridge(directScrollUpScript(), 10000, 'dm-scroll');
-      hilog.info(DOMAIN, TAG, 'paging probe scroll=%{public}s', scrolled.substring(0, 200));
-      await DirectThreadViewModel.sleep(2500);
-      await this.registry.capture('');
-      NativeDirect.logThreadVars('after-scroll');
-      /*
-       * **关键证据**：刚被页面更新过的那几条模板名。
-       *
-       * 会话历史是靠哪条请求翻的，看这一行就知道 —— 如果新出现的不是 IGDThreadDetailQuery，
-       * 那就说明网页翻历史走的是另一条查询，我们一直往 min_uq_seq_id 里塞游标自然无效。
-       */
-      hilog.info(DOMAIN, TAG, 'paging probe recent=%{public}s',
-        this.registry.recentNames(20000).join('|'));
-      this.returnToFeed();
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'paging probe threw: %{public}s', (error as Error).message);
-    }
-  }
-
   /** 翻页"卡住"之后的冷却截止时刻（见 loadOlder 里 stuck 那段）。 */
   private stuckUntilMs: number = 0;
 
-  /** 这条会话的网页地址（冷启动抓模板导航用；读不出来时界面拿它回落网页，见 DirectThreadPage）。 */
+  /** 这条会话的网页地址（读不出来时界面拿它回落网页，见 DirectThreadPage）。 */
   webUrl(): string {
     return 'https://www.instagram.com/direct/t/' + encodeURIComponent(this.threadId) + '/';
   }
