@@ -139,6 +139,8 @@ import { StoryDiag } from '../core/StoryDiag';
 import { DirectCache } from '../core/DirectCache';
 import { DirectPrefetch } from '../core/DirectPrefetch';
 import { PosterCache } from '../core/PosterCache';
+// 首页探索流第一页的落盘缓存（冷启动先画它，见 loadHomeRecommendedCached）。
+import { CachedRecommendedPage, FeedCache } from '../core/FeedCache';
 import { Translator } from '../core/Translator';
 import { MobileSession } from '../core/mobileapi/MobileSession';
 import { MobileProbe } from '../core/mobileapi/MobileProbe';
@@ -2149,6 +2151,10 @@ struct Index {
     };
     this.viewModel.loadRecommended = (cursor: string): Promise<FeedRecommendedPage> => {
       return this.loadHomeRecommended(cursor);
+    };
+    // 冷启动首屏：先铺上次落盘的那一页（毫秒级），网络那份回来再整体替换。
+    this.viewModel.loadRecommendedCached = (): FeedRecommendedPage => {
+      return this.loadHomeRecommendedCached();
     };
     /*
      * 提示卡片的位置（-1 = 不画）：关注流 → 卡片 → 探索流。
@@ -5304,6 +5310,10 @@ struct Index {
           cursor.length, NativeSearch.lastDiag());
         return new FeedRecommendedPage([], '', false);
       }
+      // 第一页顺手落盘：冷启动先铺它（见 loadHomeRecommendedCached）。
+      if (cursor.length === 0) {
+        FeedCache.saveRecommended(page.posts, page.cursor, page.hasMore);
+      }
       const list: Array<MediaPost> = Index.searchPostsToMedia(page.posts);
       hilog.info(DOMAIN, TAG, 'home recommended n=%{public}d cursor=%{public}d more=%{public}s',
         list.length, page.cursor.length, `${page.hasMore}`);
@@ -5312,6 +5322,23 @@ struct Index {
       hilog.warn(DOMAIN, TAG, 'home recommended failed: %{public}s', (error as Error).message);
       return new FeedRecommendedPage([], '', false);
     }
+  }
+
+  /**
+   * 上次落盘的探索流第一页（毫秒级；没有就是空页）。
+   *
+   * 只给**冷启动首屏**用：铺上之后 FeedViewModel 仍会照常发那一发网络请求并整体替换，
+   * 所以这里不需要判断新旧 —— 时效由 core/FeedCache.loadRecommended 管（30 分钟）。
+   */
+  private loadHomeRecommendedCached(): FeedRecommendedPage {
+    const cached: CachedRecommendedPage | null = FeedCache.loadRecommended();
+    if (cached === null) {
+      return new FeedRecommendedPage([], '', false);
+    }
+    const list: Array<MediaPost> = Index.searchPostsToMedia(cached.posts);
+    hilog.info(DOMAIN, TAG, 'home recommended cached n=%{public}d age=%{public}dms',
+      list.length, cached.ageMs);
+    return new FeedRecommendedPage(list, cached.cursor, cached.hasMore);
   }
 
   /**

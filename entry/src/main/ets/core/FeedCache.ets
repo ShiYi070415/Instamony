@@ -25,6 +25,7 @@ import { preferences } from '@kit.ArkData';
 import { AccountScope } from './AccountScope';
 import { common } from '@kit.AbilityKit';
 import { FeedItemDto } from '../model/FeedDto';
+import { SearchPost } from '../model/Search';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'FeedCache';
@@ -40,6 +41,14 @@ const KEY: string = 'page1_v1';
  * 才退回推荐源 —— 这正是用户说的"帖子刷新很慢"。
  */
 const KEY_STATE: string = 'timeline_state_v1';
+/**
+ * 探索流第一页（`discover/topical_explore/`）落盘的键。
+ *
+ * 为什么需要：这个账号的关注流是"已看完"状态，首页首屏**全部**来自探索流，而那一发要
+ * 3~7 秒、0.5~1MB。不落盘的话每次冷启动都要对着骨架屏等它；落盘之后先铺上次那份（几十毫秒），
+ * 网络那份回来再整体替换 —— 就是首页那套"先画后刷"（见 FeedViewModel.loadExplore）。
+ */
+const KEY_REC: string = 'rec_page1_v1';
 /** 缓存格式版本：改了结构就 +1，旧的一律当没有。 */
 const FORMAT: number = 1;
 /** 缓存有效期（毫秒）：30 分钟。 */
@@ -71,6 +80,30 @@ export class CachedFeedPage {
   }
 }
 
+/** 落盘的一份探索流第一页（帖子本身是 `SearchPost`，见 model/Search）。 */
+interface StoredRecommendedPage {
+  v?: number;
+  at?: number;
+  cursor?: string;
+  more?: boolean;
+  posts?: Array<SearchPost>;
+}
+
+/** 读回来的一份探索流第一页（已通过版本与时效校验）。 */
+export class CachedRecommendedPage {
+  readonly posts: Array<SearchPost>;
+  readonly cursor: string;
+  readonly hasMore: boolean;
+  readonly ageMs: number;
+
+  constructor(posts: Array<SearchPost>, cursor: string, hasMore: boolean, ageMs: number) {
+    this.posts = posts;
+    this.cursor = cursor;
+    this.hasMore = hasMore;
+    this.ageMs = ageMs;
+  }
+}
+
 export class FeedCache {
   private static store: preferences.Preferences | null = null;
 
@@ -82,7 +115,7 @@ export class FeedCache {
     try {
       FeedCache.store = preferences.getPreferencesSync(context, { name: STORE });
       // 按账号分区（见 core/AccountScope）：换账号绝不能读到上一个人的首页缓存。
-      AccountScope.register(FeedCache.store, [KEY, KEY_STATE]);
+      AccountScope.register(FeedCache.store, [KEY, KEY_STATE, KEY_REC]);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'open store failed: %{public}s', (error as Error).message);
     }
@@ -117,6 +150,82 @@ export class FeedCache {
       return Number.isFinite(value) && value > 0 ? value : 0;
     } catch (error) {
       return 0;
+    }
+  }
+
+  /**
+   * 存一份**探索流第一页**（同上：同步写，量小）。
+   *
+   * 存的是 `SearchPost`（页面注入那条路的原生类型），读回来重建实例再由页面转成 `MediaPost`；
+   * 游标也一起存 —— 冷启动先铺这份时，触底翻页能从上次那个游标接着走。
+   */
+  static saveRecommended(posts: Array<SearchPost>, cursor: string, hasMore: boolean): void {
+    const store: preferences.Preferences | null = FeedCache.store;
+    if (store === null || posts.length === 0) {
+      return;
+    }
+    try {
+      const payload: StoredRecommendedPage = {
+        v: FORMAT,
+        at: Date.now(),
+        cursor: cursor,
+        more: hasMore,
+        posts: posts
+      };
+      const text: string = JSON.stringify(payload);
+      if (text.length > MAX_CHARS) {
+        hilog.warn(DOMAIN, TAG, 'recommended too big to cache: %{public}d chars', text.length);
+        return;
+      }
+      store.putSync(AccountScope.slot(KEY_REC), text);
+      store.flushSync();
+      hilog.info(DOMAIN, TAG, 'saved recommended n=%{public}d chars=%{public}d',
+        posts.length, text.length);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'save recommended failed: %{public}s', (error as Error).message);
+    }
+  }
+
+  /** 读探索流第一页缓存（超过 `maxAgeMs` 就当没有）。 */
+  static loadRecommended(maxAgeMs: number = MAX_AGE_MS): CachedRecommendedPage | null {
+    const store: preferences.Preferences | null = FeedCache.store;
+    if (store === null) {
+      return null;
+    }
+    try {
+      const text: string = store.getSync(AccountScope.slot(KEY_REC), '') as string;
+      if (text.length === 0) {
+        return null;
+      }
+      const dto: StoredRecommendedPage = JSON.parse(text) as StoredRecommendedPage;
+      if ((dto.v ?? 0) !== FORMAT) {
+        return null;
+      }
+      const at: number = dto.at ?? 0;
+      const age: number = Date.now() - at;
+      if (at <= 0 || age > maxAgeMs) {
+        return null;
+      }
+      const raw: Array<SearchPost> = dto.posts ?? [];
+      const posts: Array<SearchPost> = [];
+      for (let index: number = 0; index < raw.length; index++) {
+        // JSON 回来的是**普通对象**（没有方法），所以要按构造器重建 —— 瀑布流要用 aspect()。
+        const one: SearchPost = raw[index];
+        if (one === null || one === undefined || `${one.code ?? ''}`.length === 0) {
+          continue;
+        }
+        posts.push(new SearchPost(one.code, one.coverUrl, one.width, one.height, one.isVideo,
+          one.mediaId, one.videoUrl, one.originalVideoUrl, one.ownerUsername, one.ownerAvatarUrl,
+          one.ownerId, one.caption, one.likeCount, one.commentCount, one.repostCount, one.liked,
+          one.following));
+      }
+      if (posts.length === 0) {
+        return null;
+      }
+      return new CachedRecommendedPage(posts, dto.cursor ?? '', dto.more === true, age);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'load recommended failed: %{public}s', (error as Error).message);
+      return null;
     }
   }
 

@@ -151,6 +151,8 @@ export class FeedViewModel {
   private exploreHasMore: boolean = false;
   /** 服务端说"探索流到底了"的时刻（见 END_RECHECK_MS：这个判断有时效）。 */
   private exploreEndAtMs: number = 0;
+  /** 本进程试过"铺落盘那一页"了没有（一轮只做一次，见 loadExplore）。 */
+  private exploreSeeded: boolean = false;
   /** 提示卡片在合并列表里的下标（-1 = 不显示，见 composePosts）。 */
   private hintIndex: number = -1;
   /**
@@ -251,6 +253,14 @@ export class FeedViewModel {
     (cursor: string): Promise<FeedRecommendedPage> => {
       return Promise.resolve(new FeedRecommendedPage([], '', false));
     };
+  /**
+   * 取**上次落盘**的探索流第一页（毫秒级，冷启动先铺它，见 core/FeedCache.saveRecommended）。
+   *
+   * 页面注入：索引不到就返回空页（行为与"没有缓存"完全一致）。
+   */
+  loadRecommendedCached: () => FeedRecommendedPage = (): FeedRecommendedPage => {
+    return new FeedRecommendedPage([], '', false);
+  };
   /** 提示卡片该画在第几条之前（-1 = 不画，见 composePosts）。 */
   onHint: (index: number) => void = (index: number): void => {
   };
@@ -339,6 +349,8 @@ export class FeedViewModel {
     this.exploreCursor = '';
     this.exploreHasMore = false;
     this.exploreEndAtMs = 0;
+    this.exploreSeeded = false;
+    this.wantExploreNext = false;
     this.hintIndex = -1;
     // 转发状态是本机记的，换了账号就完全不可信了。
     this.repostedKeys.clear();
@@ -504,6 +516,27 @@ export class FeedViewModel {
     const cursor: string = forReset ? '' : this.exploreCursor;
     if (!forReset && cursor.length === 0) {
       return;
+    }
+    /*
+     * **先铺落盘的那一页**（只在本进程第一次要探索流、且屏幕上还没有那段内容时）。
+     *
+     * 为什么值：这个账号的关注流是空状态，首屏**全部**来自探索流，而那一发 3~7 秒；
+     * 铺缓存是几十毫秒 —— 用户进首页不再是骨架屏，网络那份回来再整体替换（下面的 forReset 分支）。
+     */
+    if (forReset && !this.exploreSeeded && this.explore.length === 0) {
+      this.exploreSeeded = true;
+      const cached: FeedRecommendedPage = this.loadRecommendedCached();
+      if (cached.posts.length > 0) {
+        this.explore = cached.posts;
+        if (cached.cursor.length > 0) {
+          this.exploreCursor = cached.cursor;
+        }
+        this.exploreHasMore = cached.hasMore;
+        this.composePosts();
+        this.setStatus(FeedStatus.Idle);
+        hilog.info(DOMAIN, TAG, 'explore first paint from cache n=%{public}d',
+          cached.posts.length);
+      }
     }
     let page: FeedRecommendedPage;
     try {
