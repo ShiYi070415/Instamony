@@ -25,10 +25,12 @@ const TAG: string = 'MediaPrefetch';
 /**
  * 一次最多提交几张。
  *
- * 6 = PREFETCH_AHEAD(3) × 每条最多 2 张（多图帖下前两张）：这个上限只是兜底，
- * 免得调用方哪天给一大串把带宽全占了；正常情况下正好是"往后三张卡、每张两张图"。
+ * 原来 6 = PREFETCH_AHEAD(3) × 每条最多 2 张（多图帖下前两张）。
+ * **降到 2**（降噪，见 `FINGERPRINT_ANALYSIS.md` 阶段一）：预取是"我们替用户先下"，
+ * 不属于任何真实用户动作，密度越高越像爬虫；现在只预取**下一条**的两张，
+ * 再往后就等滚动真的到了跟前再下（那时是用户动作触发的）。
  */
-const MAX_PER_CALL: number = 6;
+const MAX_PER_CALL: number = 2;
 /**
  * `seen` 最多记多少个 url。
  *

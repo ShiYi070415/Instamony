@@ -188,6 +188,28 @@ this.timezoneOffset = DEFAULT_TIMEZONE_OFFSET;  // -14400（纽约）
 
 ---
 
+## 5.1 阶段一落地记录（2026-10-21）
+
+这一轮把"降噪 + 身份自洽"里**零风险、收益最大**的部分做进了代码，实测度量见下。
+
+| 项 | 改成 | 位置 |
+|---|---|---|
+| 会话页轮询 | 固定 **2.5s**（中间那版"近实时"）→ **12~25s 随机**；自己刚发完消息后 30 秒内允许 4~6s 突发 | `DirectThreadViewModel`（`THREAD_POLL_MIN_MS` 等） |
+| 私信列表轮询 | 6s → **25~40s 随机**，每拍重抽 | `DirectPage`（`DIRECT_POLL_MIN_MS` / `nextDirectPollMs`） |
+| 请求闸门 | `900±400ms` → **1500 + 0~2000ms**；交互请求 600 + 0~600ms | `ApiThrottle`（`PACE_MIN_MS` / `PACE_JITTER_MS`） |
+| 写操作间隔 | 无 → **3~8s 随机、全局串行**（发消息/点赞/转发/收藏/关注） | `ApiThrottle.writeSlot`，被 `NativeDirect.sendText` / `NativeEngage.postRaw` / `NativeSave.postText` 调用 |
+| 启动预热 | reels / 搜索 / 我的（含四个分页）**全部不在启动时拉**，等用户切页；搜索体检与会话自检也移出启动链 | `Index.warmOtherTabs` |
+| 媒体预取 | 一次 6 张 → **2 张**（只预取下一条） | `MediaPrefetch.MAX_PER_CALL` |
+| 整账号熔断 | 新增：`feedback_required` → 停 45 分钟；`challenge_required` → 停 60 分钟；熔断期间 `blocked()` 对所有家族为真 | `ApiThrottle.suspendAll` + `MobileRequest` / `MobileChallenge` |
+| 设备档案 | Pixel 8 Pro（美国版）→ **读这台机器的真实品牌/型号/分辨率/DPI/ABI**，只生成一次、**不轮换**（`androidVersion` 按品牌给固定值：华为/荣耀 12，其余 34） | `core/mobileapi/DeviceTruth` |
+
+度量（模拟器，冷启动到 35 秒，脚本读数）：
+`req=11  pace gap=1500+2000ms  waited=11  writes=0` —— 请求密度被闸门摊平，
+且**没有**再出现"固定 2.5 秒一发"那种节奏。真机上应再配合"用信任度更高的号"一起看。
+
+还没做的（下一步）：`X-MID` 改用 App 侧 mid、App 请求继续过滤 `ig_did` / `ps_l` / `ps_n`、
+"网页身份"与"App 身份"之间的最小间隔、写操作失败不自动重试的收口。
+
 ## 6. 参考
 
 - 本仓库 `INSTAGRAPI_PORT.md` 第 9~13 节：移动端协议移植的实测表（含哪些端点在什么身份下通/不通）。

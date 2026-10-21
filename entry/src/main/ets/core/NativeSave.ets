@@ -476,6 +476,8 @@ export class NativeSave {
   /** 发一次 POST（表单体），返回响应文本（失败给空串）。 */
   private static async postText(url0: string, headers: Record<string, string>, body: string,
                                 tag: string): Promise<string> {
+    // 收藏/取消收藏也是**写**：走人速间隔，别让几次点击挤在一秒里（见 ApiThrottle.writeSlot）。
+    await ApiThrottle.writeSlot();
     /*
      * 模板里的 URL 是**页面视角的相对路径**（`/api/graphql`、`/api/v1/media/…/save/`）：
      * 直接交给 `http.request` 会抛（invalid url），表现就是"模板明明抓到了却发不出去"。

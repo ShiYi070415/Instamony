@@ -46,13 +46,21 @@ const UNREAD_DOT_COLOR: string = '#1D4ED8';
 /** "n 条新消息"里 n 的上限（需求：n 最大等于 4）。 */
 const UNREAD_MAX: number = 4;
 /**
- * 私信列表**自动刷新**的间隔（毫秒）。
+ * 私信列表**自动刷新**的间隔（毫秒）：范围随机，不用固定值。
  *
- * 看列表的人通常就是在等回信，所以这里跟会话页一样按"近实时"取值：6 秒。
- * 这一发是 `ApiThrottle.DIRECT` 家族里的普通读请求，内容没变时连界面都不重绘
- * （见 DirectViewModel.refreshQuietly / sameThreads）；进后台就停（见 startPolling）。
+ * 演进：20 秒 → 15 秒 → 6 秒（做"近实时"那版）→ **现在 25~40 秒随机**。
+ * 6 秒那版在节奏上太像脚本（见 `FINGERPRINT_ANALYSIS.md` 根因 C：固定周期本身就是指纹；
+ * IG 的 `feedback_required` 看的正是单位时间密度）。列表也不是"盯着等回信"的界面，
+ * 25~40 秒足够；每拍重抽一次间隔，进后台就停（见 startPolling）。
  */
-const DIRECT_POLL_MS: number = 6000;
+const DIRECT_POLL_MIN_MS: number = 25000;
+const DIRECT_POLL_MAX_MS: number = 40000;
+
+/** 下一拍列表刷新的间隔（毫秒，每拍重抽）。 */
+function nextDirectPollMs(): number {
+  return DIRECT_POLL_MIN_MS
+    + Math.floor(Math.random() * (DIRECT_POLL_MAX_MS - DIRECT_POLL_MIN_MS + 1));
+}
 
 @Component
 export struct DirectPage {
@@ -83,15 +91,31 @@ export struct DirectPage {
   /** 自动刷新的定时器句柄（-1 = 没在跑，见 startPolling / aboutToDisappear）。 */
   private pollTimer: number = -1;
 
-  /** 起一个自动刷新定时器（幂等）：按 DIRECT_POLL_MS 静默拉一次收件箱。 */
+  /**
+   * 挂**下一拍**的刷新定时器（每拍重抽间隔，见 DIRECT_POLL_MIN_MS）。
+   *
+   * 为什么不用 `setInterval`：固定周期本身就是指纹；这里每拍随机 25~40 秒。
+   */
+  private armPoll(): void {
+    if (this.pollTimer >= 0) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = -1;
+    }
+    this.pollTimer = setTimeout((): void => {
+      this.pollTimer = -1;
+      this.vm.refreshQuietly().catch((): void => {
+      }).then((): void => {
+        this.armPoll();
+      });
+    }, nextDirectPollMs());
+  }
+
+  /** 起自动刷新（幂等）：按随机间隔静默拉一次收件箱。 */
   private startPolling(): void {
     if (this.pollTimer >= 0) {
       return;
     }
-    this.pollTimer = setInterval((): void => {
-      this.vm.refreshQuietly().catch((): void => {
-      });
-    }, DIRECT_POLL_MS);
+    this.armPoll();
     /*
      * **跟着前后台走**：进后台停（省电、也少给 IG 发"看不见的请求"），回前台立刻刷一次 ——
      * 后台期间定时器会被系统压住（也可能整进程被冻结），回到前台那一眼看到的才是旧列表。
@@ -99,7 +123,7 @@ export struct DirectPage {
     AppLifecycle.addVisibilityListener((foreground: boolean): void => {
       if (!foreground) {
         if (this.pollTimer >= 0) {
-          clearInterval(this.pollTimer);
+          clearTimeout(this.pollTimer);
           this.pollTimer = -1;
         }
         return;
@@ -107,17 +131,14 @@ export struct DirectPage {
       this.vm.refreshQuietly().catch((): void => {
       });
       if (this.pollTimer < 0) {
-        this.pollTimer = setInterval((): void => {
-          this.vm.refreshQuietly().catch((): void => {
-          });
-        }, DIRECT_POLL_MS);
+        this.armPoll();
       }
     });
   }
 
   aboutToDisappear(): void {
     if (this.pollTimer >= 0) {
-      clearInterval(this.pollTimer);
+      clearTimeout(this.pollTimer);
       this.pollTimer = -1;
     }
   }

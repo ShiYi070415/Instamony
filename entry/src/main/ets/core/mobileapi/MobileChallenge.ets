@@ -27,6 +27,9 @@
  * 与 `pages/Index`（界面横幅 + 打开网页）决定。
  */
 
+// 被要求验证时顺手把"可选流量"整账号停掉（见 note 末尾的 suspendAll）。
+import { ApiThrottle } from '../ApiThrottle';
+
 const CHALLENGE_KEY: string = 'challenge_required';
 
 export class MobileChallenge {
@@ -61,6 +64,12 @@ export class MobileChallenge {
     MobileChallenge.url = web;
     MobileChallenge.atMs = Date.now();
     MobileChallenge.detail = body.substring(0, 200);
+    /*
+     * **整账号熔断**：被要求过安全验证之后继续发请求，只会让 IG 把账号盯得更紧
+     * （审计文档里"越打越久"的那一类）。这里停 1 小时的可选流量，等用户去网页里验完
+     * 再恢复（界面上的验证弹窗就是入口，见 pages/Index 的 showChallengeDialog）。
+     */
+    ApiThrottle.suspendAll(60, 'challenge_required');
   }
 
   /** 现在有没有待处理的验证。 */

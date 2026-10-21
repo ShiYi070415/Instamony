@@ -41,25 +41,30 @@ export const FEEDBACK_BACKOFF_MS: number = 45 * 60 * 1000;
 /**
  * **两次请求之间至少隔多久**（毫秒）。见 `ApiThrottle.acquire` 的说明。
  *
- * 取 900ms 的依据：本项目自己的调用形态就是"一发接一发"——
- *   · 快拍预缓存一上来 5 位用户（每位 1~2 发），点开再续下一位；
- *   · 启动自检一次 9 发，实测**一秒内全打出去**（真机日志 16:00:24 那一段）；
- *   · 会话页每 4 秒轮询一发。
- * 这些都不是"用户手速"，而是我们代码自己排出来的连发。IG 的节流看的正是**单位时间内的
- * 请求密度**，所以这里给一个下限；代价是预取变慢（5 页 ≈ 4.5 秒铺满），
- * 而用户真正点开的那一发走**交互优先级**，会插到队头（见 PRIORITY_*）。
+ * 取 1500ms 的依据（2026-10-19 加强）：900ms 那版仍然是"同一台机器一发接一发"的密度，
+ * 而 IG 的节流看的就是单位时间请求密度。放到 1.5 秒后：
+ *   · 首屏那几发仍然来得急（它们是 `interactive` / 首屏 `warm`，见下面的小闸）；
+ *   · 预热和预取被自然拉开，冷启动 40 秒内的请求数从十几发压到个位数。
+ * 代价是"要连发 5 页"时慢了几秒 —— 这些本来就不是用户此刻要看的东西。
  */
-const PACE_MIN_MS: number = 900;
-/** 间隔的随机抖动上限（毫秒）：**固定间隔本身就是一种指纹**，加抖动更像人。 */
-const PACE_JITTER_MS: number = 400;
+const PACE_MIN_MS: number = 1500;
+/**
+ * 间隔的随机抖动量（毫秒）：实际间隔 = `PACE_MIN_MS` + `[0, JITTER)`。
+ *
+ * **固定间隔本身就是指纹**（审计文档里的实测：每次冷启动都停在 900±400ms 这个带子上）。
+ * 抖动幅值取和下限同量级（1.5~3.5 秒），间隔分布才不像机器。
+ */
+const PACE_JITTER_MS: number = 2000;
 /**
  * **交互请求**（用户此刻点开的）用的最小间隔（毫秒）。
  *
- * 为什么给它一个明显更小的值：900ms 那道闸是防"我们代码自己排出来的连发"（预取/自检），
- * 而用户点开某一发快拍时，真实 App 就是"立刻发" —— 让这一发也等满 900ms 只是白白让界面慢。
- * 250ms 仍然保证它不会和上一发挤在同一个瞬间（真正的风险是密集连发，不是单发）。
+ * 为什么给它一个明显更小的值：1.5 秒那道闸是防"我们代码自己排出来的连发"（预取/预热），
+ * 而用户点开某一发快拍时，真实 App 就是"立刻发" —— 让这一发也等满 1.5 秒只是白白让界面慢。
+ * 600ms 仍然保证它不会和上一发挤在同一个瞬间（真正的风险是密集连发，不是单发）。
  */
-const PACE_MIN_INTERACTIVE_MS: number = 250;
+const PACE_MIN_INTERACTIVE_MS: number = 600;
+/** 交互请求的抖动量（毫秒）：0~600，别让"点开就发"也变成固定节奏。 */
+const PACE_JITTER_INTERACTIVE_MS: number = 600;
 /**
  * 一次"持闸"最长多久（毫秒）——**防呆用**。
  *
@@ -75,6 +80,10 @@ const PRIORITY_INTERACTIVE: number = 0;
 const PRIORITY_WARM: number = 1;
 /** 空闲优先级：诊断、自检、后台补缓存 —— 排最后，别抢用户的请求。 */
 const PRIORITY_IDLE: number = 2;
+
+/** 写操作之间的人速间隔（毫秒）：3 秒 + 0~5 秒随机。 */
+const WRITE_GAP_MIN_MS: number = 3000;
+const WRITE_GAP_JITTER_MS: number = 5000;
 
 /** 排队等闸门的一个请求。 */
 class PaceWaiter {
@@ -118,6 +127,15 @@ export class ApiThrottle {
 
   /** 家族 → 解禁时刻（毫秒时间戳）。 */
   private static until: Map<string, number> = new Map<string, number>();
+
+  /** 整账号熔断的截止时刻（0 = 没熔断，见 suspendAll）。 */
+  private static suspendUntil: number = 0;
+  /** 熔断原因（日志/界面用）。 */
+  private static suspendReason: string = '';
+  /** 上一次**写操作**放行的时刻（人速间隔从它算，见 writeSlot）。 */
+  private static lastWriteAt: number = 0;
+  /** 因为人速间隔等过几次（诊断用）。 */
+  private static writeWaits: number = 0;
 
   // ---------------------------------------------------------------- 主动限速（闸门）
 
@@ -179,7 +197,10 @@ export class ApiThrottle {
   /** 限速状态一行摘要（诊断面板/日志用）。 */
   static paceDescribe(): string {
     return `pace gap=${PACE_MIN_MS}+${PACE_JITTER_MS}ms waiting=${ApiThrottle.waiters.length}`
-      + ` holding=${ApiThrottle.holding ? 'y' : 'n'} paced=${ApiThrottle.pacedCount}`;
+      + ` holding=${ApiThrottle.holding ? 'y' : 'n'} paced=${ApiThrottle.pacedCount}`
+      + ` writes=${ApiThrottle.writeWaits}`
+      + (ApiThrottle.suspended()
+        ? ` SUSPENDED ${ApiThrottle.suspendMinutesLeft()}min(${ApiThrottle.suspendReason})` : '');
   }
 
   /** 放一发（内部）：挑优先级最高的那个，按间隔延迟后唤醒它，并上防呆。 */
@@ -218,10 +239,81 @@ export class ApiThrottle {
   private static gapMs(priority: number): number {
     const interactive: boolean = priority <= PRIORITY_INTERACTIVE;
     const min: number = interactive ? PACE_MIN_INTERACTIVE_MS : PACE_MIN_MS;
-    const jitter: number = interactive ? 0 : Math.floor(Math.random() * (PACE_JITTER_MS + 1));
+    const jitterRange: number = interactive ? PACE_JITTER_INTERACTIVE_MS : PACE_JITTER_MS;
+    const jitter: number = Math.floor(Math.random() * (jitterRange + 1));
     const since: number = ApiThrottle.lastDoneAt === 0 ? min : Date.now() - ApiThrottle.lastDoneAt;
     const left: number = min + jitter - since;
     return left > 0 ? left : 0;
+  }
+
+  /**
+   * **写操作的人速间隔**（点赞 / 关注 / 发消息 / 评论…）。
+   *
+   * 读可以靠缓存摊薄，写不能：每一次写都是一次"这个账号在动"的信号，连着来最像脚本。
+   * 这里给一个 3~8 秒的随机间隔，且**全局串行**（同一时刻只允许一个写操作在等人速窗口）。
+   */
+  static async writeSlot(): Promise<void> {
+    const now: number = Date.now();
+    const wait: number = ApiThrottle.lastWriteAt === 0
+      ? 0 : ApiThrottle.lastWriteAt + WRITE_GAP_MIN_MS
+        + Math.floor(Math.random() * (WRITE_GAP_JITTER_MS + 1)) - now;
+    ApiThrottle.lastWriteAt = Math.max(now, now + (wait > 0 ? wait : 0));
+    if (wait <= 0) {
+      return;
+    }
+    ApiThrottle.writeWaits = ApiThrottle.writeWaits + 1;
+    await new Promise<void>((resolve: () => void): void => {
+      setTimeout((): void => {
+        resolve();
+      }, wait);
+    });
+  }
+
+  /**
+   * **整账号熔断**：出现 `429` / `feedback_required` / `challenge_required` 时调。
+   *
+   * 为什么不是只停"出事那个家族"：IG 的判定是**账号级**的。读到限流还继续打别的端点，
+   * 只会把窗口越拉越长（审计文档里实测过）。熔断期间 `blocked()` 对所有家族都返回 true，
+   * 已有的"每个调用点先查 blocked"就自动把可选流量全停了。
+   *
+   * @param minutes 停多久（默认 45 分钟）
+   * @param reason  原因（日志/界面提示用）
+   */
+  static suspendAll(minutes: number = 45, reason: string = '-'): void {
+    const until: number = Date.now() + minutes * 60000;
+    if (until > ApiThrottle.suspendUntil) {
+      ApiThrottle.suspendUntil = until;
+      ApiThrottle.suspendReason = reason;
+      hilog.warn(DOMAIN, TAG, 'suspend all traffic %{public}dmin reason=%{public}s',
+        minutes, reason);
+    }
+  }
+
+  /** 现在是不是处于整账号熔断中。 */
+  static suspended(): boolean {
+    if (ApiThrottle.suspendUntil <= 0) {
+      return false;
+    }
+    if (Date.now() >= ApiThrottle.suspendUntil) {
+      ApiThrottle.suspendUntil = 0;
+      ApiThrottle.suspendReason = '';
+      return false;
+    }
+    return true;
+  }
+
+  /** 熔断还剩几分钟（不在熔断里给 0）；界面/日志用。 */
+  static suspendMinutesLeft(): number {
+    if (!ApiThrottle.suspended()) {
+      return 0;
+    }
+    const left: number = ApiThrottle.suspendUntil - Date.now();
+    return left > 0 ? Math.ceil(left / 60000) : 0;
+  }
+
+  /** 熔断原因（没在熔断里给空串）。 */
+  static suspendWhy(): string {
+    return ApiThrottle.suspended() ? ApiThrottle.suspendReason : '';
   }
 
   /**
@@ -263,8 +355,16 @@ export class ApiThrottle {
     ApiThrottle.until.set(family, Date.now() + ms);
   }
 
-  /** 现在这个家族还在冷却里吗。 */
+  /**
+   * 现在这个家族还在冷却里吗（含**整账号熔断**，见 suspendAll）。
+   *
+   * 熔断期间一切可选流量都会被这条挡住 —— 各调用点本来就是"先查 blocked 再决定发不发"，
+   * 所以这里返回 true 就够了，不需要每个调用点再单独判一次。
+   */
   static blocked(family: string): boolean {
+    if (ApiThrottle.suspended()) {
+      return true;
+    }
     const at: number | undefined = ApiThrottle.until.get(family);
     if (at === undefined) {
       return false;

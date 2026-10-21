@@ -40,15 +40,26 @@ import { AppLifecycle } from '../core/AppLifecycle';
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'DirectThreadViewModel';
 /**
- * 会话页**可见时**的轮询间隔（毫秒）。
+ * 会话页**可见时**的轮询间隔（毫秒）：**随机**取 `[MIN, MAX)`，不用固定值。
  *
- * 为什么是 2.5 秒：IG 的真正实时通道是 MQTT（MQTToT），但真机实测当前运行时的
- * `TLSSocket` **收不到任何数据**（同样代码走明文 TCP 收得到，见 core/mobileapi/NetProbe
- * 的 ①②③ 三组对照），所以 MQTT 这条路暂时不可用。退一步用"够快的轮询"做**近实时**：
- * 2.5 秒一轮 ≈ 对方发完就能看到；而这条 REST 一次往返只有几十 KB、几百毫秒，
- * 只在**会话页开着**时才跑（进后台就停，见 hookVisibility），代价可控。
+ * 演进过程（这一段值得留着）：
+ *   1. 最早 4 秒 —— 太密；
+ *   2. 审计后放宽到 25 秒 —— 稳，但"发了消息要等半分钟才上屏"；
+ *   3. 中间一度改成 2.5 秒"近实时" —— **这是节奏上最危险的一版**：固定 2.5 秒是标准脚本指纹，
+ *      IG 的 `feedback_required` 看的正是这种单位时间密度；
+ *   4. 现在这版：**12~25 秒随机**，并且"自己刚发完消息后的 30 秒"里允许 4~6 秒的突发
+ *      （那时候用户确实在等回信，是人的行为，不是机器节奏）。
+ *
+ * 真正的实时通道（MQTT）在本机不可用（见 core/mobileapi/NetProbe 的三组对照），
+ * 所以这里的前提是"宁可慢一点，也别把账号打成脚本"。
  */
-const THREAD_POLL_MS: number = 2500;
+const THREAD_POLL_MIN_MS: number = 12000;
+const THREAD_POLL_MAX_MS: number = 25000;
+/** 自己刚发完消息后的**突发窗口**（毫秒）与窗口内的间隔范围。 */
+const THREAD_POLL_BURST_MS: number = 4500;
+const THREAD_POLL_BURST_MIN_MS: number = 4000;
+const THREAD_POLL_BURST_MAX_MS: number = 6000;
+const THREAD_POLL_BURST_WINDOW_MS: number = 30000;
 /**
  * 乐观气泡的**确认窗口**（毫秒）。
  *
@@ -122,6 +133,8 @@ export class DirectThreadViewModel {
   private foreground: boolean = true;
   /** 前后台监听是否已挂（幂等）。 */
   private visibilityHooked: boolean = false;
+  /** 突发窗口截止时刻：自己刚发完消息后的 30 秒里允许密一点（见 THREAD_POLL_BURST_*）。 */
+  private burstUntilMs: number = 0;
   /** 有新消息时的回调（界面据此贴到底部）。 */
   private onNew: (() => void) | undefined = undefined;
 
@@ -513,6 +526,14 @@ export class DirectThreadViewModel {
       }
       this.onStatus('');
       /*
+       * **自己刚发完消息 → 打开 30 秒的突发窗口**：这时候人确实在等回信，
+       * 密一点（4~6 秒）是人的行为；平时走 12~25 秒（见 THREAD_POLL_MIN_MS 的说明）。
+       */
+      this.burstUntilMs = Date.now() + THREAD_POLL_BURST_WINDOW_MS;
+      if (this.pollTimer < 0) {
+        this.armTimer();
+      }
+      /*
        * **先拉一次把服务端那条拿到手，再撤掉乐观气泡。**
        *
        * 早先是"先 `pending = []` 再 `load()`"：中间那 1~3 秒里刚发出去的那条会**凭空消失**，
@@ -681,11 +702,10 @@ export class DirectThreadViewModel {
   // ==========================================================================
 
   /**
-   * 开始**实时接收**：每 `THREAD_POLL_MS` 静默拉一次这条会话，有新消息就回调。
+   * 开始**实时接收**：按随机间隔静默拉一次这条会话，有新消息就回调。
    *
-   * 为什么用轮询而不是长连接：IG 的实时通道是 MQTT（`edge-mqtt`），要在 App 里再实现一套
-   * 连接/心跳/重连，代价远大于收益；而这条 REST 一次往返只有几十 KB、实测几百毫秒，
-   * 4 秒一轮对"聊天"这个场景完全够（对方发来的消息最迟 4 秒上屏）。
+   * 间隔规则见 `THREAD_POLL_MIN_MS` 的说明：常态 12~25 秒随机；
+   * 自己刚发完消息后的 30 秒内走 4~6 秒的突发（那时候人在等回信）。
    *
    * 三个讲究：
    *   1. **静默**：不碰 `busy` / 不写状态行 / 不发 `onBusy`，免得把界面刷成"正在加载"；
@@ -702,21 +722,41 @@ export class DirectThreadViewModel {
     this.armTimer();
   }
 
-  /** 按当前间隔重新挂定时器（见 THREAD_POLL_MS 的说明）。 */
+  /**
+   * 挂**下一拍**的定时器（每拍结束后自己重挂，间隔每拍重算）。
+   *
+   * 为什么不用 `setInterval`：固定周期本身就是指纹。这里每拍都按"当前是否在突发窗口"
+   * 抽一个新的随机间隔，间隔序列是 `随机(12~25s)` 与 `随机(4~6s)` 的混合。
+   */
   private armTimer(): void {
     if (this.pollTimer >= 0) {
-      clearInterval(this.pollTimer);
+      clearTimeout(this.pollTimer);
+      this.pollTimer = -1;
     }
-    this.pollTimer = setInterval((): void => {
+    if (!this.foreground) {
+      return;
+    }
+    const delay: number = this.nextDelay();
+    this.pollTimer = setTimeout((): void => {
+      this.pollTimer = -1;
       this.pollOnce();
-    }, THREAD_POLL_MS);
+      this.armTimer();
+    }, delay);
+  }
+
+  /** 下一拍的间隔（毫秒）：突发窗口内 4~6 秒，否则 12~25 秒。 */
+  private nextDelay(): number {
+    const burst: boolean = this.burstUntilMs > Date.now();
+    const min: number = burst ? THREAD_POLL_BURST_MIN_MS : THREAD_POLL_MIN_MS;
+    const max: number = burst ? THREAD_POLL_BURST_MAX_MS : THREAD_POLL_MAX_MS;
+    return min + Math.floor(Math.random() * (max - min + 1));
   }
 
   /**
    * 进后台就停、回前台立刻补一发。
    *
-   * 后台里继续每 2.5 秒发一发请求，除了耗电与白白消耗 IG 的读写配额，什么也换不到
-   * （界面根本看不见）；而回前台那一眼最需要的是"马上就是最新的"。
+   * 后台里继续轮询，除了耗电与白白消耗 IG 的读写配额什么也换不到（界面根本看不见）；
+   * 而回前台那一眼最需要的是"马上就是最新的"。
    */
   private hookVisibility(): void {
     if (this.visibilityHooked) {
@@ -727,7 +767,7 @@ export class DirectThreadViewModel {
       this.foreground = foreground;
       if (!foreground) {
         if (this.pollTimer >= 0) {
-          clearInterval(this.pollTimer);
+          clearTimeout(this.pollTimer);
           this.pollTimer = -1;
         }
         return;
@@ -740,7 +780,7 @@ export class DirectThreadViewModel {
   /** 停止实时接收（页面销毁时调用）。 */
   stopPolling(): void {
     if (this.pollTimer >= 0) {
-      clearInterval(this.pollTimer);
+      clearTimeout(this.pollTimer);
       this.pollTimer = -1;
     }
     this.polling = false;

@@ -121,6 +121,13 @@ export class MobileRequest {
   private static lastDetail: string = '-';
   private static lastError: string = '-';
   private static lastCode: number = 0;
+  /**
+   * 本进程一共发了几发移动端请求（诊断/度量用）。
+   *
+   * 用来回答"降噪到底有没有效果"：同一套动作下这个数应该掉一个量级
+   * （见 `FINGERPRINT_ANALYSIS.md` 第 5 节那张基线表）。
+   */
+  private static sends: number = 0;
 
   static detail(): string {
     return MobileRequest.lastDetail;
@@ -132,6 +139,11 @@ export class MobileRequest {
 
   static lastHttpCode(): number {
     return MobileRequest.lastCode;
+  }
+
+  /** 本进程发出的移动端请求数（诊断/降噪度量用，见 `sends` 字段）。 */
+  static sendCount(): number {
+    return MobileRequest.sends;
   }
 
   /**
@@ -248,6 +260,7 @@ export class MobileRequest {
                     options: MobileOptions | null = null): Promise<MobileResult> {
     const opts: MobileOptions = options === null ? new MobileOptions() : options;
     const started: number = Date.now();
+    MobileRequest.sends = MobileRequest.sends + 1;
     const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
     if (identity === null || !identity.isComplete()) {
       MobileRequest.lastError = MOBILE_NO_SESSION;
@@ -335,6 +348,16 @@ export class MobileRequest {
         const ms: number = outcome.error === MOBILE_FEEDBACK
           ? FEEDBACK_BACKOFF_MS : BACKOFF_MS;
         ApiThrottle.note(opts.family, ms);
+        /*
+         * `feedback_required` 再上一层：**整账号熔断**（见 ApiThrottle.suspendAll）。
+         *
+         * 只停"出事那个家族"不够 —— IG 的判定是账号级的，限流期间继续打别的端点
+         * 只会把窗口拉长。熔断后 `blocked()` 对所有家族都返回 true，
+         * 各模块的可选流量（预取/轮询）会一起停手，用户手动动作也会被挡并按提示恢复。
+         */
+        if (outcome.error === MOBILE_FEEDBACK) {
+          ApiThrottle.suspendAll(45, 'feedback_required');
+        }
         hilog.warn(DOMAIN, TAG, 'throttled %{public}s family=%{public}s → backoff %{public}dmin',
           endpoint, opts.family, Math.round(ms / 60000));
       }

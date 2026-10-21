@@ -1141,6 +1141,11 @@ export class NativeDirect {
       return false;
     }
     /*
+     * **写操作的人速间隔**：发消息是最容易被判成脚本的写操作，先过 3~8 秒随机间隔
+     * （全局串行，见 ApiThrottle.writeSlot）。用户视角只是"发送中"多转一会儿圈。
+     */
+    await ApiThrottle.writeSlot();
+    /*
      * **先走移动端私有 API**（`direct_v2/threads/broadcast/text/`，见
      * core/mobileapi/MobileDirect.sendText）：读收件箱/会话走的就是这套签名请求，
      * 而网页 REST 那条写接口在真机上被 `useragent mismatch` 卡过。

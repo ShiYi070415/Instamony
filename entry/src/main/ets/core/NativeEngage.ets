@@ -35,6 +35,8 @@ import { WebTokens } from './WebTokens';
 import { EngageSkeleton } from './EngageSkeleton';
 import { ApiRegistry, ApiTemplate } from '../bridge/ApiRegistry';
 import { MobileEngage } from './mobileapi/MobileEngage';
+// 写操作的人速间隔（见 postRaw 里的 writeSlot）。
+import { ApiThrottle } from './ApiThrottle';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeEngage';
@@ -548,6 +550,11 @@ export class NativeEngage {
   /** 一次表单 POST（头由调用方给；结果用 NativeFetchResult 表达，不抛异常）。 */
   private static async postRaw(url0: string, body: string,
                                headers: Record<string, string>): Promise<NativeFetchResult> {
+    /*
+     * **写操作的人速间隔**（点赞 / 转发 / 收藏 / 关注这一类的公共出口）：
+     * 每一次写都是"这个账号在动"的信号，连着来最像脚本（见 ApiThrottle.writeSlot）。
+     */
+    await ApiThrottle.writeSlot();
     const started: number = Date.now();
     const url: string = url0.indexOf('http') === 0
       ? url0 : `https://www.instagram.com${url0.charAt(0) === '/' ? '' : '/'}${url0}`;

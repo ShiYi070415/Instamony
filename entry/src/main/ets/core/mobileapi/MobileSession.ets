@@ -44,6 +44,8 @@ import {
   deviceTimezoneOffset
 } from './MobileConfig';
 import { androidDeviceId, base64UrlNoPad, genToken, utf8, uuid4 } from './MobileSign';
+// 真机设备档案（见 DeviceTruth 的文件头：把"自称 Pixel 8 Pro"换成"这台机器自己"）。
+import { DeviceTruth } from './DeviceTruth';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'MobileSession';
@@ -129,7 +131,9 @@ export class MobileIdentity {
     this.igURur = seed.igURur.length > 0 ? seed.igURur : rurFromCookie;
     this.authorization = seed.authorization.length > 0
       ? seed.authorization : MobileIdentity.buildAuthorization(userId, sessionId);
-    this.device = DeviceProfile.DEFAULT;
+    // 设备档案：用**这台机器自己的**品牌/型号/分辨率/DPI（见 DeviceTruth）。
+    // 只生成一次、终身不变 —— 轮换等于"同一账号天天换手机"，比不换更可疑。
+    this.device = COHERENT_FINGERPRINT ? DeviceTruth.profile() : DeviceProfile.DEFAULT;
     const known: AppProfile | undefined = APP_SETTINGS.get(seed.appVersion);
     this.app = known !== undefined ? known : MobileSession.appProfileOrDefault(seed.appVersion);
     // 身份自洽（见 MobileConfig.COHERENT_FINGERPRINT）：时区/语言跟系统走，国家拿不到就不发。

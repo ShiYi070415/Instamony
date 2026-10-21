@@ -161,6 +161,8 @@ import { ProfileReelsViewModel } from '../viewmodel/ProfileReelsViewModel';
 import { MediaDetail, NativeMediaInfo } from '../core/NativeMediaInfo';
 import { NativeUserInfo } from '../core/NativeUserInfo';
 import { ApiThrottle } from '../core/ApiThrottle';
+// 降噪度量（临时 toast 用，见 aboutToAppear 末尾那段）。
+import { MobileRequest } from '../core/mobileapi/MobileRequest';
 import { SessionGate } from '../core/SessionGate';
 import { InstagramProbe } from '../probe/InstagramProbe';
 import { FeedViewModel } from '../viewmodel/FeedViewModel';
@@ -2480,49 +2482,16 @@ struct Index {
      * 它启动时那 2~3 发（news/inbox → show_many → ayml）对首屏没有任何帮助，
      * 纯粹抬高请求密度；用户点标题栏那颗爱心时 `loadNotifications` 自己会拉。
      */
-    // 2) Reels（有模板时是毫秒级回放；没有才导航一次）。
-    await this.warmStep('reels', (): boolean => this.reelsVm.list().length > 0,
-      (): Promise<void> => {
-        return this.reelsVm.loadFirst();
-      });
-    // 3) 搜索页的推荐流：**只走原生 HTTP**（warm 不会导航隐藏网页），顺手预取第二页。
-    await this.warmStep('search', (): boolean => this.searchVm.postList().length > 0,
-      (): Promise<void> => {
-        return this.searchVm.warm();
-      });
-    // 4) 我的。
-    await this.warmStep('profile', (): boolean => this.profileVm.postsNow().length > 0,
-      (): Promise<void> => {
-        return this.profileVm.load(true);
-      });
-    // 4) 我的。
-    await this.warmStep('profile', (): boolean => this.profileVm.postsNow().length > 0,
-      (): Promise<void> => {
-        return this.profileVm.load(true);
-      });
-    // 顺手把「我的」四个分页的 feeds 页与媒体也备好（见 selectTab 里那一段的说明）：
-    // 用户切过去、或点进帖子页时，数据和图片都已经在手边了。
-    this.profileVm.preloadAllSegments();
-    /*
-     * 6) **搜索结果模板体检**（需求："进入首页时就测试搜索请求模板，失败重新抓 http 请求模板，
-     *    抓到更新进模板库"）。
-     *
-     * 放在**最后一步**：体检本身是一发几百毫秒的原生请求；万一模板不可用，它会走冷路径
-     * （导航共用的隐藏网页去重抓），那一步不能和前面的预热步骤抢页面。
-     * 失败不影响任何东西：它是"提前把搜索修好"，不是首屏路径的一部分。
-     */
-    try {
-      await this.searchVm.healthCheck();
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'search health check threw: %{public}s', (error as Error).message);
-    }
-    // 5) **会话详情自检**（诊断用，见 DirectViewModel.selfTestThread 与 SELF_TEST_THREAD）。
-    //    跑在最后：它要多打两条私信接口，别和首屏那几步抢时间。
-    if (DM_THREAD_SELFTEST && !this.dmSelfTestRun) {
-      this.dmSelfTestRun = true;
-      this.directVm.selfTestThread().catch((): void => {
-      });
-    }
+    // 2) Reels / 搜索 / 我的：**启动不再预热**（降噪，见 `FINGERPRINT_ANALYSIS.md` 阶段一）。
+    //
+    // 这三页原来在冷启动时各打 1~3 发（reels 的 clips 查询、搜索推荐 1.26MB、我的四个分页），
+    // 40 秒内十几发、4~5MB —— 正常用户不会这样，而 IG 的节流看的正是单位时间密度。
+    // 现在它们**都在用户真的切过去时才拉**：
+    //   · Reels：`selectTab(Reels)` → ReelsViewModel 自己加载；
+    //   · 搜索：`selectTab(Search)` → `searchVm.open()` / `retryRecommend()`；
+    //   · 我的：`selectTab(Profile)` → `profileVm.preloadAllSegments()` + ProfilePage 自己 load。
+    // 首屏需要的只有 feeds（preloadTabs）与快拍托盘（上面那一步），这两个留着。
+    hilog.info(DOMAIN, TAG, 'warm: reels/search/profile deferred to first visit');
     hilog.info(DOMAIN, TAG, 'warm done');
   }
 
