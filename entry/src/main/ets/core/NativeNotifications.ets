@@ -1,25 +1,16 @@
 /*
- * 通知页的**原生取数**（不经过隐藏网页）。
+ * 通知页的**取数** —— 只走移动端私有 API（`core/mobileapi/MobileNews`，instagrapi 同源）。
  *
- * ## 两条路（0.9 起移动端优先）
- * **① 移动端私有 API（instagrapi 协议）** —— `core/mobileapi/MobileNews`：
- *    · POST `i.instagram.com/api/v1/news/inbox/`         → `new_stories` / `old_stories` / `ayml`
- *    · POST `i.instagram.com/api/v1/discover/ayml/`      → 推荐位（inbox 里没带时才问）
+ * ## 端点
+ *    · POST `i.instagram.com/api/v1/news/inbox/`            → `new_stories` / `old_stories` / `ayml`
  *    · POST `i.instagram.com/api/v1/friendships/show_many/` → 这批人的关注状态
  *    这一路**不需要任何网页模板或网页专有令牌**（`x-ig-www-claim` / `fb_dtsg` / `jazoest`），
  *    和快拍 / 私信 / 主页 / 点赞 / 翻译那些端口共用同一套移动端身份与限速闸门。
- *    以前通知页要"先把隐藏网页导航到活动页抓一次 ayml 模板"，现在不需要了。
  *
- * **② 网页 REST（兜底）** —— 本文件后半段：
- *    · GET/POST https://www.instagram.com/api/v1/news/inbox/?timezone_offset=-<分钟>
- *    · GET/POST https://www.instagram.com/api/v1/discover/ayml/?timezone_offset=-<分钟>
- *    移动端那一路失败（没会话 / 被限流 / 返回形状不认识）时才走，输出**完全同构**，
- *    界面一个字都不用改。
- *
- * ## 鉴权（兜底那条）
- * Cookie + `x-csrftoken` + `x-ig-app-id`（+ UA / sec-fetch 等），复用 `NativeFeed.sessionHeaders()`
- * 那份真机抓到的模板头；万一 IG 对这条要额外头（例如 `x-ig-www-claim`），用探针在网页里
- * 打开一次通知页抓到这条请求，把它的头补进 NativeFeed.buildHeaders 即可。
+ * ## 历史
+ * 这里原来还有一条"网页 REST 兜底"（借 `NativeFeed.sessionOrBrowserHeaders` 的会话头、
+ * ayml 模板与 EngageSkeleton 骨架拼请求）。页面注入退役后模板抓不到、`fb_dtsg` 也过期，
+ * 那条兜底一并删除；移动端失败就如实回报，页面照旧提示"暂时读不到通知"。
  *
  * ## 输出
  * 直接产出和网页脚本**完全相同形状**的 `NotificationsPayload`（items: NotifyPayloadItem[]），
@@ -29,43 +20,19 @@
  * 对象字面量必须赋给显式声明了类型的变量（不能字面量 + as 断言）。
  */
 
-import { http } from '@kit.NetworkKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { NativeFeed, NativeFetchResult } from './NativeFeed';
-import { InstagramCookieJar, InstagramCookieSnapshot } from './InstagramCookieJar';
-import { WebTokens } from './WebTokens';
-import { EngageSkeleton } from './EngageSkeleton';
-import { ApiRegistry, ApiTemplate } from '../bridge/ApiRegistry';
 import { NotificationsPayload, NotifyPayloadItem } from '../model/Notification';
 import { MobileNews } from './mobileapi/MobileNews';
 import { MobileResult } from './mobileapi/MobileRequest';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeNotify';
-const CONNECT_TIMEOUT_MS: number = 8000;
-const READ_TIMEOUT_MS: number = 10000;
 /**
- * show_many 的"跑道"：超过这个时间就先出列表（见 fetch 里的 Promise.race）。
+ * show_many 的"跑道"：超过这个时间就先出列表（见 fetchMobile 里的 Promise.race）。
  *
  * 这条接口偶尔很慢，拖住它会让用户一直看到"正在刷新"。
  */
 const SHOW_MANY_CAP_MS: number = 4000;
-/**
- * 「为你推荐」（ayml)的跑道：超过这个时间就先出通知列表，推荐位这一轮不补。
- *
- * 理由同 SHOW_MANY_CAP_MS：推荐位是页面最下面那一段，**不许**让它把整页的通知拖成
- * "一直在刷新"（真机上 ayml 那条偶尔要好几秒，撞上限流时更久）。
- */
-const CAP_AYML_MS: number = 4000;
-/**
- * 「为你推荐」（ayml）模板在模板表里的名字片段。
- *
- * 页面侧给 REST 请求起的名字是 `rest_/api/v1/discover/ayml/`（见 WebScripts 的 restPath），
- * 这里按片段查，名字改了也还找得到。
- */
-const AYML_OP: string = 'ayml';
-/** friendships/show_many 的模板名片段（关注状态；同样是 REST，可能要 claim）。 */
-const SHOW_MANY_OP: string = 'show_many';
 
 /** inline_follow（有些条目带了"回关"状态）。 */
 interface NewsInlineFollow {
@@ -241,12 +208,13 @@ export class NativeNotifications {
   /**
    * 拉一次通知。
    *
-   * **两条路，移动端优先**（用户需求："通知页面接入 instagrapi 协议"）：
-   *   ① `fetchMobile`：`POST i.instagram.com/api/v1/news/inbox/`（+ `discover/ayml/`、
-   *      `friendships/show_many/`）—— 私有移动 API，**不需要任何网页模板/令牌**，
-   *      和快拍 / 私信 / 主页 / 点赞那些端口同一套身份与限速闸门（见 core/mobileapi/MobileNews）；
-   *   ② 上面失败（没会话 / 端点被限流 / 形状不认识）→ 退回原来的网页 REST 那条（本函数后半段），
-   *      界面与解析器完全一样，所以"退回去"只是多了几发请求，不会变空。
+   * **只走移动端私有接口**（`POST i.instagram.com/api/v1/news/inbox/` + `friendships/show_many/`
+   * + 可选 `discover/ayml/`）—— 与 instagrapi 同源，**不需要任何网页模板/令牌**，
+   * 和快拍 / 私信 / 主页 / 点赞那些端口同一套身份与限速闸门（见 core/mobileapi/MobileNews）。
+   *
+   * 历史：这里原来还有一条"网页 REST"兜底（借 `NativeFeed.sessionOrBrowserHeaders` 的会话头、
+   * `AYML_OP` 模板与 EngageSkeleton 骨架拼 ayml）。页面注入退役后模板抓不到、`fb_dtsg` 也过期，
+   * 那条路一并删除。
    *
    * @param asOfMs 保留参数（分组基准由页面那边算，这里只负责产出条目）。
    */
@@ -256,123 +224,15 @@ export class NativeNotifications {
       NativeNotifications.last = 'mobile';
       return mobile;
     }
-    const headers: Record<string, string> = await NativeFeed.sessionOrBrowserHeaders();
-    if (Object.keys(headers).length === 0) {
-      // 没模板/没登录：直接回空载荷，页面会走"读不到通知"的提示。
-      const noSession: NotificationsPayload = {
-        state: 'error',
-        message: 'no-session',
-        diag: 'no-session',
-        items: []
-      };
-      return noSession;
-    }
-    const tz: number = NativeNotifications.timezoneOffsetMinutes();
-    const inboxUrl: string = `https://www.instagram.com/api/v1/news/inbox/?timezone_offset=${-tz}`;
-    /*
-     * **inbox 与 ayml 并发**（原来是串行，三条请求加起来十几秒，用户看到的是"一直在刷新"）。
-     * ayml 那段整合进 `aymlWeb()`（模板 / 骨架两条都在里面），这里只管并发发起。
-     */
-    const aymlPromise: Promise<Array<NotifyPayloadItem>> = NativeNotifications.aymlWeb();
-    const inbox: NativeFetchResult = await NativeNotifications.get(inboxUrl, headers);
-    if (!inbox.ok) {
-      hilog.warn(DOMAIN, TAG, 'inbox failed: %{public}s code=%{public}d len=%{public}d',
-        inbox.error, inbox.code, inbox.body.length);
-      hilog.warn(DOMAIN, TAG, 'inbox body: %{public}s',
-        inbox.body.substring(0, 160).replace(/[\r\n]+/g, ' '));
-      const failed: NotificationsPayload = {
-        state: 'error',
-        message: inbox.error,
-        diag: inbox.error,
-        items: []
-      };
-      return failed;
-    }
-    const items: Array<NotifyPayloadItem> = NativeNotifications.parseInbox(inbox.body);
-    // **关注状态也用原生补**（网页那套 DOM 扫描的替代）：friendships/show_many 一次问一批人。
-    // 但它**不许拖住列表**：这条接口偶尔很慢（真机实测有卡到读超时的时候），
-    // 所以给它一个 4 秒的"跑道"，超时就先按接口里已有的 following 出列表（返回后它算完也就算了）。
-    let resolved: number = 0;
-    try {
-      resolved = await Promise.race([
-        NativeNotifications.applyFollowStates(items, headers),
-        NativeNotifications.delayValue(SHOW_MANY_CAP_MS)
-      ]);
-    } catch (error) {
-      resolved = 0;
-    }
-    /*
-     * 推荐位**不许拖住主列表**（同 show_many 那条取舍）：给它一个 4 秒跑道，超时这一轮就先
-     * 只出通知，下次刷新再补。以前 ayml 是 `Promise.all` 里等的 —— 它慢的时候整页跟着转。
-     */
-    let aymlItems: Array<NotifyPayloadItem> = [];
-    try {
-      // `delayValue` 给的是数字（超时那条），所以race 的结果是联合类型，这里显式判一下。
-      const raced: Array<NotifyPayloadItem> | number = await Promise.race([
-        aymlPromise,
-        NativeNotifications.delayValue(CAP_AYML_MS)
-      ]);
-      aymlItems = Array.isArray(raced) ? raced as Array<NotifyPayloadItem> : [];
-    } catch (error) {
-      aymlItems = [];
-    }
-    for (let i: number = 0; i < aymlItems.length; i++) {
-      items.push(aymlItems[i]);
-    }
-    hilog.info(DOMAIN, TAG, 'native notify items=%{public}d followResolved=%{public}d inboxLen=%{public}d aymlLen=%{public}d',
-      items.length, resolved, inbox.body.length, aymlItems.length);
-    NativeNotifications.last = 'web';
-    const ok: NotificationsPayload = {
-      state: 'ok',
-      // rows 用"这次真正读到关注状态的人数"：页面据此判断 following 是"读到了"还是"没读到"
-      // （见 model/Notification.rows 的说明）。
-      rows: resolved,
-      items: items
+    // 移动端没拿到：如实回报（页面据此提示"暂时读不到通知"），不再退网页那条。
+    NativeNotifications.last = 'mobile-failed';
+    const failed: NotificationsPayload = {
+      state: 'error',
+      message: 'mobile-failed',
+      diag: 'mobile-failed',
+      items: []
     };
-    return ok;
-  }
-
-  /**
-   * 「为你推荐」（ayml）的**网页兜底**：模板优先、骨架其次（见 AYML_OP 的说明）。
-   *
-   * 为什么单列一个方法：两条路（移动端优先 / 网页兜底）都要用它 ——
-   * 移动端那条 `POST i.instagram.com/api/v1/discover/ayml/` 真机上是 **400**，
-   * 而"为你推荐"这一段只有网页那条带 `x-ig-www-claim` / `fb_dtsg` 的请求拿得到。
-   * 拿不到就返回空数组（只是没有推荐位，不许影响通知主列表）。
-   */
-  private static async aymlWeb(): Promise<Array<NotifyPayloadItem>> {
-    const headers: Record<string, string> = await NativeFeed.sessionOrBrowserHeaders();
-    if (Object.keys(headers).length === 0) {
-      return [];
-    }
-    const tz: number = NativeNotifications.timezoneOffsetMinutes();
-    const url: string = `https://www.instagram.com/api/v1/discover/ayml/?timezone_offset=${-tz}`;
-    const tpl: ApiTemplate | null = ApiRegistry.getInstance().storedForNative(AYML_OP);
-    let result: NativeFetchResult | null = null;
-    let via: string = 'skeleton';
-    if (tpl !== null) {
-      const tplHeaders: Record<string, string> = await NativeFeed.headersFor(AYML_OP);
-      if (Object.keys(tplHeaders).length > 0) {
-        via = 'template';
-        result = await NativeNotifications.post(NativeNotifications.absolute(tpl.url),
-          tpl.body, tplHeaders);
-      }
-    }
-    if (result === null || !result.ok) {
-      const previous: boolean = result !== null;
-      const fallback: NativeFetchResult = await NativeNotifications.skeletonAyml(url, headers);
-      if (previous && fallback.ok) {
-        via = 'skeleton-fallback';
-      }
-      result = fallback;
-    }
-    if (!result.ok) {
-      hilog.warn(DOMAIN, TAG, 'ayml failed: %{public}s', result.error);
-      return [];
-    }
-    const items: Array<NotifyPayloadItem> = await NativeNotifications.parseAyml(result.body, headers);
-    hilog.info(DOMAIN, TAG, 'ayml ok via=%{public}s n=%{public}d', via, items.length);
-    return items;
+    return failed;
   }
 
   /**
@@ -422,33 +282,13 @@ export class NativeNotifications {
     }
     // 关注状态：同一个 4 秒跑道（这条接口偶尔很慢，绝不许拖住列表）。
     /*
-     * 「为你推荐」：**先看 inbox 自己的 `ayml` 块**（移动端经常把推荐位一起塞在通知响应里），
-     * 没有才单独问一发 `discover/ayml/`。两条都失败就只是没有推荐位，不影响主列表。
+     * 「为你推荐」：**只认 inbox 自己的 `ayml` 块**（移动端经常把推荐位一起塞在通知响应里）。
+     * 单独那条 `discover/ayml/` 真机上是 400，原先的网页兜底（模板 / 骨架）已随模板机制删除，
+     * 所以取不到推荐位就只是这一段不显示，主列表照旧。
      */
     step = 'parse-ayml-inbox';
     let suggested: Array<NotifyPayloadItem> = await NativeNotifications.parseAyml(inbox.body, {});
     let aymlVia: string = suggested.length > 0 ? 'inbox' : '-';
-    if (suggested.length === 0) {
-      /*
-       * 移动端那条 `POST i.instagram.com/api/v1/discover/ayml/` 真机上是 **400**
-       * （签名/不签名/GET 三种都试过，body 是 `{"status":"fail","status_code":"400"}`），
-       * 所以这里直接走**网页兜底**（模板 / 骨架），而不是先白打三发再降级 ——
-       * 那三发每发都要排队 2~5 秒，用户感知就是"通知页一直转圈"。
-       * 推荐位是锦上添花：取不到就只是这一段不显示，主列表照旧。
-       */
-      step = 'ayml-web';
-      try {
-        // **最多等 4 秒**（见 CAP_AYML_MS）：不许把主列表拖成"一直在刷新"。
-        const raced: Array<NotifyPayloadItem> | number = await Promise.race([
-          NativeNotifications.aymlWeb(),
-          NativeNotifications.delayValue(CAP_AYML_MS)
-        ]);
-        suggested = Array.isArray(raced) ? raced as Array<NotifyPayloadItem> : [];
-      } catch (error) {
-        suggested = [];
-      }
-      aymlVia = suggested.length > 0 ? 'web' : 'none';
-    }
     /*
      * 关注状态**一次问完**（主列表 + 推荐位合在一发里问）：`friendships/show_many/` 支持批量，
      * 分两次问只是白多一发。它同样受 4 秒跑道约束（见 SHOW_MANY_CAP_MS）。
@@ -618,221 +458,13 @@ export class NativeNotifications {
     }
   }
 
-  /**
-   * 一次问一批人的关注状态，写回 items[i].following（**网页那条**，见 fetch 的说明）。
-   *
-   * 端点：`POST https://www.instagram.com/api/v1/friendships/show_many/`，body
-   * `user_ids=1,2,3`（form-urlencoded）；响应 `{ friendship_statuses: { "<id>": { following } } }`。
-   * 返回**成功问到的条数**（页面用 rows 判断"关注状态读到了没有"）。
-   */
-  private static async applyFollowStates(items: Array<NotifyPayloadItem>,
-                                         headers: Record<string, string>): Promise<number> {
-    const ids: Array<string> = [];
-    for (let i: number = 0; i < items.length; i++) {
-      const id: string = (items[i].userId ?? '').trim();
-      if (id.length > 0 && ids.indexOf(id) < 0) {
-        ids.push(id);
-      }
-    }
-    if (ids.length === 0) {
-      return 0;
-    }
-    const body: string = `user_ids=${encodeURIComponent(ids.join(','))}`;
-    // **先试 GET**：真机实测 `/api/v1/` 的 POST 在原生侧会被 IG 当成页面导航（回一整页 HTML），
-    // 而 GET 那条路是通的（news/inbox、friendships/pending 都是 GET + JSON）。
-    const getUrl: string =
-      `https://www.instagram.com/api/v1/friendships/show_many/?user_ids=${encodeURIComponent(ids.join(','))}`;
-    let response: NativeFetchResult = await NativeNotifications.get(getUrl, headers);
-    if (!response.ok) {
-      response = await NativeNotifications.post(
-        'https://www.instagram.com/api/v1/friendships/show_many/', body,
-        await NativeNotifications.restHeaders(SHOW_MANY_OP, headers));
-    }
-    if (!response.ok) {
-      hilog.warn(DOMAIN, TAG, 'show_many failed: %{public}s ids=%{public}d', response.error, ids.length);
-      hilog.warn(DOMAIN, TAG, 'show_many body: %{public}s',
-        response.body.substring(0, 160).replace(/[\r\n]+/g, ' '));
-      return 0;
-    }
-    let data: ShowManyResponse | null = null;
-    try {
-      data = JSON.parse(response.body) as ShowManyResponse;
-    } catch (error) {
-      return 0;
-    }
-    const statuses: Record<string, ShowManyStatus> = (data ?? {}).friendship_statuses ?? {};
-    let resolved: number = 0;
-    for (let i: number = 0; i < items.length; i++) {
-      const id: string = (items[i].userId ?? '').trim();
-      if (id.length === 0) {
-        continue;
-      }
-      const one: ShowManyStatus | undefined = statuses[id];
-      if (one === undefined) {
-        continue;
-      }
-      items[i].following = one.following === true;
-      resolved = resolved + 1;
-    }
-    hilog.info(DOMAIN, TAG, 'show_many asked=%{public}d resolved=%{public}d', ids.length, resolved);
-    return resolved;
-  }
-
-  /**
-   * 骨架 + 页面令牌拼一条 ayml（没有网页抓来的模板时用，见 core/EngageSkeleton）。
-   *
-   * 真机样本里这条 POST 只带 `jazoest` + `fb_dtsg` 两个表单字段，头上有 csrf / ajax(rev) /
-   * app-id / asbd / claim / web-session-id。我们手上没有会话级的 claim 与 web-session-id，
-   * 先按"能拿到多少发多少"来：服务端不认就返回失败，调用方照旧走"去活动页抓模板"那条路。
-   */
-  private static async skeletonAyml(url: string,
-                                    fallback: Record<string, string>): Promise<NativeFetchResult> {
-    if (!await WebTokens.ensure()) {
-      return new NativeFetchResult(false, 'no-tokens', 0, 0, 0, false, 0, '');
-    }
-    const jar: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
-    if (!jar.signedIn) {
-      return new NativeFetchResult(false, 'no-session', 0, 0, 0, false, 0, '');
-    }
-    const cookie: string = jar.cookie ?? '';
-    const csrf: string = NativeNotifications.cookieValue(cookie, 'csrftoken');
-    const headers: Record<string, string> = EngageSkeleton.aymlHeaders(await NativeFeed.sessionOrBrowserHeaders(), csrf, cookie);
-    if (Object.keys(headers).length === 0) {
-      return NativeNotifications.post(url, `timezone_offset=0`, fallback);
-    }
-    return NativeNotifications.post(url, EngageSkeleton.aymlBody(''), headers);
-  }
-
-
-  /** Cookie 串里取一个值（csrf 用）。 */
-  private static cookieValue(cookie: string, name: string): string {
-    const parts: Array<string> = cookie.split(';');
-    for (let i: number = 0; i < parts.length; i++) {
-      const one: string = parts[i].trim();
-      if (one.indexOf(`${name}=`) === 0) {
-        return one.substring(name.length + 1).trim();
-      }
-    }
-    return '';
-  }
-
-  /** 一次 form-urlencoded POST（关注状态批量查询 / ayml 用）。 */
-  private static async post(url: string, body: string,
-                            headers: Record<string, string>): Promise<NativeFetchResult> {
-    const started: number = Date.now();
-    const request: http.HttpRequest = http.createHttp();
-    // **显式声明表单类型**：IG 的写类私有接口按 Content-Type 分流，
-    // 不带这个头时 POST 可能掉进"页面路由"里回一整个 HTML 而不是 JSON。
-    const form: Record<string, string> = {};
-    const keys: Array<string> = Object.keys(headers);
-    for (let i: number = 0; i < keys.length; i++) {
-      form[keys[i]] = headers[keys[i]];
-    }
-    form['content-type'] = 'application/x-www-form-urlencoded';
-    try {
-      const response: http.HttpResponse = await request.request(url, {
-        method: http.RequestMethod.POST,
-        header: form,
-        extraData: body,
-        connectTimeout: CONNECT_TIMEOUT_MS,
-        readTimeout: READ_TIMEOUT_MS,
-        expectDataType: http.HttpDataType.STRING
-      });
-      const text: string = typeof response.result === 'string'
-        ? response.result as string : JSON.stringify(response.result);
-      const looksJson: boolean = text.length > 0 && text.charAt(0) === '{';
-      const okCode: boolean = response.responseCode === 200 && looksJson;
-      const detail: string = looksJson ? `http-${response.responseCode}`
-        : `http-${response.responseCode}/non-json`;
-      return new NativeFetchResult(okCode, detail, response.responseCode,
-        Date.now() - started, text.length, looksJson, 0, text);
-    } catch (error) {
-      const message: string = (error as Error).message ?? 'request-threw';
-      hilog.warn(DOMAIN, TAG, 'post failed: %{public}s', message);
-      return new NativeFetchResult(false, `throw:${message}`.substring(0, 60), 0,
-        Date.now() - started, 0, false, 0, '');
-    } finally {
-      try {
-        request.destroy();
-      } catch (error) {
-      }
-    }
-  }
-
-  /**
-   * REST 写请求要用的头：优先用**同名模板**那份（里面带网页专有的 `x-ig-www-claim` /
-   * `x-instagram-ajax` / `x-asbd-id`），没有才退回信息流模板那套会话头。
-   *
-   * 为什么必须这样：裸会话头打 `/api/v1/` 的 POST，IG 会用**整页 HTML** 回（真机实测），
-   * 表现是"接口在、数据就是拿不到"。
-   */
-  private static async restHeaders(op: string, fallback: Record<string, string>):
-    Promise<Record<string, string>> {
-    const fromTemplate: Record<string, string> = await NativeFeed.headersFor(op);
-    if (Object.keys(fromTemplate).length > 0) {
-      return fromTemplate;
-    }
-    // 退一步：用 ayml 那条模板的头（同一批网页专有头，只是路径不同）。
-    const generic: Record<string, string> = await NativeFeed.headersFor(AYML_OP);
-    return Object.keys(generic).length > 0 ? generic : fallback;
-  }
-
-  /** 模板里的 URL 可能是相对路径（页面用 `open('/api/v1/...')`）：补成绝对地址。 */
-  private static absolute(url: string): string {
-    const one: string = url.trim();
-    if (one.indexOf('http') === 0) {
-      return one;
-    }
-    return one.charAt(0) === '/' ? `https://www.instagram.com${one}`
-      : `https://www.instagram.com/${one}`;
-  }
-
-  /** 设备时区相对 UTC 的分钟偏移（东八区 = +480）。 */
-  private static timezoneOffsetMinutes(): number {
-    return -new Date().getTimezoneOffset();
-  }
-
-  /** 等 ms 毫秒后回 0（只给 Promise.race 当"跑道"用，见 applyFollowStates 的说明）。 */
+  /** 等 ms 毫秒后回 0（只给 Promise.race 当"跑道"用，见 fetchMobile 的说明）。 */
   private static delayValue(ms: number): Promise<number> {
     return new Promise<number>((resolve: (v: number) => void): void => {
       setTimeout((): void => {
         resolve(0);
       }, ms);
     });
-  }
-
-  /** 一次 GET（头由调用方给；结果用 NativeFetchResult 表达，不抛异常）。 */
-  private static async get(url: string, headers: Record<string, string>): Promise<NativeFetchResult> {
-    const started: number = Date.now();
-    const request: http.HttpRequest = http.createHttp();
-    try {
-      const response: http.HttpResponse = await request.request(url, {
-        method: http.RequestMethod.GET,
-        header: headers,
-        connectTimeout: CONNECT_TIMEOUT_MS,
-        readTimeout: READ_TIMEOUT_MS,
-        expectDataType: http.HttpDataType.STRING
-      });
-      const text: string = typeof response.result === 'string'
-        ? response.result as string : JSON.stringify(response.result);
-      // 判据和 feeds 一样严：必须是 JSON（IG 对不认识的请求会回 200 + 一整页 HTML）。
-      const looksJson: boolean = text.length > 0 && text.charAt(0) === '{';
-      const okCode: boolean = response.responseCode === 200 && looksJson;
-      const detail: string = looksJson ? `http-${response.responseCode}`
-        : `http-${response.responseCode}/non-json`;
-      return new NativeFetchResult(okCode, detail, response.responseCode,
-        Date.now() - started, text.length, looksJson, 0, text);
-    } catch (error) {
-      const message: string = (error as Error).message ?? 'request-threw';
-      hilog.warn(DOMAIN, TAG, 'request failed: %{public}s', message);
-      return new NativeFetchResult(false, `throw:${message}`.substring(0, 60), 0,
-        Date.now() - started, 0, false, 0, '');
-    } finally {
-      try {
-        request.destroy();
-      } catch (error) {
-      }
-    }
   }
 
   /** news/inbox → 页面用的条目（字段形状与网页脚本一致）。 */
@@ -1211,7 +843,7 @@ export class NativeNotifications {
     return [];
   }
 
-  /** discover/ayml → 推荐条目（group = suggested，和网页脚本一致）。 */
+  /** discover/ayml（或 inbox 内嵌的 ayml 块）→ 推荐条目（group = suggested，和网页脚本一致）。 */
   private static async parseAyml(text: string, headers: Record<string, string>): Promise<Array<NotifyPayloadItem>> {
     const out: Array<NotifyPayloadItem> = [];
     let data: AymlPayload | null = null;
@@ -1252,34 +884,9 @@ export class NativeNotifications {
       users.push(nested ?? flat);
       socials.push((entry.social_context ?? (nested ?? flat).social_context ?? '').trim());
     }
-    const ids: Array<string> = [];
-    for (let i: number = 0; i < users.length; i++) {
-      const id: string = `${users[i].pk ?? ''}`.trim();
-      if (id.length > 0 && id !== 'null' && ids.indexOf(id) < 0) {
-        ids.push(id);
-      }
-    }
-    // 推荐位也把关注状态带出来（和主列表同一份 show_many 逻辑）。失败就算了，不影响推荐列表。
-    // `headers` 为空 = 调用方是**移动端那条路**（它自己会用 MobileNews.showMany 统一补一次，
-    // 这里就别再打一发网页请求了）。
+    // 关注状态：推荐项的 `friendship_status` 直接读；批量那一发由调用方用
+    // `MobileNews.showMany` 统一补一次（见 fetchMobile / applyMobileFollowStates）。
     const states: Record<string, ShowManyStatus> = {};
-    if (ids.length > 0 && Object.keys(headers).length > 0) {
-      try {
-        const response: NativeFetchResult = await NativeNotifications.post(
-          'https://www.instagram.com/api/v1/friendships/show_many/',
-          `user_ids=${encodeURIComponent(ids.join(','))}`,
-          await NativeNotifications.restHeaders(SHOW_MANY_OP, headers));
-        if (response.ok) {
-          const parsed: ShowManyResponse = JSON.parse(response.body) as ShowManyResponse;
-          const got: Record<string, ShowManyStatus> = parsed.friendship_statuses ?? {};
-          const keys: Array<string> = Object.keys(got);
-          for (let i: number = 0; i < keys.length; i++) {
-            states[keys[i]] = got[keys[i]];
-          }
-        }
-      } catch (error) {
-      }
-    }
     for (let i: number = 0; i < users.length; i++) {
       const user: AymlUser = users[i];
       const name: string = (user.username ?? '').trim();
