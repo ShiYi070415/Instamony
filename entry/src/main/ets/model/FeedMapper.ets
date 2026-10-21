@@ -72,6 +72,14 @@ export class FeedMapper {
       ownerId: item.userId ?? '',
       ownerFollowing: FollowState.resolve(item.userId ?? '',
         FollowState.resolveName(item.username ?? '', item.following ?? false)),
+      /*
+       * **数据源到底说没说**这件事必须记下来（需求："非关注状态的用户帖子不要显示在关注流中"）。
+       *
+       * 时间线给的 `friendship_status.following` 有时**整个字段都没有**（推荐卡片、稀疏载荷），
+       * 这时 `ownerFollowing` 只是个默认的 false —— 拿它当"没关注"就会把正常帖子误删。
+       * 所以 `FeedViewModel` 的过滤判据是"**明确说了**没关注"（known && !following）。
+       */
+      ownerFollowKnown: item.following !== undefined,
       videoUrl: playable,
       imageUrls: images,
       liked: item.liked ?? false,

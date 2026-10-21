@@ -25,6 +25,8 @@ import { MediaPost } from '../model/MediaPost';
 import { NativeFeed, NativeFeedPage, NativeFetchResult } from '../core/NativeFeed';
 import { CachedFeedPage, FeedCache } from '../core/FeedCache';
 import { PosterCache } from '../core/PosterCache';
+// 关注流的筛选要批量问"这些人我关注了吗"（见 filterFollowing）。
+import { NativeFollow } from '../core/NativeFollow';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'FeedViewModel';
@@ -153,6 +155,15 @@ export class FeedViewModel {
   private exploreEndAtMs: number = 0;
   /** 本进程试过"铺落盘那一页"了没有（一轮只做一次，见 loadExplore）。 */
   private exploreSeeded: boolean = false;
+  /**
+   * 这一屏**打算**有探索流那一段（决定提示卡片画不画）。
+   *
+   * 为什么判据不是"探索流已经有内容"：那样的话，探索流那一发还没回来（或失败）时，
+   * 关注流末尾**什么都没有** —— 用户看到的就是"关注流结束没有为你推荐卡片"。
+   * 现在一旦开始要探索流就把卡片画出来（下面暂时空着、末尾有加载圈），内容到了接上；
+   * 真的确认探索流没有内容（拿到空页且手上也没有）时再收回去。
+   */
+  private exploreWanted: boolean = false;
   /** 提示卡片在合并列表里的下标（-1 = 不显示，见 composePosts）。 */
   private hintIndex: number = -1;
   /**
@@ -350,6 +361,7 @@ export class FeedViewModel {
     this.exploreHasMore = false;
     this.exploreEndAtMs = 0;
     this.exploreSeeded = false;
+    this.exploreWanted = false;
     this.wantExploreNext = false;
     this.hintIndex = -1;
     // 转发状态是本机记的，换了账号就完全不可信了。
@@ -517,6 +529,11 @@ export class FeedViewModel {
     if (!forReset && cursor.length === 0) {
       return;
     }
+    // 一开始要探索流就把提示卡片放出来（下面暂时空着、末尾有加载圈），见 exploreWanted。
+    if (!this.exploreWanted) {
+      this.exploreWanted = true;
+      this.composePosts();
+    }
     /*
      * **先铺落盘的那一页**（只在本进程第一次要探索流、且屏幕上还没有那段内容时）。
      *
@@ -549,6 +566,11 @@ export class FeedViewModel {
       // 服务端这一页没东西：到底了。别把屏幕上的探索流清掉（下次刷新会重取）。
       this.exploreHasMore = false;
       this.exploreEndAtMs = Date.now();
+      // 手上也一条都没有：把提示卡片收回去（否则会出现"卡片下面空空如也"）。
+      if (this.explore.length === 0) {
+        this.exploreWanted = false;
+        this.composePosts();
+      }
       hilog.info(DOMAIN, TAG, 'explore page empty reset=%{public}s', `${forReset}`);
       return;
     }
@@ -601,7 +623,7 @@ export class FeedViewModel {
       seen.add(key);
       list.push(post);
     }
-    this.hintIndex = this.explore.length > 0 ? this.following.length : -1;
+    this.hintIndex = (this.exploreWanted || this.explore.length > 0) ? this.following.length : -1;
     // 每铺一页都会走这里，所以用 debug 级别（排查"卡片位置不对"时再开）。
     hilog.debug(DOMAIN, TAG,
       'compose hint=%{public}d following=%{public}d explore=%{public}d total=%{public}d',
@@ -616,6 +638,90 @@ export class FeedViewModel {
       return false;
     }
     return this.nativeCursor.length > 0 && this.nativeHasMore;
+  }
+
+  /**
+   * 关注流那一段的筛选：**只留关注的人的帖子**（需求："非关注状态的用户帖子不要显示在关注流中"）。
+   *
+   * 两道：
+   *   ① 载荷里**明确说了没关注**的直接丢（`ownerFollowKnown && !ownerFollowing`，见 followedOnly）；
+   *   ② 载荷**没说**（字段缺失）但知道作者 id 的，批量问一次 `friendships/show_many`
+   *      （见 core/NativeFollow.statesFor）—— 问出来"确实没关注"才丢；
+   *      问不到（网络/限流/没 id）就保持原样，宁可多留也不要误删。
+   *
+   * 为什么非要有第二道：IG 的时间线会把推荐帖混进来，而推荐帖里有一部分**不带**
+   * `friendship_status`。只做第一道的话，那些"不知道"的帖子仍然会排在提示卡片上面，
+   * 看起来还是"关注流里冒出不认识的人"。
+   */
+  private async filterFollowing(raw: Array<MediaPost>): Promise<Array<MediaPost>> {
+    const known: Array<MediaPost> = FeedViewModel.followedOnly(raw);
+    const ids: Array<string> = [];
+    for (let index: number = 0; index < known.length; index++) {
+      const post: MediaPost = known[index];
+      if (post.ownerFollowKnown || post.ownerId.length === 0) {
+        continue;
+      }
+      if (ids.indexOf(post.ownerId) < 0 && ids.length < 30) {
+        ids.push(post.ownerId);
+      }
+    }
+    if (ids.length === 0) {
+      return known;
+    }
+    let states: Map<string, boolean>;
+    try {
+      states = await NativeFollow.statesFor(ids);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'follow-state query failed: %{public}s', (error as Error).message);
+      return known;
+    }
+    if (states.size === 0) {
+      return known;
+    }
+    const out: Array<MediaPost> = [];
+    let dropped: number = 0;
+    for (let index: number = 0; index < known.length; index++) {
+      const post: MediaPost = known[index];
+      if (!post.ownerFollowKnown && post.ownerId.length > 0) {
+        const state: boolean | undefined = states.get(post.ownerId);
+        if (state === false) {
+          dropped++;
+          continue;
+        }
+      }
+      out.push(post);
+    }
+    hilog.info(DOMAIN, TAG, 'following follow-state: queried=%{public}d dropped=%{public}d kept=%{public}d',
+      ids.length, dropped, out.length);
+    return out;
+  }
+
+  /**
+   * 只留"作者确实被我关注"的帖子（关注流那一段用，见 applyPayload 里的说明）。
+   *
+   * 判据：**数据源明确说了没关注**才丢（`ownerFollowKnown && !ownerFollowing`）；
+   * 字段缺失（`ownerFollowKnown=false`）算"不知道"，照旧放行 —— 想连这种也判掉，
+   * 走 {@link filterFollowing}（它会额外问一次 `friendships/show_many`）。
+   */
+  private static followedOnly(posts: Array<MediaPost>): Array<MediaPost> {
+    let dropped: number = 0;
+    let unknown: number = 0;
+    const out: Array<MediaPost> = [];
+    for (let index: number = 0; index < posts.length; index++) {
+      const post: MediaPost = posts[index];
+      if (!post.ownerFollowKnown) {
+        unknown++;
+      } else if (!post.ownerFollowing) {
+        dropped++;
+        continue;
+      }
+      out.push(post);
+    }
+    if (dropped > 0 || unknown === posts.length) {
+      hilog.info(DOMAIN, TAG, 'following filter: kept=%{public}d dropped=%{public}d unknown=%{public}d',
+        out.length, dropped, unknown);
+    }
+    return out;
   }
 
   /**
@@ -647,7 +753,8 @@ export class FeedViewModel {
       return;
     }
     this.fromCache = true;
-    this.following = mapped;
+    // 缓存那份也过同一道筛：里面可能混着"没关注"的推荐帖（见 followedOnly）。
+    this.following = FeedViewModel.followedOnly(mapped);
     this.composePosts();
     // 游标/翻页状态也先用缓存里的：万一网络那份迟迟不回，上滑照样能接着翻（新的一页会覆盖它）。
     this.nativeCursor = cached.cursor;
@@ -947,16 +1054,16 @@ export class FeedViewModel {
       items.length, payload.src ?? '-', this.hasMore ? 'y' : 'n');
 
     // 逐条映射，单条异常不影响整体。
-    const mapped: MediaPost[] = [];
+    const raw: MediaPost[] = [];
     for (let index: number = 0; index < items.length; index++) {
       try {
-        mapped.push(FeedMapper.toPost(items[index], index));
+        raw.push(FeedMapper.toPost(items[index], index));
       } catch (error) {
         hilog.error(DOMAIN, TAG, 'LF map item %{public}d failed: %{public}s',
           index, (error as Error).message);
       }
     }
-    FeedMapper.logKeys('mapped', mapped);
+    FeedMapper.logKeys('mapped', raw);
 
     // 累积去重，不再整体替换。下拉刷新反过来：新一页放头部（见 mergePrepend）。
     // `replace` 是给首屏用的：**重新要来的第一页整体顶掉列表**（见 loadFirstPage 的说明）。
@@ -964,17 +1071,27 @@ export class FeedViewModel {
     // 否则探索流的内容会被并进关注流、下次翻页还会被当成"关注流"重复去重。
     let merged: MergeResult;
     if (replace) {
-      merged = new MergeResult(mapped, mapped.length);
+      merged = new MergeResult(raw, raw.length);
     } else if (prepend) {
-      merged = FeedMapper.mergePrepend(mapped, this.following);
+      merged = FeedMapper.mergePrepend(raw, this.following);
     } else {
-      merged = FeedMapper.merge(this.following, mapped);
+      merged = FeedMapper.merge(this.following, raw);
     }
-    this.following = merged.posts;
+    /*
+     * **关注流只留"关注的人"的帖子**（需求："非关注状态的用户帖子不要显示在关注流中"）。
+     *
+     * 时间线本来就会把推荐内容混进关注流（IG 自己插的探索卡片、"为你推荐"那一组），
+     * 它们一旦进了这一段就会排到提示卡片**上面**，看起来就像"关注的人发了推荐帖"。
+     *
+     * 筛的是**合并后的整段**，不只是这一页：缓存铺出来的那一份里也可能留着"不知道"
+     * 的帖子（缓存走的是同步路径、没法发请求），下次网络页回来时顺手一起问掉。
+     * 探索流那一段（`this.explore`）本来就是推荐的，不做这件事。
+     */
+    this.following = await this.filterFollowing(merged.posts);
     this.composePosts();
     FeedMapper.logKeys(prepend ? 'prepended' : 'merged', merged.posts);
 
-    this.debug = `${this.debug} +${merged.changed}/${mapped.length}`;
+    this.debug = `${this.debug} +${merged.changed}/${raw.length}`;
     if (merged.changed > 0) {
       this.setStatus(FeedStatus.Idle);
     } else if (this.posts.length === 0) {
