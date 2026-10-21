@@ -74,7 +74,6 @@ import { NativeProfile } from '../core/NativeProfile';
 import { FollowState, FOLLOW_VERSION_KEY } from '../core/FollowState';
 import { SaveState } from '../core/SaveState';
 import { NativeSave, SaveResult } from '../core/NativeSave';
-import { WebTokens } from '../core/WebTokens';
 import { NativeEngage, EngageResult, EngageState } from '../core/NativeEngage';
 import { NativeNotifications } from '../core/NativeNotifications';
 // 通知：Push Kit 注册 + 本地通知（见 core/PushCenter）。
@@ -2184,12 +2183,6 @@ struct Index {
        * 一行一条，量很小（SPA 换路由 / 整页导航各一条）。
        */
       hilog.info(DOMAIN, TAG, 'web route %{public}s', url);
-      // 路由一变就顺手抓一次评论模板：网页里"点开一条帖子"正是靠 SPA 换路由，
-      // 那一下之后页面才会去请求评论（见 captureCommentTemplate）。
-      this.captureCommentTemplate();
-      // 页面令牌（lsd / fb_dtsg / 整页指纹）跟着**一份文档**走：换路由/重载就作废，
-      // 下次需要时重新读一遍（见 core/WebTokens）。
-      WebTokens.invalidate();
     });
     // 这里刻意不读 Cookie 罐：WebCookieManager 会提前拉起 ArkWeb 引擎，抢在
     // Web 组件创建浏览器之前初始化会让内核初始化失败（页面整片空白）。
