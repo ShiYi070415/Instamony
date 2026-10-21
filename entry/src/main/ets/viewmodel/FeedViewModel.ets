@@ -450,6 +450,9 @@ export class FeedViewModel {
     // 上一次那一页（30 分钟内）先铺出来，用户一进 app 就有画面；网络那份回来再整体替换。
     // 这一步必须在下面"等网页就绪"之前：等网页可能要几百毫秒到几秒，缓存只要几十毫秒。
     this.hydrateFromCache();
+    // **首屏不糊弄**：探索流那份落盘缓存同步铺上（几十毫秒），别等下面那次时间线请求
+    // （3~5 秒）白等一屏骨架。见 seedExploreFromCache。
+    this.seedExploreFromCache();
     /*
      * **不再等网页就绪**（这是"刷新/翻页慢"的主因之一）。
      *
@@ -520,6 +523,36 @@ export class FeedViewModel {
   }
 
   /**
+   * **同步**把落盘的探索流第一页铺上（几十毫秒）。
+   *
+   * 为什么单独抽出来：冷启动时首屏**不能等网络**。以前这段代码在 `loadExplore` 里，
+   * 而 `loadExplore` 要排在"关注流第一页"之后 —— 这一等就是一次 3~5 秒的时间线请求，
+   * 屏幕上就一直是骨架屏（用户报的"冷启动渲染很慢"）。现在 `loadFeed` 一进来就调它，
+   * 帖子立刻有画面；关注流那一段稍后回来会插在卡片上面（`composePosts` 只负责拼接）。
+   *
+   * 只做一次（`exploreSeeded`），且只在探索流这一段还空着时做。
+   */
+  private seedExploreFromCache(): void {
+    if (this.exploreSeeded || this.explore.length > 0) {
+      return;
+    }
+    this.exploreSeeded = true;
+    const cached: FeedRecommendedPage = this.loadRecommendedCached();
+    if (cached.posts.length === 0) {
+      return;
+    }
+    this.explore = cached.posts;
+    if (cached.cursor.length > 0) {
+      this.exploreCursor = cached.cursor;
+    }
+    this.exploreHasMore = cached.hasMore;
+    this.exploreWanted = true;
+    this.composePosts();
+    this.setStatus(FeedStatus.Idle);
+    hilog.info(DOMAIN, TAG, 'explore first paint from cache n=%{public}d', cached.posts.length);
+  }
+
+  /**
    * 拉一页探索流（`forReset = true` 时重新要第一页，整体替换探索那一段）。
    *
    * 失败不清屏：屏幕上已经有的那几段照旧，只把状态行留给上一次的语义。
@@ -529,31 +562,12 @@ export class FeedViewModel {
     if (!forReset && cursor.length === 0) {
       return;
     }
-    // 一开始要探索流就把提示卡片放出来（下面暂时空着、末尾有加载圈），见 exploreWanted。
     if (!this.exploreWanted) {
       this.exploreWanted = true;
       this.composePosts();
     }
-    /*
-     * **先铺落盘的那一页**（只在本进程第一次要探索流、且屏幕上还没有那段内容时）。
-     *
-     * 为什么值：这个账号的关注流是空状态，首屏**全部**来自探索流，而那一发 3~7 秒；
-     * 铺缓存是几十毫秒 —— 用户进首页不再是骨架屏，网络那份回来再整体替换（下面的 forReset 分支）。
-     */
-    if (forReset && !this.exploreSeeded && this.explore.length === 0) {
-      this.exploreSeeded = true;
-      const cached: FeedRecommendedPage = this.loadRecommendedCached();
-      if (cached.posts.length > 0) {
-        this.explore = cached.posts;
-        if (cached.cursor.length > 0) {
-          this.exploreCursor = cached.cursor;
-        }
-        this.exploreHasMore = cached.hasMore;
-        this.composePosts();
-        this.setStatus(FeedStatus.Idle);
-        hilog.info(DOMAIN, TAG, 'explore first paint from cache n=%{public}d',
-          cached.posts.length);
-      }
+    if (forReset) {
+      this.seedExploreFromCache();
     }
     let page: FeedRecommendedPage;
     try {
@@ -918,6 +932,20 @@ export class FeedViewModel {
       PosterCache.warm(this.posts);
       // 首屏一铺上就**在后台把后面几页抓好**：用户上滑时那些页已经在内存里（见 prefetchNativePage）。
       this.prefetchNativePage();
+      return;
+    }
+    /*
+     * **关注流是"已看完"状态时，别再等 DOM 兜底**（这是冷启动卡 8 秒的真凶）。
+     *
+     * 这种状态下网页那条时间线同样是空的 —— DOM 抽取一定拿不到东西，而
+     * `bridge.runBridge` 要**等隐藏网页就绪**，冷启动实测 8.5 秒才超时返回
+     * （见 core/NativeFeed.timelineCaughtUp 的说明）。期间屏幕上只有骨架屏，
+     * 明明手上的探索流缓存可以立刻画出来（`maybeLoadRecommended` 就在这一步之后）。
+     * 所以这里直接返回：状态不动，交给 `maybeLoadRecommended` 去铺探索流。
+     */
+    if (NativeFeed.timelineCaughtUp()) {
+      hilog.info(DOMAIN, TAG, 'first page: following caught up → skip DOM wait ms=%{public}d',
+        Date.now() - startedMs);
       return;
     }
     /*

@@ -24,6 +24,8 @@ import { FeedCache } from '../core/FeedCache';
 import { NativeSearch } from '../core/NativeSearch';
 import { NativeReels } from '../core/NativeReels';
 import { ReelsCache } from '../core/ReelsCache';
+// 快拍托盘的落盘缓存（冷启动先画上次那排头像，见 core/TrayCache）。
+import { TrayCache } from '../core/TrayCache';
 import { NetworkState } from '../core/NetworkState';
 import { PlatformCap } from '../core/PlatformCap';
 import { MobileSession } from '../core/mobileapi/MobileSession';
@@ -126,6 +128,12 @@ export default class EntryAbility extends UIAbility {
       // reels 第一页的落盘缓存（见 core/ReelsCache）：clips 那条查询被 IG 限流时，
       // 视频标签靠它"至少还能看上次那批"，而不是一片空白。
       ReelsCache.init(this.context);
+      /*
+       * 限时快拍托盘的落盘缓存（见 core/TrayCache）：冷启动时托盘那一排先铺上次那份，
+       * 网络那份（213 条 / 425KB / 3~6 秒）回来再替换 —— 用户不用再对着灰色骨架等
+       * （用户报的"快拍列表冷启动渲染的很慢"就是它）。
+       */
+      TrayCache.init(this.context);
       // 移动 API 的设备身份（见 core/mobileapi/MobileSession）：**只开落盘文件**，
       // 不读 Cookie 罐、不发请求。身份必须跨重启稳定，所以这里同步把上次那份读回内存。
       MobileSession.init(this.context);

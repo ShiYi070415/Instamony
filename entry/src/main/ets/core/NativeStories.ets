@@ -17,6 +17,8 @@ import { JsonRead } from './JsonRead';
 import { StoryItem, StoryReel, StoryTray, StoryTrayItem } from '../model/Story';
 import { MobileStories } from './mobileapi/MobileStories';
 import { MobileChallenge } from './mobileapi/MobileChallenge';
+// 托盘落盘缓存（每次成功都写一份，冷启动先画它，见 core/TrayCache）。
+import { TrayCache } from './TrayCache';
 // 「是不是我自己的快拍」要读当前会话的 `ds_user_id`（见 reelOf 里 selfReel 那一段）。
 import { NativeProfile } from './NativeProfile';
 
@@ -445,6 +447,8 @@ export class NativeStories {
         tray.items.length, tray.items.length > 0 ? tray.items[0].username : '-');
       if (tray.items.length > 0) {
         NativeStories.rememberTray(tray);
+        // 落盘一份：下次冷启动先画它（见 core/TrayCache / StoriesTray.aboutToAppear）。
+        TrayCache.save(tray.items);
         return tray;
       }
       // 全被"已关注过的推荐"滤掉了：当作真的没有，别把空表塞给界面。

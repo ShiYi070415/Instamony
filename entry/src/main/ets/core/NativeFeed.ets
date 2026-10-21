@@ -182,6 +182,19 @@ export class NativeFeed {
     return NativeFeed.caughtUpMs;
   }
 
+  /**
+   * 这个账号的**关注流现在就是"已看完"**（时间线只会回那条占位）。
+   *
+   * 谁用：`FeedViewModel.loadFirstPage` —— 这种状态下 DOM 兜底**一定什么都取不到**
+   * （网页那条时间线也是空的），而 `bridge.runBridge` 要等隐藏网页就绪，冷启动实测要
+   * **8.5 秒**才超时返回。以前首页首屏就被它白等这么久，缓存（探索流那一段）明明在手上
+   * 却要等它超时才画出来 —— 用户报的"快拍列表 / 内容冷启动渲染很慢"根因就在这儿。
+   */
+  static timelineCaughtUp(): boolean {
+    const at: number = NativeFeed.caughtUpAt();
+    return at > 0 && Date.now() - at < NativeFeed.CAUGHT_UP_TTL_MS;
+  }
+
   private static caughtUpMs: number = 0;
   private static caughtUpLoaded: boolean = false;
   /**

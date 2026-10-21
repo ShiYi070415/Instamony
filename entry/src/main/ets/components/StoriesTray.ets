@@ -19,6 +19,8 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { NativeStories } from '../core/NativeStories';
+// 冷启动先铺上次那排头像（见 aboutToAppear 里"先铺落盘那份"那段）。
+import { CachedTray, TrayCache } from '../core/TrayCache';
 import { StoryHeroRect, storyAvatarNodeId, StoryTrayItem } from '../model/Story';
 import { MaterialIconButton, MaterialPillIcon } from './MaterialSurface';
 
@@ -261,6 +263,25 @@ export struct StoriesTray {
       }
       hilog.info(DOMAIN, TAG, 'tray seed stale age=%{public}dms → refresh',
         Date.now() - this.seedAtMs);
+    }
+    /*
+     * **冷启动先铺落盘那份**（用户报的"快拍列表冷启动渲染的很慢"）。
+     *
+     * 宿主那份 `seed` 只活在内存里（切 tab 不丢、进程一重启就没了）；没有它的时候，
+     * 以前这里直接进 `load()` —— 于是首页顶部先是一排灰色骨架，等 `feed/reels_tray/`
+     * 那一发（213 条 / 425KB / 3~6 秒）回来才长出真头像。
+     * 现在同步读盘（几十毫秒）先画一排真头像，网络那份回来后照旧整体替换。
+     * 注意：**不回调 `onLoaded`**（和 seed 同理：宿主那份顺序还要留着，交回去会 reset 预缓存）。
+     */
+    if (this.items.length === 0) {
+      const cached: CachedTray | null = TrayCache.load();
+      if (cached !== null && cached.items.length > 0) {
+        this.items = cached.items;
+        this.loaded = true;
+        this.syncSelf();
+        hilog.info(DOMAIN, TAG, 'tray from cache n=%{public}d age=%{public}dms',
+          cached.items.length, cached.ageMs);
+      }
     }
     this.load();
   }
