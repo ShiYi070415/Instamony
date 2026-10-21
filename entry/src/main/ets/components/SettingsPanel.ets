@@ -61,7 +61,7 @@ import { common } from '@kit.AbilityKit';
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'SettingsPanel';
 
-/** 左右留白（vp）：列表行与底部按钮共用，两边才会对齐。 */
+/** 左右留白（vp）：底部那颗「退出登录」用（它在卡片外面，和卡片外缘对齐）。 */
 const SIDE_PADDING: number = 16;
 /** 行高（vp）：和系统设置项一致，点起来不局促。 */
 const ROW_HEIGHT: number = 54;
@@ -72,6 +72,19 @@ const SIGN_OUT_HEIGHT: number = MATERIAL_PILL_HEIGHT;
 const SIGN_OUT_RADIUS: number = SIGN_OUT_HEIGHT / 2;
 /** 下拉菜单相对按钮的垂直偏移（vp）：留一点缝，别和按钮粘在一起。 */
 const MENU_OFFSET_Y: number = 6;
+/*
+ * **分组卡片**的外观（需求："用圆角卡片：实线 border、透明背景，分类标题在卡片外部"）。
+ *
+ *   PAGE_PADDING —— 卡片离屏幕左右的距离；
+ *   CARD_ROW_PADDING —— 卡片**内部**每一行的左右内缩（两者相加才是文字离屏幕的距离）；
+ *   CARD_RADIUS / CARD_BORDER —— 圆角与实线边框粗细。
+ * 背景保持透明：本页已经是"墨黑→暗紫（浅色为白→冷灰蓝）"的整页渐变，再填一层底色会把
+ * 渐变糊掉，也会让沉浸光感的下拉按钮失去通透感。
+ */
+const PAGE_PADDING: number = 12;
+const CARD_ROW_PADDING: number = 14;
+const CARD_RADIUS: number = 16;
+const CARD_BORDER: number = 1;
 
 /**
  * 下拉里四档的**顺序**（也是下标 → 取值 的映射表）。
@@ -156,7 +169,7 @@ export struct SettingsPanel {
     }
     .width('100%')
     .height(ROW_HEIGHT)
-    .padding({ left: SIDE_PADDING, right: SIDE_PADDING })
+    .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING })
     .onClick((): void => {
       action();
     })
@@ -296,24 +309,61 @@ export struct SettingsPanel {
     }
   }
 
-  /** 分组标题。 */
+  /**
+   * **分组标题**（需求："分类标题在卡片外部"）。
+   *
+   * 放在卡片上方、按屏幕左内缩对齐（不跟着卡片内的行再缩一层），字号比正文小一档，
+   * 让人一眼分清"这是一组的名字"而不是某一行设置。
+   */
   @Builder
   groupHeader(text: ResourceStr) {
     Text(text)
       .fontSize(13)
+      .fontWeight(FontWeight.Medium)
       .fontColor($r('app.color.secondary_text'))
       .width('100%')
-      .padding({ left: SIDE_PADDING, right: SIDE_PADDING, top: 18, bottom: 6 })
+      .padding({ left: PAGE_PADDING + 4, right: PAGE_PADDING + 4, top: 20, bottom: 8 })
   }
 
-  /** 分组脚注（说明文案）。 */
+  /**
+   * 分组脚注（说明文案）：**画在卡片里面**的最后一小段，跟着它的开关走，
+   * 而不是在卡片外孤零零地飘着（那是"一堆东西混在一起"的观感来源之一）。
+   */
   @Builder
   groupHint(text: ResourceStr) {
     Text(text)
       .fontSize(12)
       .fontColor($r('app.color.secondary_text'))
       .width('100%')
-      .padding({ left: SIDE_PADDING, right: SIDE_PADDING, top: 8, bottom: 4 })
+      .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING, top: 2, bottom: 12 })
+  }
+
+  /** 卡片内部相邻两行之间的细分隔线（左右与行文字对齐）。 */
+  @Builder
+  cardDivider() {
+    Divider()
+      .strokeWidth(0.5)
+      .color($r('app.color.divider'))
+      .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING })
+  }
+
+  /**
+   * 卡片外观（需求："用圆角卡片：实线 border、透明背景"）。
+   *
+   * `@Styles` 只能写通用属性，所以边框 / 圆角 / 背景这三样放这里；
+   * 每个分组的成员行由调用处包成一个 `Column() { … }.cardStyle()`。
+   */
+  @Styles
+  cardStyle() {
+    .width('100%')
+    .borderRadius(CARD_RADIUS)
+    .backgroundColor(Color.Transparent)
+    .border({ width: CARD_BORDER, color: $r('app.color.divider') })
+    /*
+     * **不要 clip(true)**：卡片里的下拉按钮是沉浸光感材质，它的阴影/光边画在按钮边界之外，
+     * 一裁就没了（信息流资料栏那一行踩过同一个坑，见 FeedList.profileRow）。
+     * 卡片本身是透明底 + 实线边，成员行也都带着内缩，不会溢出到圆角外面。
+     */
   }
 
   /**
@@ -336,7 +386,7 @@ export struct SettingsPanel {
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
-    .padding({ left: SIDE_PADDING, right: SIDE_PADDING, top: 8, bottom: 8 })
+    .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING, top: 8, bottom: 8 })
     .onClick((): void => {
       this.copyMobileProbe();
     })
@@ -371,7 +421,7 @@ export struct SettingsPanel {
     }
     .width('100%')
     .height(ROW_HEIGHT)
-    .padding({ left: SIDE_PADDING, right: SIDE_PADDING })
+    .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING })
   }
 
   /**
@@ -409,7 +459,7 @@ export struct SettingsPanel {
     }
     .width('100%')
     .height(ROW_HEIGHT)
-    .padding({ left: SIDE_PADDING, right: SIDE_PADDING })
+    .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING })
   }
 
   /**
@@ -462,7 +512,7 @@ export struct SettingsPanel {
     }
     .width('100%')
     .height(ROW_HEIGHT)
-    .padding({ left: SIDE_PADDING, right: SIDE_PADDING })
+    .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING })
   }
 
   /**
@@ -503,7 +553,7 @@ export struct SettingsPanel {
     }
     .width('100%')
     .height(ROW_HEIGHT)
-    .padding({ left: SIDE_PADDING, right: SIDE_PADDING })
+    .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING })
   }
 
   /** 「视频质量」那一行（同上，只是写 videoQuality）。 */
@@ -533,7 +583,7 @@ export struct SettingsPanel {
     }
     .width('100%')
     .height(ROW_HEIGHT)
-    .padding({ left: SIDE_PADDING, right: SIDE_PADDING })
+    .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING })
   }
 
   /** 清晰度下拉的四项（顺序必须与 MEDIA_QUALITY_ORDER 一致）。 */
@@ -689,20 +739,27 @@ export struct SettingsPanel {
         .height(LIST_TOP_OFFSET)
 
       List() {
-      // **两组的入口按设备能力显示**（需求：不支持时隐藏）：
+      // **两组入口按设备能力显示**（需求：不支持时隐藏）：
       //   · 「底栏」那组（原生隐藏动画）依赖 HDS 的 `barFloatingStyle`（6.1.0(23) 起）；
       //   · 「外观」那组（材质厚度 / 材质等级）依赖沉浸光感材质（HDS 23 起、ArkUI 26 起）。
       // 低版本设备上这些开关改了也没有任何效果，留着只会让用户以为"坏了"。
+      //
+      // 版式（需求）：**分类标题在卡片外面** + 每组一张**圆角实线卡片、透明背景**
+      // （见 cardStyle / groupHeader）。一张卡片 = 一个 ListItem，卡片内的行用细分隔线分开，
+      // 这样列表不会再出现"标题、行、脚注各占一项、彼此混在一起"的观感。
       if (this.barOptionsSupported()) {
         ListItem() {
           this.groupHeader($r('app.string.settings_group_bar'))
         }
         ListItem() {
-          this.nativeAnimationRow()
+          Column({ space: 0 }) {
+            this.nativeAnimationRow()
+            this.cardDivider()
+            this.groupHint($r('app.string.settings_bar_native_animation_hint'))
+          }
+          .cardStyle()
         }
-        ListItem() {
-          this.groupHint($r('app.string.settings_bar_native_animation_hint'))
-        }
+        .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
       }
 
       /*
@@ -713,33 +770,43 @@ export struct SettingsPanel {
         this.groupHeader($r('app.string.settings_group_media'))
       }
       ListItem() {
-        this.imageQualityRow()
+        Column({ space: 0 }) {
+          this.imageQualityRow()
+          this.cardDivider()
+          this.videoQualityRow()
+          this.cardDivider()
+          this.groupHint($r('app.string.settings_media_quality_hint'))
+        }
+        .cardStyle()
       }
-      ListItem() {
-        this.videoQualityRow()
-      }
-      ListItem() {
-        this.groupHint($r('app.string.settings_media_quality_hint'))
-      }
+      .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+
       if (this.materialOptionsSupported()) {
         ListItem() {
           this.groupHeader($r('app.string.settings_group_appearance'))
         }
         ListItem() {
-          this.thicknessRow()
+          Column({ space: 0 }) {
+            this.thicknessRow()
+            this.cardDivider()
+            this.materialRow()
+            this.cardDivider()
+            this.groupHint($r('app.string.settings_material_hint'))
+          }
+          .cardStyle()
         }
-        ListItem() {
-          this.materialRow()
-        }
-        ListItem() {
-          this.groupHint($r('app.string.settings_material_hint'))
-        }
+        .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
       }
 
       if (!this.barOptionsSupported() || !this.materialOptionsSupported()) {
         // 两组都被隐藏时给一句说明，免得页面看着"缺了一块"却不知道为什么。
         ListItem() {
-          this.groupHint($r('app.string.settings_unsupported_hint'))
+          Text($r('app.string.settings_unsupported_hint'))
+            .fontSize(12)
+            .fontColor($r('app.color.secondary_text'))
+            .width('100%')
+            .padding({ left: PAGE_PADDING + CARD_ROW_PADDING, right: PAGE_PADDING + CARD_ROW_PADDING,
+              top: 10, bottom: 2 })
         }
       }
 
@@ -755,47 +822,46 @@ export struct SettingsPanel {
         this.groupHeader($r('app.string.settings_group_diag'))
       }
       ListItem() {
-        this.actionRow($r('app.string.settings_export_diag'), (): void => {
-          this.exportDiag();
-        })
+        Column({ space: 0 }) {
+          this.actionRow($r('app.string.settings_export_diag'), (): void => {
+            this.exportDiag();
+          })
+          this.cardDivider()
+          this.actionRow($r('app.string.settings_copy_diag'), (): void => {
+            this.copyDiag();
+          })
+          this.cardDivider()
+          /*
+           * **抓一次"故事页"的模板**（诊断 + 手动救急）。
+           *
+           * 为什么要有这个入口：`reels_media` 那条私有 REST 在部分会话上被 IG 回 500，
+           * 我们改走"网页自己那条快拍查询"（见 NativeStories.storyViaTemplate）—— 而那条路
+           * 只有在 REST 失败时才会自己触发。这个按钮让人**当场**试一次：抓到了就说明这条路可用
+           * （之后快拍就能开），抓不到也能立刻看到失败原因，不用等复现。
+           */
+          this.actionRow($r('app.string.settings_capture_story'), (): void => {
+            this.captureStoryTemplateForDiag();
+          })
+          this.cardDivider()
+          /*
+           * **跑一次移动 API 自检**（新路径：instagrapi 那套私有移动 API，见 core/mobileapi）。
+           *
+           * 和上一行同源：网页那条路被 IG 按来源拒（reels_media 回 500 / challenge）之后，
+           * 我们在试"复用同一个 Cookie 罐、改用移动端私有 API"。这条链路的失败点很多
+           * （会话读不到、claim 不对、challenge、限流），所以给一个当场能跑的入口：
+           * 结论直接显示在下面那行，不依赖 hdc 也不依赖 hilog。
+           */
+          this.actionRow($r('app.string.settings_run_mobile_probe'), (): void => {
+            this.runMobileProbe();
+          })
+          this.cardDivider()
+          this.mobileProbeRow()
+          this.cardDivider()
+          this.groupHint($r('app.string.settings_diag_hint'))
+        }
+        .cardStyle()
       }
-      ListItem() {
-        this.actionRow($r('app.string.settings_copy_diag'), (): void => {
-          this.copyDiag();
-        })
-      }
-      ListItem() {
-        /*
-         * **抓一次"故事页"的模板**（诊断 + 手动救急）。
-         *
-         * 为什么要有这个入口：`reels_media` 那条私有 REST 在部分会话上被 IG 回 500，
-         * 我们改走"网页自己那条快拍查询"（见 NativeStories.storyViaTemplate）—— 而那条路
-         * 只有在 REST 失败时才会自己触发。这个按钮让人**当场**试一次：抓到了就说明这条路可用
-         * （之后快拍就能开），抓不到也能立刻看到失败原因，不用等复现。
-         */
-        this.actionRow($r('app.string.settings_capture_story'), (): void => {
-          this.captureStoryTemplateForDiag();
-        })
-      }
-      ListItem() {
-        /*
-         * **跑一次移动 API 自检**（新路径：instagrapi 那套私有移动 API，见 core/mobileapi）。
-         *
-         * 和上一行同源：网页那条路被 IG 按来源拒（reels_media 回 500 / challenge）之后，
-         * 我们在试"复用同一个 Cookie 罐、改用移动端私有 API"。这条链路的失败点很多
-         * （会话读不到、claim 不对、challenge、限流），所以给一个当场能跑的入口：
-         * 结论直接显示在下面那行，不依赖 hdc 也不依赖 hilog。
-         */
-        this.actionRow($r('app.string.settings_run_mobile_probe'), (): void => {
-          this.runMobileProbe();
-        })
-      }
-      ListItem() {
-        this.mobileProbeRow()
-      }
-      ListItem() {
-        this.groupHint($r('app.string.settings_diag_hint'))
-      }
+      .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
 
       // 退出登录：设置列表的最后一项（跟着列表一起滚），宽度和上面几行对齐（左右各留 SIDE_PADDING）。
       //
@@ -833,7 +899,7 @@ export struct SettingsPanel {
           this.onSignOut();
         })
       }
-      .padding({ left: SIDE_PADDING, right: SIDE_PADDING, top: 28, bottom: 24 })
+      .padding({ left: PAGE_PADDING, right: PAGE_PADDING, top: 28, bottom: 24 })
       }
       .width('100%')
       .layoutWeight(1)
