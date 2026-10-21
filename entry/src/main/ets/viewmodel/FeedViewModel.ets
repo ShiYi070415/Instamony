@@ -504,8 +504,12 @@ export class FeedViewModel {
        * `exploreTakesOver()` = 关注流那一段空 + 探索流有内容（缓存已经铺上了）。
        * 这时先发探索流那一发（它才是"新帖子"的来源），关注流改到**后台**顺带问一次
        * （见 refreshFollowingQuietly）—— 既不挡首屏，也不会让新关注的人永远不出现。
+       *
+       * ⚠️ **必须限定在"首屏 / 下拉刷新"**：`loadExplore(true)` 是**整体替换**探索流那一段。
+       * 早先这里漏了这个限定，于是**每一次触底**（`requestMore → loadFeed`）都会走到这儿，
+       * 把整段探索流重置成第一页 —— 用户看到的就是"触底不停刷新页面、老帖子被覆盖"。
        */
-      if (this.exploreTakesOver()) {
+      if ((firstLoad || refreshing) && this.exploreTakesOver()) {
         hilog.info(DOMAIN, TAG, 'feed first/refresh: explore takes over → explore first');
         await this.loadExplore(true);
         if (firstLoad) {
@@ -657,7 +661,15 @@ export class FeedViewModel {
         }
       }
       if (this.exploreCursor.length === 0) {
-        return;
+        /*
+         * 游标空了 = "到底了"。到点后可以拿**第一页**再试一次，但**只合并、不替换** ——
+         * 触底这一路（`forReset=false`）绝不能把用户正在看的那些帖子清掉
+         * （早先误把它当"重启"用，表现就是"触底不停刷新、老帖子被覆盖"）。
+         */
+        if (!this.exploreRecheckDue()) {
+          return;
+        }
+        hilog.info(DOMAIN, TAG, 'explore dry recheck: fetch first page and merge (no reset)');
       }
     }
     const cursor: string = forReset ? '' : this.exploreCursor;
@@ -1215,8 +1227,12 @@ export class FeedViewModel {
       if (want || this.exploreHasMore || this.exploreRecheckDue()) {
         this.setStatus(FeedStatus.LoadingMore);
         const beforeExplore: number = this.explore.length;
-        // 游标还在就接着翻；游标没了（到底/过期）就重新要第一页，那一页本身就是新内容。
-        await this.loadExplore(!this.exploreHasMore);
+        /*
+         * **触底这一路永远是"合并"，不传 reset**：`loadExplore(true)` 会把探索流那一段整体
+         * 替换掉（那是首屏/下拉刷新才该做的事）。游标空了的"到底重试"也在 loadExplore 内部
+         * 走合并分支（见那里的 explore dry recheck）。
+         */
+        await this.loadExplore(false);
         if (this.explore.length > beforeExplore || this.exploreHasMore) {
           this.pagingStuck = false;
           return;
