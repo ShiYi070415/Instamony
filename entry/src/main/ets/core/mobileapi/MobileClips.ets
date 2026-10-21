@@ -1,25 +1,30 @@
 /*
  * Reels 的**移动端私有通道**（对应 instagrapi 的 `reels` / `explore_reels`）。
  *
- * ## 端点（与 instagrapi 逐字一致）
- *   POST `clips/discover/`           ← instagrapi 的 `explore_reels`
- *   POST `clips/connected/`          ← `reels`
- *   body: 一个**空格**（instagrapi 里就是 `data=" "`），query: `max_id=<游标>`
+ * ## 三个端点，实测结论（真机 2026-10-21，见下面的实验记录）
  *
- * ## 返回结构（注意与网页 GraphQL 不同）
- *   `{"items":[{"media":{…v1 媒体…}}], "items_with_ads":[…],
- *     "paging_info":{"more_available":true, "max_id":"…"}}`
- * 而网页 GraphQL 那条是
- *   `{"data":{"xdt_api__v1__clips__home__connection_v2":{"edges":[{"node":{"media":…}}],
- *     "page_info":{"has_next_page":…,"end_cursor":"…"}}}}`
+ * | 端点 | 形状 | 翻页 | 用不用 |
+ * | --- | --- | --- | --- |
+ * | `POST clips/connected/` | `items[5]`（关注流，无 `paging_info`） | 无游标 | **首屏暖场**（小、快） |
+ * | `GET discover/topical_explore/` | `sectional_items[]`（见 MobileDiscover） | **`max_id` 真能换页** | **主路** |
+ * | `POST clips/discover/` | `items[]` 空 + `items_with_ads[4]` | **换不了页** | 最后兜底 |
  *
- * **v1 媒体与 GraphQL 媒体的字段名高度重合**（`code` / `video_versions[].url` /
- * `image_versions2.candidates[]` / `user` / `like_count` / `clips_metadata`），
- * 所以解析不需要第二套映射：把 `items[].media` 取出来交给 `NativeReels.toReel` 即可。
+ * ### `clips/discover/` 为什么不能当主路（这条是本节的重点）
  *
- * ## 为什么值得走这条
- * 网页 GraphQL 那条依赖"抓模板 + 回放"，而这条**不需要任何网页模板**：
- * 端点是写死的（instagrapi 那张表里就这么写），身份用 App 那套。
+ * 现场：连续要了 4 页，每页都回**同样那 4 条**（`DetYzMxzSoK` / `DetdvCnyNuE` /
+ * `DeCcpBuvset` / `Detog77hNnG`），字节数一分不差（204892），只有顺序被倒过来。
+ * `paging_info.max_id` 虽然每页都变，但它的"已看窗口"token 是同一批 —— 服务端**没认**我们的游标，
+ * 只是把我们上次报的那几条又还回来（这就是用户说的"reels 无法获取新的视频"）。
+ *
+ * 逐个排除过（一次性实验，结论拿到后已删）：
+ *   · 游标放签名体里（`max_id=…`） → 同样那 4 条（顺序还原）
+ *   · 换个参数名（`cursor=…`） → 同样那 4 条
+ *   · 查询串 + 体里带 instagrapi 的 `_uid`/`_uuid` → 同样那 4 条
+ *   · 加 `count`/`page_size` → 同样那 4 条
+ *
+ * 同一时刻另外两条源都正常：`clips/connected/` 回 5 条关注流；
+ * `discover/topical_explore/` 第一页和它的 `max_id` 第二页**短码完全不重合**。
+ * 所以 Reels 的主路改成探索流，`clips/discover/` 只留作"两条都挂了"时的兜底（它至少给 4 条能播的）。
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -42,20 +47,40 @@ export class MobileClips {
   }
 
   /**
-   * 拉一页 Reels（拿不到给 null，调用方自己决定要不要退回模板回放）。
+   * 关注流那一发（`clips/connected/`）：**首屏暖场**用。
    *
-   * @param maxId 上一页 `paging_info.max_id`（空串 = 第一页）
-   * @param endpoint `clips/discover/`（默认，探索流）或 `clips/connected/`（关注流）
+   * 小、快（5 条、几十 KB），但**没有 `paging_info`** —— 所以它只负责让用户一进视频页就有内容，
+   * 真正翻页由探索流接管（见 core/NativeReels 的 fetchPage）。
    */
-  static async page(maxId: string = '', endpoint: string = CLIPS_DISCOVER): Promise<string | null> {
+  static async connected(cursor: string = ''): Promise<string | null> {
+    return MobileClips.post(CLIPS_CONNECTED, cursor);
+  }
+
+  /**
+   * 探索流兜底那一发（`clips/discover/`）。
+   *
+   * **不要拿它当主路**：真机上它每页都回同样 4 条（见文件头）。
+   * 留着是因为"探索流 + 关注流都挂了"时它至少还能给 4 条能播的视频。
+   */
+  static async discover(cursor: string = ''): Promise<string | null> {
+    return MobileClips.post(CLIPS_DISCOVER, cursor);
+  }
+
+  /**
+   * 发一发 `clips/*`（拿不到给 null）。
+   *
+   * @param endpoint `clips/connected/` 或 `clips/discover/`
+   * @param cursor 上一页 `paging_info.max_id`（空串 = 第一页）
+   */
+  private static async post(endpoint: string, cursor: string): Promise<string | null> {
     const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
     if (identity === null) {
       MobileClips.lastDetail = 'no-session';
       return null;
     }
     let params: string = '';
-    if (maxId.length > 0) {
-      params = `max_id=${encodeURIComponent(maxId)}`;
+    if (cursor.length > 0) {
+      params = `max_id=${encodeURIComponent(cursor)}`;
     }
     /*
      * `data=" "`（一个空格）不是笔误：instagrapi 就是这么发的 —— 这条要 POST，
@@ -69,28 +94,29 @@ export class MobileClips {
       hilog.info(DOMAIN, TAG, 'clips miss %{public}s %{public}s', endpoint, MobileClips.lastDetail);
       return null;
     }
-    const items: number = MobileClips.countOf(result.body);
-    MobileClips.lastDetail = `ok items=${items} bytes=${result.bytes}`;
-    hilog.info(DOMAIN, TAG, 'clips ok %{public}s cursor=%{public}d items=%{public}d bytes=%{public}d',
-      endpoint, maxId.length, items, result.bytes);
+    const counts: string = MobileClips.countsOf(result.body);
+    MobileClips.lastDetail = `ok ${counts} bytes=${result.bytes}`;
+    hilog.info(DOMAIN, TAG, 'clips ok %{public}s cursor=%{public}d %{public}s bytes=%{public}d',
+      endpoint, cursor.length, counts, result.bytes);
     return result.body;
   }
 
-  /** `items` / `items_with_ads` 的条数（只给日志；解析仍在 NativeReels）。 */
-  private static countOf(body: string): number {
+  /** `items` / `items_with_ads` 各几条（只给日志；解析仍在 core/NativeReels）。 */
+  private static countsOf(body: string): string {
     try {
       const parsed: Record<string, Object> = JSON.parse(body) as Record<string, Object>;
-      const items: Object | undefined = parsed['items'];
-      if (items !== undefined && items !== null && Array.isArray(items)) {
-        return (items as Array<Object>).length;
-      }
-      const ads: Object | undefined = parsed['items_with_ads'];
-      if (ads !== undefined && ads !== null && Array.isArray(ads)) {
-        return (ads as Array<Object>).length;
-      }
-      return -1;
+      return `items=${MobileClips.lenOf(parsed, 'items')}`
+        + ` ads=${MobileClips.lenOf(parsed, 'items_with_ads')}`;
     } catch (error) {
+      return 'not-json';
+    }
+  }
+
+  private static lenOf(root: Record<string, Object>, key: string): number {
+    const list: Object | undefined = root[key];
+    if (list === undefined || list === null || !Array.isArray(list)) {
       return -1;
     }
+    return (list as Array<Object>).length;
   }
 }

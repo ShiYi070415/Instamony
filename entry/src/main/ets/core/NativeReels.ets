@@ -18,10 +18,15 @@ import { JsonRead } from './JsonRead';
 import { MobileDiscover, MobileMediaPage } from './mobileapi/MobileDiscover';
 // Reels 的移动端通道（对应 instagrapi 的 reels / explore_reels，不需要网页模板）。
 import { MobileClips } from './mobileapi/MobileClips';
+// 主页 Reels 分页（`clips/user/{pk}/`）—— 补货池用它，见 fetchAuthorPage。
+import { MobileProfile, MobileGridPage } from './mobileapi/MobileProfile';
 import { EngageState } from './NativeEngage';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeReels';
+
+/** 补货时一个作者要几条（`clips/user/` 的 `page_size`；他有多少给多少，最多这么多）。 */
+const AUTHOR_PAGE_COUNT: number = 12;
 
 /** Clips 连接键（只给历史解析函数用，数据获取已不走它）。 */
 const CLIPS_KEY: string = 'xdt_api__v1__clips__home__connection_v2';
@@ -149,12 +154,29 @@ export class NativeReels {
   /** "载荷里有没有收藏状态"那条诊断只打一次（见 toReel）。 */
   private static saveDiagDone: boolean = false;
   /**
-   * 这一轮的 reels 是不是**移动端探索流**给的（见 viaExplore）。
+   * **这一页是从哪条路来的**（`explore` / `connected` / `clips` / `author` / `-`）。
    *
-   * 记它的唯一原因：两种路的游标互不通用，翻页必须回到"给游标的那条路"，
-   * 否则第二页要么空、要么被当成第一页反复请求。
+   * 翻页时用得上：只有探索流的 `max_id` 真的能换页（真机实测，见 core/mobileapi/MobileClips
+   * 文件头那张表），另外几条的游标换了也没新内容，所以**不能拿它们的游标去翻页**。
    */
-  private static exploreUsable: boolean = false;
+  private static lastSource: string = '-';
+  /**
+   * **补货池**：流里见过的作者（按出现顺序消费）。
+   *
+   * 为什么需要它：能翻页的探索流是图文混排，实测 8 条里只有 1~3 条是视频（500KB / 5 秒），
+   * 光靠它撑不住"一直往下刷"。而 `clips/user/{pk}/`（主页 Reels 那一发，见 MobileProfile.tab）
+   * 是**该用户的全部 Reels**：100% 是视频、几十 KB、一两秒。
+   * 所以每翻一页探索流，就从池子里取一个作者补一页真视频，两条交替，密度和速度都够。
+   */
+  private static authors: Array<string> = [];
+  /** 作者 id → 该作者的下一页游标（不在表里 = 还没取过；值为空串 = 已到底，不再要）。 */
+  private static authorCursors: Map<string, string> = new Map<string, string>();
+  /** 已经进过池子的作者（防重复）。 */
+  private static authorSeen: Set<string> = new Set<string>();
+  /** 池子最多排多少人（够刷很久了，池子本身会跟着探索流一直长大）。 */
+  private static readonly AUTHOR_POOL_MAX: number = 40;
+  /** "作者那页解析不出 Reel"那条诊断只打一次（见 fetchAuthorPage）。 */
+  private static authorDiagDone: boolean = false;
 
   /**
    * app 启动时就发一发 reels 第一页，结果留在内存里等 Reels 页来取（幂等）。
@@ -198,14 +220,38 @@ export class NativeReels {
   }
 
   /**
-   * 移动端 `clips/discover/` 那一发（拿不到给 null）。
+   * **关注流那一发**（`clips/connected/`）：首屏暖场。
    *
-   * 返回结构与网页 GraphQL 不同（`items[].media` + `paging_info`），但**媒体对象是同一套 v1 字段**，
-   * 所以直接复用 `toReel`（见 core/mobileapi/MobileClips 文件头的说明）。
+   * 5 条、几十 KB、很快，但**没有 `paging_info`**（游标为空），所以它只负责"一进视频页就有东西播"，
+   * 翻页由探索流接管（见 fetchPage）。
+   */
+  private static async viaConnected(cursor: string): Promise<NativeReelsPage | null> {
+    const started: number = Date.now();
+    const body: string | null = await MobileClips.connected(cursor);
+    if (body === null) {
+      return null;
+    }
+    const page: NativeReelsPage | null = NativeReels.parseMobile(body, Date.now() - started);
+    if (page === null) {
+      hilog.info(DOMAIN, TAG, 'connected unparsable bytes=%{public}d', body.length);
+      return null;
+    }
+    NativeReels.lastSource = 'connected';
+    NativeReels.noteAuthors(page.reels);
+    hilog.info(DOMAIN, TAG, 'reels via connected n=%{public}d more=%{public}s cursor=%{public}d ms=%{public}d',
+      page.reels.length, `${page.hasMore}`, page.nextCursor.length, page.ms);
+    return page;
+  }
+
+  /**
+   * `clips/discover/` 那一发（**只当兜底**）。
+   *
+   * 真机上它每页都回同样 4 条、游标换不动（见 core/mobileapi/MobileClips 文件头），
+   * 所以只在"探索流 + 关注流都挂了"时用它，至少还有 4 条能播。
    */
   private static async viaClips(cursor: string): Promise<NativeReelsPage | null> {
     const started: number = Date.now();
-    const body: string | null = await MobileClips.page(cursor);
+    const body: string | null = await MobileClips.discover(cursor);
     if (body === null) {
       return null;
     }
@@ -215,9 +261,108 @@ export class NativeReels {
         body.length, NativeReels.diagnose(body));
       return null;
     }
+    NativeReels.lastSource = 'clips';
+    NativeReels.noteAuthors(page.reels);
     hilog.info(DOMAIN, TAG, 'reels via clips n=%{public}d more=%{public}s cursor=%{public}d ms=%{public}d',
       page.reels.length, `${page.hasMore}`, page.nextCursor.length, page.ms);
     return page;
+  }
+
+  /** 补货池里还有几个作者（视图模型用它决定"这一发要不要补货"）。 */
+  static authorPoolSize(): number {
+    return NativeReels.authors.length;
+  }
+
+  /**
+   * **补货**：从池子里取一个作者，要他那页 Reels（`clips/user/{pk}/`）。
+   *
+   * 为什么是这条路：探索流实测 8 条里只有 1~3 条是视频（500KB / 5 秒），单靠它刷不动；
+   * 而一个作者那页是**清一色视频**、几十 KB、一两秒（主页 Reels 分页同一条，已真机验证）。
+   *
+   * 返回的那一页 **`nextCursor` 是空串**：它推进不了探索流的游标，视图模型那边看到空游标
+   * 就知道"这条不是分页用的，别拿它覆盖探索流游标"（见 ReelsViewModel.applyNativePage）。
+   * 作者自己还有下一页时，他被重新排到队尾（游标记在 authorCursors 里）。
+   *
+   * 一个作者给不出东西（私密/零 Reels/被限流）就换下一个，最多试两个 —— 不在这儿死磕。
+   */
+  static async fetchAuthorPage(): Promise<NativeReelsPage | null> {
+    let tries: number = 0;
+    while (NativeReels.authors.length > 0 && tries < 2) {
+      const pk: string | undefined = NativeReels.authors.shift();
+      if (pk === undefined || pk.length === 0) {
+        continue;
+      }
+      const cursor: string = NativeReels.authorCursors.get(pk) ?? '';
+      const started: number = Date.now();
+      const grid: MobileGridPage | null = await MobileProfile.tab('clips', pk, cursor,
+        AUTHOR_PAGE_COUNT, ApiThrottle.interactive());
+      tries++;
+      if (grid === null) {
+        // 这个作者这一发没成：不放回池子（别在一个人身上反复失败），试下一个。
+        NativeReels.authorCursors.delete(pk);
+        continue;
+      }
+      const reels: Array<Reel> = [];
+      for (let index: number = 0; index < grid.items.length; index++) {
+        let media: Record<string, Object> | null = JsonRead.asRecord(grid.items[index]);
+        if (media === null) {
+          continue;
+        }
+        /*
+         * `clips/user/` 的条目是**包了一层**的 `{ "media": {…v1 媒体…} }`
+         * （和探索流 `layout_content.medias[]` 一样），而 `parseMobile` 那些 `items[]` 是裸的。
+         * 诊断现场就是 `items=12 keys=media` —— 不解包的话一条都认不出来。
+         */
+        const wrapped: Record<string, Object> | null = JsonRead.asRecord(media['media']);
+        if (wrapped !== null) {
+          media = wrapped;
+        }
+        const reel: Reel | null = NativeReels.toReel(media as IgClipsMedia);
+        if (reel !== null) {
+          reels.push(reel);
+        }
+      }
+      if (reels.length === 0 && !NativeReels.authorDiagDone) {
+        // 只打一次：这一页到底给了什么形状（`clips/user/` 的条目可能与 clips 流不同）。
+        NativeReels.authorDiagDone = true;
+        const first: Record<string, Object> | null = grid.items.length > 0
+          ? JsonRead.asRecord(grid.items[0]) : null;
+        hilog.info(DOMAIN, TAG, 'author page no reel: items=%{public}d keys=%{public}s',
+          grid.items.length,
+          first === null ? '-' : Object.keys(first).slice(0, 20).join(','));
+      }
+      if (grid.nextCursor.length > 0) {
+        // 他还有更早的 Reels：记下游标，排到队尾，下次轮到他要下一页。
+        NativeReels.authorCursors.set(pk, grid.nextCursor);
+        NativeReels.authors.push(pk);
+      } else {
+        NativeReels.authorCursors.delete(pk);
+      }
+      if (reels.length === 0) {
+        continue;
+      }
+      hilog.info(DOMAIN, TAG,
+        'reels via author pk=%{public}s n=%{public}d items=%{public}d more=%{public}s ms=%{public}d',
+        pk, reels.length, grid.items.length, grid.nextCursor.length > 0 ? 'y' : 'n',
+        Date.now() - started);
+      return new NativeReelsPage(reels, '', true, Date.now() - started);
+    }
+    return null;
+  }
+
+  /** 把一页里出现过的作者收进补货池（按出现顺序，去重，限量）。 */
+  private static noteAuthors(reels: Array<Reel>): void {
+    for (let index: number = 0; index < reels.length; index++) {
+      const pk: string = reels[index].authorId;
+      if (pk.length === 0 || NativeReels.authorSeen.has(pk)) {
+        continue;
+      }
+      if (NativeReels.authors.length >= NativeReels.AUTHOR_POOL_MAX) {
+        return;
+      }
+      NativeReels.authorSeen.add(pk);
+      NativeReels.authors.push(pk);
+    }
   }
 
   /**
@@ -282,64 +427,124 @@ export class NativeReels {
   /**
    * 要一页 reels 并解析好。失败一律 null（没登录 / 被限流 / HTTP 非 200 / 解析不出条目）。
    *
-   * **只走移动端**（与 instagrapi 的 `explore_reels` 同一套 App 身份，不需要网页模板）：
-   * `clips/discover/` 为主，探索流 `discover/topical_explore/` 在**用户驱动**时兜底。
-   * 网页 GraphQL 模板回放已删：页面不再注入抓包钩子（`NETWORK_WATCHER` 已退役），
-   * 模板既抓不到，也不该再当数据源。
+   * **只走移动端**（与 instagrapi 的 `explore_reels` 同一套 App 身份，不需要网页模板）。
+   * 三条源的分工是**实测出来的**，不是猜的（见 core/mobileapi/MobileClips 文件头那张表）：
    *
-   * @param allowExplore 允许用**移动端探索流**兜底吗（见 viaExplore）。
+   *   · 首屏（无游标）：探索流 `discover/topical_explore/` 为主 + `clips/connected/`（关注流）补在前面；
+   *   · 翻页（有游标）：仍然只有探索流的 `max_id` 真的换页 —— 另外两条只是"再试一次"；
+   *   · `clips/discover/` 从主路撤下来当兜底：它每页都回同样 4 条（用户报的
+   *     "reels 无法获取新的视频"就是它）。
    *
-   *   · `true` = 调用方是**用户驱动**的（进 reels 页 / 上滑翻页，见 ReelsViewModel）；
-   *   · `false`（默认）= 启动预热（`warmStart`）与后台预取 —— 这时**不发**这一发 0.8~1.3MB 的
-   *     探索流。降噪（`FINGERPRINT_ANALYSIS.md` 阶段一）：没人看视频页时替用户拉一兆多，
-   *     既浪费流量，也正是"请求密度像脚本"的主要来源。
+   * @param userDriven 用户在看视频页吗（进 reels 页 / 上滑翻页 = true）。
+   *
+   *   · `true` = 允许拉**探索流**那一发（1MB 上下、5 秒）—— 它才是能翻页的主路；
+   *   · `false`（默认）= 启动预热：只打 `clips/connected/`（几十 KB），
+   *     没人看视频页时不该替用户拉一兆多（降噪，见 FINGERPRINT_ANALYSIS.md 阶段一）。
    */
   static async fetchPage(first: number, cursor: string,
-                         allowExplore: boolean = false): Promise<NativeReelsPage | null> {
-    /*
-     * 顺序：clips 在前是故意的 —— 它和 `viaExplore` 的区别是：
-     * 那个用的是 `discover/topical_explore/`（图片+视频混合流），这个才是**真正的 Reels 流**。
-     */
-    const viaMobile: NativeReelsPage | null = await NativeReels.viaClips(cursor);
-    if (viaMobile !== null) {
-      return viaMobile;
-    }
-    if (!allowExplore) {
-      hilog.info(DOMAIN, TAG, 'reels miss: clips failed, explore skipped (background) cursor=%{public}d',
-        cursor.length);
+                         userDriven: boolean = false): Promise<NativeReelsPage | null> {
+    if (cursor.length > 0) {
+      /*
+       * **翻页**：只有探索流的游标真的换页。上一条源不是探索流时（关注流那 5 条、
+       * `clips/discover/` 那 4 条都换不动），把这个游标丢掉，直接问探索流第一页 ——
+       * 只有它能把"能翻页的游标"建起来（见文件头那张表）。
+       */
+      if (NativeReels.lastSource === 'explore') {
+        const explorePage: NativeReelsPage | null = await NativeReels.viaExplore(cursor);
+        if (explorePage !== null) {
+          return explorePage;
+        }
+      }
+      const boot: NativeReelsPage | null = await NativeReels.viaExplore('');
+      if (boot !== null) {
+        return boot;
+      }
+      const connected: NativeReelsPage | null = await NativeReels.viaConnected(cursor);
+      if (connected !== null) {
+        return connected;
+      }
+      const clips: NativeReelsPage | null = await NativeReels.viaClips(cursor);
+      if (clips !== null) {
+        return clips;
+      }
+      hilog.info(DOMAIN, TAG, 'reels miss: all sources empty cursor=%{public}d limited=%{public}s',
+        cursor.length, `${ApiThrottle.blocked(ApiThrottle.CLIPS)}`);
       return null;
     }
-    const viaExplore: NativeReelsPage | null = await NativeReels.viaExplore(cursor);
-    if (viaExplore !== null) {
-      return viaExplore;
+    if (!userDriven) {
+      // 启动预热：只打小那一发（关注流）。
+      const warm: NativeReelsPage | null = await NativeReels.viaConnected('');
+      if (warm === null) {
+        hilog.info(DOMAIN, TAG, 'warm miss: connected empty (explore skipped in background)');
+      }
+      return warm;
     }
-    hilog.info(DOMAIN, TAG, 'reels miss: clips + explore both empty cursor=%{public}d limited=%{public}s',
-      cursor.length, `${ApiThrottle.blocked(ApiThrottle.CLIPS)}`);
-    return null;
+    /*
+     * 首屏（用户在看）：探索流为主 —— 它带**真游标**，翻页才有后面；
+     * 关注流那 5 条补在前面（关注的人的新视频优先，且几十 KB / 1 秒内有）。
+     * 探索流挂了就只用关注流；两条都挂才落到 `clips/discover/`。
+     */
+    const explore: NativeReelsPage | null = await NativeReels.viaExplore('');
+    const connected: NativeReelsPage | null = await NativeReels.viaConnected('');
+    if (explore !== null && connected !== null) {
+      const merged: NativeReelsPage = NativeReels.mergePages(connected, explore);
+      hilog.info(DOMAIN, TAG, 'reels first merged connected=%{public}d explore=%{public}d → n=%{public}d',
+        connected.reels.length, explore.reels.length, merged.reels.length);
+      return merged;
+    }
+    if (explore !== null) {
+      return explore;
+    }
+    if (connected !== null) {
+      return connected;
+    }
+    const fallback: NativeReelsPage | null = await NativeReels.viaClips('');
+    if (fallback === null) {
+      hilog.info(DOMAIN, TAG, 'reels miss: explore + connected + clips all empty limited=%{public}s',
+        `${ApiThrottle.blocked(ApiThrottle.CLIPS)}`);
+    }
+    return fallback;
   }
 
   /**
-   * **移动端探索流兜底**：clips 那条 GraphQL 被 IG 限流 / 不可用时，用
-   * `discover/topical_explore/`（见 core/mobileapi/MobileDiscover）里的 clips 媒体顶上。
+   * 两页合并成"首屏那一页"：`head` 在前，`tail` 里没见过的接后面（按短码去重）。
    *
-   * 为什么行得通：探索流那份 `sectional_items[].layout_content.medias[].media` 就是**媒体对象**
-   * （`code` / `pk` / `video_versions` / `image_versions2` / `user` / `like_count`…），
-   * 与 clips 那条同形状，所以直接喂给 `toReel` 即可（它本来就只认这几个键）。
+   * **游标取 `tail`（探索流）的** —— 关注流那页没有游标，探索流才有能翻的 `max_id`；
+   * 丢了它，首屏之后就再也翻不动了（这正是"每页都回同样几条"的老毛病）。
+   */
+  private static mergePages(head: NativeReelsPage, tail: NativeReelsPage): NativeReelsPage {
+    const seen: Set<string> = new Set<string>();
+    const reels: Array<Reel> = [];
+    const parts: Array<NativeReelsPage> = [head, tail];
+    for (let part: number = 0; part < parts.length; part++) {
+      const list: Array<Reel> = parts[part].reels;
+      for (let index: number = 0; index < list.length; index++) {
+        if (seen.has(list[index].shortcode)) {
+          continue;
+        }
+        seen.add(list[index].shortcode);
+        reels.push(list[index]);
+      }
+    }
+    return new NativeReelsPage(reels, tail.nextCursor, tail.hasMore, head.ms + tail.ms);
+  }
+
+  /**
+   * **探索流**（`discover/topical_explore/`，见 core/mobileapi/MobileDiscover）是 Reels 的主路。
    *
-   * 代价说清楚：那是"推荐/探索"的排序，不是 Reels 标签那套个性化排序；封面/音乐字段也可能稀疏
-   * （探索流不一定给 `clips_metadata`）。所以这条路**只在主路不可用时**走，
-   * 而且游标与主路不通用 —— 第一页从哪条来的，翻页就继续走哪条（见 exploreUsable）。
+   * 为什么是它（真机实测）：`clips/discover/` 的游标换不动内容（每页都回同样 4 条），
+   * 而探索流的 `max_id` 翻页**真的换内容**（第二页短码与第一页完全不重合）。
+   *
+   * 代价说清楚：它是"推荐/探索"的排序，不是 Reels 标签那套个性化排序；封面/音乐字段也可能稀疏
+   * （探索流不一定给 `clips_metadata`）。换来的是**能一直往下翻**，这才是视频页的底线。
+   *
+   * 只收有视频的（探索流里也夹着图片帖）：`toReel` 自己会剔除。
    */
   private static async viaExplore(cursor: string): Promise<NativeReelsPage | null> {
-    if (cursor.length > 0 && !NativeReels.exploreUsable) {
-      return null;
-    }
-    const page: MobileMediaPage | null = await MobileDiscover.explore(cursor, ApiThrottle.interactive());
+    const page: MobileMediaPage | null = await MobileDiscover.explore(cursor,
+      ApiThrottle.interactive(), ApiThrottle.CLIPS);
     if (page === null) {
-      if (cursor.length === 0) {
-        NativeReels.exploreUsable = false;
-      }
-      hilog.info(DOMAIN, TAG, 'explore fallback miss cursor=%{public}d', cursor.length);
+      hilog.info(DOMAIN, TAG, 'explore miss cursor=%{public}d', cursor.length);
       return null;
     }
     const reels: Array<Reel> = [];
@@ -355,14 +560,15 @@ export class NativeReels {
       }
     }
     if (reels.length === 0) {
-      hilog.info(DOMAIN, TAG, 'explore fallback: medias=%{public}d but no playable reel',
+      hilog.info(DOMAIN, TAG, 'explore: medias=%{public}d but no playable reel',
         page.medias.length);
       return null;
     }
-    NativeReels.exploreUsable = true;
+    NativeReels.lastSource = 'explore';
+    NativeReels.noteAuthors(reels);
     hilog.info(DOMAIN, TAG,
-      'reels via mobile explore n=%{public}d medias=%{public}d more=%{public}s ms=%{public}d',
-      reels.length, page.medias.length, `${page.hasMore}`, page.ms);
+      'reels via explore n=%{public}d medias=%{public}d more=%{public}s cursor=%{public}d ms=%{public}d',
+      reels.length, page.medias.length, `${page.hasMore}`, page.nextCursor.length, page.ms);
     return new NativeReelsPage(reels, page.nextCursor, page.hasMore, page.ms);
   }
 

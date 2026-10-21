@@ -48,9 +48,7 @@ const MAX_USERS: number = 40;
 /** `layout_content` 里可能装着媒体的几个键（见文件头的实测形状）。 */
 const LAYOUT_MEDIA_KEYS: Array<string> = ['medias', 'fill_items'];
 
-/** 一页媒体节点（探索流 / 搜索帖子共用）。 */
-export class MobileMediaPage {
-  /** **原始**媒体对象（字段映射由调用方做，见文件头）。 */
+export class MobileMediaPage {  /** **原始**媒体对象（字段映射由调用方做，见文件头）。 */
   readonly medias: Array<Object>;
   readonly nextCursor: string;
   readonly hasMore: boolean;
@@ -96,9 +94,12 @@ export class MobileDiscover {
    *
    * @param cursor 上一页给的游标（`max_id`）；空 = 第一页
    * @param priority 排队优先级（用户点开搜索页那一发传 interactive，预热传 warm）
+   * @param family 走哪条限速家族（见 core/ApiThrottle）。默认 `MOBILE`（搜索推荐网格用）；
+   *               **Reels 传 `CLIPS`** —— 它和搜索推荐共用这一发请求，但"视频频道"和"搜索频道"
+   *               被限流的概率不同，混在一条家族里会互相拖死。
    */
-  static async explore(cursor: string = '', priority: number = ApiThrottle.warm())
-    : Promise<MobileMediaPage | null> {
+  static async explore(cursor: string = '', priority: number = ApiThrottle.warm(),
+                      family: string = ApiThrottle.MOBILE): Promise<MobileMediaPage | null> {
     const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
     if (identity === null) {
       hilog.info(DOMAIN, TAG, 'explore skipped: no session');
@@ -118,7 +119,7 @@ export class MobileDiscover {
     const started: number = Date.now();
     const result: MobileResult = await MobileRequest.send(
       'discover/topical_explore/', '', params, true, null,
-      new MobileOptions(ApiThrottle.MOBILE, priority));
+      new MobileOptions(family, priority));
     if (!result.ok) {
       hilog.warn(DOMAIN, TAG, 'explore failed: %{public}s', result.summary());
       return null;

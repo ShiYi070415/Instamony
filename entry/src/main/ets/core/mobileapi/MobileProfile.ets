@@ -183,36 +183,47 @@ export class MobileProfile {
     if (maxId.length > 0) {
       data['max_id'] = maxId;
     }
-    let params: string = `target_user_id=${encodeURIComponent(userId)}`;
-    let started: number = Date.now();
-    let result: MobileResult = await MobileRequest.send(endpoint, MobileRequest.formOf(data), params,
-      true, null, new MobileOptions(ApiThrottle.MOBILE, priority));
-    if (!result.ok) {
-      hilog.info(DOMAIN, TAG, 'tab[%{public}s] query form miss: %{public}s', kind, result.summary());
-      // 第二次：把 `target_user_id` 放进签名体（老写法）。
-      data['target_user_id'] = userId;
-      params = maxId.length > 0 ? `max_id=${encodeURIComponent(maxId)}` : '';
-      started = Date.now();
-      result = await MobileRequest.send(endpoint, MobileRequest.formOf(data), params, true, null,
-        new MobileOptions(ApiThrottle.MOBILE, priority));
-      if (!result.ok) {
-        /*
-         * 第三次：**不包 signed_body**（普通表单体）。
-         *
-         * 依据：两次都被判 `target_user_id is required`，说明 IG 这条端点读的是**裸表单字段**，
-         * 而签名体把整个体包成了一个 `signed_body=` 字段（其它端点认，这条不认）。
-         * instagrapi 里也有 `with_signature=False` 的先例（如 `interest_nux/list_all/`）。
-         */
-        hilog.info(DOMAIN, TAG, 'tab[%{public}s] signed body miss, retry unsigned: %{public}s',
-          kind, result.summary());
-        started = Date.now();
-        result = await MobileRequest.send(endpoint, MobileRequest.formOf(data), params, false, null,
-          new MobileOptions(ApiThrottle.MOBILE, priority));
-      }
+    data['target_user_id'] = userId;
+    /*
+     * **学到的那条就记下来**（`postUnsigned`）：真机实测这条端点只认**未签名**的表单体
+     * （签名体把字段包进 `signed_body=`，IG 就看不到 `target_user_id` 了）。
+     * 不记的话每一发都要先白打一次 400（实测每页多 ~9 秒、多发 1 个请求）——
+     * 那是纯浪费，而请求密度正是本项目要压的东西。
+     */
+    if (MobileProfile.postUnsigned) {
+      return MobileProfile.postOnce(endpoint, data, maxId, kind, priority, false);
     }
+    const signed: MobileGridPage | null = await MobileProfile.postOnce(endpoint, data, maxId, kind,
+      priority, true);
+    if (signed !== null) {
+      return signed;
+    }
+    const unsigned: MobileGridPage | null = await MobileProfile.postOnce(endpoint, data, maxId, kind,
+      priority, false);
+    if (unsigned !== null) {
+      MobileProfile.postUnsigned = true;
+      hilog.info(DOMAIN, TAG, 'tab[%{public}s] learned: unsigned form body works, use it directly', kind);
+    }
+    return unsigned;
+  }
+
+  /** 这条端点的表单体要不要包 `signed_body`（学到就记住，见 gridPost）。 */
+  private static postUnsigned: boolean = false;
+
+  /** 发一次网格 POST（`signed=false` = 不包签名体）。 */
+  private static async postOnce(endpoint: string, data: Record<string, Object>, maxId: string,
+                                kind: string, priority: number,
+                                signed: boolean): Promise<MobileGridPage | null> {
+    let params: string = `target_user_id=${encodeURIComponent(`${data['target_user_id'] ?? ''}`)}`;
+    if (maxId.length > 0) {
+      params += `&max_id=${encodeURIComponent(maxId)}`;
+    }
+    const started: number = Date.now();
+    const result: MobileResult = await MobileRequest.send(endpoint, MobileRequest.formOf(data), params,
+      signed, null, new MobileOptions(ApiThrottle.MOBILE, priority));
     if (!result.ok) {
-      hilog.info(DOMAIN, TAG, 'tab[%{public}s] miss (%{public}s): %{public}s',
-        kind, endpoint, result.summary());
+      hilog.info(DOMAIN, TAG, 'tab[%{public}s] form miss signed=%{public}s: %{public}s',
+        kind, `${signed}`, result.summary());
       return null;
     }
     const page: MobileGridPage | null = MobileProfile.gridOf(result, kind, started);

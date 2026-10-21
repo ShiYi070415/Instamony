@@ -88,30 +88,6 @@ const END_RECHECK_MS: number = 30000;
  */
 const RESTART_COOLDOWN_MS: number = 60000;
 /**
- * 下拉刷新时，等"页面就绪"的上限（毫秒）。
- *
- * 网页可能正停在别处（活动页 / 帖子页）或者刚被导航过、还在水合，这时读信息流必定失败。
- * 等一小会儿再读，比"拉一下什么都没发生"好。
- */
-const REFRESH_READY_MS: number = 6000;
-/**
- * 「等网页就绪」的总上限与单次等待片段（毫秒）。
- *
- * 分段等而不是一次等到死：每段结束都能重新问一次 `isReady()`，网页在这期间就绪就能立刻继续
- * （常见情况是等 1~2 秒），而真的一直不就绪时也不会无限挂住这一轮取数。
- */
-const READY_TOTAL_MS: number = 30000;
-const READY_SLICE_MS: number = 4000;
-/**
- * 「这一轮是不是真的等过」的判据，以及没等过时主动让出的时长（毫秒）。
- *
- * `awaitPageReady` 命中"刚刚确认不就绪"的快速通道时会**立刻**返回，一轮几乎不耗时；
- * 那种情况下必须自己 sleep 一下，否则 `waitPageReady` 的 while 会变成纯微任务自旋
- * 把主线程占死（真机实测 10 秒 AppFreeze，见那里的注释）。
- */
-const READY_MIN_WAIT_MS: number = 50;
-const READY_RETRY_GAP_MS: number = 250;
-/**
  * 等下拉刷新真正做完的上限（毫秒），以及轮询间隔。
  *
  * 见 `awaitIdle`：刷新请求可能正好撞上在跑的一轮取数，那一轮结束后才会真正重读第一页，
@@ -331,11 +307,11 @@ export class FeedViewModel {
     this.hasMore = true;
     this.sawEnd = false;
     this.sawEndAtMs = 0;
-    // 页面没就绪就先等它（已经就绪时这个方法立刻返回）。
-    try {
-      await this.bridge.awaitPageReady(REFRESH_READY_MS);
-    } catch (error) {
-    }
+    /*
+     * **不再等网页就绪**：刷新走的是原生 `feed/timeline/`（core/NativeFeed），
+     * 一个字节都不经过隐藏网页。以前这里先 `awaitPageReady(6000)` —— 网页正在水合 /
+     * 被别的功能导航 / 后台挂起时白白多等最多 6 秒，用户看到的就是"下拉之后半天不刷新"。
+     */
     this.wantFirstPage = true;
     if (this.busy) {
       // 已经有一轮在跑：排队。上面这些标志会被排队的那一轮读到，目标仍是第一页。
@@ -373,53 +349,6 @@ export class FeedViewModel {
     });
   }
 
-  /**
-   * 等隐藏网页就绪，**一直等到就绪或到上限**（而不是一看到未就绪就放弃）。
-   *
-   * 为什么：信息流的一切都建立在"网页这一份文档是活的"上面。冷启动时网页可能还在加载、
-   * 或刚被别的页面（Reels / 我的 的冷启动）导航走又回来，这个窗口里读必定失败。以前这里
-   * 只等一次 6 秒就报「页面尚未就绪」并收工，用户看到的就是"骨架屏/空白一直不动，
-   * 得自己再拉一下"。现在改成反复等到就绪为止（上限 READY_TOTAL_MS），
-   * 于是"一直刷新到 IG 页面准备好"这件事是自动完成的。
-   */
-  private async waitPageReady(): Promise<boolean> {
-    if (this.bridge.isReady()) {
-      return true;
-    }
-    const deadline: number = Date.now() + READY_TOTAL_MS;
-    let rounds: number = 0;
-    while (Date.now() < deadline) {
-      const left: number = deadline - Date.now();
-      const chunk: number = left > READY_SLICE_MS ? READY_SLICE_MS : left;
-      const before: number = Date.now();
-      await this.bridge.awaitPageReady(chunk);
-      if (this.bridge.isReady()) {
-        hilog.info(DOMAIN, TAG, 'page ready after %{public}d waits', rounds + 1);
-        return true;
-      }
-      rounds++;
-      /*
-       * **本轮几乎没等就回来了 → 必须自己让出一拍。**
-       *
-       * `awaitPageReady` 有一条"刚刚确认不就绪"的快速通道（见 PageBridge.NOT_READY_MEMO_MS）：
-       * 命中时它**立刻**返回 'timeout'，一个定时器都不排。于是这个 while 会退化成
-       * **纯微任务自旋** —— `await` 一个已解决的 promise 只会排微任务，宏任务队列（定时器、
-       * 触摸、绘制）永远排不进来，主线程就被这一圈代码占死了。
-       * 真机实测：这一圈连续转 10 秒、写了 36 万行日志，系统直接记 `uv_timer_task 10004ms`
-       * 并报 AppFreeze（用户说的「经常 appfreeze」就是它）。
-       *
-       * 所以：只要这一轮没真的等过（< READY_MIN_WAIT_MS），就主动 sleep 一下，
-       * 把主线程让给定时器与输入事件。
-       */
-      if (Date.now() - before < READY_MIN_WAIT_MS) {
-        await FeedViewModel.delay(READY_RETRY_GAP_MS);
-      }
-    }
-    hilog.warn(DOMAIN, TAG, 'page not ready after %{public}dms rounds=%{public}d',
-      READY_TOTAL_MS, rounds);
-    return false;
-  }
-
   // ==========================================================================
   // 取数主流程
   // ==========================================================================
@@ -440,26 +369,13 @@ export class FeedViewModel {
     // 上一次那一页（30 分钟内）先铺出来，用户一进 app 就有画面；网络那份回来再整体替换。
     // 这一步必须在下面"等网页就绪"之前：等网页可能要几百毫秒到几秒，缓存只要几十毫秒。
     this.hydrateFromCache();
-    if (!this.bridge.isReady()) {
-      // 网页没就绪时**先把这一轮占住再等**：等就绪是个 await，不先占位的话，等的过程里再来的
-      // 调用（首页自动重试、触底、下拉）会全部通过上面的 busy 检查，于是同一条流被读两遍 ——
-      // 日志成对出现、翻页翻两次、网络请求翻倍（实测踩过）。
-      //
-      // **首屏例外**：第一页走的是**原生 HTTP**（core/NativeFeed，落盘模板 + Cookie 罐），
-      // 一个字节都不经过网页，网页没就绪照样能读；以前在这里死等网页就绪，等于让用户白等
-      // 好几秒。所以首屏（列表还空着）不等网页，直接进 loadFirstPage：原生那条路先把内容
-      // 铺上，网页那条路在里面自己会判"没就绪就跳过"，就绪之后再补充（见 loadFirstPage）。
-      const firstScreen: boolean = this.posts.length === 0;
-      if (!firstScreen) {
-        this.setBusy(true);
-        const ready: boolean = await this.waitPageReady();
-        this.setBusy(false);
-        if (!ready) {
-          this.setStatus(FeedStatus.PageNotReady);
-          return;
-        }
-      }
-    }
+    /*
+     * **不再等网页就绪**（这是"刷新/翻页慢"的主因之一）。
+     *
+     * 首屏与翻页都走原生 `feed/timeline/`，只有最后的 DOM 兜底才需要网页 ——
+     * 而那条路自己会快速失败（读不到就报 Unparsable），不该让整条链先陪网页等
+     * 最多 30 秒（`waitPageReady` 的老实现）。
+     */
     hilog.info(DOMAIN, TAG, 'LF enter posts=%{public}d cursor=%{public}s more=%{public}s',
       this.posts.length, this.nextCursor.length > 0 ? 'y' : 'n', this.hasMore ? 'y' : 'n');
     this.setBusy(true);

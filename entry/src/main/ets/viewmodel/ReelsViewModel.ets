@@ -35,7 +35,15 @@ const NAV_READY_TIMEOUT_MS: number = 20000;
  * 预热那份超过 2 分钟就当旧了（app 可能在后台躺很久）。
  */
 const NATIVE_PAGE_COUNT: number = 7;
-const NATIVE_CACHE_PAGES: number = 2;
+/**
+ * 内存里**排着队的页数**（上滑一次吃一页）。
+ *
+ * 3 页而不是 2 页：真机上作者那页要 4~7 秒、探索流那页要 5~9 秒（几百 KB 的响应），
+ * 而用户上滑一次只要一两秒 —— 只排 2 页时队列说空就空，滑到就等。排 3 页大约提前
+ * 15~30 条（作者页 12 条 / 探索流 5~7 条），足够把这一发的延迟盖住。
+ * 代价是内存里多留一页 Reel（每页只有地址和文案，没有像素），可以忽略。
+ */
+const NATIVE_CACHE_PAGES: number = 3;
 const NATIVE_WARM_MAX_AGE_MS: number = 120000;
 
 export class ReelsViewModel implements ReelStreamVm {
@@ -67,6 +75,8 @@ export class ReelsViewModel implements ReelStreamVm {
   private nativeCursor: string = '';
   private nativeHasMore: boolean = false;
   private nativeFetching: boolean = false;
+  /** 上一次补队列补的是"某个作者的 Reels"吗（两条源交替，见 prefetchNativePage）。 */
+  private lastFillWasAuthor: boolean = false;
 
   onReels: (reels: Array<Reel>, hasMore: boolean) => void =
     (reels: Array<Reel>, hasMore: boolean): void => {
@@ -123,6 +133,7 @@ export class ReelsViewModel implements ReelStreamVm {
         this.fromCacheOrSay(ApiThrottle.remainingMinutes(ApiThrottle.CLIPS));
         const fallback: NativeReelsPage | null = await NativeReels.fetchPage(NATIVE_PAGE_COUNT, '', true);
         if (fallback !== null) {
+          this.noteCursor(fallback.nextCursor);
           this.applyNativePage(fallback, false);
           hilog.info(DOMAIN, TAG, 'reels first via explore fallback n=%{public}d ms=%{public}d',
             fallback.reels.length, Date.now() - startedMs);
@@ -134,6 +145,7 @@ export class ReelsViewModel implements ReelStreamVm {
       // ---- 1) 启动预热那一页（app 一起来就发了，见 EntryAbility / NativeReels.warmStart）----
       const warm: NativeReelsPage | null = NativeReels.takeWarm(NATIVE_WARM_MAX_AGE_MS);
       if (warm !== null) {
+        this.noteCursor(warm.nextCursor);
         this.applyNativePage(warm, false);
         hilog.info(DOMAIN, TAG, 'reels first from warm n=%{public}d ms=%{public}d',
           warm.reels.length, Date.now() - startedMs);
@@ -143,6 +155,7 @@ export class ReelsViewModel implements ReelStreamVm {
       // ---- 2) 原生直发（有落盘模板 + 登录态时可走）----
       const native: NativeReelsPage | null = await NativeReels.fetchPage(NATIVE_PAGE_COUNT, '', true);
       if (native !== null) {
+        this.noteCursor(native.nextCursor);
         this.applyNativePage(native, false);
         hilog.info(DOMAIN, TAG, 'reels first native n=%{public}d ms=%{public}d ms=%{public}d',
           native.reels.length, native.ms, Date.now() - startedMs);
@@ -183,17 +196,31 @@ export class ReelsViewModel implements ReelStreamVm {
       fresh.push(reel);
     }
     this.reels = append ? this.reels.concat(fresh) : fresh;
-    this.nativeCursor = page.nextCursor;
-    this.nativeHasMore = page.hasMore;
-    // 网页那条路的游标也一起对齐：原生这条路失败时能接着往下翻，而不是从头来过。
-    this.endCursor = page.nextCursor;
-    this.more = page.hasMore && page.nextCursor.length > 0;
     this.onReels(this.reels, this.more);
     this.onStatus('已加载 ' + this.reels.length + ' 条' + (this.more ? '' : '（到底了）'));
     // 落盘一份：**首屏和翻页都存**（首页那条查询首屏有时只回 2~4 条，光存第一页太少）。
     // 被限流/没网时这几十条就是视频标签能显示的全部内容（见 core/ReelsCache）。
     ReelsCache.save(this.reels);
     return fresh.length;
+  }
+
+  /**
+   * **记下游标**（谁取到带游标的页，谁就调它一次）。
+   *
+   * 为什么不在 `applyNativePage` 里顺手记：预取的那几页是**先排队、晚些才铺上屏**的，
+   * 而"下一次预取用哪个游标"必须跟着**取到的页**走 —— 早先两者混用同一个字段，
+   * 结果是连发两次同一个游标、拿回同一页（去重后一条都不新增，看起来就像"不加载新的了"）。
+   * 作者那页（`clips/user/`）的游标是空串，调进来也什么都不改（它推进不了探索流）。
+   */
+  private noteCursor(cursor: string): void {
+    if (cursor.length === 0) {
+      return;
+    }
+    this.nativeCursor = cursor;
+    this.endCursor = cursor;
+    // 有游标就允许继续翻：IG 的 `more_available` 经常缺省或写成 false，按它拦就是"滑到底不再请求"。
+    this.nativeHasMore = true;
+    this.more = true;
   }
 
   /**
@@ -222,29 +249,72 @@ export class ReelsViewModel implements ReelStreamVm {
     if (this.nativeFetching || this.nativeQueue.length >= NATIVE_CACHE_PAGES) {
       return;
     }
-    if (!this.nativeHasMore) {
+    /*
+     * **两条源交替**（这是"视频刷不完"的关键，理由见 core/NativeReels 的补货池说明）：
+     *   · 探索流：能一直往下翻，但图文混排（实测 8 条里只有 1~3 条是视频、500KB / 5 秒）；
+     *   · 作者那页（`clips/user/`）：清一色视频、几十 KB、一两秒。
+     * 上一次补的是探索流，这次就补一个作者；反过来也一样。没有作者可补时才连续走探索流。
+     */
+    const authorReady: boolean = !this.lastFillWasAuthor && NativeReels.authorPoolSize() > 0;
+    if (authorReady) {
+      this.fillFromAuthor();
       return;
     }
-    const cursor: string = this.nativeQueue.length > 0
-      ? this.nativeQueue[this.nativeQueue.length - 1].nextCursor
-      : this.nativeCursor;
-    if (cursor.length === 0) {
-      return;
-    }
+    this.fillFromExplore();
+  }
+
+  /** 补一页"某个作者的 Reels"进队列（不推进探索流游标）。 */
+  private fillFromAuthor(): void {
     this.nativeFetching = true;
-    NativeReels.fetchPage(NATIVE_PAGE_COUNT, cursor, true).then((page: NativeReelsPage | null): void => {
+    NativeReels.fetchAuthorPage().then((page: NativeReelsPage | null): void => {
       this.nativeFetching = false;
       if (page === null) {
+        // 池子里的作者这一轮都问不出来：别停下，退回探索流接着补。
+        this.lastFillWasAuthor = false;
+        hilog.info(DOMAIN, TAG, 'reels author fill miss, fall back to explore');
+        this.fillFromExplore();
         return;
       }
+      this.lastFillWasAuthor = true;
       this.nativeQueue.push(page);
-      this.nativeHasMore = page.hasMore;
-      hilog.info(DOMAIN, TAG, 'reels prefetch ready n=%{public}d ms=%{public}d more=%{public}s queued=%{public}d',
-        page.reels.length, page.ms, page.hasMore ? 'y' : 'n', this.nativeQueue.length);
+      hilog.info(DOMAIN, TAG, 'reels author page queued n=%{public}d pool=%{public}d queued=%{public}d',
+        page.reels.length, NativeReels.authorPoolSize(), this.nativeQueue.length);
       this.prefetchNativePage();
     }).catch((): void => {
       this.nativeFetching = false;
     });
+  }
+
+  /** 补一页探索流进队列（唯一能推进游标的那条，见 core/NativeReels.fetchPage）。 */
+  private fillFromExplore(): void {
+    this.nativeFetching = true;
+    // 传 `nativeCursor` 就行：源不是探索流时 NativeReels 会自己把这个游标丢掉、改问第一页。
+    NativeReels.fetchPage(NATIVE_PAGE_COUNT, this.nativeCursor, true)
+      .then((page: NativeReelsPage | null): void => {
+        this.nativeFetching = false;
+        if (page === null) {
+          this.nativeHasMore = false;
+          return;
+        }
+        this.lastFillWasAuthor = false;
+        this.nativeQueue.push(page);
+        // 取到带游标的页就**立刻把它记成下一次预取要用的那个**（见 noteCursor 的说明）。
+        this.noteCursor(page.nextCursor);
+        if (page.nextCursor.length > 0) {
+          this.nativeHasMore = true;
+          this.more = true;
+          hilog.info(DOMAIN, TAG,
+            'reels explore page queued n=%{public}d ms=%{public}d cursor=%{public}d queued=%{public}d',
+            page.reels.length, page.ms, page.nextCursor.length, this.nativeQueue.length);
+          this.prefetchNativePage();
+          return;
+        }
+        this.nativeHasMore = false;
+        hilog.info(DOMAIN, TAG, 'reels explore page queued without cursor n=%{public}d',
+          page.reels.length);
+      }).catch((): void => {
+        this.nativeFetching = false;
+      });
   }
 
   /** 取走缓存里最前面的那一页（先进先出）。 */
@@ -256,7 +326,7 @@ export class ReelsViewModel implements ReelStreamVm {
     return page === undefined ? null : page;
   }
 
-  /** 翻页：先吃原生缓存，再走原生现抓，最后退回模板回放。 */
+  /** 翻页：先吃原生缓存，再走原生现抓（用户驱动，允许探索流兜底）。 */
   async requestMore(): Promise<void> {
     if (this.busy) {
       return;
@@ -270,6 +340,7 @@ export class ReelsViewModel implements ReelStreamVm {
       this.busy = true;
       this.onBusy(true);
       try {
+        this.noteCursor(cached.nextCursor);
         const added: number = this.applyNativePage(cached, true);
         hilog.info(DOMAIN, TAG, 'reels page from cache n=%{public}d added=%{public}d queued=%{public}d',
           cached.reels.length, added, this.nativeQueue.length);
@@ -286,26 +357,68 @@ export class ReelsViewModel implements ReelStreamVm {
       this.onStatus(`Instagram 暂时限制了视频接口，约 ${ApiThrottle.remainingMinutes(ApiThrottle.CLIPS)} 分钟后再试`);
       return;
     }
-    if (!this.more || this.endCursor.length === 0) {
-      return;
-    }
+    /*
+     * **不再用 `more` 提前拦**：IG 的 clips 分页经常把游标给了却把 `more_available` 写成 false，
+     * 按它拦就是"滑到底一次都不再请求"（用户报的"reels 无法获取新的视频"）。
+     * 能不能翻由**结果**决定：真的拿不到新内容才把 `more` 置 false。
+     */
     this.busy = true;
     this.onBusy(true);
     try {
-      // 原生现抓一页（仍然不碰网页）：缓存被上滑抢先吃完时走这条。
-      if (this.nativeHasMore && this.nativeCursor.length > 0) {
-        const live: NativeReelsPage | null = await NativeReels.fetchPage(NATIVE_PAGE_COUNT, this.nativeCursor);
+      /*
+       * ① 继续按游标翻（用户驱动，允许探索流兜底）。
+       *
+       * `allowExplore = true` 是必须的：首屏在 clips 被限流时是由**探索流**顶上的（见 loadFirst），
+       * 两条路的游标互不通用 —— 拿探索流的 `max_id` 去问 clips 必然是空。
+       */
+      let attempt: number = 0;
+      while (attempt < 2) {
+        const cursor: string = this.nativeCursor.length > 0 ? this.nativeCursor : this.endCursor;
+        if (cursor.length === 0) {
+          break;
+        }
+        const live: NativeReelsPage | null = await NativeReels.fetchPage(NATIVE_PAGE_COUNT, cursor, true);
+        attempt++;
         if (live !== null) {
+          this.noteCursor(live.nextCursor);
           const added: number = this.applyNativePage(live, true);
-          hilog.info(DOMAIN, TAG, 'reels page live n=%{public}d ms=%{public}d added=%{public}d',
-            live.reels.length, live.ms, added);
+          hilog.info(DOMAIN, TAG, 'reels page live n=%{public}d ms=%{public}d added=%{public}d attempt=%{public}d',
+            live.reels.length, live.ms, added, attempt);
           this.prefetchNativePage();
           if (added > 0) {
             return;
           }
+          // 整页都是已经有的（IG 的分页游标常把上一条/上几条又带回来）：拿新游标再试一次。
+          continue;
+        }
+        // 这一发没拿到（限流 / 端点抖动）：被限流时保留 more，等冷却结束还能接着翻。
+        if (ApiThrottle.blocked(ApiThrottle.CLIPS)) {
+          this.onStatus(`Instagram 暂时限制了视频接口，约 ${ApiThrottle.remainingMinutes(ApiThrottle.CLIPS)} 分钟后再试`);
+          return;
+        }
+        break;
+      }
+      /*
+       * ② **游标翻不动时，重取一次「第一页」**（带上一页的游标已经是死链时的唯一出路）。
+       *
+       * 这就是用户手动做的事（退出再进来就有一批新的）—— 这里替他在"滑到底"这一刻自动做掉：
+       * 新拿到的那批按 shortcode 去重后追加，真正新增才留下；一条都没新增才收工。
+       */
+      const fresh: NativeReelsPage | null = await NativeReels.fetchPage(NATIVE_PAGE_COUNT, '', true);
+      if (fresh !== null) {
+        this.noteCursor(fresh.nextCursor);
+        const added: number = this.applyNativePage(fresh, true);
+        hilog.info(DOMAIN, TAG, 'reels page restarted n=%{public}d added=%{public}d',
+          fresh.reels.length, added);
+        if (added > 0) {
+          this.prefetchNativePage();
+          return;
+        }
+        if (ApiThrottle.blocked(ApiThrottle.CLIPS)) {
+          return;
         }
       }
-      // 原生也没拿到（缓存吃完 + 现抓失败）：收工，等用户下次上滑再试。
+      // 真的拿不到新内容：收工，等用户下次上滑再试（下次仍会先试游标）。
       this.more = false;
       this.onReels(this.reels, this.more);
     } finally {
