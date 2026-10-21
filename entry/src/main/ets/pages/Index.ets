@@ -38,10 +38,8 @@ import {
   TextStyleMode
 } from '@kit.UIDesignKit';
 import { AppConfig } from '../config/AppConfig';
-import { ApiRegistry, ApiTemplate, DigestResult, ReplayResult } from '../bridge/ApiRegistry';
 import { InstagramPageBridge } from '../bridge/PageBridge';
 import {
-  commentsByStoredCfgScript,
   commentsOnPostPageScript,
   DOM_COMMENTS_PROBE_SCRIPT,
   DOM_SURVEY_SCRIPT,
@@ -280,13 +278,11 @@ const POST_PAGE_READ_TIMEOUT_MS: number = 6000;
  * 它只做一件事：用页面里缓存的评论接口模板发一次 fetch（页面里 9 秒自己中止），
  * 失败就退回上面的导航路径 —— 所以上限给得比导航那条短，别让用户白等。
  */
-const COMMENTS_REPLAY_TIMEOUT_MS: number = 12000;
 /**
  * 回放评论时一次要多少条。
  *
  * 接口默认一页只给 10~20 条；回放的好处之一就是能把这个数直接调大。
  */
-const COMMENTS_REPLAY_FIRST: number = 50;
 /**
  * 用户没碰过评论列表时，最多自动往后补几页。
  *
@@ -307,10 +303,6 @@ const POST_PAGE_SETTLE_MS: number = 900;
  * pageReady 到"页面自己把查询发出去"之间还有水合，搜索页/个人页上实测会晚几秒；
  * 只在那一刻登记会漏掉它们。这个补登记很便宜（一次索引过桥，几 KB）。
  */
-const API_INDEX_LATE_SYNC_MS: number = 5000;
-/** 探测用：抓这几条 GraphQL 的完整模板来验证"跨文档回放"（见 captureFeedTemplate）。 */
-const FEED_TEMPLATE_KEY: string = 'Polaris';/** 评论接口的操作名片段（评论模板按它抓，见 captureCommentTemplate）。 */
-const COMMENT_TEMPLATE_KEY: string = 'comment';
 /** 评论浮层：面板与输入框之间的间隙（vp）。需求："输入框和面板之间要有间隙"。 */
 const COMMENTS_GAP_VP: number = 10;
 /**
@@ -1165,8 +1157,6 @@ struct Index {
   }
   /** 帖子页下拉刷新用的状态（这一页没有可刷新的东西，占位给 FeedList 的 `$refreshing`）。 */
   @State private postPageRefreshing: boolean = false;
-  /** 上一次自动抓评论模板的时刻（节流用，见 captureCommentTemplate）。 */
-  private lastCommentCaptureMs: number = 0;
   /** 上一次探针自动落盘的时刻（节流用，见 dumpProbeSilently）。 */
   private lastProbeDumpMs: number = 0;
   /** 屏幕宽度（vp）：底栏胶囊的左右留白按它反算（见 barSideMargin）。 */
@@ -2002,11 +1992,6 @@ struct Index {
         }
       }).catch((): void => {
       });
-      // 接口模板落盘（幂等）：读回盘上已有的那些，**只作兜底**（见 bridge/ApiRegistry）。
-      // 取数与写操作已经全部走移动端私有 API（core/mobileapi），页面里不再有抓包钩子。
-      ApiRegistry.init(host);
-      hilog.info(DOMAIN, TAG, 'templates (fallback only) n=%{public}d',
-        ApiRegistry.getInstance().count());
       // 「我的」四个分页：探针按钮跑完把四条接口的结构摘要落一份。
       this.profileVm.onDigest = (text: string): void => {
         this.dumpProbeFile('profile', text);
@@ -2135,8 +2120,6 @@ struct Index {
       this.refreshChallengeState();
       // 只落轻量报告（同步、毫秒级）。重脚本改到探针面板手动触发。
       this.dumpProbeSilently();
-      // 顺带看一眼接口登记表有没有新东西（有 TTL，过桥不频繁）。
-      this.syncApiIndex();
     };
     /*
      * 账号安全验证的界面状态**只由 MobileChallenge 台账驱动**（见 refreshChallengeState 与
@@ -2165,12 +2148,6 @@ struct Index {
       this.bridgeReady = true;
       // 网页宿主就绪 = 切 tab / 导航网页都已经可用 → 这时候才执行深链意图（见 consumePendingDeepLink）。
       this.consumePendingDeepLink();
-    });
-    // 页面刚发出评论请求 → 立刻把那份模板抓下来存住（见 PageBridge.commentTemplateHandler）。
-    // 这是"评论回放"能不能成立的关键一环：模板只在当前文档里有效，等我们回首页就没了。
-    this.bridge.setCommentTemplateHandler((name: string): void => {
-      hilog.info(DOMAIN, TAG, 'comment request seen name=%{public}s', name);
-      ApiRegistry.getInstance().capture(COMMENT_TEMPLATE_KEY);
     });
     this.bridge.setSessionHandler((signedIn: boolean): void => {
       this.handleSessionSignal(signedIn);
@@ -2660,15 +2637,6 @@ struct Index {
       this.signedIn ? '1' : '0', this.selectedTab, this.viewModel.list().length);
     // 探针：每次网页加载完成后落一份报告，方便直接取用（不含任何凭据与正文）。
     this.dumpProbeSilently();
-    // 网页刚走完一轮，接口模板多半又多了几条（例如刚从别的页面回来）。
-    this.syncApiIndex();
-    // 有些查询是**水合之后**才发的（搜索页、个人页都见过），pageReady 那一刻还没出现；
-    // 隔几秒再补一次，免得清单里漏掉它们。
-    setTimeout((): void => {
-      this.syncApiIndex();
-      // 水合之后页面才会把评论请求发出去，这一趟正好也把评论模板收下来。
-      this.captureCommentTemplate();
-    }, API_INDEX_LATE_SYNC_MS);
     if (this.signedIn && this.selectedTab === AppTab.Home && this.viewModel.list().length === 0) {
       this.viewModel.loadFeed();
     }
@@ -2780,8 +2748,6 @@ struct Index {
     // "我是谁"那份缓存（`ds_user_id`）：不清的话换账号后"我的"页面会按上一个人的 id 取头部
     // （用户报的"我的页面拿到不是本账号的头部数据"就是这么来的）。
     NativeProfile.clearCache();
-    // 网页抓来的请求模板带着**当时那条会话的头**，跨账号复用等于拿上一个人的身份打接口。
-    ApiRegistry.getInstance().forgetTemplates();
     // 图片缓存 / 预下载 / 译文缓存。
     PosterCache.clear();
     MediaPrefetch.clearCache();
@@ -3450,19 +3416,6 @@ struct Index {
   }
 
   /**
-   * 探针面板用：把**信息流**那条接口的完整模板存到原生侧。
-   *
-   * 为了验证"跨文档回放"：模板在 A 文档存下，页面整页重载（B 文档）之后还能不能拿来用。
-   * 评论那条链路现在拿不到模板（帖子页读评论本身在超时），所以先用信息流这条做验证 ——
-   * 机制是同一个（catch / stored / replay 都与接口无关）。
-   */
-  private async captureFeedTemplate(): Promise<void> {
-    const ok: boolean = await ApiRegistry.getInstance().capture(FEED_TEMPLATE_KEY);
-    hilog.info(DOMAIN, TAG, 'probe capture feed ok=%{public}s', ok ? 'y' : 'n');
-  }
-
-
-  /**
    * 探针面板用：用**移动端接口**自检「我的」四个分页（模板机制退役后不再抓模板）。
    */
   private async captureProfileTemplates(): Promise<void> {
@@ -3498,52 +3451,6 @@ struct Index {
   }
 
   /**
-   * 探针面板用：把**当前页面**的接口模板全部抓下来，再逐个回放一次打出**结构摘要**
-   * （写原生页面时照着它写解析）。
-   *
-   * 抓的是**全部**（filter 传空串 = 匹配所有操作名），不是只抓信息流那一条：做「私信」「搜索」
-   * 这些新页面时，要看的正是那几个操作的响应结构 —— 页面停在哪一页，就抓哪一页的接口。
-   */
-  private async probeDigests(): Promise<void> {
-    const registry: ApiRegistry = ApiRegistry.getInstance();
-    // 空过滤器 = 全都要（见 ApiRegistry.capture 的说明）。
-    const stored: boolean = await registry.capture('');
-    hilog.info(DOMAIN, TAG, 'digest capture all ok=%{public}s %{public}s',
-      stored ? 'y' : 'n', registry.storedSummary());
-    const names: Array<string> = registry.storedNames();
-    if (names.length === 0) {
-      hilog.info(DOMAIN, TAG, 'digest: no stored template (%{public}s)', registry.storedSummary());
-      return;
-    }
-    for (let index: number = 0; index < names.length && index < 12; index++) {
-      const digest: DigestResult | null = await registry.replayDigest(names[index], {}, 5, 140);
-      if (digest === null) {
-        hilog.info(DOMAIN, TAG, 'digest %{public}s: null', names[index]);
-        continue;
-      }
-      hilog.info(DOMAIN, TAG, 'digest %{public}s state=%{public}s http=%{public}d n=%{public}d %{public}s',
-        names[index], digest.state, digest.http, digest.lines.length, digest.text());
-    }
-  }
-
-  /** 探针面板用：用原生侧存下来的模板回放一次，并把关键结果打进日志。 */
-  private async replayStoredTemplate(): Promise<void> {
-    const registry: ApiRegistry = ApiRegistry.getInstance();
-    const result: ReplayResult | null =
-      await registry.replayStored(FEED_TEMPLATE_KEY, {}, 200000);
-    if (result === null) {
-      hilog.info(DOMAIN, TAG, 'probe stored replay: no template (stored=%{public}s)',
-        registry.storedSummary());
-      return;
-    }
-    // 判据只看"这是一份正常的 GraphQL 响应"：HTTP 200 + 响应体里有 data 字段。
-    const hit: boolean = result.body.indexOf('"data"') >= 0;
-    hilog.info(DOMAIN, TAG,
-      'probe stored replay state=%{public}s http=%{public}d ms=%{public}d bytes=%{public}d data=%{public}s',
-      result.state, result.http, result.ms, result.bytes, hit ? 'y' : 'n');
-  }
-
-  /**
    * 探针面板上的「打开某个页面」：把常驻网页揭出来导航过去。
    *
    * **不收起面板**：下面几个探测按钮（结构摘要 / 存信息流模板 / 读内嵌评论）都要对着
@@ -3551,34 +3458,6 @@ struct Index {
    */
   private openWebFromProbe(url: string): void {
     this.openWeb(url);
-  }
-
-  /**
-   * 顺手同步一次「接口登记表」（见 ApiRegistry）。
-   *
-   * 只登记、不取数；索引自带 20 秒 TTL（在 ApiRegistry 里），所以切页、网页加载完、
-   * 一轮取数结束都可以放心调。目的是：在 reels / 私信 / 搜索 / 我的 逛一圈之后，
-   * 日志里能直接看到这几页用到的 GraphQL 操作名（登记表只在清单变化时打一行）。
-   */
-  private syncApiIndex(): void {
-    ApiRegistry.getInstance().sync(false);
-  }
-
-  /**
-   * 顺手抓一次评论模板（带节流）。
-   *
-   * 为什么不能只在"打开评论"时抓：帖子的评论请求只有**网页真的进到那条帖子**才会发，
-   * 而那一步在网页上是 **SPA 弹层**，不会触发 pageReady。所以这里挂在"路由变化 /
-   * 加载完成 / 切页"几处，并且节流 —— 页面上真有评论模板时存下来，下次打开评论就能
-   * 直接回放（不用再导航一次）。
-   */
-  private captureCommentTemplate(): void {
-    const now: number = Date.now();
-    if (now - this.lastCommentCaptureMs < COMMENT_CAPTURE_MIN_INTERVAL_MS) {
-      return;
-    }
-    this.lastCommentCaptureMs = now;
-    ApiRegistry.getInstance().capture(COMMENT_TEMPLATE_KEY);
   }
 
   /**
@@ -4077,20 +3956,6 @@ struct Index {
 
   /** 关掉网页回到原生视图：用罐里的最新会话决定下一步，而不是沿用旧状态。 */
   private async closeWeb(): Promise<void> {
-    /*
-     * **临时探针**：关掉网页浮层时，把网页刚抓到的请求名打出来。
-     *
-     * 为什么放这儿：私信翻页要抓的是"网页自己翻历史时发的那条请求"，而网页的消息容器只认
-     * 真实触摸 —— 我在可见网页里滑完、关掉浮层，这一下 `capture('')` 就把页面钩子里的请求
-     * 倒进模板表，`recentNames` 再列出最近更新过的。之前把探针放在会话页里，打开网页浮层时
-     * 那个页面被卸载、定时器跟着没了，所以一直打不出来。打通翻页后删掉这一段。
-     */
-    ApiRegistry.getInstance().capture('').then((): void => {
-      hilog.info(DOMAIN, TAG, 'web probe recent=%{public}s',
-        ApiRegistry.getInstance().recentNames(60000).join('|'));
-    }).catch((): void => {
-    });
-    this.webVisible = false;
     this.selectedTab = AppTab.Home;
     // 和 applySession 里同理：切页真正看的是 selectedIndex，必须一起复位到首页。
     this.selectedIndex = 0;
@@ -4200,9 +4065,7 @@ struct Index {
     // Reels 进出要换应用配色（进 = 深色、出 = 交回系统，见 syncReelsColorMode）。
     this.syncReelsColorMode();
     // 切页顺手登记一次接口（有 TTL，不会真的每次都过桥）。
-    this.syncApiIndex();
     // 也顺手看看评论模板到了没有（同样有节流）。
-    this.captureCommentTemplate();
     if (tab === AppTab.Home && this.viewModel.list().length === 0) {
       this.viewModel.loadFeed();
     }
@@ -4691,13 +4554,6 @@ struct Index {
         this.applyComments(native, post);
         return;
       }
-      const fast: CommentsPayload | null = await this.readCommentsByReplay(post);
-      if (fast !== null) {
-        hilog.info(DOMAIN, TAG, 'comments src=replay n=%{public}d',
-          (fast.items ?? []).length);
-        this.applyComments(fast, post);
-        return;
-      }
       const payload: CommentsPayload | null = await this.readCommentsOnPostPage(post);
       this.applyComments(payload, post);
     } catch (error) {
@@ -4979,8 +4835,6 @@ struct Index {
         await this.returnToFeed();
       }
     }
-    // 无论成没成都存一次：模板是"页面发过才有"的，这一下就是下次走原生那条路的原料。
-    await ApiRegistry.getInstance().capture('comment');
     hilog.info(DOMAIN, TAG, 'comment like web state=%{public}s pk=%{public}s', state, commentPk);
     return state === 'liked' || state === 'unliked';
   }
@@ -5094,41 +4948,6 @@ struct Index {
     }
   }
 
-  /**
-   * 评论回放快路径：原生侧存过评论模板就直接重放，**不导航、不等页面渲染**。
-   *
-   * 模板从哪来：第一次打开评论走导航（见 readCommentsOnPostPage），那时页面自己请求过评论，
-   * 顺手把模板倒到原生存下来（见 ApiRegistry.capture）。之后每次打开评论都走这里。
-   *
-   * 返回 null 表示"这条快路径不可用"（没有模板 / 请求没成 / 一条评论都没读到），
-   * 由调用方退回导航那条路 —— 所以这里**不报错、不改状态**，只当没发生过。
-   */
-  private async readCommentsByReplay(post: MediaPost): Promise<CommentsPayload | null> {
-    const registry: ApiRegistry = ApiRegistry.getInstance();
-    // 先看存的；没有就问问当前页面有没有（例如网页正好停在帖子页上）。
-    let cfg: string = registry.storedJson('comment');
-    if (cfg.length === 0) {
-      await registry.capture('comment');
-      cfg = registry.storedJson('comment');
-    }
-    if (cfg.length === 0) {
-      hilog.info(DOMAIN, TAG, 'comments replay skip %{public}s %{public}s',
-        registry.summary(), registry.storedSummary());
-      return null;
-    }
-    // 帖子 id 形如 `<mediaId>_<userId>`，GraphQL 变量里的 media_id 就是前面那段。
-    const cut: number = post.id.indexOf('_');
-    const mediaId: string = cut > 0 ? post.id.substring(0, cut) : post.id;
-    const payload: CommentsPayload | null = await this.readComments(
-      commentsByStoredCfgScript(cfg, post.shortcode, mediaId, COMMENTS_REPLAY_FIRST),
-      COMMENTS_REPLAY_TIMEOUT_MS);
-    if (payload === null) {
-      return null;
-    }
-    hilog.info(DOMAIN, TAG, 'comments replay state=%{public}s n=%{public}d diag=%{public}s',
-      payload.state, (payload.items ?? []).length, payload.diag ?? '-');
-    return payload.state === 'ok' ? payload : null;
-  }
 
   /** 跑一次评论脚本；异常算 null。 */
   private async readComments(script: string, timeoutMs: number): Promise<CommentsPayload | null> {
@@ -5169,7 +4988,6 @@ struct Index {
       await Index.sleep(POST_PAGE_SETTLE_MS);
       const payload: CommentsPayload | null =
         await this.readComments(commentsOnPostPageScript(), POST_PAGE_READ_TIMEOUT_MS);
-      await ApiRegistry.getInstance().capture('comment');
       return payload;
     } finally {
       await this.returnToFeed();
@@ -9362,19 +9180,12 @@ struct Index {
             }
             this.openComments(target);
           },
-          onCaptureTemplate: (): void => {
-            this.captureFeedTemplate();
-          },
-          // 「我的」四个分页的模板：逐页导航一次，把四条查询都抓下来（见 captureProfileTemplates）。
           onProfileTemplates: (): void => {
             this.captureProfileTemplates();
           },
-          // 搜索页的模板（推荐 + 结果那两条），顺手落一份结构摘要（见 captureSearchTemplates）。
+          // 搜索页自检（移动端两路，见 captureSearchTemplates）。
           onSearchTemplates: (): void => {
             this.captureSearchTemplates();
-          },
-          onReplayStored: (): void => {
-            this.replayStoredTemplate();
           },
           onOpenPostPage: (): void => {
             // 打开首条**图片**帖的帖子页（视频帖走 /reel/，结构不同）。
@@ -9396,9 +9207,6 @@ struct Index {
           },
           onCommentsEmbed: (): void => {
             this.probeCommentsEmbed();
-          },
-          onDigest: (): void => {
-            this.probeDigests();
           },
           onClose: (): void => {
             this.probeVisible = false;

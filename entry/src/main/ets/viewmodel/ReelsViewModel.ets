@@ -1,18 +1,13 @@
 /*
  * Reels 视频流的视图模型。
  *
- * 和 ProfileViewModel 完全同一套路数（见它的说明）：
- *   1) 冷启动：让隐藏网页打开一次 /reels/，页面自己会发 PolarisClipsTabRootPaginationQuery，
- *      网络钩子把模板交给原生存住（capture）；
- *   2) 之后用**小脚本回放**（reelsScript）+ 重试：刚导航完那几秒页面忙、注入脚本抢不到
- *      执行机会（桥会超时），所以短超时 + 多试几次；
- *   3) 翻页只改游标（after），不重新导航。
+ * 取数只有一条链：core/NativeReels → 移动端 clips/discover/（失败退探索流），见那里的说明。
+ * 这里原来那套「冷启动导航 /reels/ 抓模板 → 小脚本回放 → 重试」已随模板机制删除；
+ * 现在首屏 = 启动预热的那一页 / 原生现抓一页，翻页只改游标（max_id）。
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { InstagramPageBridge } from '../bridge/PageBridge';
-import { ApiRegistry } from '../bridge/ApiRegistry';
-import { reelsScript } from '../bridge/WebScripts';
 import { AppConfig } from '../config/AppConfig';
 import { Reel, ReelMapper, ReelsDto, ReelsPage, ReelStreamVm } from '../model/Reel';
 import { NativeReels, NativeReelsPage } from '../core/NativeReels';
@@ -22,10 +17,6 @@ import { CachedReelsPage, ReelsCache } from '../core/ReelsCache';
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'ReelsViewModel';
 
-/** Reels 那条查询的操作名（回放时按名字取模板）。 */
-const OP_REELS: string = 'PolarisClipsTabRootPaginationQuery';
-/** 冷启动抓模板用的片段。 */
-const CAPTURE_FILTER: string = 'ClipsTabRoot';
 /** 一页要多少条（接口默认给十几条）。 */
 const PAGE_SIZE: number = 12;
 /** 抽取脚本的单次超时与重试次数（理由见文件头）。 */
@@ -49,7 +40,6 @@ const NATIVE_WARM_MAX_AGE_MS: number = 120000;
 
 export class ReelsViewModel implements ReelStreamVm {
   private readonly bridge: InstagramPageBridge = InstagramPageBridge.getInstance();
-  private readonly registry: ApiRegistry = ApiRegistry.getInstance();
   /**
    * **清空自己**（退出登录 / 换账号时调，见 core/AccountScope 的文件头）。
    *
@@ -69,7 +59,6 @@ export class ReelsViewModel implements ReelStreamVm {
   private more: boolean = true;
   private busy: boolean = false;
   private diag: string = '-';
-  private usedColdPath: boolean = false;
   /** 当前看到第几条（切 tab 重建页面时要恢复，见 activeIndex）。 */
   private active: number = 0;
   /** 原生已经取好、等着上滑切换时直接铺的那些页（最多 NATIVE_CACHE_PAGES 页，先进先出）。 */
@@ -160,45 +149,12 @@ export class ReelsViewModel implements ReelStreamVm {
         this.prefetchNativePage();
         return;
       }
-      // 原生这一发被**限流**了：别再走下面那条网页路（那里还要重试 5 次，见 core/ApiThrottle）。
-      if (ApiThrottle.blocked(ApiThrottle.CLIPS)) {
-        this.fromCacheOrSay(ApiThrottle.remainingMinutes(ApiThrottle.CLIPS));
-        return;
-      }
-      // ---- 3) 退回原来的网页路（没有模板、或模板过期被 IG 判成无效时靠它）----
-      // force=true：走到这里就说明原生没拿到东西，手里那份模板多半已过期，必须重新抓一份，
-      // 顺便把新的落盘 —— 下一次冷启动的原生预热才有得用。
-      const ok: boolean = await this.ensureTemplate(true);
-      if (!ok) {
-        this.onStatus('拿不到接口模板');
-        return;
-      }
-      const page: ReelsPage | null = await this.fetchWithRetry('');
-      if (page === null) {
-        if (ApiThrottle.blocked(ApiThrottle.CLIPS)) {
-          this.fromCacheOrSay(ApiThrottle.remainingMinutes(ApiThrottle.CLIPS));
-          return;
-        }
-        this.onStatus('读取失败：' + this.diag);
-        return;
-      }
-      this.reels = ReelsViewModel.dedupe(page.reels);
-      this.endCursor = page.endCursor;
-      // 没有游标就当到底了：触底哨兵只看 more，不看清游标，会让它一直空转。
-      this.more = page.hasMore && page.endCursor.length > 0;
-      this.onReels(this.reels, this.more);
-      this.onStatus('已加载 ' + this.reels.length + ' 条'
-        + (this.usedColdPath ? '（首次走网页）' : ''));
-      ReelsCache.save(this.reels);
+      // ---- 3) 原生也没拿到：铺落盘缓存或如实说明（网页模板回放那条路已删除）----
+      this.fromCacheOrSay(ApiThrottle.blocked(ApiThrottle.CLIPS)
+        ? ApiThrottle.remainingMinutes(ApiThrottle.CLIPS) : 0);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'loadFirst threw: %{public}s', (error as Error).message);
       this.onStatus('加载出错');
-    } finally {
-      // 走过冷启动就一定要把网页送回首页（理由同 ProfileViewModel.returnToFeed：
-      // 隐藏网页全 App 共用，留在 /reels/ 会让首页信息流读不出帖子）。
-      if (this.usedColdPath) {
-        this.returnToFeed();
-      }
       this.busy = false;
       this.onBusy(false);
     }
@@ -300,20 +256,6 @@ export class ReelsViewModel implements ReelStreamVm {
     return page === undefined ? null : page;
   }
 
-  /**
-   * 冷启动那条路读完，把隐藏网页送回首页信息流。
-   *
-   * 故意不 awaitPageReady：数据已经用原生存下的模板拿到了，不必让界面陪着等整页导航；
-   * 信息流那边触发时会自己等页面就绪。
-   */
-  private returnToFeed(): void {
-    try {
-      this.bridge.loadUrl(AppConfig.INSTAGRAM_HOME_URL);
-      hilog.info(DOMAIN, TAG, 'cold path done → back to feed');
-    } catch (error) {
-    }
-  }
-
   /** 翻页：先吃原生缓存，再走原生现抓，最后退回模板回放。 */
   async requestMore(): Promise<void> {
     if (this.busy) {
@@ -363,161 +305,12 @@ export class ReelsViewModel implements ReelStreamVm {
           }
         }
       }
-      const prevCursor: string = this.endCursor;
-      const page: ReelsPage | null = await this.fetchWithRetry(this.endCursor);
-      if (page === null || page.reels.length === 0) {
-        this.more = false;
-        this.onReels(this.reels, this.more);
-        return;
-      }
-      // **按 shortcode 去重后再追加**：IG 的 clips 分页游标经常把上一条/上几条又带回来，
-      // 直接 concat 就会让同一条视频在流里出现好几次（用户看到的"视频重复出现"），
-      // 而且 ForEach 的键也是 shortcode，重复键会让渲染更乱。
-      const known: Set<string> = new Set<string>();
-      for (let index: number = 0; index < this.reels.length; index++) {
-        known.add(this.reels[index].shortcode);
-      }
-      const fresh: Array<Reel> = [];
-      for (let index: number = 0; index < page.reels.length; index++) {
-        const reel: Reel = page.reels[index];
-        if (known.has(reel.shortcode)) {
-          continue;
-        }
-        known.add(reel.shortcode);
-        fresh.push(reel);
-      }
-      if (fresh.length === 0) {
-        // 这一页全是已经有的：说明游标没往前走（再拉还是同一页）——直接收工，
-        // 否则会一遍遍把同样的视频追加进来。
-        hilog.info(DOMAIN, TAG, 'reels page all duplicated n=%{public}d → stop',
-          page.reels.length);
-        this.more = false;
-        this.onReels(this.reels, this.more);
-        return;
-      }
-      this.reels = this.reels.concat(fresh);
-      this.endCursor = page.endCursor;
-      // 游标没变也停：再翻只会拿到同一页。
-      this.more = page.hasMore && page.endCursor.length > 0 && page.endCursor !== prevCursor;
+      // 原生也没拿到（缓存吃完 + 现抓失败）：收工，等用户下次上滑再试。
+      this.more = false;
       this.onReels(this.reels, this.more);
-      this.onStatus('已加载 ' + this.reels.length + ' 条' + (this.more ? '' : '（到底了）'));
-      hilog.info(DOMAIN, TAG, 'reels appended fresh=%{public}d total=%{public}d more=%{public}s',
-        fresh.length, this.reels.length, this.more ? 'y' : 'n');
     } finally {
       this.busy = false;
       this.onBusy(false);
     }
-  }
-
-  /**
-   * 确保 reels 那条模板在原生侧；没有（或强制刷新）就让隐藏网页打开一次 /reels/。
-   *
-   * 判断用 **storedJson**（已存模板），不是 `has()` —— 后者查的是接口索引，
-   * 刚 capture 完还没同步，会误判成"没有"（这个坑在「我的」页已经踩过一次）。
-   *
-   * @param force 强制重新抓一次。**什么时候必须强制**：原生那条路拿到的是 HTML 而不是 JSON
-   *              （实测：200 + 63KB + `<!DOCTYPE html>`）—— 那说明手里这份 Clips 模板已经过期，
-   *              IG 不认它里面的 doc_id / 变量组合了。信息流那条每次都刷新（见 FeedViewModel
-   *              的 saveTemplateOnce），reels 这条原来只在"没有模板"时才抓，于是一份隔天甚至
-   *              更久的旧模板会被一直用下去（`storedForNative` 的 TTL 故意放到 24 小时）。
-   */
-  private async ensureTemplate(force: boolean = false): Promise<boolean> {
-    this.usedColdPath = false;
-    if (!force && this.hasTemplate()) {
-      return true;
-    }
-    this.onStatus('首次加载：正在读取网页');
-    this.bridge.loadUrl(AppConfig.INSTAGRAM_REELS_URL);
-    // 标记立刻立起来：无论后面抓没抓到模板，收尾都要把网页送回首页（见 returnToFeed）。
-    this.usedColdPath = true;
-    await this.bridge.awaitPageReady(NAV_READY_TIMEOUT_MS);
-    await ReelsViewModel.sleep(HYDRATE_WAIT_MS);
-    const stored: boolean = await this.registry.capture(CAPTURE_FILTER);
-    // 这里**刻意不等**页面自己那条 Clips 响应（试过 `awaitCaptureScript('reels', 2500)`）：
-    // 实测（真机 4 次冷路径）页面那条请求的响应要比我们的回放晚到（回放 ~1s 就有数据，
-    // 而轮询等到 2.5s 也还是 `timeout:cap=...`），而且那一刻页面正在导航/忙，注入的轮询脚本
-    // 有一半概率连结果都回不来（bridge 直接 `{"state":"timeout"}`）。
-    // 所以 reels 的冷路径保持"存模板 → 回放"；页面响应真被缓存时（用户就在 reels 页上时），
-    // `reelsScript` 里的 __ogCap 判断会自己命中，不必额外等。
-    hilog.info(DOMAIN, TAG, 'cold path stored=%{public}s %{public}s',
-      stored ? 'y' : 'n', this.registry.storedSummary());
-    return this.hasTemplate();
-  }
-
-  private hasTemplate(): boolean {
-    return this.registry.storedJson(OP_REELS).length > 0;
-  }
-
-  private async fetchWithRetry(cursor: string): Promise<ReelsPage | null> {
-    let page: ReelsPage | null = null;
-    for (let attempt: number = 1; attempt <= EXTRACT_ATTEMPTS; attempt++) {
-      page = await this.fetch(cursor, attempt);
-      if (page !== null) {
-        return page;
-      }
-      this.onStatus('第' + attempt + '次未成：' + this.diag);
-      if (attempt < EXTRACT_ATTEMPTS) {
-        await ReelsViewModel.sleep(EXTRACT_RETRY_GAP_MS);
-      }
-    }
-    return page;
-  }
-
-  private async fetch(cursor: string, attempt: number): Promise<ReelsPage | null> {
-    const cfg: string = this.registry.storedJson(OP_REELS);
-    if (cfg.length === 0) {
-      this.diag = 'no-template';
-      return null;
-    }
-    // 只改游标，不碰 first（理由同 ProfileViewModel.fetchPosts：覆盖 first 会让 IG 的
-    // GraphQL 回 noncoercible_variable_value，data 直接是 null）。第一页删掉 after。
-    const vars: string = cursor.length > 0
-      ? '{"after":' + JSON.stringify(cursor) + '}'
-      : '{"after":null}';
-    let raw: string = '';
-    try {
-      raw = await this.bridge.runBridge(reelsScript(cfg, vars), EXTRACT_TIMEOUT_MS, 'reels');
-    } catch (error) {
-      this.diag = 'bridge:' + (error as Error).message;
-      return null;
-    }
-    const page: ReelsPage | null = ReelMapper.pageFromJson(raw);
-    if (page === null) {
-      this.diag = raw.substring(0, 80);
-      hilog.info(DOMAIN, TAG, 'reels try=%{public}d failed raw=%{public}s',
-        attempt, raw.substring(0, 160));
-      return null;
-    }
-    // src 用来区分"探针抓到的页面响应（capture，零额外网络）"和"我们回放的那一发（replay）"，
-    // 以及各自的耗时 —— 取数路径优化前后就靠它对比。
-    let src: string = '?';
-    try {
-      src = (JSON.parse(raw) as ReelsDto).src ?? 'replay';
-    } catch (error) {
-    }
-    hilog.info(DOMAIN, TAG, 'reels ok try=%{public}d src=%{public}s n=%{public}d more=%{public}s',
-      attempt, src, page.reels.length, page.hasMore ? 'y' : 'n');
-    return page;
-  }
-
-  private static sleep(ms: number): Promise<void> {
-    return new Promise<void>((resolve: () => void): void => {
-      setTimeout(resolve, ms);
-    });
-  }
-
-  /** 一页内部自己也可能有重复（同一条被接口返回两次），按 shortcode 去一次重。 */
-  private static dedupe(reels: Array<Reel>): Array<Reel> {
-    const seen: Set<string> = new Set<string>();
-    const out: Array<Reel> = [];
-    for (let index: number = 0; index < reels.length; index++) {
-      const reel: Reel = reels[index];
-      if (seen.has(reel.shortcode)) {
-        continue;
-      }
-      seen.add(reel.shortcode);
-      out.push(reel);
-    }
-    return out;
   }
 }

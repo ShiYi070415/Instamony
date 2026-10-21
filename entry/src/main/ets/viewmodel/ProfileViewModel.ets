@@ -22,7 +22,6 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { InstagramPageBridge } from '../bridge/PageBridge';
-import { ApiRegistry } from '../bridge/ApiRegistry';
 import { OWN_PROFILE_SCRIPT, profileHeaderScript, profilePostsScript } from '../bridge/WebScripts';
 import { AppConfig } from '../config/AppConfig';
 import { NativeProfile, ProfileTarget } from '../core/NativeProfile';
@@ -179,7 +178,6 @@ class ProfileTabState {
 
 export class ProfileViewModel {
   private readonly bridge: InstagramPageBridge = InstagramPageBridge.getInstance();
-  private readonly registry: ApiRegistry = ApiRegistry.getInstance();
   private header: ProfileHeader | null = null;
   /**
    * 一次性的**全量清空**（退出登录 / 换账号时调）。
@@ -1207,7 +1205,7 @@ export class ProfileViewModel {
 
   /** 已存的操作名（给状态行做诊断用）。 */
   private tabDiag(): string {
-    return this.registry.storedNames().join('/');
+    return 'mobile';
   }
 
   /**

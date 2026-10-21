@@ -25,7 +25,6 @@ import { FeedItemDto, FeedPayloadDto, PayloadState } from '../model/FeedDto';
 import { FeedStatus } from '../model/FeedStatus';
 import { FeedMapper, MergeResult } from '../model/FeedMapper';
 import { MediaPost } from '../model/MediaPost';
-import { ApiRegistry } from '../bridge/ApiRegistry';
 import { NativeFeed, NativeFeedPage, NativeFetchResult } from '../core/NativeFeed';
 import { CachedFeedPage, FeedCache } from '../core/FeedCache';
 import { PosterCache } from '../core/PosterCache';
@@ -192,12 +191,6 @@ export class FeedViewModel {
   private sawEndAtMs: number = 0;
   /** 上一轮翻页一条都没新增（链路可疑，见 RESTART_COOLDOWN_MS）。 */
   private pagingStuck: boolean = false;
-  /**
-   * 这一轮进程里有没有把信息流模板落过盘（见 saveTemplateOnce）。
-   *
-   * 只在第一次拿到真实首页数据时做一次：capture 要过一次桥，没必要每次刷新都做。
-   */
-  private templateSaved: boolean = false;
   /**
    * 原生分页链路自己的游标（和网页那条路的 nextCursor **分开**维护）。
    *
@@ -810,10 +803,6 @@ export class FeedViewModel {
       await this.applyPayload(payload, asFirstLoad, false, keepNative ? false : true, replace);
       if (fresh) {
         sawFresh = true;
-        // 拿到真的第一页了：顺手把信息流那条请求模板落盘一次。
-        // 下次冷启动，"不走网页"的那一发（core/NativeFeed）就靠它 —— 没有落盘的话
-        // 每次都还得先让网页跑起来发一条请求，快路径无从谈起。
-        this.saveTemplateOnce();
         return;
       }
       if (!asFirstLoad && this.posts.length > 0) {
@@ -1073,22 +1062,6 @@ export class FeedViewModel {
     } catch (error) {
     }
     return null;
-  }
-
-  /**
-   * 把信息流请求模板存到原生并落盘（一轮进程只做一次）。
-   *
-   * 不 await：这是给**下次**冷启动用的，不该拖慢当前这一屏。
-   */
-  private saveTemplateOnce(): void {
-    if (this.templateSaved) {
-      return;
-    }
-    this.templateSaved = true;
-    ApiRegistry.getInstance().capture(TIMELINE_OPS[0]).then((ok: boolean): void => {
-      hilog.info(DOMAIN, TAG, 'feed template saved=%{public}s', ok ? 'y' : 'n');
-    }).catch((): void => {
-    });
   }
 
   // ---- 原生分页（缓存两页，上滑直接吃）-------------------------------------

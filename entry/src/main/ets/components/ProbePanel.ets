@@ -44,12 +44,6 @@ export struct ProbePanel {
    */
   onCommentsFirst: () => void = (): void => {
   };
-  /** 在当前页把某条接口的完整模板存到原生侧（见 ApiRegistry.capture）。 */
-  onCaptureTemplate: () => void = (): void => {
-  };
-  /** 用**原生侧存下来的**模板回放一次（跨页面也能用）。 */
-  onReplayStored: () => void = (): void => {
-  };
   /**
    * 在可见网页里打开第一条图片帖的帖子页（不跑任何读取脚本）。
    *
@@ -219,11 +213,6 @@ export struct ProbePanel {
       .width('100%')
       .padding({ left: 8, right: 8 })
 
-      Row({ space: 6 }) {
-        this.openButton($r('app.string.probe_capture'), this.onCaptureTemplate)
-        this.openButton($r('app.string.probe_replay_stored'), this.onReplayStored)
-      }
-      .width('100%')
       .padding({ left: 8, right: 8 })
 
       Row({ space: 6 }) {

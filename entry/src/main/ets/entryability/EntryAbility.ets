@@ -26,7 +26,6 @@ import { NativeReels } from '../core/NativeReels';
 import { ReelsCache } from '../core/ReelsCache';
 import { NetworkState } from '../core/NetworkState';
 import { PlatformCap } from '../core/PlatformCap';
-import { ApiRegistry } from '../bridge/ApiRegistry';
 import { MobileSession } from '../core/mobileapi/MobileSession';
 import { MobileProbe } from '../core/mobileapi/MobileProbe';
 import { DirectCache } from '../core/DirectCache';
@@ -114,20 +113,10 @@ export default class EntryAbility extends UIAbility {
     // 用户看到的就是"内容已经在那儿"而不是"转圈等一秒多"。
     //
     // 前置条件两个，都在这一行之前就绪：
-    //   1) 请求模板：ApiRegistry.init 把上次落盘的模板读回内存（同步读 preferences，很快）；
-    //   2) 会话 Cookie：上面 initializeWebEngine() 已经起了 Web 内核，WebCookieManager 能读罐。
+    //   1) 会话 Cookie：上面 initializeWebEngine() 已经起了 Web 内核，WebCookieManager 能读罐。
     // 失败无所谓：预热只是"提前量"，页面那条路会照旧自己发一次。
     try {
-      /*
-       * **账号分区**（见 core/AccountScope）必须**第一个** init。
-       *
-       * 为什么顺序这么紧要：`ApiRegistry.init` 在里面**立刻读盘**（loadPersisted），
-       * 而所有缓存的键都要过 `AccountScope.slot()`。账号还没读出来时槽位是 `anon` ——
-       * 那样读到的永远是"匿名槽"（等于没分区），而且第一次读盘的结果会被当成这个账号的模板
-       * 留在内存里。所以先建立账号，再让任何 cache 碰盘。
-       */
       AccountScope.init(this.context);
-      ApiRegistry.init(this.context);
       // 信息流第一页的落盘缓存（见 core/FeedCache）：冷启动时页面会先把它铺出来，
       // 再让网络那份整体替换 —— 用户一进 app 就有画面。这里只是同步打开那个 store。
       FeedCache.init(this.context);
