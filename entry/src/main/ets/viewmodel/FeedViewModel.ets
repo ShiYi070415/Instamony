@@ -97,6 +97,13 @@ const NATIVE_WARM_MAX_AGE_MS: number = 120000;
  * 排 1 页就够盖住"一次触底"，再多就是替用户白花流量（他可能滑两条就退出）。
  */
 const EXPLORE_CACHE_PAGES: number = 2;
+/**
+ * 首屏要不要先铺落盘缓存（再被网络那份整体替换）。
+ *
+ * 现在是 false：用户明确要求冷启动显示占位加载动画、不要再用上次缓存覆盖。
+ * 缓存写入照旧（FeedCache.save），只是不参与首屏；改回 true 就恢复先画后刷。
+ */
+const PAINT_CACHE_ON_START: boolean = false;
 /** 探索流新到的那一页，最多给几条热封面（同 ProfileViewModel.precacheMedia 的口径）。 */
 const PRECACHE_POSTS: number = 6;
 /** 多图帖最多预下载两张（需求：滑到前两张不白）。 */
@@ -494,13 +501,20 @@ export class FeedViewModel {
       this.pending = true;
       return;
     }
-    // **首屏先吃落盘缓存**（需求："进入 app 时先获取 feeds 流并缓存" + 先画后刷）：
-    // 上一次那一页（30 分钟内）先铺出来，用户一进 app 就有画面；网络那份回来再整体替换。
-    // 这一步必须在下面"等网页就绪"之前：等网页可能要几百毫秒到几秒，缓存只要几十毫秒。
-    this.hydrateFromCache();
-    // **首屏不糊弄**：探索流那份落盘缓存同步铺上（几十毫秒），别等下面那次时间线请求
-    // （3~5 秒）白等一屏骨架。见 seedExploreFromCache。
-    this.seedExploreFromCache();
+    /*
+     * **不再"先铺上次缓存、几秒后再整体换掉"**（用户要求："冷启动主页显示占位加载动画，
+     * 包括快拍列表、帖子、文字等都需要占位加载动画，抛弃加载上一次缓存覆盖的功能"）。
+     *
+     * 那种观感是"内容先闪一下旧数据、再整块重排"，比一屏规整的骨架更让人以为卡了；
+     * 骨架屏在 `components/FeedSkeleton`（托盘圆环 + 帖子卡片 + 文字横条 + 光雾）。
+     *
+     * 落盘缓存**仍然在写**（`FeedCache.save` / 推荐页缓存），只是不再参与首屏；
+     * 需要"彻底不要缓存"或"恢复先画缓存"，把 `PAINT_CACHE_ON_START` 翻过来即可。
+     */
+    if (PAINT_CACHE_ON_START) {
+      this.hydrateFromCache();
+      this.seedExploreFromCache();
+    }
     /*
      * **不再等网页就绪**（这是"刷新/翻页慢"的主因之一）。
      *
@@ -639,7 +653,10 @@ export class FeedViewModel {
     if (forReset) {
       // 重新要第一页会把这一段整体换掉，排队的那页（基于旧第一页的游标）跟着作废。
       this.exploreQueue = [];
-      this.seedExploreFromCache();
+      // 首屏不再先铺探索流缓存（见 loadFeed 里 PAINT_CACHE_ON_START 的说明）。
+      if (PAINT_CACHE_ON_START) {
+        this.seedExploreFromCache();
+      }
     } else {
       // ---- ① 队列里有页：零等待直接铺（触底那次走的就是这条）----
       const queued: FeedRecommendedPage | null = this.takeExplorePage();

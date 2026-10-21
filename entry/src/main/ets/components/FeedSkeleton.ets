@@ -1,12 +1,18 @@
 /*
- * 信息流骨架屏。
+ * 信息流**骨架屏**（冷启动/首屏加载期间唯一的占位）。
  *
- * 进入应用或首屏加载期间，先按真实帖子的版式铺一层灰色占位：头像与用户名是灰块，
- * 媒体是灰色方块，点赞数与正文是灰色横条；上面再扫过一条竖直光雾，避免白屏干等。
- * 真实帖子一到，FeedList 会把整块换成帖子原样。
+ * 用户要求（原话）："冷启动主页显示占位加载动画，包括快拍列表、帖子、文字等都需要占位加载动画，
+ * 抛弃加载上一次缓存覆盖的功能。" —— 也就是：宁可先看一屏规整的骨架，也不要"先铺上次的缓存、
+ * 几秒后再整体换掉"（那种观感像是内容闪了一下又重排）。
  *
- * 占位色用的是和真实卡片一致的 field_background（图片未加载时也是这个色），
- * 所以骨架 → 真实内容的切换不会跳色。
+ * 所以这一屏要按**真实版式**摆齐三块：
+ *   ① 快拍托盘：一排圆环 + 圆环下面的名字条（和 StoriesTray 的形状对齐）；
+ *   ② 帖子：作者行（头像 + 名字条 + 关注胶囊）、媒体块、动作行（四颗图标 + 右侧收藏）、
+ *      正文两三行 —— 帖子给两张，滚动一屏之内都是骨架而不是空白；
+ *   ③ 文字：正文与计数都用灰色横条表示。
+ * 上面再扫过一条竖直光雾（shimmer），避免"整屏死灰"让人以为卡住了。
+ *
+ * 占位色用 `field_background`（和真实卡片的媒体占位色一致），骨架 → 真实内容不会跳色。
  */
 
 /** 光雾带宽（vp）。 */
@@ -16,6 +22,17 @@ const SHIMMER_FROM: number = -SHIMMER_WIDTH;
 const SHIMMER_TO: number = 560;
 /** 一趟扫动的时长（毫秒）。 */
 const SHIMMER_DURATION_MS: number = 1500;
+
+/** 托盘骨架画几个圆环（真机一屏大约能放下 5 个多一点）。 */
+const TRAY_PLACEHOLDERS: number = 5;
+/** 托盘圆环直径（vp）：比真实头像略小一点，看起来更"占位"。 */
+const TRAY_CIRCLE: number = 62;
+/** 帖子骨架画几张。 */
+const CARD_PLACEHOLDERS: number = 2;
+/** 动作行里的小块尺寸（vp）。 */
+const ACTION_DOT: number = 22;
+/** 统一的占位灰（与真实媒体未加载时的底色同源）。 */
+const PLACEHOLDER_BG: ResourceStr = $r('app.color.field_background');
 
 @Component
 export struct FeedSkeleton {
@@ -48,47 +65,98 @@ export struct FeedSkeleton {
     });
   }
 
-  /** 一条灰色横条，代表一行未加载的文字。 */
+  /** 一条灰色横条，代表一行未加载的文字（或一个未知尺寸的元素）。 */
   @Builder
-  bar(barWidth: Length) {
+  bar(barWidth: Length, barHeight: number) {
     Column()
       .width(barWidth)
-      .height(12)
-      .borderRadius(6)
-      .backgroundColor($r('app.color.field_background'))
+      .height(barHeight)
+      .borderRadius(barHeight / 2)
+      .backgroundColor(PLACEHOLDER_BG)
   }
 
-  /** 一张骨架卡片：版式与真实帖子一致（作者行 / 方形媒体 / 文字行）。 */
+  @Builder
+  dot(size: number, radius: number) {
+    Column()
+      .width(size)
+      .height(size)
+      .borderRadius(radius)
+      .backgroundColor(PLACEHOLDER_BG)
+  }
+
+  /**
+   * **快拍托盘骨架**：一排圆环 + 下面的名字条。
+   *
+   * 形状照着 StoriesTray 的真实布局做（圆环 62 + 名字条 10 高、间距一致），
+   * 这样真实托盘长出来时只是"灰块变成头像"，不会整块重排。
+   */
+  @Builder
+  trayRow() {
+    Row({ space: 16 }) {
+      ForEach([0, 1, 2, 3, 4], (index: number): void => {
+        Column({ space: 10 }) {
+          this.dot(TRAY_CIRCLE, TRAY_CIRCLE / 2)
+          this.bar(46, 10)
+        }
+        .alignItems(HorizontalAlign.Center)
+      }, (index: number): string => `tray-${index}`)
+    }
+    .width('100%')
+    .height(TRAY_CIRCLE + 24)
+    .alignItems(VerticalAlign.Top)
+    .padding({ left: 16, right: 16, top: 12 })
+  }
+
+  /**
+   * **一张帖子骨架**：版式与真实卡片一致。
+   *
+   * 从上到下：作者行（34 头像 + 名字条 + 右侧「关注」胶囊）、媒体块（4:5，和常见竖图一致）、
+   * 动作行（心 / 评论 / 转发 / 分享 + 右侧收藏）、正文两行 + 时间条。
+   */
   @Builder
   skeletonCard() {
     Column({ space: 0 }) {
+      // 作者行
       Row({ space: 10 }) {
-        Column()
-          .width(34)
-          .height(34)
-          .borderRadius(17)
-          .backgroundColor($r('app.color.field_background'))
-        this.bar(120)
+        this.dot(34, 17)
+        this.bar(118, 12)
         Blank()
+        this.bar(62, 26)
+        this.dot(24, 12)
       }
       .width('100%')
       .height(52)
       .padding({ left: 12, right: 12 })
 
-      // 媒体：灰色方块
+      // 媒体块
       Column()
         .width('100%')
-        .aspectRatio(1)
-        .backgroundColor($r('app.color.field_background'))
+        .aspectRatio(0.8)
+        .backgroundColor(PLACEHOLDER_BG)
 
+      // 动作行：四颗图标 + 右侧收藏
+      Row({ space: 18 }) {
+        this.dot(ACTION_DOT, ACTION_DOT / 2)
+        this.dot(ACTION_DOT, ACTION_DOT / 2)
+        this.dot(ACTION_DOT, ACTION_DOT / 2)
+        this.dot(ACTION_DOT, ACTION_DOT / 2)
+        Blank()
+        this.dot(ACTION_DOT, ACTION_DOT / 2)
+      }
+      .width('100%')
+      .height(44)
+      .alignItems(VerticalAlign.Center)
+      .padding({ left: 12, right: 12 })
+
+      // 正文 + 发布时间
       Column({ space: 8 }) {
-        this.bar(90)
-        this.bar('100%')
-        this.bar('72%')
+        this.bar('92%', 12)
+        this.bar('64%', 12)
+        this.bar(72, 10)
       }
       .width('100%')
       .alignItems(HorizontalAlign.Start)
-      .padding({ left: 12, right: 12, top: 12, bottom: 16 })
+      .padding({ left: 12, right: 12, top: 6, bottom: 18 })
     }
     .width('100%')
   }
@@ -96,6 +164,7 @@ export struct FeedSkeleton {
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       Column() {
+        this.trayRow()
         this.skeletonCard()
         this.skeletonCard()
       }

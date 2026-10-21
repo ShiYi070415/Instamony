@@ -19,8 +19,6 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { NativeStories } from '../core/NativeStories';
-// 冷启动先铺上次那排头像（见 aboutToAppear 里"先铺落盘那份"那段）。
-import { CachedTray, TrayCache } from '../core/TrayCache';
 import { StoryHeroRect, storyAvatarNodeId, StoryTrayItem } from '../model/Story';
 import { MaterialIconButton, MaterialPillIcon } from './MaterialSurface';
 
@@ -265,24 +263,14 @@ export struct StoriesTray {
         Date.now() - this.seedAtMs);
     }
     /*
-     * **冷启动先铺落盘那份**（用户报的"快拍列表冷启动渲染的很慢"）。
+     * **冷启动不再铺落盘那份**（用户要求："冷启动主页显示占位加载动画，包括快拍列表、帖子、
+     * 文字等都需要占位加载动画，抛弃加载上一次缓存覆盖的功能"）。
      *
-     * 宿主那份 `seed` 只活在内存里（切 tab 不丢、进程一重启就没了）；没有它的时候，
-     * 以前这里直接进 `load()` —— 于是首页顶部先是一排灰色骨架，等 `feed/reels_tray/`
-     * 那一发（213 条 / 425KB / 3~6 秒）回来才长出真头像。
-     * 现在同步读盘（几十毫秒）先画一排真头像，网络那份回来后照旧整体替换。
-     * 注意：**不回调 `onLoaded`**（和 seed 同理：宿主那份顺序还要留着，交回去会 reset 预缓存）。
+     * 之前是"同步读盘先画一排上次的头像、等网络回来再整体换掉"—— 观感上像内容闪了一下又重排。
+     * 现在冷启动就让托盘显示自己的**骨架**（`skeletonRow`：5 个灰圆环 + 名字条，
+     * 和信息流骨架屏 `components/FeedSkeleton` 的托盘那一排同形），网络那份回来一次画对。
+     * 落盘缓存仍然在写（见 core/TrayCache），只是不再参与首屏。
      */
-    if (this.items.length === 0) {
-      const cached: CachedTray | null = TrayCache.load();
-      if (cached !== null && cached.items.length > 0) {
-        this.items = cached.items;
-        this.loaded = true;
-        this.syncSelf();
-        hilog.info(DOMAIN, TAG, 'tray from cache n=%{public}d age=%{public}dms',
-          cached.items.length, cached.ageMs);
-      }
-    }
     this.load();
   }
 
