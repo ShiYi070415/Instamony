@@ -249,11 +249,10 @@ const REFRESH_NAV_POLL_MS: number = 200;
 /** 页面级导航（去帖子页 / 回首页）的等待上限，以及帖子页上读评论的上限。 */
 const NAV_READY_TIMEOUT_MS: number = 20000;
 /**
- * 深链执行前等"网页宿主就绪"的上限（毫秒）。
+ * 等"网页宿主就绪"时轮询的上限与间隔（毫秒）。
  *
- * 冷启动被深链唤起时，网页宿主可能还在建首帧，这时 loadUrl 会被随后的初始化覆盖
- * （表现就是"链接点了没反应"）。给 6 秒：正常冷启动 1~2 秒内就绪，超时就放弃并回首页，
- * 不让用户对着白屏等（见 Index.consumePendingDeepLink / openDeepLinkPost）。
+ * ⚠️ 深链**不再用它**（改为由 `PageBridge` 攒住导航、宿主挂上再补发，见 openDeepLinkPost）；
+ * 这条常量只留给 `waitBridgeReady` 这个通用工具方法。
  */
 const DEEP_LINK_READY_TIMEOUT_MS: number = 6000;
 /** 等网页宿主就绪时的轮询间隔（毫秒）。 */
@@ -847,6 +846,13 @@ struct Index {
    * 所以：**需要时才挂**，用完（`closeWeb`）就卸掉。
    */
   @State webHostMounted: boolean = false;
+  /**
+   * 新挂的网页宿主**从哪条地址起步**（交给 `InstagramWebHost.startUrl`，见那里）。
+   *
+   * 只在"这一刻还没挂"的时候更新：挂着的时候换值会让 `Web({src})` 也去导航一次，
+   * 那种情况由 `bridge.loadUrl` 负责（它是"现在就在的控制器，立刻导航"那条路）。
+   */
+  @State webStartUrl: string = AppConfig.INSTAGRAM_HOME_URL;
   @State busy: boolean = false;
   /**
    * 是否已经跑完过至少一轮加载。
@@ -2622,6 +2628,8 @@ struct Index {
   }
 
   private applySession(signedIn: boolean, cookie: string = ''): void {
+    // 这一次之前有没有核对过：用来区分"首次核对"和"真的换了登录态"（见下面 signedIn 那一支）。
+    const wasChecked: boolean = this.sessionChecked;
     const changed: boolean = !this.sessionChecked || this.lastSessionState !== signedIn;
     this.sessionChecked = true;
     this.lastSessionState = signedIn;
@@ -2678,16 +2686,27 @@ struct Index {
       // 直接改 selectedTab 会绕过 selectTab 里的可见性同步：搜索页已经不是当前页了，
       // 必须显式关掉它的"接受滚动翻页"闸门（审计 C1：否则 active 与实际可见页不符）。
       this.searchVm.setActive(false);
-      this.webVisible = false;
       /*
-       * **登录完成后不再让网页常驻**（见 webHostMounted 的说明）。
+       * **只有真正的登录态切换才把网页收起来**（`wasChecked` = 这一次之前已经核对过一次）。
        *
-       * 以前这里要 `bridge.loadUrl(HOME)`：那时信息流是"回放网页那条查询"的，必须让隐藏网页
-       * 停在首页才拿得到数据。现在信息流、Reels、搜索、我的、私信全部走移动端私有接口，
-       * 网页只是登录/验证的入口 —— 登录完就没它的事了。留着它只会每帧合成、烧 CPU。
-       * 所以：直接走下面的原生取数链，然后把宿主卸掉。
+       * 为什么首次核对不能收：冷启动时 `refreshSessionFromJar → applySession(true)` 一定
+       * "看起来像切换"（第一次核对，`changed` 必然是 true），而它和用户点开网页/深链是
+       * **同一两秒里**的事（真机日志：`mount web host … 02:09:31.795` →
+       * `unmount web host … 02:09:31.797`，中间只隔 2 毫秒）。表现就是"点了帖子/深链，
+       * 网页一闪就没了、回到信息流"。
        */
-      this.unmountWebHost();
+      if (wasChecked) {
+        this.webVisible = false;
+        /*
+         * **登录完成后不再让网页常驻**（见 webHostMounted 的说明）。
+         *
+         * 以前这里要 `bridge.loadUrl(HOME)`：那时信息流是"回放网页那条查询"的，必须让隐藏网页
+         * 停在首页才拿得到数据。现在信息流、Reels、搜索、我的、私信全部走移动端私有接口，
+         * 网页只是登录/验证的入口 —— 登录完就没它的事了。留着它只会每帧合成、烧 CPU。
+         * 所以：直接走下面的原生取数链，然后把宿主卸掉。
+         */
+        this.unmountWebHost('session');
+      }
       this.viewModel.reset();
       /*
        * **登录完成后立刻按正常加载流程取数**（用户要求："登录后立刻通过 http 请求按正常
@@ -2799,7 +2818,7 @@ struct Index {
      * 用户点登录时 `mountWebHost()` 会建一个**全新实例**、从登录页开始 —— 原来那个
      * "旧文档跟我们的 loadUrl 打架、页面反复刷新"的问题从根上不存在了。
      */
-    this.unmountWebHost();
+    this.unmountWebHost('signout');
     hilog.info(DOMAIN, TAG, 'signed out; account data cleared (%{public}s)', AccountScope.describe());
   }
 
@@ -3012,14 +3031,16 @@ struct Index {
    * 把隐藏网页宿主挂上（`webHostMounted = true`）。
    *
    * 幂等：已经挂着就什么都不做，所以调用方可以无脑先调它再 `webVisible = true`。
-   * 挂载是**下一帧才构建组件**的，所以紧接着的 `bridge.loadUrl(...)` 可能赶在组件之前 ——
-   * `PageBridge` 那条"宿主没就绪先把加载请求记下"的逻辑会兜住（见 bridge/PageBridge）。
+   * 挂载是**下一帧才构建组件**的，所以紧接着的 `bridge.loadUrl(...)` 一定赶在组件之前 ——
+   * `PageBridge.loadUrl` 会发现"控制器还没绑组件"，把这条导航**攒下来**，
+   * 组件在 `onControllerAttached` 里调 `markAttached()` 时补发（见 bridge/PageBridge）。
+   * 另外这条地址往往还被交给 `webStartUrl` 当 `src`，那种情况下补发那一步会被认出来跳过。
    */
   private mountWebHost(): void {
     if (this.webHostMounted) {
       return;
     }
-    hilog.info(DOMAIN, TAG, 'mount web host (on demand)');
+    hilog.info(DOMAIN, TAG, 'mount web host (on demand) start=%{public}s', this.webStartUrl);
     this.webHostMounted = true;
   }
 
@@ -3030,13 +3051,30 @@ struct Index {
    * 之后任何需要网页的动作都会重新 `mountWebHost()`（登录 / 注册 / 安全验证 / 深链），
    * 代价是那一次要多花 1~3 秒把页面加载起来，换来的是**平时完全不烧 CPU**。
    */
-  private unmountWebHost(): void {
+  private unmountWebHost(why: string = '-'): void {
     if (!this.webHostMounted) {
       return;
     }
-    hilog.info(DOMAIN, TAG, 'unmount web host (idle)');
+    // `why` 只进日志：这条"谁把网页摘掉了"的线索排查过两次（关不掉 / 一闪就没），别丢。
+    hilog.info(DOMAIN, TAG, 'unmount web host (idle) why=%{public}s', why);
     this.webHostMounted = false;
     this.bridgeReady = false;
+    // 控制器随即和组件解绑：之后的导航请求由 PageBridge 先攒着（见 markDetached）。
+    this.bridge.markDetached();
+  }
+
+  /**
+   * 新挂宿主时该从哪条地址起步（见 `webStartUrl`）。
+   *
+   * 宿主**已经挂着**时不动它：那时由 `bridge.loadUrl` 立刻导航，改 `src` 只会多一次导航。
+   */
+  private noteStartUrl(url: string): void {
+    if (this.webHostMounted) {
+      return;
+    }
+    // 未登录时闸门说了算（见 core/SessionGate）：它只放行登录流程那几条地址，
+    // 否则 `src` 会绕过闸门直接进信息流 —— 那正是"登录页反复刷新"的老毛病。
+    this.webStartUrl = SessionGate.allowsNavigation(url) ? url : AppConfig.INSTAGRAM_HOME_URL;
   }
 
   /**
@@ -3048,11 +3086,16 @@ struct Index {
    * 已经在 Instagram 的 `/accounts/...` 那一族（登录页 / 二次验证 / 改密页）就直接亮出来。
    */
   private openLoginWeb(): void {
+    // 挂着的时候才谈"它现在停在哪"；没挂的话下面会带着登录页地址重新建一个（见 noteStartUrl）。
+    const onInstagramAuth: boolean = this.webHostMounted
+      && this.currentUrl.indexOf('instagram.com') >= 0
+      && this.currentUrl.indexOf('/accounts/') >= 0;
+    if (!onInstagramAuth) {
+      this.noteStartUrl(AppConfig.INSTAGRAM_LOGIN_URL);
+    }
     this.mountWebHost();
     this.webVisible = true;
     this.statusShown = false;
-    const onInstagramAuth: boolean = this.currentUrl.indexOf('instagram.com') >= 0
-      && this.currentUrl.indexOf('/accounts/') >= 0;
     if (onInstagramAuth) {
       hilog.info(DOMAIN, TAG, 'login web already at %{public}s', this.currentUrl);
       return;
@@ -3070,6 +3113,7 @@ struct Index {
    * 未登录时 `SessionGate` 只放行 `/accounts/…` 这类登录流程地址，注册页正好在这一族里。
    */
   private openSignupWeb(): void {
+    this.noteStartUrl(AppConfig.INSTAGRAM_SIGNUP_URL);
     this.mountWebHost();
     this.webVisible = true;
     this.statusShown = false;
@@ -3077,7 +3121,16 @@ struct Index {
     this.bridge.loadUrl(AppConfig.INSTAGRAM_SIGNUP_URL);
   }
 
+  /**
+   * 把网页亮出来并导航到某条地址（登录 / 注册 / 帖子 / 私信会话 / 验证页都走这里）。
+   *
+   * 两种情况都要覆盖，见 `noteStartUrl` 与 `PageBridge.loadUrl`：
+   *   · **还没挂**：地址交给 `webStartUrl` 当 `src`（一次到位），`loadUrl` 那句会被攒起来，
+   *     挂上时发现"和 src 一样"就跳过 —— 不会多一次导航；
+   *   · **已经挂着**：直接让现有控制器导航。
+   */
   private openWeb(url: string): void {
+    this.noteStartUrl(url);
     this.mountWebHost();
     this.webVisible = true;
     this.statusShown = false;
@@ -4084,6 +4137,17 @@ struct Index {
 
   /** 关掉网页回到原生视图：用罐里的最新会话决定下一步，而不是沿用旧状态。 */
   private async closeWeb(): Promise<void> {
+    /*
+     * **第一步必须是把网页收起来**（用户报的"点『关闭网页』没反应"）。
+     *
+     * 原来是 `this.webVisible = false;` 打头，改成"按需挂载网页"时这一行被挪进了
+     * `applySession` 的**登录态变了**那一支 —— 而正常关网页时登录态根本没变
+     * （`changed === false` 直接 return），于是 `webVisible` 永远是 true：
+     * chrome 不消失、chrome 下面还是网页层，看起来就是那颗按钮点不动。
+     * 现在恢复"先收起、再处理会话"，并把宿主一起卸掉（不卸就又常驻烧 CPU 了，见 webHostMounted）。
+     */
+    this.webVisible = false;
+    this.unmountWebHost('close');
     this.selectedTab = AppTab.Home;
     // 和 applySession 里同理：切页真正看的是 selectedIndex，必须一起复位到首页。
     this.selectedIndex = 0;
@@ -4268,7 +4332,7 @@ struct Index {
           this.searchVm.search(intent.id);
           return;
         case DeepLinkRoute.Post:
-          await this.openDeepLinkPost(intent);
+          this.openDeepLinkPost(intent);
           return;
         default:
           this.selectTab(AppTab.Home);
@@ -4282,10 +4346,11 @@ struct Index {
   /**
    * 等"网页宿主就绪"（`bridgeReady`）或超时。
    *
-   * 为什么不用 PageBridge 自己的 `awaitPageReady`：那条路等的是"当前这次的页面加载完成"，
-   * 而这里要等的是"宿主建好并跑完首帧、可以接受 loadUrl 了"——判据是 Index 自己的
-   * bridgeReady 标志（由 setReadyHandler 置位）。轮询间隔取 150ms：状态一变就往下走，
-   * 又不会在冷启动那一两秒里空转。
+   * ⚠️ 目前**没有调用方**（保留是因为探针类的诊断动作可能还要用）。
+   *
+   * 深链原来靠它：那时 `loadUrl` 必须等宿主就绪，否则会被随后的初始化覆盖。现在
+   * `PageBridge.loadUrl` 自己会把"宿主还没挂上"的导航攒起来（见 markAttached），
+   * 所以深链不再需要等（而且在按需挂载之后，冷启动时**必然等满 8 秒然后失败**）。
    */
   private async waitBridgeReady(timeoutMs: number): Promise<void> {
     const deadline: number = Date.now() + timeoutMs;
@@ -4309,22 +4374,12 @@ struct Index {
    * 为什么用**隐藏网页导航**而不是帖子页（openPostStream）：深链只有一个 shortcode，
    * 而帖子页要的是一整份分页列表 + 翻页回调，凑不出那份上下文（见 core/DeepLink.toInstagramUrl）。
    *
-   * 为什么要等桥就绪：冷启动点进帖子时网页宿主可能刚建好、还没跑完首帧，
-   * 这时 loadUrl 会被随后的初始化覆盖掉（表现就是"链接点了没反应"）。
+   * **不再"先挂上再等就绪"**：`PageBridge.loadUrl` 现在会把"宿主还没挂上"的导航攒起来，
+   * 宿主挂上那一刻补发（见 markAttached）；而且地址同时被交给 `webStartUrl` 当 `src`，
+   * 一次导航就能到位。原来那段 `waitBridgeReady` 在按需挂载之后是**必然等满 8 秒**的
+   * （冷启动时根本没有网页可等），等不到还会把深链整个丢掉（"链接点了没反应"）。
    */
-  private async openDeepLinkPost(intent: DeepLinkIntent): Promise<void> {
-    // 网页宿主是按需挂载的（见 webHostMounted）：深链要它，就先把它挂上再等就绪。
-    this.mountWebHost();
-    if (!this.bridgeReady) {
-      // PageBridge 没有"等就绪"的接口（只有 awaitPageReady / runBridge），而这里要等的是
-      // "网页宿主建好并报过一次 ready"（见 setReadyHandler），所以按标志轮询。
-      await this.waitBridgeReady(DEEP_LINK_READY_TIMEOUT_MS);
-    }
-    if (!this.bridgeReady) {
-      hilog.warn(DOMAIN, TAG, 'deep link post skipped: web host not ready');
-      this.selectTab(AppTab.Home);
-      return;
-    }
+  private openDeepLinkPost(intent: DeepLinkIntent): void {
     this.selectTab(AppTab.Home);
     this.openWeb(DeepLink.toInstagramUrl(intent));
   }
@@ -9308,6 +9363,8 @@ struct Index {
         InstagramWebHost({
           visible: this.webVisible,
           signedIn: this.signedIn,
+          // 这一次挂载该从哪条地址起步（见 webStartUrl / noteStartUrl）。
+          startUrl: this.webStartUrl,
           onPageReady: (): void => {
             this.handlePageReady();
           },

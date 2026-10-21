@@ -106,6 +106,22 @@ export class InstagramPageBridge {
   /** 单调递增，不随换页归零——归零会让换页前登记的等待永远等不到。 */
   private ready: boolean = false;
   /**
+   * 控制器现在有没有真的绑到一个 `Web` 组件上（见 `markAttached` / `markDetached`）。
+   *
+   * 为什么要这个标志：控制器是**单例**（一个 Web 组件），而宿主组件是按需挂载的
+   * （见 Index 的 `webHostMounted`）。宿主没挂上时 `controller.loadUrl()` 会抛
+   * `Init error`（17100001），旧代码把它 `catch {}` 吞掉了 —— 用户看到的就是
+   * "点了帖子只打开 IG 首页，没到那条帖子"。
+   */
+  private attached: boolean = false;
+  /**
+   * 宿主还没挂上时收到的导航请求（只留最后一条）：挂上那一刻补发（见 `markAttached`）。
+   *
+   * 只留最后一条是有意的 —— 连点几条时用户要看的是最后点的那一条，前面的排队补发
+   * 既浪费一发生成请求，也会让界面"闪过去又闪回来"。
+   */
+  private pendingUrl: string = '';
+  /**
    * "上一次等就绪超时"的时刻（毫秒）。见 `awaitPageReady`：短时间内别一段一段地陪等。
    * `markReady()` / `markUnready()` 都会清掉它（就绪状态变了，这份记忆就不成立了）。
    */
@@ -169,6 +185,38 @@ export class InstagramPageBridge {
 
   isReady(): boolean {
     return this.ready;
+  }
+
+  /**
+   * 宿主组件把控制器绑好了（`InstagramWebHost.onControllerAttached` 里调）。
+   *
+   * @param mountedUrl 这个组件是**从哪条地址起步**的（`Web({src})` 那个值）。
+   *   如果挂载前攒下的导航请求正好就是它，说明页面已经在往那儿走了，不用再导航一次。
+   */
+  markAttached(mountedUrl: string): void {
+    this.attached = true;
+    const pending: string = this.pendingUrl;
+    this.pendingUrl = '';
+    if (pending.length === 0) {
+      return;
+    }
+    if (pending === mountedUrl) {
+      hilog.info(DOMAIN, TAG, 'navigation already served by mounted src: %{public}s', pending);
+      return;
+    }
+    hilog.info(DOMAIN, TAG, 'navigation flush after attach: %{public}s', pending);
+    this.loadUrl(pending);
+  }
+
+  /** 宿主组件被卸掉（组件销毁）时调：之后收到的导航请求一律先攒着。 */
+  markDetached(): void {
+    this.attached = false;
+    this.ready = false;
+  }
+
+  /** 现在有没有"等着宿主挂上再发"的导航（诊断用）。 */
+  pendingNavigation(): string {
+    return this.pendingUrl;
   }
 
   /**
@@ -285,15 +333,33 @@ export class InstagramPageBridge {
       hilog.info(DOMAIN, TAG, 'navigation blocked (signed out): %{public}s', url);
       return;
     }
+    /*
+     * **宿主还没挂上**：控制器没绑组件，`loadUrl` 必抛 `Init error`。
+     * 以前这里把它 catch 掉就算了，于是"点帖子 → 打开网页"看到的永远是 IG 首页
+     * （宿主是在下一次渲染才建的，而建的时候从 `src` 回到首页）。
+     * 现在先记下来，宿主挂上那一刻补发（见 markAttached）。
+     */
+    if (!this.attached) {
+      this.pendingUrl = url;
+      hilog.info(DOMAIN, TAG, 'navigation queued (host not attached): %{public}s', url);
+      return;
+    }
     this.ready = false;
+    this.pendingUrl = '';
     try {
       this.controller.loadUrl(url);
     } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'loadUrl failed: %{public}s', (error as Error).message);
+      this.pendingUrl = url;
     }
   }
 
   reload(): void {
     this.ready = false;
+    // 宿主没挂上时 refresh() 同样会抛；等挂上之后自会加载，不必记请求。
+    if (!this.attached) {
+      return;
+    }
     try {
       this.controller.refresh();
     } catch (error) {
@@ -301,6 +367,9 @@ export class InstagramPageBridge {
   }
 
   canGoBack(): boolean {
+    if (!this.attached) {
+      return false;
+    }
     try {
       return this.controller.accessBackward();
     } catch (error) {
@@ -309,6 +378,9 @@ export class InstagramPageBridge {
   }
 
   goBack(): void {
+    if (!this.attached) {
+      return;
+    }
     try {
       this.controller.backward();
     } catch (error) {

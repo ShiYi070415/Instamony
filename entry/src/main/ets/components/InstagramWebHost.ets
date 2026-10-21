@@ -1,10 +1,11 @@
 /*
  * The only Instagram WebView in Instarmony.
  *
- * It is always mounted. When native content is on screen it stays underneath
- * with opacity 0.01, which keeps Instagram hydrated and preserves cookies/SPA
- * state instead of reloading on every tab change. When login or a web detail is
- * open, the same WebView is revealed with a native top bar above it.
+ * **按需挂载**（见 Index 的 `webHostMounted`）：平时这棵树里根本没有它，登录/注册、
+ * 安全验证、少数"只能靠网页"的动作（看帖子、私信会话、深链）才建一个。
+ * 建起来时隐藏态用 `Visibility.Hidden` + `onInactive` 降到最低（常驻一个隐藏 WebView
+ * 会让进程在前台吃掉 40~65% CPU、手机发烫，那是真机量出来的）。
+ * 亮出来时就在同一棵树里直接显示，上面盖一层 `WebChromeBar`。
  */
 
 import { webview } from '@kit.ArkWeb';
@@ -32,6 +33,15 @@ export struct InstagramWebHost {
    * 再触发一次预加载 —— 自己把自己踩成了循环。
    */
   @Prop signedIn: boolean = false;
+  /**
+   * 这个宿主**从哪条地址起步**（`Index.openWeb` 等决定，见那里）。
+   *
+   * 为什么要它：宿主是按需挂载的 —— `openWeb(url)` 与"组件真正建起来"隔着一次渲染，
+   * 那期间 `bridge.loadUrl` 还没有可用的控制器（抛 `Init error`）。以前靠"挂载后补发一发
+   * `loadUrl`"来兜，代价是**先白开一次首页再跳**；现在把目标地址直接交给 `src`，
+   * 一次导航到位，补发那一步也会被 `markAttached` 认出来跳过。
+   */
+  @Prop startUrl: string = AppConfig.INSTAGRAM_HOME_URL;
   onPageReady: () => void = (): void => {
   };
   onSessionChanged: (signedIn: boolean) => void = (signedIn: boolean): void => {
@@ -175,6 +185,8 @@ export struct InstagramWebHost {
   }
 
   aboutToDisappear(): void {
+    // 组件销毁 = 控制器没绑组件了：之后收到的导航请求先攒着，等下一次挂载补发。
+    this.bridge.markDetached();
     try {
       InstagramCookieJar.save();
     } catch (error) {
@@ -183,7 +195,7 @@ export struct InstagramWebHost {
 
   build() {
     Web({
-      src: AppConfig.INSTAGRAM_HOME_URL,
+      src: this.startUrl,
       controller: this.bridge.controller,
       incognitoMode: false
     })
@@ -225,6 +237,12 @@ export struct InstagramWebHost {
         } catch (error) {
           hilog.warn(0x0000, TAG, 'custom user agent rejected');
         }
+        /*
+         * 控制器绑好了：把"挂载之前"收到的导航请求补发（见 PageBridge.markAttached）。
+         * 必须在 `onControllerAttached` 里做 —— 文档要求控制器的实例方法只在这个回调之后调，
+         * 早一帧就是 `Init error`。
+         */
+        this.bridge.markAttached(this.startUrl);
         // 引擎已经起来了，这时读 Cookie 罐才是安全的（见 Index.aboutToAppear 的说明）。
         this.detectSession();
       })
