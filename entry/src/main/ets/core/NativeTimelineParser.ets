@@ -158,6 +158,99 @@ export class NativeTimeline {
 
 export class NativeTimelineParser {
   /**
+   * **移动端 `feed/timeline/` 那条**的解析（形状与网页 GraphQL 不同）。
+   *
+   * 移动端响应（实测 200 / 253KB）通常是：
+   *   `{"feed_items":[{"media_or_ad":{…v1 媒体…}}], "more_available":true, "next_max_id":"…"}`
+   * 有的版本用 `items[]` 或把条目直接写成 `media`，所以这里**都不写死**：
+   * 依次找 `feed_items` / `items`，条目里依次找 `media_or_ad` / `media`；
+   * 游标依次取 `next_max_id` / `pagination_info.max_id`；`more_available` 同理。
+   *
+   * 字段映射**复用 `toItem`**：v1 媒体与 GraphQL 媒体的字段名基本重合
+   * （`image_versions2` / `video_versions` / `carousel_media` / `user` / `caption` …）。
+   */
+  static parseMobileFeed(body: string): NativeTimeline | null {
+    if (body.length === 0) {
+      return null;
+    }
+    let root: Record<string, Object>;
+    try {
+      root = JSON.parse(body) as Record<string, Object>;
+    } catch (error) {
+      return null;
+    }
+    const rows: Array<Object> = NativeTimelineParser.rowsOf(root);
+    const items: Array<FeedItemDto> = [];
+    for (let index: number = 0; index < rows.length; index++) {
+      const row: Record<string, Object> | null = NativeTimelineParser.asRecord(rows[index]);
+      if (row === null) {
+        continue;
+      }
+      // 条目里可能是 `media_or_ad`（时间线）或 `media`（部分版本/广告位）。
+      let media: Record<string, Object> | null = NativeTimelineParser.asRecord(row['media_or_ad']);
+      if (media === null) {
+        media = NativeTimelineParser.asRecord(row['media']);
+      }
+      if (media === null) {
+        continue;
+      }
+      items.push(NativeTimelineParser.toItem(media as IgMedia));
+    }
+    if (items.length === 0) {
+      return null;
+    }
+    const cursor: string = NativeTimelineParser.cursorOf(root);
+    const hasNext: boolean = NativeTimelineParser.moreOf(root);
+    return new NativeTimeline(items, cursor, hasNext);
+  }
+
+  /** 移动端响应里"那一串条目"在哪（`feed_items` / `items`）。 */
+  private static rowsOf(root: Record<string, Object>): Array<Object> {
+    const keys: Array<string> = ['feed_items', 'items'];
+    for (let index: number = 0; index < keys.length; index++) {
+      const value: Object | undefined = root[keys[index]];
+      if (value !== undefined && value !== null && Array.isArray(value)) {
+        return value as Array<Object>;
+      }
+    }
+    return [];
+  }
+
+  /** 翻页游标（`next_max_id` 优先，其次 `pagination_info.max_id`）。 */
+  private static cursorOf(root: Record<string, Object>): string {
+    const direct: string = `${root['next_max_id'] ?? ''}`.trim();
+    if (direct.length > 0 && direct !== 'null') {
+      return direct;
+    }
+    const paging: Record<string, Object> | null =
+      NativeTimelineParser.asRecord(root['pagination_info']);
+    if (paging !== null) {
+      const viaPaging: string = `${paging['max_id'] ?? ''}`.trim();
+      if (viaPaging.length > 0 && viaPaging !== 'null') {
+        return viaPaging;
+      }
+    }
+    return '';
+  }
+
+  /** 还有没有下一页（`more_available` 优先，其次 `pagination_info.more_available`）。 */
+  private static moreOf(root: Record<string, Object>): boolean {
+    if (root['more_available'] === true) {
+      return true;
+    }
+    const paging: Record<string, Object> | null =
+      NativeTimelineParser.asRecord(root['pagination_info']);
+    return paging !== null && paging['more_available'] === true;
+  }
+
+  private static asRecord(value: Object | undefined | null): Record<string, Object> | null {
+    if (value === undefined || value === null || Array.isArray(value)) {
+      return null;
+    }
+    return value as Record<string, Object>;
+  }
+
+  /**
    * 把整包响应解析成卡片 DTO。
    *
    * 解析不了（不是 JSON / 没有连接 / 一条媒体都没有）返回 null，调用方直接退回网页路径。

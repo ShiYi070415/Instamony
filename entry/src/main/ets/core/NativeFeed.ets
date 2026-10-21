@@ -20,11 +20,19 @@ import { ApiRegistry, ApiTemplate } from '../bridge/ApiRegistry';
 import { InstagramCookieJar, InstagramCookieSnapshot } from './InstagramCookieJar';
 import { FeedItemDto } from '../model/FeedDto';
 import { NativeTimeline, NativeTimelineParser } from './NativeTimelineParser';
+// 首页时间线的移动端通道（实测 POST feed/timeline/ → 200；见那个文件的文件头）。
+import { MobileFeedPage, MobileFeedTimeline } from './mobileapi/MobileFeedTimeline';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeFeed';
 /** 首页信息流那条操作的名字片段（模板按它找）。 */
 const FEED_OP: string = 'FeedTimeline';
+/**
+ * **迁移期对照开关**：true = 只走移动端 `feed/timeline/`，不走模板回放。
+ *
+ * 用来验证"**没有网页模板也能出信息流**"。平时 false（移动端失败自动退回模板）。
+ */
+const MOBILE_ONLY: boolean = false;
 /** 连接键：响应里出现它就说明这一发真的拿到了信息流。 */
 const FEED_KEY: string = 'xdt_api__v1__feed__timeline__connection';
 /**
@@ -173,6 +181,22 @@ export class NativeFeed {
    * 失败一律返回 null（HTTP 非 200 / 没有模板 / 没登录 / 解析不出条目）。
    */
   static async fetchPage(first: number, cursor: string): Promise<NativeFeedPage | null> {
+    /*
+     * **先走移动端 `feed/timeline/`**（见 core/mobileapi/MobileFeedTimeline）：
+     * 实测 `POST feed/timeline/` → 200 / 253KB，参数走查询串。
+     * 这是**最后一块模板依赖** —— 走通了，模板回放就只剩兜底作用。
+     * 失败（无会话 / 非 200 / 形状变了 / 解析不出）再走下面老的模板回放。
+     */
+    const viaMobile: NativeFeedPage | null = await NativeFeed.viaMobile(cursor);
+    if (viaMobile !== null) {
+      return viaMobile;
+    }
+    // 对照开关：只走移动端（验证用，见文件顶部的 MOBILE_ONLY 常量）。
+    if (MOBILE_ONLY) {
+      hilog.info(DOMAIN, TAG, 'feed mobile-only: no page (%{public}s)',
+        MobileFeedTimeline.detail());
+      return null;
+    }
     const result: NativeFetchResult = await NativeFeed.firstPage(first, cursor);
     if (!result.ok) {
       hilog.info(DOMAIN, TAG, 'native page failed %{public}s', result.summary());
@@ -184,6 +208,28 @@ export class NativeFeed {
       return null;
     }
     return new NativeFeedPage(parsed.items, parsed.nextCursor, parsed.hasNext, result.ms);
+  }
+
+  /**
+   * 移动端那一发（拿不到给 null）。
+   *
+   * 解析用 `NativeTimelineParser.parseMobileFeed`（v1 媒体 → 同一套卡片 DTO），
+   * 所以界面模型与模板那条完全一致，不需要第二份映射。
+   */
+  private static async viaMobile(cursor: string): Promise<NativeFeedPage | null> {
+    const page: MobileFeedPage | null = await MobileFeedTimeline.page(cursor);
+    if (page === null) {
+      return null;
+    }
+    const parsed: NativeTimeline | null = NativeTimelineParser.parseMobileFeed(page.body);
+    if (parsed === null) {
+      hilog.info(DOMAIN, TAG, 'feed mobile unparsable bytes=%{public}d (%{public}s)',
+        page.body.length, MobileFeedTimeline.detail());
+      return null;
+    }
+    hilog.info(DOMAIN, TAG, 'feed via mobile n=%{public}d more=%{public}s cursor=%{public}d ms=%{public}d',
+      parsed.items.length, `${parsed.hasNext}`, parsed.nextCursor.length, page.ms);
+    return new NativeFeedPage(parsed.items, parsed.nextCursor, parsed.hasNext, page.ms);
   }
 
   /**
