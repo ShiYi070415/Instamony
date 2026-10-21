@@ -1999,8 +1999,8 @@ export struct FeedList {
     .backgroundColor($r('app.color.field_background'))
     // 圆角再大一点（需求）：20 才有明显的"卡片"感（16 看着还是偏方）。
     .borderRadius(20)
-    // 卡片左右留白（贴边就成了一整条横幅，不像"卡片"了）；上下留白把两段内容分开。
-    .margin({ left: 12, right: 12, top: 12, bottom: 4 })
+    // 卡片四周留白：**上下各 10vp**（需求："平衡卡片顶部和底部的空隙，各 10vp"）。
+    .margin({ left: 12, right: 12, top: 10, bottom: 10 })
   }
 
   /**

@@ -217,6 +217,17 @@ export class NativeTimelineParser {
       if (media === null) {
         continue;
       }
+      /*
+       * **广告一律不要**（用户报的："关注流还是混入未关注的广告用户帖子"）。
+       *
+       * 广告是 IG 插进时间线的付费内容（`media_or_ad` 这个键名就是"媒体**或**广告"），
+       * 作者通常没被关注，但它不一定带 `friendship_status` —— 光靠"关注状态"那道筛
+       * 兜不住它（unknown 只能放行或误杀）。所以在这一层就按广告标记剔掉。
+       * 判据取几个这版载荷里出现过的标记，任一命中即算广告。
+       */
+      if (NativeTimelineParser.looksLikeAd(row, media)) {
+        continue;
+      }
       items.push(NativeTimelineParser.toItem(media as IgMedia));
     }
     if (items.length === 0) {
@@ -329,6 +340,52 @@ export class NativeTimelineParser {
       }
     }
     return sawPlaceholder;
+  }
+
+  /**
+   * 这一条是不是**广告**（付费插入的）。
+   *
+   * 认几个这版时间线载荷里出现过的标记，任一命中即算：
+   *   · 行/媒体上的 `is_ad: true`、`ad_id`；
+   *   · 媒体上的 `ad_header_style` / `ad_action` / `ad_metadata` / `injected` /
+   *     `dr_ad_type` / `ad_tag`（后两个是 IG 广告回传用的字段）。
+   *
+   * 只认"明确是广告"的那几个键：宁可漏一条广告，也不要把正常帖子当广告删掉。
+   */
+  private static looksLikeAd(row: Record<string, Object>, media: Record<string, Object>): boolean {
+    if (NativeTimelineParser.flagOf(row, 'is_ad') || NativeTimelineParser.flagOf(media, 'is_ad')) {
+      return true;
+    }
+    const keys: Array<string> = ['ad_id', 'ad_header_style', 'ad_action', 'ad_metadata',
+      'injected', 'dr_ad_type', 'ad_tag'];
+    for (let index: number = 0; index < keys.length; index++) {
+      const key: string = keys[index];
+      if (NativeTimelineParser.hasValue(media, key) || NativeTimelineParser.hasValue(row, key)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** 字段存在且不是 false / null / 空串 / 0。 */
+  private static hasValue(holder: Record<string, Object>, key: string): boolean {
+    const value: Object | undefined = holder[key];
+    if (value === undefined || value === null || value === false) {
+      return false;
+    }
+    if (typeof value === 'string') {
+      return (value as string).length > 0;
+    }
+    if (typeof value === 'number') {
+      return (value as number) !== 0;
+    }
+    return true;
+  }
+
+  /** 布尔标记（`true` 或字符串 `'true'` 才算）。 */
+  private static flagOf(holder: Record<string, Object>, key: string): boolean {
+    const value: Object | undefined = holder[key];
+    return value === true || `${value}` === 'true';
   }
 
   /** 翻页游标（`next_max_id` 优先，其次 `pagination_info.max_id`）。 */

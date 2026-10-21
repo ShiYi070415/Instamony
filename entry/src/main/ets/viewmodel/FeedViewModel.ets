@@ -641,23 +641,28 @@ export class FeedViewModel {
   }
 
   /**
-   * 关注流那一段的筛选：**只留关注的人的帖子**（需求："非关注状态的用户帖子不要显示在关注流中"）。
+   * 关注流那一段的筛选：**只留"确认被我关注"的帖子**
+   * （需求："非关注状态的用户帖子不要显示在关注流中"，后来又补了
+   *  "关注流还是混入未关注的广告用户帖子"）。
    *
-   * 两道：
-   *   ① 载荷里**明确说了没关注**的直接丢（`ownerFollowKnown && !ownerFollowing`，见 followedOnly）；
-   *   ② 载荷**没说**（字段缺失）但知道作者 id 的，批量问一次 `friendships/show_many`
-   *      （见 core/NativeFollow.statesFor）—— 问出来"确实没关注"才丢；
-   *      问不到（网络/限流/没 id）就保持原样，宁可多留也不要误删。
+   * 判据（**白名单**，不是黑名单）：
+   *   ① 载荷里说关注了（`ownerFollowKnown && ownerFollowing`）→ 留；
+   *   ② 载荷没说、但有作者 id → 批量问一次 `friendships/show_many`
+   *      （见 core/NativeFollow.statesFor）：回 `following=true` 才留；
+   *   ③ 其余（没 id、问不到、查无此人）→ **丢**。
    *
-   * 为什么非要有第二道：IG 的时间线会把推荐帖混进来，而推荐帖里有一部分**不带**
-   * `friendship_status`。只做第一道的话，那些"不知道"的帖子仍然会排在提示卡片上面，
-   * 看起来还是"关注流里冒出不认识的人"。
+   * 为什么从"黑名单"改成"白名单"：黑名单（只知道没关注才丢）会把"不知道"全放行，
+   * 而 IG 混进来的推荐/广告帖恰恰经常**不带** `friendship_status` —— 于是它们照样排在
+   * 提示卡片上面，用户看到的就是"关注流里混入未关注的广告用户"。
+   * 现在只有"确认关注"才进这一段；确认不了的一律不进（这类帖子会出现在卡片下面的探索流里）。
+   *
+   * 失败兜底：`show_many` 整个请求失败时**不**因此清空关注流 —— 那种情况下 ① 的有效载荷
+   * 仍然照留，只是 ② 那批退化成"丢"，并且会打一行 warn 说明。
    */
   private async filterFollowing(raw: Array<MediaPost>): Promise<Array<MediaPost>> {
-    const known: Array<MediaPost> = FeedViewModel.followedOnly(raw);
     const ids: Array<string> = [];
-    for (let index: number = 0; index < known.length; index++) {
-      const post: MediaPost = known[index];
+    for (let index: number = 0; index < raw.length; index++) {
+      const post: MediaPost = raw[index];
       if (post.ownerFollowKnown || post.ownerId.length === 0) {
         continue;
       }
@@ -665,43 +670,56 @@ export class FeedViewModel {
         ids.push(post.ownerId);
       }
     }
-    if (ids.length === 0) {
-      return known;
-    }
-    let states: Map<string, boolean>;
-    try {
-      states = await NativeFollow.statesFor(ids);
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'follow-state query failed: %{public}s', (error as Error).message);
-      return known;
-    }
-    if (states.size === 0) {
-      return known;
+    let states: Map<string, boolean> = new Map<string, boolean>();
+    let queried: boolean = false;
+    if (ids.length > 0) {
+      try {
+        states = await NativeFollow.statesFor(ids);
+        queried = true;
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'follow-state query failed: %{public}s', (error as Error).message);
+      }
     }
     const out: Array<MediaPost> = [];
-    let dropped: number = 0;
-    for (let index: number = 0; index < known.length; index++) {
-      const post: MediaPost = known[index];
-      if (!post.ownerFollowKnown && post.ownerId.length > 0) {
-        const state: boolean | undefined = states.get(post.ownerId);
-        if (state === false) {
-          dropped++;
-          continue;
+    let keptKnown: number = 0;
+    let keptQueried: number = 0;
+    let droppedKnown: number = 0;
+    let droppedUnknown: number = 0;
+    for (let index: number = 0; index < raw.length; index++) {
+      const post: MediaPost = raw[index];
+      if (post.ownerFollowKnown) {
+        if (post.ownerFollowing) {
+          keptKnown++;
+          out.push(post);
+        } else {
+          droppedKnown++;
         }
+        continue;
       }
-      out.push(post);
+      const state: boolean | undefined = post.ownerId.length > 0 ? states.get(post.ownerId) : undefined;
+      if (state === true) {
+        keptQueried++;
+        out.push(post);
+      } else {
+        droppedUnknown++;
+      }
     }
-    hilog.info(DOMAIN, TAG, 'following follow-state: queried=%{public}d dropped=%{public}d kept=%{public}d',
-      ids.length, dropped, out.length);
+    if (droppedKnown > 0 || droppedUnknown > 0 || !queried && ids.length > 0) {
+      hilog.info(DOMAIN, TAG,
+        'following filter: kept=%{public}d (known=%{public}d queried=%{public}d)'
+        + ' dropped=%{public}d (known=%{public}d unknown=%{public}d) queried=%{public}d/%{public}d',
+        out.length, keptKnown, keptQueried, droppedKnown + droppedUnknown, droppedKnown,
+        droppedUnknown, states.size, ids.length);
+    }
     return out;
   }
 
   /**
-   * 只留"作者确实被我关注"的帖子（关注流那一段用，见 applyPayload 里的说明）。
+   * 只留"作者确实被我关注"的帖子（**同步版**，给缓存那条路用）。
    *
    * 判据：**数据源明确说了没关注**才丢（`ownerFollowKnown && !ownerFollowing`）；
-   * 字段缺失（`ownerFollowKnown=false`）算"不知道"，照旧放行 —— 想连这种也判掉，
-   * 走 {@link filterFollowing}（它会额外问一次 `friendships/show_many`）。
+   * 字段缺失（`ownerFollowKnown=false`）算"不知道"，照旧放行 —— 缓存这条是同步路径、
+   * 发不了 `show_many`，只能等下一次网络页回来由 {@link filterFollowing} 一次性筛干净。
    */
   private static followedOnly(posts: Array<MediaPost>): Array<MediaPost> {
     let dropped: number = 0;
