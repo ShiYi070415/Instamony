@@ -75,8 +75,7 @@ import { FollowState, FOLLOW_VERSION_KEY } from '../core/FollowState';
 import { SaveState } from '../core/SaveState';
 import { NativeSave, SaveResult } from '../core/NativeSave';
 import { WebTokens } from '../core/WebTokens';
-import { EngageSkeleton } from '../core/EngageSkeleton';
-import { NativeEngage, EngageResult, EngageState, LIKE_OP, UNLIKE_OP, REPOST_OP, UNREPOST_OP } from '../core/NativeEngage';
+import { NativeEngage, EngageResult, EngageState } from '../core/NativeEngage';
 import { NativeNotifications } from '../core/NativeNotifications';
 // 通知：Push Kit 注册 + 本地通知（见 core/PushCenter）。
 import { PushCenter } from '../core/PushCenter';
@@ -2173,14 +2172,6 @@ struct Index {
     this.bridge.setCommentTemplateHandler((name: string): void => {
       hilog.info(DOMAIN, TAG, 'comment request seen name=%{public}s', name);
       ApiRegistry.getInstance().capture(COMMENT_TEMPLATE_KEY);
-    });
-    // 页面刚发出**点赞 / 转发**的写请求 → 立刻存模板（core/NativeEngage 靠它）。
-    // **立刻**是关键：网页里这条请求随时可能被下一次整页导航冲掉（去帖子页点那种情况）。
-    //
-    // 收藏不再需要这一步：它已经只走移动端私有接口（core/NativeSave → MobileEngage）。
-    this.bridge.setEngageTemplateHandler((name: string): void => {
-      hilog.info(DOMAIN, TAG, 'engage request seen name=%{public}s', name);
-      this.captureEngageTemplates();
     });
     this.bridge.setSessionHandler((signedIn: boolean): void => {
       this.handleSessionSignal(signedIn);
@@ -4448,8 +4439,7 @@ struct Index {
         return;
       }
       hilog.info(DOMAIN, TAG, 'native like failed (%{public}s) → web', native.detail);
-      // ② 网页驱动（模板还没抓到 / 原生那一发被拒）：老路子，点完顺手把模板抓下来，
-      //    下一次同样的操作就走 ①（自举，见 core/NativeEngage 的文件头）。
+      // ② 网页驱动（移动端那一发被拒）：老路子，点网页自己那颗按钮。
       // 1) 帖子就在网页当前信息流里：直接点（快路径）。
       let state: string = await this.runLike(likePostScript(post.shortcode), LIKE_TIMEOUT_MS);
       // 2) 不在（靠游标翻出来的帖子，页面自己没渲染过）：真的导航到帖子页再点。
@@ -4461,7 +4451,6 @@ struct Index {
         this.setLikedEverywhere(key, before);
         state = await this.likeOnPostPage(post);
       }
-      await this.captureEngageTemplates();
       if (state === 'liked' || state === 'unliked') {
         this.setLikedEverywhere(key, state === 'liked');
         return;
@@ -4482,55 +4471,6 @@ struct Index {
   }
 
 
-
-  /**
-   * 把网页刚发过的那几条"互动"请求存成模板（点赞 / 取消赞 / 转发 / 取消转发）。
-   *
-   * 它就是 core/NativeEngage 那条原生路的**自举**：模板只在"页面自己发过一次"之后才有，
-   * 所以每次走网页路径成功后都抓一把（页面一发出这类请求也会主动通知，见
-   * PageBridge.setEngageTemplateHandler）；抓到之后（24 小时有效）同样的操作就走 HTTP。
-   *
-   * 四个操作名**分开抓**：`capture` 是按名字片段过滤的，用一个大而全的词（比如 `Polaris`）
-   * 会把个人页/推荐位那一堆查询一起塞进模板表 —— 表里坑位有限（落盘 24 个），
-   * 真正要用的这四条反而会被挤掉（真机上就是这么丢的）。
-   */
-  private async captureEngageTemplates(): Promise<void> {
-    const ops: Array<string> = [LIKE_OP, UNLIKE_OP, REPOST_OP, UNREPOST_OP];
-    let stored: number = 0;
-    try {
-      for (let index: number = 0; index < ops.length; index++) {
-        if (await ApiRegistry.getInstance().capture(ops[index])) {
-          stored++;
-        }
-      }
-      // 顺手把模板里的 **doc_id 回写到包内骨架**：IG 改前端时 doc_id 会换，模板是可靠的新值
-      // 来源；回写之后即使模板过期（24 小时），骨架那条路也还能直接发（见 core/EngageSkeleton）。
-      this.rememberEngageDocs(ops);
-      hilog.info(DOMAIN, TAG, 'engage templates stored=%{public}d like=%{public}s repost=%{public}s',
-        stored, `${NativeEngage.hasLikeTemplate()}`, `${NativeEngage.hasRepostTemplate()}`);
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'engage template capture failed: %{public}s',
-        (error as Error).message);
-    }
-  }
-
-  /** 把已存模板里的 doc_id 回写给包内骨架（见 captureEngageTemplates 的说明）。 */
-  private rememberEngageDocs(ops: Array<string>): void {
-    for (let index: number = 0; index < ops.length; index++) {
-      const tpl: ApiTemplate | null = ApiRegistry.getInstance().storedForNative(ops[index]);
-      if (tpl === null) {
-        continue;
-      }
-      const at: number = tpl.body.indexOf('doc_id=');
-      if (at < 0) {
-        continue;
-      }
-      const start: number = at + 'doc_id='.length;
-      const end: number = tpl.body.indexOf('&', start);
-      const doc: string = (end < 0 ? tpl.body.substring(start) : tpl.body.substring(start, end)).trim();
-      EngageSkeleton.rememberDoc(ops[index], doc);
-    }
-  }
 
   /**
    * 双击媒体点赞。
@@ -4599,7 +4539,6 @@ struct Index {
       } catch (error) {
         state = 'error';
       }
-      await this.captureEngageTemplates();
       // 读到了网页翻转后的真状态：按它落定，并说明这一步做了什么。
       if (state === 'reposted' || state === 'unreposted') {
         this.setRepostedEverywhere(key, state === 'reposted');
