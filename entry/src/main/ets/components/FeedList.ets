@@ -241,6 +241,14 @@ const IMMERSIVE_VIDEO_MAX_ASPECT: number = 1;
  * 用固定档位而不是 Date 的本地化格式：一是这里只需要"多久以前"，二是 ArkTS 侧
  * 走资源串更稳（en_US 也有对应文案），三是不会因为语言环境不同而突然变成别的样子。
  */
+/**
+ * 「为你推荐」卡片里那颗星的字号（vp）。
+ *
+ * 需求（原话）："星星 symbol 太小，可以放大并且垂直置中"。16 看着偏小，
+ * 22 大致与两行文字（14 + 12 + 行距）齐高，卡片也不会被撑高。
+ */
+const HINT_STAR_SIZE: number = 22;
+
 const AGO_MINUTE_MS: number = 60 * 1000;
 const AGO_HOUR_MS: number = 60 * AGO_MINUTE_MS;
 const AGO_DAY_MS: number = 24 * AGO_HOUR_MS;
@@ -1940,6 +1948,62 @@ export struct FeedList {
   }
 
   /**
+   * 「为你推荐」那张**提示卡片**（夹在关注流与探索流之间，或在列表最顶上）。
+   *
+   * 为什么不是一行小字了：列表现在是两段拼起来的（关注流 → 卡片 → 探索流），
+   * 这张卡片是两段的**分界**，要让人一眼看出"上面是关注的人、下面开始是推荐"。
+   * 位置由 `hintAt` 决定（见那里），这里只管画。
+   *
+   * 样式（需求）：**圆角灰底卡片** + 星星用 **Instagram 粉紫渐变**，星星放大并垂直居中。
+   *   · 底色用 `field_background`（浅色 #F2F2F2 / 深色 #1A1A1A）：它本来就是"灰底"那一档，
+   *     而且跟着主题走，别写死十六进制；
+   *   · 渐变星星用**位图** `app.media.star_ig`（144×144 透明 PNG，黄→粉→紫的 LinearGradient）。
+   *     为什么不用别的：
+   *       - SVG：ArkUI 的 SVG 渲染**吃不到 `<linearGradient>`**，画出来是一颗纯色星（踩过）；
+   *       - `SymbolGlyph` + `linearGradient` + `BlendMode.SRC_IN`：遮罩没生效，
+   *         渐变方块直接盖在那儿（也踩过）。
+   *     换配色就重新生成这张 PNG（GDI+ 那种几行脚本就行），别改这里的代码。
+   */
+  @Builder
+  hintRow() {
+    Row({ space: 10 }) {
+      Image($r('app.media.star_ig'))
+        .width(HINT_STAR_SIZE)
+        .height(HINT_STAR_SIZE)
+        .objectFit(ImageFit.Contain)
+        .flexShrink(0)
+      /*
+       * 注意：**不能设 fillColor**（那会把 PNG 的渐变换成单色），也不用再套 Stack/遮罩。
+       */
+
+      Column({ space: 3 }) {
+        Text($r('app.string.feed_recommended_title'))
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.primary_text'))
+          .width('100%')
+        Text($r('app.string.feed_recommended_hint'))
+          .fontSize(12)
+          .fontColor($r('app.color.secondary_text'))
+          .width('100%')
+          .maxLines(3)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+    }
+    .width('100%')
+    // 垂直居中（需求）：星星对着**整张卡片**居中，不是贴着第一行文字。
+    .alignItems(VerticalAlign.Center)
+    .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+    .backgroundColor($r('app.color.field_background'))
+    // 圆角再大一点（需求）：20 才有明显的"卡片"感（16 看着还是偏方）。
+    .borderRadius(20)
+    // 卡片左右留白（贴边就成了一整条横幅，不像"卡片"了）；上下留白把两段内容分开。
+    .margin({ left: 12, right: 12, top: 12, bottom: 4 })
+  }
+
+  /**
    * 资料行：头像 + 用户名 + 右上角「更多」。
    *
    * **不设背景色**：沉浸式视频里这一行是叠在视频上的，底色一给就把视频挡掉了
@@ -1952,44 +2016,9 @@ export struct FeedList {
    * 不承载"开关"语义，只是材质的宿主，所以点它不做事，并且放开触摸测试 ——
    * 沉浸式视频里这一行盖在画面上，视频顶部这 52vp 里的双击点赞不能被它吃掉。
    */
-  /**
-   * 「为你推荐」那张**提示卡片**（夹在关注流与探索流之间，或在列表最顶上）。
-   *
-   * 为什么不是一行小字了：列表现在是两段拼起来的（关注流 → 卡片 → 探索流），
-   * 这张卡片是两段的**分界**，要让人一眼看出"上面是关注的人、下面开始是推荐"。
-   * 位置由 `hintAt` 决定（见那里），这里只管画。
-   */
   @Builder
-  hintRow() {
-    Column({ space: 6 }) {
-      Row({ space: 8 }) {
-        SymbolGlyph($r('sys.symbol.star_fill'))
-          .fontSize(15)
-          .fontColor([$r('app.color.accent')])
-        Text($r('app.string.feed_recommended_title'))
-          .fontSize(14)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.primary_text'))
-      }
-      .width('100%')
-      .alignItems(VerticalAlign.Center)
-
-      Text($r('app.string.feed_recommended_hint'))
-        .fontSize(12)
-        .fontColor($r('app.color.secondary_text'))
-        .width('100%')
-        .maxLines(3)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
-    .padding({ left: 16, right: 16, top: 18, bottom: 10 })
-    // 一条细分隔线：这是两段内容的分界，不是某条帖子的附属。
-    .border({ width: { top: 0.5 }, color: $r('app.color.divider') })
-  }
-
-  @Builder
-  profileRow(post: MediaPost, index: number, overMedia: boolean) {    Row({ space: 10 }) {
+  profileRow(post: MediaPost, index: number, overMedia: boolean) {
+    Row({ space: 10 }) {
       // 头像 + 账号名那一块：**外面套一层 Row 吃掉多余宽度**（`layoutWeight(1)`），
       // 后面的「关注 / 更多」两个按钮自然排到右边。
       //

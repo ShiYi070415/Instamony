@@ -602,6 +602,10 @@ export class FeedViewModel {
       list.push(post);
     }
     this.hintIndex = this.explore.length > 0 ? this.following.length : -1;
+    // 每铺一页都会走这里，所以用 debug 级别（排查"卡片位置不对"时再开）。
+    hilog.debug(DOMAIN, TAG,
+      'compose hint=%{public}d following=%{public}d explore=%{public}d total=%{public}d',
+      this.hintIndex, this.following.length, this.explore.length, list.length);
     this.setPosts(list);
     this.onHint(this.hintIndex);
   }
