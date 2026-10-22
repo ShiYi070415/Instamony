@@ -224,6 +224,21 @@ export struct RepostIcon {
   /** 勾号弹出到哪一档（0.2 → 1）。 */
   @State private checkScale: number = CHECK_FROM;
 
+  /**
+   * **首次挂载时按初值把勾直接画好**（关键，别删）。
+   *
+   * `@Watch` 只在属性**变化**时触发，挂载那一刻不会来 —— 于是组件被重新创建时
+   * （切 tab 回来 / 进网页再退出 / 翻页复用卡片），`reposted` 明明是 `true`，
+   * 而 `drawn` 还是初值 `false`，那颗勾就画不出来，观感是"已转发状态被刷掉了"。
+   * 用户报的两条路径（进网页后退出、切换页面回来）都是"卡片被重建"这一种。
+   */
+  aboutToAppear(): void {
+    this.drawn = this.reposted;
+    this.checkScale = this.reposted ? 1 : CHECK_FROM;
+    this.angle = 0;
+    this.mirror = 1;
+  }
+
   /** 这一条转发状态刚刚变成什么样。 */
   onReposted(): void {
     // 取消转发：反着转一圈，勾立刻收掉。
