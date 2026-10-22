@@ -30,7 +30,6 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { http } from '@kit.NetworkKit';
 import { ApiThrottle } from './ApiThrottle';
 import { MobileRequest } from './mobileapi/MobileRequest';
-import { MobileEngage, RepostContext } from './mobileapi/MobileEngage';
 import { InstagramCookieJar, InstagramCookieSnapshot } from './InstagramCookieJar';
 
 const DOMAIN: number = 0xFF00;
@@ -41,9 +40,21 @@ const WEB_APP_ID: string = '1217981644879628';
 const ASBD_ID: string = '359341';
 const HOME_URL: string = 'https://www.instagram.com/';
 const GRAPHQL_URL: string = 'https://www.instagram.com/graphql/query';
-/** 转发 / 取消转发的变更（doc_id 与 friendly name 来自早期真机抓包）。 */
-const REPOST_DOC: string = '38542997498680691';
+/**
+ * 转发（doc_id 与 friendly name 来自**用户刚在网页端抓到的真实请求**，2026-10-22）：
+ *   doc_id 27933176649688558 / usePolarisCreateMediaRepostMutation
+ *   variables {"input":{"actor_id":"…","client_mutation_id":"11","audience":7,
+ *              "media_id":"4013502126080504545","note_style":13,"text":""}}
+ *
+ * 两个关键点（以前都搞错，所以服务端一直回 `data:null`）：
+ *   ① doc_id 会换：旧骨架里那个 38542997498680691 现在对应的是另一个操作
+ *      （应答根字段是 `xdt_create_media_note_v2`），拿它发转发等于什么都没做；
+ *   ② `media_id` 是**纯 pk**（`4013502126080504545`），不是信息流里那种
+ *      `<媒体pk>_<作者pk>` 组合串 —— 组合串会被拒。
+ */
+const REPOST_DOC: string = '27933176649688558';
 const REPOST_NAME: string = 'usePolarisCreateMediaRepostMutation';
+/** 取消转发：doc_id 待重新抓（见 sendUnrepost 的说明）。 */
 const UNREPOST_DOC: string = '26656683127335602';
 const UNREPOST_NAME: string = 'usePolarisDeleteMediaRepostMutation';
 /** 网页令牌能用多久（毫秒）：太短会每次都拉一次首页，太长会在会话轮换后失效。 */
@@ -67,8 +78,13 @@ class WebTokens {
   }
 }
 
-/** `client_mutation_id`（网页端那种 30 位左右的十进制串）。 */
-let mutationSeq: number = 0;
+/**
+ * `client_mutation_id`：**小整数**，网页端自己也是"每次 +1"（抓包里是 11）。
+ *
+ * 为什么不用时间戳：真机抓到的真实请求就是 `"11"`，跟着它的形状走最稳；
+ * 从 11 起、每次 +1，同一进程里不会撞（不同进程撞了也无所谓，服务端不靠它去重）。
+ */
+let mutationSeq: number = 10;
 
 export class WebRepost {
   private static tokens: WebTokens | null = null;
@@ -84,39 +100,20 @@ export class WebRepost {
   /**
    * 转发 / 取消转发。
    *
-   * ⚠️ 变量形状是**真机试出来的**：老的抓包那份（`{input:{actor_id, media_id, audience:7,
-   * note_style:13, text:''}}`）现在会让服务端回
-   * `{"data":{"xdt_create_media_note_v2":null},"status":"ok"}` —— HTTP 200、status ok、
-   * **结果却是 null**（等于什么都没做）。这个 doc_id 对应的是 `xdt_create_media_note_v2`，
-   * 也就是"带媒体的 note v2"，它要的是和 REST 版 `media/create_note/v2/` 同一套字段：
-   * `media_id` / `carousel_media_id` / `carousel_index` / `audience` / `inventory_source` /
-   * `media_client_position` / `ranking_info_token` / `text` / `tracking_token`。
+   * 变量形状**照用户刚抓到的真实请求**（见文件头 REPOST_DOC 那段）：
+   *   `{"input":{actor_id, client_mutation_id, audience:7, media_id:<纯pk>, note_style:13, text:""}}`
+   * 所以**不再需要** media info 里的 tracking token / carousel 子媒体 —— 少一发请求。
    *
-   * @param pk 纯数字媒体 pk（取 note id 时查 media info 用）
+   * @param pk 纯数字媒体 pk（`media_id` 要的就是它，不能带 `_作者` 后缀）
    */
-  static async setReposted(composite: string, pk: string, repost: boolean,
-                           shortcode: string = ''): Promise<boolean> {
+  static async setReposted(pk: string, repost: boolean): Promise<boolean> {
     const actorId: string = await WebRepost.myUserId();
     if (actorId.length === 0) {
       WebRepost.detail = 'no-user-id';
       return false;
     }
     if (repost) {
-      const context: RepostContext | null =
-        await MobileEngage.repostContextOf(composite, shortcode);
-      if (context === null) {
-        WebRepost.detail = `no-context:${MobileEngage.lastRepostDetail()}`;
-        return false;
-      }
-      const ok: boolean = await WebRepost.sendRepost(actorId, context);
-      if (ok) {
-        // 转发成功：顺手问一次 media info，把 note id 记下来（取消转发要它）。
-        const noteId: string = await WebRepost.findNoteId(pk, actorId);
-        if (noteId.length > 0) {
-          WebRepost.noteIds.set(pk, noteId);
-        }
-      }
-      return ok;
+      return await WebRepost.sendRepost(actorId, pk);
     }
     let noteId: string = WebRepost.noteIds.get(pk) ?? '';
     if (noteId.length === 0) {
@@ -136,22 +133,25 @@ export class WebRepost {
 
   // ---------------------------------------------------------------- 两条变更
 
-  private static async sendRepost(actorId: string, context: RepostContext): Promise<boolean> {
-    /*
-     * 字段与 REST 版 `media/create_note/v2/` 一一对应（见 MobileEngage.setReposted）。
-     * `text` 留空：转发就是一条空 note，文字由后续 mutation 补，我们不做。
-     */
+  private static async sendRepost(actorId: string, pk: string): Promise<boolean> {
     const input: Record<string, Object> = {};
-    input['media_id'] = context.mediaId;
-    input['carousel_media_id'] = context.carouselMediaId;
-    input['carousel_index'] = context.carouselIndex;
+    input['actor_id'] = actorId;
+    input['client_mutation_id'] = WebRepost.nextMutationId();
+    // 7 / 13 都是抓包里的原值：audience=7，note_style=13 表示"转发那条 note"。
     input['audience'] = 7;
-    input['inventory_source'] = 'mixed_unconnected';
-    input['media_client_position'] = 0;
-    input['ranking_info_token'] = '';
+    input['media_id'] = pk;
+    input['note_style'] = 13;
     input['text'] = '';
-    input['tracking_token'] = context.trackingToken;
-    return await WebRepost.sendMutation(actorId, REPOST_NAME, REPOST_DOC, input, 'repost');
+    const ok: boolean = await WebRepost.sendMutation(actorId, REPOST_NAME, REPOST_DOC, input,
+      'repost');
+    if (ok) {
+      // 顺手问一次 media info 把 note id 记下来（取消转发要它）；失败不影响这次转发。
+      const noteId: string = await WebRepost.findNoteId(pk, actorId);
+      if (noteId.length > 0) {
+        WebRepost.noteIds.set(pk, noteId);
+      }
+    }
+    return ok;
   }
 
   private static async sendUnrepost(actorId: string, noteId: string): Promise<boolean> {
@@ -376,10 +376,25 @@ export class WebRepost {
       const html: string = typeof response.result === 'string' ? response.result as string : '';
       const lsd: string = WebRepost.tokenAfter(html, '"LSD",[],{"token":"');
       const dtsg: string = WebRepost.tokenAfter(html, '"DTSGInitialData",[],{"token":"');
-      hilog.info(DOMAIN, TAG, 'web tokens http=%{public}d bytes=%{public}d lsd=%{public}d dtsg=%{public}d',
-        response.responseCode, html.length, lsd.length, dtsg.length);
+      /*
+       * 顺手判一下**这份 Cookie 到底还登着没有**。
+       *
+       * 为什么关键：未登录时首页 HTML 照样有 `LSD`/`DTSGInitialData`（所以令牌能读到），
+       * 但 GraphQL 变更会回 `{"data":{"…":null},"status":"ok"}` —— 看起来 200，实际什么都没做。
+       * 真机踩过：会话失效后我们就一直在收这种"假成功"，光看 HTTP 码永远查不出来。
+       */
+      const loggedIn: boolean = html.indexOf('"logged_in_user"') >= 0
+        || html.indexOf('"viewer":{') >= 0;
+      hilog.info(DOMAIN, TAG,
+        'web tokens http=%{public}d bytes=%{public}d lsd=%{public}d dtsg=%{public}d loggedIn=%{public}s',
+        response.responseCode, html.length, lsd.length, dtsg.length, loggedIn ? 'y' : 'n');
       if (lsd.length === 0 || dtsg.length === 0) {
         WebRepost.detail = 'no-tokens-in-html';
+        return null;
+      }
+      if (!loggedIn) {
+        WebRepost.detail = 'session-logged-out';
+        hilog.warn(DOMAIN, TAG, 'web session looks logged out; repost cannot work until re-login');
         return null;
       }
       return new WebTokens(lsd, dtsg, WebRepost.jazoestOf(dtsg), Date.now());
@@ -461,8 +476,8 @@ export class WebRepost {
 
   private static nextMutationId(): string {
     mutationSeq = mutationSeq + 1;
-    // 网页端是"毫秒时间戳 + 序号"，同一个人的连续动作不会撞。
-    return `${Date.now()}${mutationSeq}`;
+    // 抓包里是 `"11"` 这种小整数（不是时间戳），见 mutationSeq 的说明。
+    return `${mutationSeq}`;
   }
 
   /** 网页 GraphQL 的表单体（字段与真机抓包一致）。 */

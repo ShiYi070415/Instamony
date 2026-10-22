@@ -232,8 +232,8 @@ export class NativeEngage {
     }
     let web: boolean = false;
     try {
-      web = await WebRepost.setReposted(mediaId.trim().length > 0 ? mediaId : id, id, repost,
-        shortcode);
+      // 网页 GraphQL 的 `media_id` 要**纯 pk**（抓包实证），所以这里传解出来的 id。
+      web = await WebRepost.setReposted(id, repost);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'web repost threw: %{public}s', (error as Error).message);
       web = false;
