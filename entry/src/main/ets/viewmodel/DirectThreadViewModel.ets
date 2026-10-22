@@ -67,6 +67,13 @@ const PENDING_MATCH_SLACK_MS: number = 6000;
 /** 确认失败后的复查间隔（毫秒）：一次没对上就在这之后再看一眼（气泡不会消失）。 */
 const PENDING_RECHECK_MS: number = 1200;
 /**
+ * "这条服务端消息刚顶替掉一个乐观气泡"的**记忆时长**（毫秒）。
+ *
+ * 只给界面用：气泡换成服务端那条时，**不要再播一次入场动画**（本地那条在按发送的
+ * 那一刻已经弹过了，再弹一次就是"同一句话弹两下"）。
+ */
+const CONFIRMED_MEMO_MS: number = 5000;
+/**
  * 翻页"卡住"（去重后没多出任何一条）之后的冷却：这段时间内不再翻，过了允许再试一次。
  *
  * 为什么要它：这条查询的分页参数在真机上本来就不认（详见 NativeDirect 里的说明），一次卡住就把
@@ -84,6 +91,7 @@ export class DirectThreadViewModel {
   reset(): void {
     this.view = null;
     this.pending = [];
+    this.confirmedIds = new Map<string, number>();
     this.busy = false;
     this.threadId = '';
     this.onView(null);
@@ -101,6 +109,8 @@ export class DirectThreadViewModel {
   private diag: string = '-';
   /** 乐观发送的临时消息（本地 id → 文本），成功/失败后清掉。 */
   private pending: Array<DirectMessage> = [];
+  /** 刚顶替掉乐观气泡的服务端消息 id → 那一刻（见 CONFIRMED_MEMO_MS / wasConfirmed）。 */
+  private confirmedIds: Map<string, number> = new Map<string, number>();
   /** 实时接收的计时器（见 startPolling / stopPolling）。 */
   private pollTimer: number = -1;
   /** 一轮轮询正在跑（防重入）。 */
@@ -167,6 +177,7 @@ export class DirectThreadViewModel {
     this.onView(this.view);
     this.diag = '-';
     this.pending = [];
+    this.confirmedIds = new Map<string, number>();
     this.onPending(this.pending);
   }
 
@@ -208,6 +219,14 @@ export class DirectThreadViewModel {
     // 刚有推送到达：别让轮询紧接着再发一发同样的请求（见 pollOnce 的 8 秒闸）。
     this.lastLoadAtMs = Date.now();
     this.onView(this.view);
+    /*
+     * **自己刚发出去的那条也会被推回来**（message_sync 不分收发）。
+     *
+     * 不在这里顺手撤掉乐观气泡的话，服务端副本会与本地那条**同时**在屏上
+     * —— 用户看到的正是"发消息会一次性弹出两条相同的，然后收回一条"。
+     * 撤与插放在同一个 tick 里，界面一帧都看不到重复（见 dropConfirmedPending）。
+     */
+    this.dropConfirmedPending();
     hilog.info(DOMAIN, TAG, 'live append id=%{public}d msgs=%{public}d mine=%{public}s',
       message.id.length, messages.length, `${message.mine}`);
     return true;
@@ -215,6 +234,24 @@ export class DirectThreadViewModel {
 
   pendingNow(): Array<DirectMessage> {
     return this.pending;
+  }
+
+  /**
+   * 这条消息是不是**刚顶替掉一个乐观气泡**（见 CONFIRMED_MEMO_MS）。
+   *
+   * 界面据此**跳过入场动画**：本地那条在按下发送时已经弹过一次了，
+   * 换成服务端那条再弹一次就成了"同一句话弹两下"。
+   */
+  wasConfirmed(id: string): boolean {
+    const at: number | undefined = this.confirmedIds.get(id);
+    if (at === undefined) {
+      return false;
+    }
+    if (Date.now() - at > CONFIRMED_MEMO_MS) {
+      this.confirmedIds.delete(id);
+      return false;
+    }
+    return true;
   }
 
   busyNow(): boolean {
@@ -296,6 +333,14 @@ export class DirectThreadViewModel {
       // 记下"刚拉过"，让轮询第一拍别紧跟着再发一发（见 pollOnce 的说明）。
       this.lastLoadAtMs = Date.now();
       this.onView(view);
+      /*
+       * **同一帧里把已经到位的乐观气泡撤掉**（见 applyIncoming 里那条说明）。
+       *
+       * 这一发多半就是"发送成功后的那次刷新"：服务端副本已经在 `view` 里了，
+       * 本地那条继续留着就是两条一模一样的。放在 `onView` 紧后面、同一个 tick 里，
+       * 界面一次都不会画出重复。
+       */
+      this.dropConfirmedPending();
       this.onStatus(view.messages.length > 0 ? '已加载' : '');
       /*
        * **进会话就算看过了**：照 instagrapi 的 `direct_send_seen` 把这条会话标成已读
@@ -448,6 +493,8 @@ export class DirectThreadViewModel {
       const hitId: string = DirectThreadViewModel.serverCopyOf(this.view, one, used);
       if (hitId.length > 0) {
         used.add(hitId);
+        // 记一下：界面看到这条时不要再播入场动画（见 wasConfirmed）。
+        this.confirmedIds.set(hitId, Date.now());
         dropped++;
         continue;
       }

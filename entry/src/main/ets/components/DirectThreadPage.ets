@@ -128,6 +128,13 @@ const POP_MAX_STEPS: number = 16;
 const POP_MIN_DELAY_MS: number = 16;
 /** 一批气泡播完之后，排名表再多留一会儿（毫秒）再清，见 noteMessages。 */
 const POP_RANK_KEEP_MS: number = 500;
+/**
+ * `delayMs` 取这个值 = **一个气泡都不播**，直接落到终态。
+ *
+ * 用在"乐观气泡换成服务端那条"的那一帧：键变了、`ForEach` 会当新条目重建，
+ * 那条消息其实已经弹过了（见 popDelayFor 与 DirectThreadViewModel.wasConfirmed）。
+ */
+const POP_NONE: number = -1;
 
 @Component
 export struct DirectThreadPage {
@@ -408,10 +415,20 @@ export struct DirectThreadPage {
   /**
    * 这一条气泡的入场延迟（毫秒）。
    *
-   * @returns 0 = 立刻播（上滑时逐条进入视口的那种）；
+   * @returns `POP_NONE`(-1) = **不播**（见下）；
+   *          0 = 立刻播（上滑时逐条进入视口的那种）；
    *          其余 = "这一批里从最下面往回数"的档位 × 22ms，越靠下越先、越靠上越后，整体封顶。
    */
   private popDelayFor(id: string): number {
+    /*
+     * **刚顶替掉乐观气泡的那条不播**：自己发出去的消息在按下发送的那一刻，
+     * 本地气泡已经弹过一次了；等它换成服务端那条时再弹，就是"同一句话弹两下"。
+     * 而且这一对气泡的**键不同**（`local-…` vs 服务端 id），`ForEach` 会当成新条目重建，
+     * 不拦的话必然重播。
+     */
+    if (this.vm.wasConfirmed(id)) {
+      return POP_NONE;
+    }
     const rank: number | undefined = this.freshRank.get(id);
     if (rank === undefined) {
       return 0;
@@ -1028,7 +1045,10 @@ export struct DirectThreadPage {
  */
 @Component
 struct PopInBubble {
-  /** 入场延迟（毫秒，0 = 立刻）。级联时由宿主按"从最下面到最上面"排好（见 popDelayFor）。 */
+  /**
+   * 入场延迟（毫秒）：0 = 立刻，>0 = 级联档位（由宿主按"从最下面到最上面"排好），
+   * **负值（`POP_NONE`）= 不播**、直接落到终态。
+   */
   @Prop delayMs: number = 0;
   /** 气泡本体（宿主画：方向、头像、内容都在里面）。 */
   @BuilderParam content: () => void;
@@ -1038,6 +1058,11 @@ struct PopInBubble {
   private delayTimer: number = -1;
 
   aboutToAppear(): void {
+    // POP_NONE = 不播：首帧就设成终态，隐式动画没有"属性变化"就不会播（见 PopInBubble 的说明）。
+    if (this.delayMs < 0) {
+      this.shown = true;
+      return;
+    }
     /*
      * **一定要至少等一帧**再把 `shown` 打开：同一帧里设成 true 的话，
      * 首帧就已经是终态、压根没有"从 0.86 弹到 1"这个过程（隐式动画要求属性真的变化过）。
