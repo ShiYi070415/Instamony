@@ -168,6 +168,16 @@ export class ReelsViewModel implements ReelStreamVm {
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'loadFirst threw: %{public}s', (error as Error).message);
       this.onStatus('加载出错');
+    } finally {
+      /*
+       * **`busy` 一定要在这里收**（`finally`，不是每个 return 前各写一遍）。
+       *
+       * 这里原先只有 `catch` 里把它置回 false —— 于是**成功路径一进来 `busy` 就永远是 true**
+       * （`return` 不会走 catch）。后果是 `requestMore()` 第一句 `if (this.busy) return;` 之后
+       * 直接返回：滑到第 14 条（首屏最后一页）再往上划只会看到 Swiper 的弹簧回弹，
+       * 一条新的都要不来 —— 用户报的"到最底无法刷新新的"就是这个。
+       * 而且那个状态下预取队列里明明排着 3 页，也永远吃不到。
+       */
       this.busy = false;
       this.onBusy(false);
     }
@@ -285,33 +295,32 @@ export class ReelsViewModel implements ReelStreamVm {
     });
   }
 
-  /** 补一页探索流进队列（唯一能推进游标的那条，见 core/NativeReels.fetchPage）。 */
+  /** 补一页探索流进队列（真正个性化那一条，见 core/NativeReels.fetchExplorePage）。 */
   private fillFromExplore(): void {
     this.nativeFetching = true;
-    // 传 `nativeCursor` 就行：源不是探索流时 NativeReels 会自己把这个游标丢掉、改问第一页。
-    NativeReels.fetchPage(NATIVE_PAGE_COUNT, this.nativeCursor, true)
+    /*
+     * **必须走 `fetchExplorePage`**（不是 `fetchPage`）。
+     *
+     * `fetchPage(游标)` 的策略是"作者页优先"：拿它来"补探索流"，回来的还是作者页 ——
+     * 于是补货永远是同一条路，探索流那份个性化推荐一次都进不来，整条流就是
+     * "固定那批作者的最新 12 条"反复切段（用户报的"全部都是固定重复的"）。
+     */
+    NativeReels.fetchExplorePage()
       .then((page: NativeReelsPage | null): void => {
         this.nativeFetching = false;
         if (page === null) {
-          this.nativeHasMore = false;
+          // 探索流这一发没成（限流/抖动）：**别把 more 置死**，回到作者页接着补。
+          this.lastFillWasAuthor = true;
+          hilog.info(DOMAIN, TAG, 'reels explore fill miss, keep going with authors');
+          this.prefetchNativePage();
           return;
         }
         this.lastFillWasAuthor = false;
         this.nativeQueue.push(page);
-        // 取到带游标的页就**立刻把它记成下一次预取要用的那个**（见 noteCursor 的说明）。
         this.noteCursor(page.nextCursor);
-        if (page.nextCursor.length > 0) {
-          this.nativeHasMore = true;
-          this.more = true;
-          hilog.info(DOMAIN, TAG,
-            'reels explore page queued n=%{public}d ms=%{public}d cursor=%{public}d queued=%{public}d',
-            page.reels.length, page.ms, page.nextCursor.length, this.nativeQueue.length);
-          this.prefetchNativePage();
-          return;
-        }
-        this.nativeHasMore = false;
-        hilog.info(DOMAIN, TAG, 'reels explore page queued without cursor n=%{public}d',
-          page.reels.length);
+        hilog.info(DOMAIN, TAG, 'reels explore page queued n=%{public}d ms=%{public}d queued=%{public}d',
+          page.reels.length, page.ms, this.nativeQueue.length);
+        this.prefetchNativePage();
       }).catch((): void => {
         this.nativeFetching = false;
       });
@@ -399,10 +408,25 @@ export class ReelsViewModel implements ReelStreamVm {
         break;
       }
       /*
-       * ② **游标翻不动时，重取一次「第一页」**（带上一页的游标已经是死链时的唯一出路）。
+       * ② **游标翻不动时，直接从探索流拿一页**。
        *
-       * 这就是用户手动做的事（退出再进来就有一批新的）—— 这里替他在"滑到底"这一刻自动做掉：
-       * 新拿到的那批按 shortcode 去重后追加，真正新增才留下；一条都没新增才收工。
+       * 为什么不是"重取第一页"：第一页就是开头那三条 `clips/*`，它们是**固定的一批**
+       * （每次冷启动都回同一组）—— 重取只会整页重复，一条都新增不了，等于白花一发。
+       * 探索流是唯一"每次都能给新条目"的源（它的 `max_id` 真的往后走），所以这里先问它。
+       */
+      const explore: NativeReelsPage | null = await NativeReels.fetchExplorePage();
+      if (explore !== null) {
+        const added: number = this.applyNativePage(explore, true);
+        hilog.info(DOMAIN, TAG, 'reels page explore n=%{public}d ms=%{public}d added=%{public}d',
+          explore.reels.length, explore.ms, added);
+        if (added > 0) {
+          this.prefetchNativePage();
+          return;
+        }
+      }
+      /*
+       * ③ 探索流也没新增：重取一次第一页（IG 的服务端排序会变，偶尔能带回没见过的条目）。
+       * 这就是用户手动做的事（退出再进来）—— 这里替他在"滑到底"这一刻自动做掉。
        */
       const fresh: NativeReelsPage | null = await NativeReels.fetchPage(NATIVE_PAGE_COUNT, '', true);
       if (fresh !== null) {

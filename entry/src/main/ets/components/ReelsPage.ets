@@ -1303,7 +1303,21 @@ export struct ReelsPage {
    * 那一层 —— 这正是"数据显示固定在第一条"的修法。
    */
   private switchTo(index: number): void {
-    if (index < 0 || index >= this.reels.length || index === this.activeIndex) {
+    if (index < 0 || index >= this.reels.length) {
+      return;
+    }
+    /*
+     * **"到底了还想往下"要能补货** —— 这一段必须放在下面的去重 `return` 之前。
+     *
+     * 滑到最后一条再往上划，Swiper 会弹一下（`onAnimationStart` 报的还是同一个 index），
+     * 放在后面的话 `index === this.activeIndex` 一命中就直接 return，`requestMore` 一次都不发，
+     * 表现就是"到最底怎么划都没反应"（用户报的那条）。视图模型那边有 `busy` 兜着，
+     * 重复调用不会并发发请求。
+     */
+    if (index >= this.reels.length - PREFETCH_DISTANCE) {
+      this.vm.requestMore();
+    }
+    if (index === this.activeIndex) {
       return;
     }
     this.activeIndex = index;
@@ -1322,10 +1336,6 @@ export struct ReelsPage {
     this.logCurrent();
     // 记进视图模型：切 tab 会重建这个组件，位置要能恢复（见 ReelsViewModel.activeIndex）。
     this.vm.setActiveIndex(index);
-    // 快到底了就预取下一页，等真滑到底时通常已经接上。
-    if (index >= this.reels.length - PREFETCH_DISTANCE) {
-      this.vm.requestMore();
-    }
   }
 
   /** 从视图模型回读（不依赖回调时序，见 ProfilePage 里同一个坑）。 */

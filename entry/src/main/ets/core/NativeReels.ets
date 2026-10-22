@@ -461,7 +461,29 @@ export class NativeReels {
     return null;
   }
 
-  /** 把一页里出现过的作者收进补货池（按出现顺序，去重，限量）。 */
+  /**
+   * **只要探索流那一页**（不看补货池）。
+   *
+   * 为什么要单独开一个入口：视图模型那边是"作者页 / 探索流**交替**"补货的（作者页全是视频、
+   * 探索流是真正个性化的推荐）。而 `fetchPage(游标)` 的策略是"作者优先"，拿它去要探索流
+   * 永远只会回作者页 —— 于是同一批作者的作品会被反复切成一段一段，整个视频流就成了
+   * 一份固定的播放表（用户报的"全部都是固定重复的"）。
+   *
+   * 游标用内部那个 `exploreCursor`（首屏预热时拿到，见 warmExploreCursor），成功后推进它。
+   * 返回的 `nextCursor` 仍是**占位哨兵**：探索流的 `max_id` 由本类自己管，不交给视图模型。
+   */
+  static async fetchExplorePage(): Promise<NativeReelsPage | null> {
+    const started: number = Date.now();
+    const page: NativeReelsPage | null = await NativeReels.viaExplore(NativeReels.exploreCursor);
+    if (page === null) {
+      return null;
+    }
+    NativeReels.exploreCursor = page.nextCursor;
+    return new NativeReelsPage(page.reels, NativeReels.CURSOR_SENTINEL, true,
+      Date.now() - started);
+  }
+
+  /** 把一页里出现过的作者收进补货池（去重，限量，**插在随机位置**）。 */
   private static noteAuthors(reels: Array<Reel>): void {
     for (let index: number = 0; index < reels.length; index++) {
       const pk: string = reels[index].authorId;
@@ -472,7 +494,15 @@ export class NativeReels {
         return;
       }
       NativeReels.authorSeen.add(pk);
-      NativeReels.authors.push(pk);
+      /*
+       * **随机位置插入**（不是一律排到队尾）。
+       *
+       * 首屏那三条 `clips/*` 是**固定的一批**（真机实测每次都回同一组），于是它们的作者顺序
+       * 也是固定的 —— 一律排队尾的话，每次冷启动看到的作者顺序一模一样，整条视频流就成了
+       * 一份可以背下来的播放表。随机插入让"下一个是哪个作者"每次都不同，代价为零。
+       */
+      const at: number = Math.floor(Math.random() * (NativeReels.authors.length + 1));
+      NativeReels.authors.splice(at, 0, pk);
     }
   }
 

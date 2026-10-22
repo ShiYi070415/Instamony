@@ -184,31 +184,43 @@ export class MobileProfile {
       data['max_id'] = maxId;
     }
     data['target_user_id'] = userId;
+    // instagrapi 的 `user_clips_paginated_v1` 多带这一项（官方 App 也带）：不带的话个别账号
+    // 只回视频之外的条目，页里能认出多少算多少。留着对齐参考实现，代价为 0。
+    data['include_feed_video'] = 'true';
     /*
-     * **学到的那条就记下来**（`postUnsigned`）：真机实测这条端点只认**未签名**的表单体
-     * （签名体把字段包进 `signed_body=`，IG 就看不到 `target_user_id` 了）。
-     * 不记的话每一发都要先白打一次 400（实测每页多 ~9 秒、多发 1 个请求）——
-     * 那是纯浪费，而请求密度正是本项目要压的东西。
+     * **先发"学到的"那条，失败再换另一条**（`postUnsigned` 只记方向，不当作硬开关）。
+     *
+     * 背景（真机实测 2026-10-22）：这条端点只认**未签名**的表单体 ——
+     * 签名体把字段包进 `signed_body=`，IG 看不到 `target_user_id`，回
+     * `400 target_user_id is required`（白花 4.3 秒 + 一个错误请求，每次进程只便宜一次）。
+     * 所以默认方向就是**未签名优先**；哪天真有账号只认签名体，反过来的那一发会把它纠正回来。
+     * 每一发都带兜底（不是 `return postOnce(...)`）：换版本时哪条通就用哪条。
      */
-    if (MobileProfile.postUnsigned) {
-      return MobileProfile.postOnce(endpoint, data, maxId, kind, priority, false);
+    const order: Array<boolean> = MobileProfile.postUnsigned ? [false, true] : [true, false];
+    for (let index: number = 0; index < order.length; index++) {
+      const signed: boolean = order[index];
+      const page: MobileGridPage | null = await MobileProfile.postOnce(endpoint, data, maxId, kind,
+        priority, signed);
+      if (page !== null) {
+        const wantUnsigned: boolean = !signed;
+        if (MobileProfile.postUnsigned !== wantUnsigned) {
+          MobileProfile.postUnsigned = wantUnsigned;
+          hilog.info(DOMAIN, TAG, 'tab[%{public}s] learned: %{public}s form body works',
+            kind, signed ? 'signed' : 'unsigned');
+        }
+        return page;
+      }
     }
-    const signed: MobileGridPage | null = await MobileProfile.postOnce(endpoint, data, maxId, kind,
-      priority, true);
-    if (signed !== null) {
-      return signed;
-    }
-    const unsigned: MobileGridPage | null = await MobileProfile.postOnce(endpoint, data, maxId, kind,
-      priority, false);
-    if (unsigned !== null) {
-      MobileProfile.postUnsigned = true;
-      hilog.info(DOMAIN, TAG, 'tab[%{public}s] learned: unsigned form body works, use it directly', kind);
-    }
-    return unsigned;
+    return null;
   }
 
-  /** 这条端点的表单体要不要包 `signed_body`（学到就记住，见 gridPost）。 */
-  private static postUnsigned: boolean = false;
+  /**
+   * 这条端点的表单体优先发哪种形态（学到的方向，见 gridPost）。
+   *
+   * **默认未签名**：`clips/user/` 实测只认它（签名体一律 400）。默认值反过来时，每次冷启动
+   * 第一个作者页都要先白打一发 400 —— 实测那一下要 4.3 秒，正是"首屏之后第一页最慢"的原因。
+   */
+  private static postUnsigned: boolean = true;
 
   /** 发一次网格 POST（`signed=false` = 不包签名体）。 */
   private static async postOnce(endpoint: string, data: Record<string, Object>, maxId: string,
@@ -239,12 +251,26 @@ export class MobileProfile {
       return null;
     }
     const items: Array<Object> = MobileProfile.objectsOf(parsed['items']);
-    const cursor: string = MobileProfile.firstText(parsed, ['next_max_id', 'max_id']);
-    const more: boolean = MobileProfile.boolOf(parsed, 'more_available');
+    /*
+     * 游标 —— **两条端点给的形状不一样**（真机 2026-10-22 实测，别只读顶层）：
+     *   · 网格类（`feed/user/{pk}/`、`usertags/…/feed/`、`feed/saved/`）→ 顶层 `next_max_id` / `max_id`
+     *   · `clips/user/`（Reels 分页）→ **`paging_info.max_id`**，顶层压根没有 `next_max_id`
+     *     （instagrapi 的 `user_clips_paginated_v1` 也是从 `paging_info.max_id` 取的）
+     * 只读顶层的时候，`clips/user/` 的游标永远是空串 → 每个作者只拿到最新的 12 条就被当成
+     * "已经到底"从补货池里删掉 → 刷几十条之后整个视频流只剩重复内容（用户报的
+     * "全部都是固定重复的、到最底无法刷新新的"就是这两个原因之一）。
+     */
+    const paging: Record<string, Object> | null = MobileProfile.objectOf(parsed['paging_info']);
+    const top: string = MobileProfile.firstText(parsed, ['next_max_id', 'max_id']);
+    const nested: string = paging === null ? ''
+      : MobileProfile.firstText(paging, ['max_id', 'next_max_id']);
+    const cursor: string = top.length > 0 ? top : nested;
+    const more: boolean = MobileProfile.boolOf(parsed, 'more_available')
+      || (paging !== null && MobileProfile.boolOf(paging, 'more_available'));
     const ms: number = Date.now() - started;
     hilog.info(DOMAIN, TAG,
-      'tab[%{public}s] ok items=%{public}d more=%{public}s ms=%{public}d bytes=%{public}d',
-      kind, items.length, `${more}`, ms, result.bytes);
+      'tab[%{public}s] ok items=%{public}d more=%{public}s cursor=%{public}d ms=%{public}d bytes=%{public}d',
+      kind, items.length, `${more}`, cursor.length, ms, result.bytes);
     return new MobileGridPage(items, cursor, more, ms, result.bytes);
   }
 
