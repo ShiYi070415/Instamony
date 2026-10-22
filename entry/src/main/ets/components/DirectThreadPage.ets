@@ -60,6 +60,13 @@ const LOADING_ROW_VP: number = 36;
  */
 const REACH_COOLDOWN_MS: number = 1200;
 /**
+ * 滚动偏移超过这么多 vp 就算"离开了顶部"，重新武装触顶刷新（见 onReachStart 的三道闸）。
+ *
+ * 取得比标题栏让位（96vp）小一点：用户只要真的往下滚了一段，就说明他愿意再拉一次。
+ */
+const REACH_REARM_OFFSET_VP: number = 80;
+
+/**
  * 贴底后再补几次"仍然贴底"的检查（毫秒）。
  *
  * 为什么需要：气泡里有图片/贴纸，它们是**异步解码**的 —— 解码完高度才变，
@@ -277,6 +284,7 @@ export struct DirectThreadPage {
       clearTimeout(this.rankClearTimer);
       this.rankClearTimer = -1;
     }
+
   }
 
   /**
@@ -339,36 +347,45 @@ export struct DirectThreadPage {
     this.pending = this.vm.pendingNow();
     this.busy = this.vm.busyNow();
     this.noteMessages();
+
   }
 
   /**
    * **记下"这一批新出现的是哪几条"**，给气泡的级联入场动画算延迟（见 popDelayFor）。
    *
-   * ## 两条规矩（需求："只有从进入视口的消息气泡才播放动画，刷新不会触发全局动画，
-   * 只有刷新出来的消息才有动画"）
-   *   1. **每条气泡一辈子只播一次**（`playedIds`）—— 刷新、列表回收、滚动回来再创建，
-   *      都不会让它重播；否则一次刷新就变成"满屏又弹一遍"。
-   *   2. 没播过的才算"这一批"：进会话时是整屏（从最新一条往回数）；翻历史时是刚插进来那一页；
-   *      滚到视口里才第一次被创建的那几条也算。延迟按"这一批里从最新往回数"的序号给，
-   *      所以永远是**最新的先弹、越老越后**。
+   * 需求（2026-10-23 修正过两轮，最终态）：
+   *   · 进会话、刷新出来的消息、**上滑时逐条进入视口的消息** —— 全都要播动画；
+   *   · 顺序一律**从最下面（最新）到最上面（最老）**：同一帧里一起出现的那一批按
+   *     "从最新往回数"排延迟；上滑时逐条出现的那些，创建顺序本来就是自下而上，
+   *     所以拿到延迟 0、立刻各自弹一下。
    *
    * 排名表只活一小会儿（`POP_MAX_STEPS * POP_STEP_MS + 500ms`）：清掉之后，
-   * 后面滚动才创建的气泡拿不到延迟，立刻入场，不会越用越慢。
+   * 滚动过程中才创建的气泡一律即时入场，不会排队排到"卡"。
    */
   private noteMessages(): void {
     const list: Array<DirectMessage> = this.allMessages();
+    /*
+     * 只有"上一轮没见过"的才算这一批的新条目。整表替换（进会话/换会话）时 knownIds 很小，
+     * 于是全部算新 —— 正是我们要的：进会话就从最后一条开始一路往上弹。
+     */
     const fresh: Set<string> = new Set<string>();
+    const seen: Set<string> = new Set<string>();
     for (let index: number = 0; index < list.length; index++) {
       const id: string = list[index].id;
-      if (id.length > 0 && !this.playedIds.has(id)) {
+      if (id.length === 0) {
+        continue;
+      }
+      seen.add(id);
+      if (!this.knownIds.has(id)) {
         fresh.add(id);
       }
     }
+    this.knownIds = seen;
     if (fresh.size === 0) {
       return;
     }
     /*
-     * 排名**从最新的往回数**（最新 = 0）：界面是老的在上、新的在下，所以延迟要从后往前发。
+     * 排名**从最下面往回数**（最新 = 0）：界面是老的在上、新的在下，所以延迟要从后往前发。
      */
     this.freshRank = new Map<string, number>();
     let rank: number = 0;
@@ -388,32 +405,20 @@ export struct DirectThreadPage {
     }, POP_MAX_STEPS * POP_STEP_MS + POP_RANK_KEEP_MS);
   }
 
-  /** 这条气泡**开始播**了（由 PopInBubble 回调）：记下来，之后重建不再重播。 */
-  private markPlayed(id: string): void {
-    if (id.length > 0) {
-      this.playedIds.add(id);
-    }
-  }
-
   /**
    * 这一条气泡的入场延迟（毫秒）。
    *
-   * @returns **-1 = 不播动画**（这条已经播过、或者不是这一批新出现的）。
-   *          其余是"这一批里从最新往回数"的档位 × 22ms，越新越先、越老越后，且整体封顶。
+   * @returns 0 = 立刻播（上滑时逐条进入视口的那种）；
+   *          其余 = "这一批里从最下面往回数"的档位 × 22ms，越靠下越先、越靠上越后，整体封顶。
    */
   private popDelayFor(id: string): number {
-    if (id.length === 0 || this.playedIds.has(id)) {
-      return -1;
-    }
     const rank: number | undefined = this.freshRank.get(id);
     if (rank === undefined) {
-      // 不在这一批里（滚动到视口才第一次创建的那种）：立刻播，不排队。
       return 0;
     }
     const steps: number = rank < POP_MAX_STEPS ? rank : POP_MAX_STEPS;
     return steps * POP_STEP_MS;
   }
-
   private allMessages(): Array<DirectMessage> {
     if (this.view === null) {
       return this.pending;
@@ -464,17 +469,31 @@ export struct DirectThreadPage {
   private settleTimer: number = -1;
   /** 上一次触顶刷新的时刻（毫秒；见 REACH_COOLDOWN_MS）。 */
   private lastReachAtMs: number = 0;
+  /** 有一发"加载更老"在飞（防重入，见 onReachStart）。 */
+  private olderInFlight: boolean = false;
   /**
-   * **已经播过入场动画**的消息 id（见 noteMessages）。
+   * 触顶刷新是否**已武装**。
    *
-   * 刷新、列表回收、滚回来再创建都不该重播 —— 这就是需求里"刷新不会触发全局动画、
-   * 只有刷新出来的消息才有动画"的那道闸。
+   * 一次加载之后必须"**真实手指**离开过顶部再回来"才重新武装（见 onDidScroll）：
+   * 程序化的锚位滚动不算。只靠冷却时间的话，列表贴着顶部会"加载 → 锚回 → 又被当成离开
+   * 顶部 → 再加载"，一直往下捞（真机报的"触顶刷新一直回到最底部"就是这条）。
    */
-  private playedIds: Set<string> = new Set<string>();
+  private reachArmed: boolean = true;
+  /** 手指现在压在屏幕上没有（只有真实手指能重新武装触顶刷新，见 onDidScroll）。 */
+  private userTouching: boolean = false;
+
+  /**
+   * 上一轮列表里**已经出现过**的消息 id（见 noteMessages）。
+   *
+   * 只用来判断"哪几条是这一批新冒出来的"（它们要按从下往上的顺序排队弹）。
+   * **不**用它拦动画：上滑时列表回收后再创建的气泡本来就要再弹一次（需求）。
+   */
+  private knownIds: Set<string> = new Set<string>();
   /** 这一批新消息的入场排名（id → 从最新往回数的序号；见 popDelayFor）。 */
   private freshRank: Map<string, number> = new Map<string, number>();
   /** 清空排名表的定时器（见 noteMessages）。 */
   private rankClearTimer: number = -1;
+
 
   /**
    * 取更老那批，并把视口**锚回加载前的那条消息**（需求："加载后页面位置保持不变"）。
@@ -519,23 +538,36 @@ export struct DirectThreadPage {
         });
       return;
     }
+    this.olderInFlight = true;
     this.vm.loadOlder()
       .then((): void => {
+        this.olderInFlight = false;
         const added: number = this.allMessages().length - before;
         if (added > 0) {
-          try {
-            // **+1**：列表第 0 格是那行"加载中"占位（见 LOADING_ROW_VP），消息从下标 1 开始。
-            this.listScroller.scrollToIndex(added + 1, false, ScrollAlign.START);
-            // 再退回标题栏那一条的高度，让它停在栏下方而不是藏在栏背后（见方法头）。
-            this.listScroller.scrollBy(0, -PAGE_TOP_OFFSET);
-          } catch (error) {
-          }
+          // 立即锚（改动画之前那套）：`ForEach` 下条目首帧就在，`scrollToIndex` 落到的是新布局。
+          this.anchorToLoaded(added);
         }
         this.settleRefresh();
       })
       .catch((): void => {
+        this.olderInFlight = false;
         this.settleRefresh();
       });
+  }
+
+  /**
+   * 把视口锚回"加载前那条消息"（见 loadOlderKeepPosition 的说明）。
+   *
+   * @param added 这一发在前面插进来多少条
+   */
+  private anchorToLoaded(added: number): void {
+    try {
+      // **+1**：列表第 0 格是那行"加载中"占位（见 LOADING_ROW_VP），消息从下标 1 开始。
+      this.listScroller.scrollToIndex(added + 1, false, ScrollAlign.START);
+      // 再退回标题栏那一条的高度，让它停在栏下方而不是藏在栏背后（见方法头）。
+      this.listScroller.scrollBy(0, -PAGE_TOP_OFFSET);
+    } catch (error) {
+    }
   }
 
   /**
@@ -745,21 +777,23 @@ export struct DirectThreadPage {
             .animation({ duration: 160, curve: Curve.EaseOut })
           }
 
+          /*
+           * **回到 `ForEach`**（撤掉 LazyForEach）。
+           *
+           * 上一版为了"上滑时逐条播动画"换成了 LazyForEach + 增量通知，结果把**触顶刷新的锚位**
+           * 弄坏了：整表/头部插入会让 List 自己挪动滚动位置，加载一页就被拽回底部，然后再触顶、
+           * 再加载（用户报的死循环）。`ForEach` 的条目是首帧建好的、滚动不重建，
+           * 位置完全由 `scrollToIndex` 说了算 —— 这是"改动画之前没问题"的那套行为，先恢复它。
+           */
           ForEach(this.allMessages(), (message: DirectMessage, index: number): void => {
             ListItem() {
               /*
                * **气泡入场**：外面这层只负责动画（见 PopInBubble），内容还是宿主画。
                *
-               * `delayMs` 就是"级联"的节拍：进入会话时**从最新一条开始、往上一格格弹出来**（需求）；
-               * 新消息 / 自己刚发的那条 / 翻出来的历史同样走这一套（见 popDelayFor）。
+               * 每一批**新冒出来**的气泡弹一次：进会话（整屏从最下面往上）、刷新出来的新消息、
+               * 自己刚发出去的那条。同一批里按"从最下面到最上面"排队（`delayMs` 由 popDelayFor 给）。
                */
-              PopInBubble({
-                delayMs: this.popDelayFor(message.id),
-                messageId: message.id,
-                onPlayed: (id: string): void => {
-                  this.markPlayed(id);
-                }
-              }) {
+              PopInBubble({ delayMs: this.popDelayFor(message.id) }) {
                 this.bubble(message, index)
               }
             }
@@ -827,6 +861,14 @@ export struct DirectThreadPage {
           if (y < this.lastOffsetY - 12) {
             this.pinnedToBottom = false;
           }
+          /*
+           * **离开过顶部才重新武装触顶刷新**（见 onReachStart 里那三道闸）。
+           *
+           * 阈值取得比标题栏让位小一点：滚下去半屏就足够说明"用户真的离开了顶部"。
+           */
+          if (this.userTouching && y > REACH_REARM_OFFSET_VP) {
+            this.reachArmed = true;
+          }
           this.lastOffsetY = y;
           this.scrollDelta.report(y, scrollState, this.onFeedScroll);
         })
@@ -846,14 +888,24 @@ export struct DirectThreadPage {
             return;
           }
           /*
-           * **同一次"拉到底"只触发一发**：`onReachStart` 在弹性的每次回弹都会再报一次，
-           * 不加这道闸的话，一次下拉连弹三下就会连发三页（真机实测 +20、+20、+20）。
+           * **同一次"拉到底"只触发一发**。
+           *
+           * 两道闸（都在"改动画"那一轮踩过坑）：
+           *   ① 一发在飞时不再发（`olderInFlight`）；
+           *   ② 触发一次就**解除武装**，只有**真实手指**离开过顶部（>80vp）才重新武装
+           *      （见 onDidScroll）—— 程序化的锚位滚动不算，否则
+           *      "加载 → 锚回 → 又被当成离开顶部 → 再加载"就是那个死循环；
+           *   ③ 冷却时间（同一次下拉的弹性回弹会连报好几次）。
            */
+          if (this.olderInFlight || !this.reachArmed) {
+            return;
+          }
           const now: number = Date.now();
           if (now - this.lastReachAtMs < REACH_COOLDOWN_MS) {
             return;
           }
           this.lastReachAtMs = now;
+          this.reachArmed = false;
           this.loadOlderKeepPosition();
         })
       }
@@ -876,10 +928,17 @@ export struct DirectThreadPage {
      * **任何触摸都算"人还在看"**：这直接决定要不要继续轮询
      * （空闲 90 秒就停，见 DirectThreadViewModel.THREAD_IDLE_STOP_MS）。
      * 一开始那次也算动作，所以进页面立刻恢复。
+     *
+     * 顺带记"手指在不在屏幕上"：**只有真实手指**才重新武装触顶刷新
+     * （见 onDidScroll 里那条），程序化的锚位滚动不许武装 —— 否则
+     * "加载 → 锚回 → 又被当成离开顶部 → 再加载"就是那个死循环。
      */
     .onTouch((event: TouchEvent): void => {
       if (event.type === TouchType.Down) {
+        this.userTouching = true;
         this.vm.touchActivity();
+      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+        this.userTouching = false;
       }
     })
   }
@@ -950,33 +1009,16 @@ export struct DirectThreadPage {
  */
 @Component
 struct PopInBubble {
-  /**
-   * 入场延迟（毫秒）。
-   *
-   * **负数 = 不播动画、直接就位**：这条气泡已经播过（宿主记在 `playedIds` 里）——
-   * 刷新列表、列表回收后重新创建时都走这一支，于是"刷新不会让满屏再弹一遍"。
-   */
+  /** 入场延迟（毫秒，0 = 立刻）。级联时由宿主按"从最下面到最上面"排好（见 popDelayFor）。 */
   @Prop delayMs: number = 0;
-  /** 气泡 id（播完回调宿主记账用）。 */
-  @Prop messageId: string = '';
   /** 气泡本体（宿主画：方向、头像、内容都在里面）。 */
   @BuilderParam content: () => void;
-  /** 开始播时通知宿主（记进 playedIds，之后不再重播）。 */
-  onPlayed: (id: string) => void = (id: string): void => {
-  };
   /** 已经"就位"了没有（false = 还停在起点：小、低、透明）。 */
   @State private shown: boolean = false;
   /** 延迟用的定时器句柄（组件销毁要清，否则会去写已卸载的状态）。 */
   private delayTimer: number = -1;
 
   aboutToAppear(): void {
-    if (this.delayMs < 0) {
-      // 已经播过：直接就位，不再动（需求："刷新不会触发全局动画"）。
-      this.shown = true;
-      return;
-    }
-    // 先跟宿主报账，免得这一条在延迟期间被重建又播一遍。
-    this.onPlayed(this.messageId);
     /*
      * **一定要至少等一帧**再把 `shown` 打开：同一帧里设成 true 的话，
      * 首帧就已经是终态、压根没有"从 0.86 弹到 1"这个过程（隐式动画要求属性真的变化过）。
