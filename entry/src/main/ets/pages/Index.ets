@@ -2747,7 +2747,17 @@ struct Index {
    * 只有"列表里根本没有这条会话"（新会话、翻页还没到）才退回刷一次收件箱。
    */
   private onRealtimeMessage(incoming: RealtimeMessage): void {
+    /*
+     * **"正在看这条会话"= 会话页在栈顶 + 底栏就停在私信页 + 就是这条会话**。
+     *
+     * 第三条判据（底栏）是修"突然不弹通知"的关键：`topPage` 由 NavDestination 的
+     * onShown/onHidden 维护，而**切底栏时它不会被清**（真机日志验证过：页面还在栈上、
+     * 用户已经在首页，`topPage` 仍然是 directThread）。少了这条，用户只要这一轮里
+     * 打开过一次会话页，之后所有来信都被当成"正在看" —— 不加未读、也不弹通知，
+     * 表现就是"突然不弹了"。
+     */
     const onThisThread: boolean = this.topPage === DIRECT_THREAD_PAGE
+      && this.selectedTab === AppTab.Direct
       && this.directThreadVm.threadIdNow() === incoming.threadId;
     let readHere: boolean = false;
     if (onThisThread) {
@@ -2772,7 +2782,9 @@ struct Index {
    * 那一发会把"再点开别的会话"顶到后面去。会话页自己有轮询，列表晚几十秒刷新没影响。
    */
   private scheduleDirectInboxRefresh(): void {
-    if (this.topPage === DIRECT_THREAD_PAGE) {
+    // 判据同样要带底栏：`topPage` 在切底栏时不会清（见 onRealtimeMessage 那段说明），
+    // 只在"人真的停在会话页上"时才让路。
+    if (this.topPage === DIRECT_THREAD_PAGE && this.selectedTab === AppTab.Direct) {
       return;
     }
     const now: number = Date.now();
