@@ -135,7 +135,6 @@ import { MobileChallenge } from '../core/mobileapi/MobileChallenge';
 import { StoryCache } from '../core/StoryCache';
 import { AccountChange, AccountScope } from '../core/AccountScope';
 import { StoryDiag } from '../core/StoryDiag';
-import { DirectCache } from '../core/DirectCache';
 import { PosterCache } from '../core/PosterCache';
 // 首页探索流第一页的落盘缓存（冷启动先画它，见 loadHomeRecommendedCached）。
 import { CachedRecommendedPage, FeedCache } from '../core/FeedCache';
@@ -2697,6 +2696,17 @@ struct Index {
       return;
     }
     if (event.topic === '146' || event.topic === '149' || event.topic === '88') {
+      /*
+       * **正在看某条会话时不抢那一发的名额**（需求："加快进入会话获取消息的速度"）。
+       *
+       * 收件箱刷新是 30KB 起步的一发，而全局闸门只允许 2 发同时在飞 —— 用户在私信列表里
+       * 点开会话的那一刻，如果恰好被一次推送触发的收件箱刷新占着名额，会话那一发就得排队
+       * （真机实测：点开瞬间 send 比 recv 晚 1 秒多）。会话页自己有轮询，收件箱晚几十秒
+       * 刷新完全没影响。
+       */
+      if (this.topPage === DIRECT_THREAD_PAGE) {
+        return;
+      }
       const now: number = Date.now();
       if (now - this.realtimeInboxAt < 3000) {
         return;
@@ -3021,8 +3031,6 @@ struct Index {
     NativeStories.forgetTray();
     // 「你的快拍」那一项的头像同样属于"这个人"：换人之后先把旧头像抹掉，等新头部回来再填。
     this.selfAvatarUrl = '';
-    // 私信会话快照缓存（落盘那份已由 AccountScope 搬到备份位；后台预取已按需求移除）。
-    DirectCache.clear();
     // 设备侧会话材料（claim / rur / mid / authorization）：设备身份留着，会话材料作废。
     MobileSession.getInstance().clearSession();
     // "我是谁"那份缓存（`ds_user_id`）：不清的话换账号后"我的"页面会按上一个人的 id 取头部

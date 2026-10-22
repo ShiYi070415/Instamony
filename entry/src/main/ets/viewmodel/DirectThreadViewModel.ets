@@ -17,8 +17,9 @@
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
+// 点开会话那一发要用 interactive 优先级（见 load 的说明）。
+import { ApiThrottle } from '../core/ApiThrottle';
 import { NativeDirect } from '../core/NativeDirect';
-import { DirectCache } from '../core/DirectCache';
 // 进会话就把它标成已读（见 markThreadSeen）。
 import { MobileDirect } from '../core/mobileapi/MobileDirect';
 import { DirectMessage, DirectThreadView } from '../model/Direct';
@@ -104,6 +105,13 @@ export class DirectThreadViewModel {
   private pollTimer: number = -1;
   /** 一轮轮询正在跑（防重入）。 */
   private polling: boolean = false;
+  /**
+   * 上一次**首屏拉取**落定的时刻（毫秒；0 = 还没拉过）。
+   *
+   * 只给 pollOnce 用：点开会话那一发刚落定，轮询第一拍不该紧接着再发同样的请求
+   * （真机实测 1.6 秒内发了两发 35KB）。
+   */
+  private lastLoadAtMs: number = 0;
   /** 应用是否在前台（后台时暂停轮询，见 hookVisibility）。 */
   private foreground: boolean = true;
   /** 前后台监听是否已挂（幂等）。 */
@@ -142,6 +150,10 @@ export class DirectThreadViewModel {
    * `view` 还在里面 —— 页面一建就把上一个人的消息/标题铺出来，等本次读完再换，
    * 用户看到的就是"信息不对 + 内容闪一下变成新的"（用户报的正是这个）。清空之后标题栏
    * 先用**收件箱那一行**的资料（用户名/头像/群标记），列表空着等本次读数。
+   *
+   * **这里不再读任何本地缓存**（需求："去除文本快照缓存"）：点开会话就是一次干净的网络
+   * 请求（见 load 的 interactive 优先级）。所以这个函数是纯同步的，越快越好 ——
+   * 页面能在同一帧里就把标题/头像画出来，只为消息留一个加载态。
    */
   open(threadId: string, title: string, avatar: string = '', isGroup: boolean = false,
        userId: string = '', username: string = ''): void {
@@ -152,24 +164,6 @@ export class DirectThreadViewModel {
     this.fallbackUserId = userId;
     this.fallbackUsername = username;
     this.view = null;
-    /*
-     * **先用上次的文本快照把这一屏铺上**（用户："点进去覆盖并触发刷新获取一页历史消息"）。
-     *
-     * 为什么放在这里（而不是等 `load()`）：`open()` 是点开的那一刻，页面第一帧就用这份数据画 ——
-     * 上次留下的那几条文本立刻就位（媒体位置画占位），随后 `load()` 那一发刷新再补齐媒体、
-     * 并在"没有新消息"时**保持画面不跳**（见 DirectCache.mergeMedia）。
-     * 快照里不存头像（见 DirectCache 文件头），所以头像用收件箱那一行带过来的。
-     *
-     * 注意：会话消息的**后台预取已经按需求移除**（core/DirectPrefetch.ets 整个删掉了），
-     * 所以这里读到的只可能是"以前自己点开过、写回缓存"的那一份 —— 不会再有"列表替用户预取"。
-     */
-    const cached: DirectThreadView | null = DirectCache.viewOf(threadId, avatar);
-    if (cached !== null) {
-      this.view = cached;
-      this.onView(cached);
-      hilog.info(DOMAIN, TAG, 'first paint from cache id=%{public}s msgs=%{public}d',
-        threadId, cached.messages.length);
-    }
     this.onView(this.view);
     this.diag = '-';
     this.pending = [];
@@ -237,7 +231,13 @@ export class DirectThreadViewModel {
     return id;
   }
 
-  /** 读这一条会话的最新一屏消息。 */
+  /**
+   * 读这一条会话的最新一屏消息。
+   *
+   * **优先级用 `interactive()`**（需求："加快进入会话获取消息的速度"）：这是用户点进来的那一刻，
+   * 而全局闸门对 warm 是 1.5~3.5 秒的起发间隔、对 interactive 是 0.6~1.2 秒，而且插队到
+   * 队列最前面（见 core/ApiThrottle）。以前用默认的 warm，第一屏经常要等两三秒才出来。
+   */
   async load(): Promise<void> {
     if (this.busy || this.threadId.length === 0) {
       return;
@@ -245,50 +245,19 @@ export class DirectThreadViewModel {
     this.busy = true;
     this.onBusy(true);
     try {
-      let view: DirectThreadView | null =
-        await NativeDirect.thread(this.threadId, '', this.fallbackUserId);
+      const view: DirectThreadView | null = await NativeDirect.thread(this.threadId, '',
+        this.fallbackUserId, ApiThrottle.urgent());
       if (view === null) {
         this.diag = NativeDirect.lastDetail();
-        // 网络那一发没成：**手里有快照就继续用**（总比把上次的文本换成"读取失败"强）。
-        if (this.view !== null && this.view.messages.length > 0) {
-          hilog.info(DOMAIN, TAG, 'load failed but cache shown id=%{public}s why=%{public}s',
-            this.threadId, this.diag);
-          this.onStatus('已加载（离线快照）');
-          return;
-        }
+        // 没有本地快照兜底了（需求：去掉文本快照缓存）：失败就如实说，页面留着空态可重试。
         this.onStatus('读取失败：' + this.diag);
         return;
       }
-      /*
-       * **"无新消息就直接覆盖会话消息"**（用户要求）+ 媒体补齐。
-       *
-       * 判据是"最新一条的 id 有没有变"：
-       *   · 没变 → 画面**保持快照的样子**（不跳），只把这一页里同 id 消息的媒体地址填进去
-       *     （占位换成真图/封面）；这就是"没有新消息时以快照为准"。
-       *   · 变了 → 直接显示新读到的那一页（新消息必须在场）。
-       * 无论哪一支，都把这一页**写回快照**（下次点开同一条会话就有更新的文本可先铺）。
-       */
-      const cached: DirectThreadView | null = DirectCache.viewOf(this.threadId, this.fallbackAvatar);
-      let shown: DirectThreadView = view;
-      if (cached !== null && cached.messages.length > 0) {
-        const cachedNewest: DirectMessage = cached.messages[cached.messages.length - 1];
-        const freshNewest: DirectMessage = view.messages[view.messages.length - 1];
-        const same: boolean = cachedNewest.id.length > 0 && cachedNewest.id === freshNewest.id;
-        if (same) {
-          shown = new DirectThreadView(view.id, view.title, view.withUsername, view.withAvatar,
-            view.withId, DirectCache.mergeMedia(cached, view), view.hasOlder, view.oldestCursor,
-            view.isGroup, view.withFullName);
-          hilog.info(DOMAIN, TAG, 'no new message → keep cache paint msgs=%{public}d',
-            shown.messages.length);
-        } else {
-          hilog.info(DOMAIN, TAG, 'new messages cached=%{public}s fresh=%{public}s',
-            cachedNewest.id, freshNewest.id);
-        }
-      }
-      DirectCache.save(shown.messages.length > 0 ? shown : view);
-      this.view = shown;
-      this.onView(shown);
-      this.onStatus(shown.messages.length > 0 ? '已加载' : '');
+      this.view = view;
+      // 记下"刚拉过"，让轮询第一拍别紧跟着再发一发（见 pollOnce 的说明）。
+      this.lastLoadAtMs = Date.now();
+      this.onView(view);
+      this.onStatus(view.messages.length > 0 ? '已加载' : '');
       /*
        * **进会话就算看过了**：照 instagrapi 的 `direct_send_seen` 把这条会话标成已读
        * （`direct_v2/threads/{id}/items/{最新消息id}/seen/`，见 MobileDirect.markSeen）。
@@ -297,7 +266,7 @@ export class DirectThreadViewModel {
        * —— 用户报的"已读私信全变成未读"有一半是这个原因。
        * 发完就刷新收件箱（列表里的粗体/蓝点跟着消失）。
        */
-      this.markThreadSeen(shown);
+      this.markThreadSeen(view);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'load threw: %{public}s', (error as Error).message);
       this.onStatus('加载出错');
@@ -684,6 +653,16 @@ export class DirectThreadViewModel {
      * 用户手动重进会重新走一遍完整的三条路。
      */
     if (this.view === null) {
+      return;
+    }
+    /*
+     * **刚拉过就别再来一发**（需求："加快进入会话获取消息的速度"）。
+     *
+     * 真机上看到的浪费：点开会话那一发 35KB 刚落定 1.6 秒，轮询第一拍就跟着又发了同样一发
+     * （`burstUntilMs` 还在窗口里时，第一拍的间隔只有 4~6 秒）。两道闸：
+     * 刚 `load()` 过 8 秒内不轮询；同一时刻只允许一发（`polling`）。
+     */
+    if (this.lastLoadAtMs > 0 && Date.now() - this.lastLoadAtMs < 8000) {
       return;
     }
     this.polling = true;

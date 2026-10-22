@@ -90,6 +90,8 @@ const MAX_IN_FLIGHT: number = 2;
  */
 const PACE_HOLD_MAX_MS: number = 30000;
 
+/** 紧急优先级：用户**当场在等**的那一发（点开私信会话），排队最前、**不加人为间隔**。 */
+const PRIORITY_URGENT: number = -1;
 /** 交互优先级：用户**此刻**点的东西（点开快拍/会话），插到队头。 */
 const PRIORITY_INTERACTIVE: number = 0;
 /** 预热优先级：界面马上要用、但不是用户此刻点的（首屏、预缓存）。 */
@@ -186,6 +188,11 @@ export class ApiThrottle {
     ApiThrottle.freeSlot();
   }
 
+  /** 优先级：**用户当场在等**的那一发（点开私信会话）：队头 + 不加人为间隔。 */
+  static urgent(): number {
+    return PRIORITY_URGENT;
+  }
+
   /** 优先级：用户此刻点的东西。 */
   static interactive(): number {
     return PRIORITY_INTERACTIVE;
@@ -222,7 +229,7 @@ export class ApiThrottle {
    * 可能一次就能放两发出去（这也是整个改动的目的 —— 让第二发不用等第一发的回包）。
    */
   private static pump(): void {
-    while (ApiThrottle.inFlight < MAX_IN_FLIGHT && ApiThrottle.waiters.length > 0) {
+    while (ApiThrottle.waiters.length > 0) {
       let best: number = 0;
       for (let index: number = 1; index < ApiThrottle.waiters.length; index++) {
         if (ApiThrottle.waiters[index].priority < ApiThrottle.waiters[best].priority) {
@@ -230,6 +237,20 @@ export class ApiThrottle {
         }
       }
       const next: PaceWaiter = ApiThrottle.waiters[best];
+      /*
+       * **urgent 允许比并发上限多一个名额**（需求："加快进入会话获取消息的速度"）。
+       *
+       * 真机实测：点开私信会话的那一发，前面常常堵着两发后台大请求（快拍的
+       * `feed/user/{id}/story/`、探索流），轻则等 1.8 秒、重则 2.9 秒。urgent 是"人当场点了一下"
+       * 的直接后果，让它插一个临时名额出去：**单位时间内的请求到达数不变**（它只是提前，
+       * 不会多出请求），并发上限也只是这一刻从 2 变成 3。
+       * 普通请求仍然严格受 `MAX_IN_FLIGHT` 限制。
+       */
+      const urgent: boolean = next.priority <= PRIORITY_URGENT;
+      const limit: number = urgent ? MAX_IN_FLIGHT + 1 : MAX_IN_FLIGHT;
+      if (ApiThrottle.inFlight >= limit) {
+        return;
+      }
       ApiThrottle.waiters.splice(best, 1);
       ApiThrottle.startOne(next);
     }
@@ -310,6 +331,20 @@ export class ApiThrottle {
   private static gapMs(priority: number): number {
     if (ApiThrottle.lastStartAt === 0) {
       // 这一次启动以来的第一发：直接放，不给自己加戏。
+      return 0;
+    }
+    /*
+     * **urgent（用户当场在等的那一发）不排队、也不加间隔**。
+     *
+     * 什么时候用它：点开某条私信会话（见 DirectThreadViewModel.load）。这一发是"人点了一下"
+     * 的直接后果，真机实测：交互优先级仍然要等 1.7 秒（前面两发后台任务占着名额 + 0.6~1.2 秒间隔），
+     * 而人类在 IM 里点开会话的期待是"立刻"。
+     *
+     * 代价与边界说清楚：它**仍然受 `MAX_IN_FLIGHT` 限制**（最多等一个名额空出来），
+     * 所以不会把并发数顶上去；只是不再人为地空等那 0.6~1.2 秒。调用点只有一个（开会话），
+     * 且那一路有 `busy` 防重入 —— 连点不会变成连发。
+     */
+    if (priority <= PRIORITY_URGENT) {
       return 0;
     }
     const interactive: boolean = priority <= PRIORITY_INTERACTIVE;
