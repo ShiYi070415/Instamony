@@ -40,25 +40,6 @@ const TAG: string = 'MobileEngage';
  * 为什么单独一个类而不是三个字符串参数：这四样**必须来自同一发**
  * `media/{pk}/info/` 的响应，混着传就很容易把 A 媒体的 token 用到 B 上。
  */
-export class RepostContext {
-  /** 容器媒体 id（`<广播pk>_<作者pk>`，note 挂它）。 */
-  readonly mediaId: string;
-  /** 真正挂 note 的子媒体 id（多图帖取第一个子媒体，否则同容器）。 */
-  readonly carouselMediaId: string;
-  /** 子媒体下标（多图帖 0 起；单媒体恒 0）。 */
-  readonly carouselIndex: number;
-  /** `organic_tracking_token`（服务端要的"这条是从信息流里点的"凭据）。 */
-  readonly trackingToken: string;
-
-  constructor(mediaId: string, carouselMediaId: string, carouselIndex: number,
-              trackingToken: string) {
-    this.mediaId = mediaId;
-    this.carouselMediaId = carouselMediaId;
-    this.carouselIndex = carouselIndex;
-    this.trackingToken = trackingToken;
-  }
-}
-
 export class MobileEngage {
   /**
    * shortcode → 媒体数字 pk 的缓存（见 `mediaPkFor`）。
@@ -222,42 +203,23 @@ export class MobileEngage {
   }
 
   /**
-   * 转发用的**上下文**（公开版：core/WebRepost 也要同一份，见那边的 GraphQL 变更）。
+   * **转发 / 取消转发**（IG 的 repost 在服务端就是一条"挂在媒体上的 note"）。
    *
-   * @param mediaId  可能带 `_作者` 后缀（信息流给的就是这个形状）
-   * @param shortcode 只有短码的条目用它换真 pk
-   */
-  static async repostContextOf(mediaId: string,
-                               shortcode: string): Promise<RepostContext | null> {
-    const pk: string = await MobileEngage.mediaIdOf(mediaId, shortcode);
-    if (pk.length === 0) {
-      MobileEngage.repostDetail = 'no-media-id';
-      return null;
-    }
-    const composite: string = `${mediaId}`.trim().length > 0 ? `${mediaId}`.trim() : pk;
-    return await MobileEngage.repostContext(pk, composite);
-  }
-
-  /**
-   * **转发 / 取消转发**（IG 的 repost 在服务端就是一条"带媒体的 note"）。
+   * 这两发的字段是照 **instagrapi 的 `media_note_create` / `media_note_delete`** 抄的
+   * （它本来就是移动端私有 API 的移植，而且默认参数 `audience=7` / `note_style=13`
+   * 与网页抓包完全一致）。之前自己拼的那版一直回 400，差的就是下面这几项 ——
+   * 每一条都是踩过的坑，别改：
    *
-   * 以前这条只能"让隐藏网页去点它自己的按钮"（GraphQL `usePolarisCreateMediaRepostMutation`，
-   * 还要从网页里读 lsd / fb_dtsg / jazoest 那套指纹）—— 网页一按需挂载，用户点转发就会
-   * 把整页 IG 拉起来，而且失败率很高。移动端私有接口里有等价的两发，见下面。
+   *   · **`with_signature=False`**：这两条端点吃**裸表单**，包 `signed_body=` 反而会被拒；
+   *   · **`media_id` 要完整 id**（`<媒体pk>_<作者pk>`），只给纯 pk 不行 ——
+   *     注意这跟**网页 GraphQL** 那条相反（那条要纯 pk），两边别混；
+   *   · **`carousel_index = -1`**（不是 0）；
+   *   · `inventory_source = recommended_clips_chaining_model`；
+   *   · `event_source = ufi`、`container_module = clips_viewer_clips_tab`（"从 UFI 那条路点的"）；
+   *   · `media_client_position = 0`、`audience = 7`、`note_style = 13`、`text` 留空。
    *
-   * **转发** = `POST media/create_note/v2/`：建一条挂在（轮播子）媒体上的空 note，
-   *   服务端认这就是"转发"。要带四样：容器媒体 id、子媒体 id、`organic_tracking_token`
-   *   （来自 `media/{pk}/info/`）、以及 `audience`（7 = 与网页那次抓包一致）。
-   *   web 那条用的 `note_style=13` 在这条端点上由"带了 media_id"隐式决定，不用显式给。
-   *
-   * **取消转发** = `POST notes/delete_note/`，把那一发建出来的 note 删掉 —— 所以建完
-   *   **必须记住 note id**（见 repostNotes）：记不住就只能如实失败，绝不假装成功。
-   *
-   * ⚠️ 真机实测：这条 REST 对这个账号一律回 400（连普通 note 都发不出去），
-   * 所以线上真正跑通的是 core/WebRepost（同一条操作的 GraphQL 版）。这里保留是因为
-   * IG 哪天放开就直接生效，而且它比走网页少一发请求。
-   *
-   * @returns 成功返回 true；拿不到 id / 拿不到 tracking token / 服务端拒绝都返回 false。
+   * **取消转发** = `POST media/delete_note/`（同样是裸表单），只认 `note_id`；
+   * 所以建完必须记住 note id（见 repostNotes），记不住就如实失败，绝不猜。
    */
   static async setReposted(mediaId: string, shortcode: string, repost: boolean,
                            priority: number = ApiThrottle.interactive()): Promise<boolean> {
@@ -266,7 +228,16 @@ export class MobileEngage {
       MobileEngage.repostDetail = 'no-media-id';
       return false;
     }
-    const composite: string = `${mediaId}`.trim().length > 0 ? `${mediaId}`.trim() : pk;
+    const full: string = await MobileEngage.fullMediaId(pk, mediaId);
+    if (full.length === 0) {
+      MobileEngage.repostDetail = 'no-full-media-id';
+      return false;
+    }
+    const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
+    if (identity === null) {
+      MobileEngage.repostDetail = 'no-session';
+      return false;
+    }
     if (!repost) {
       const noteId: string = MobileEngage.noteFor(pk);
       if (noteId.length === 0) {
@@ -275,34 +246,37 @@ export class MobileEngage {
         hilog.info(DOMAIN, TAG, 'unrepost skipped pk=%{public}s: no note id', pk);
         return false;
       }
-      const data: Record<string, Object> = {};
-      data['id'] = noteId;
-      const ok: boolean = await MobileEngage.write('notes/delete_note/', MobileRequest.formOf(data),
+      const del: Record<string, Object> = {};
+      del['inventory_source'] = 'recommended_clips_chaining_model';
+      del['carousel_index'] = '-1';
+      del['_uuid'] = identity.uuid;
+      del['event_source'] = 'ufi';
+      del['container_module'] = 'clips_viewer_clips_tab';
+      del['note_id'] = noteId;
+      const result: MobileResult = await MobileEngage.postUnsigned('media/delete_note/', del,
         'unrepost', priority);
+      const ok: boolean = result.ok && result.body.indexOf('"status":"ok"') >= 0;
       if (ok) {
         MobileEngage.repostNotes.delete(pk);
+        MobileEngage.repostDetail = '-';
+      } else {
+        MobileEngage.repostDetail = `delete-note-${result.summary()}`;
       }
-      MobileEngage.repostDetail = ok ? '-' : 'delete-note-failed';
       return ok;
     }
-    const context: RepostContext | null = await MobileEngage.repostContext(pk, composite);
-    if (context === null) {
-      return false;
-    }
     const data: Record<string, Object> = {};
-    data['media_id'] = context.mediaId;
-    data['carousel_media_id'] = context.carouselMediaId;
-    data['carousel_index'] = context.carouselIndex;
-    // 7 = 与网页那次真机抓包一致（igpapi 的 NOTE_AUDIENCE_DEFAULT 也是 7）。
-    data['audience'] = 7;
-    data['inventory_source'] = 'mixed_unconnected';
-    data['media_client_position'] = 0;
-    data['ranking_info_token'] = '';
-    // 转发抓包建的是**空 note**（文字由后续 mutation 补，这里不做）。
+    data['inventory_source'] = 'recommended_clips_chaining_model';
+    data['media_client_position'] = '0';
+    data['media_id'] = full;
+    data['note_style'] = '13';
+    data['carousel_index'] = '-1';
     data['text'] = '';
-    data['tracking_token'] = context.trackingToken;
-    const result: MobileResult = await MobileEngage.writeRaw('media/create_note/v2/',
-      MobileRequest.formOf(data), 'repost', priority);
+    data['_uuid'] = identity.uuid;
+    data['audience'] = '7';
+    data['event_source'] = 'ufi';
+    data['container_module'] = 'clips_viewer_clips_tab';
+    const result: MobileResult = await MobileEngage.postUnsigned('media/create_note/v2/', data,
+      'repost', priority);
     if (!result.ok) {
       MobileEngage.repostDetail = `create-note-${result.summary()}`;
       return false;
@@ -312,9 +286,62 @@ export class MobileEngage {
     if (noteId.length > 0) {
       MobileEngage.repostNotes.set(pk, noteId);
     }
-    hilog.info(DOMAIN, TAG, 'repost ok pk=%{public}s note=%{public}s bytes=%{public}d',
-      pk, noteId.length > 0 ? noteId : '-', result.body.length);
+    hilog.info(DOMAIN, TAG, 'repost ok full=%{public}s note=%{public}s bytes=%{public}d',
+      full, noteId.length > 0 ? noteId : '-', result.body.length);
     return true;
+  }
+
+  /**
+   * 完整媒体 id（`<pk>_<作者pk>`）—— 媒体 note 这族端点要的就是它。
+   *
+   * 优先用调用方给的（信息流里本来就是组合串）；只有纯 pk 时问一次 `media/{pk}/info/`
+   * 的 `items[0].id`（那就是完整 id）。都拿不到给空串，让调用方如实失败。
+   */
+  private static async fullMediaId(pk: string, raw: string): Promise<string> {
+    const text: string = `${raw}`.trim();
+    if (text.indexOf('_') > 0) {
+      return text;
+    }
+    const result: MobileResult = await MobileRequest.send(`media/${encodeURIComponent(pk)}/info/`, '',
+      '', true, null, new MobileOptions(ApiThrottle.MEDIA_INFO, ApiThrottle.interactive()));
+    if (!result.ok) {
+      return '';
+    }
+    try {
+      const root: Record<string, Object> = JSON.parse(result.body) as Record<string, Object>;
+      const items: Object[] | undefined = root['items'] as Object[] | undefined;
+      if (items === undefined || items.length === 0) {
+        return '';
+      }
+      const own: string = `${(items[0] as Record<string, Object>)['id'] ?? ''}`.trim();
+      return own.indexOf('_') > 0 ? own : '';
+    } catch (error) {
+      return '';
+    }
+  }
+
+  /**
+   * 发一发**裸表单**的写请求（`with_signature=False`）。
+   *
+   * 和 `writeRaw` 的区别只有两点：不包 `signed_body=`、多加 `_uid/_csrftoken` 那套设备字段。
+   * 媒体 note 这族（create_note v2 / delete_note）只吃这种形状 —— 签名版一律 400。
+   */
+  private static async postUnsigned(endpoint: string, data: Record<string, Object>, label: string,
+                                    priority: number): Promise<MobileResult> {
+    const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
+    if (identity === null) {
+      return new MobileResult(false, 'no-session', 0, 0, 0, '', 'no-session');
+    }
+    const extra: Record<string, Object> = MobileRequest.withDefaultData(identity);
+    const keys: Array<string> = Object.keys(data);
+    for (let index: number = 0; index < keys.length; index++) {
+      extra[keys[index]] = data[keys[index]];
+    }
+    const result: MobileResult = await MobileRequest.send(endpoint, MobileRequest.formOf(extra),
+      '', false, null, new MobileOptions(ApiThrottle.MOBILE, priority));
+    hilog.info(DOMAIN, TAG, '%{public}s unsigned ok=%{public}s %{public}s', label,
+      result.ok ? 'y' : 'n', result.summary());
+    return result;
   }
 
   /** 最近一次转发/取消转发的失败原因（日志与界面提示用）。 */
@@ -323,61 +350,6 @@ export class MobileEngage {
   }
 
   // ------------------------------------------------------------------ 内部
-
-  /** 一条媒体的"转发上下文"（见 setReposted）：`media/{pk}/info/` 里那几样服务端要的东西。 */
-  private static async repostContext(pk: string, composite: string): Promise<RepostContext | null> {
-    const result: MobileResult = await MobileRequest.send(`media/${encodeURIComponent(pk)}/info/`, '',
-      '', true, null, new MobileOptions(ApiThrottle.MEDIA_INFO, ApiThrottle.interactive()));
-    if (!result.ok) {
-      MobileEngage.repostDetail = `media-info-${result.summary()}`;
-      hilog.warn(DOMAIN, TAG, 'repost media info failed pk=%{public}s %{public}s', pk,
-        result.summary());
-      return null;
-    }
-    const context: RepostContext | null = MobileEngage.parseRepostContext(result.body, composite);
-    if (context === null) {
-      MobileEngage.repostDetail = 'no-tracking-token';
-      hilog.warn(DOMAIN, TAG, 'repost media info has no tracking token pk=%{public}s body=%{public}s',
-        pk, result.body.substring(0, 160));
-    }
-    return context;
-  }
-
-  /**
-   * 从 `media/{pk}/info/` 的响应里取三样：容器 id（`<pk>_<作者pk>`）、
-   * 挂 note 的子媒体 id、`organic_tracking_token`。
-   *
-   * 容器 id 用响应里的那份（最准）；它没给 `_` 时退回调用方传进来的组合串。
-   * 多图帖把 note 挂在**第一个子媒体**上（`carousel_index = 0`），与 App 自己的行为一致。
-   */
-  private static parseRepostContext(body: string, composite: string): RepostContext | null {
-    try {
-      const root: Record<string, Object> = JSON.parse(body) as Record<string, Object>;
-      const items: Object[] | undefined = root['items'] as Object[] | undefined;
-      if (items === undefined || items.length === 0) {
-        return null;
-      }
-      const item: Record<string, Object> = items[0] as Record<string, Object>;
-      const token: string = `${item['organic_tracking_token'] ?? ''}`.trim();
-      if (token.length === 0) {
-        return null;
-      }
-      const own: string = `${item['id'] ?? ''}`.trim();
-      const container: string = own.indexOf('_') > 0 ? own : composite;
-      let child: string = container;
-      const carousel: Object[] | undefined = item['carousel_media'] as Object[] | undefined;
-      if (carousel !== undefined && carousel.length > 0) {
-        const first: Record<string, Object> = carousel[0] as Record<string, Object>;
-        const firstId: string = `${first['id'] ?? ''}`.trim();
-        if (firstId.length > 0) {
-          child = firstId;
-        }
-      }
-      return new RepostContext(container, child, 0, token);
-    } catch (error) {
-      return null;
-    }
-  }
 
   /** `media/create_note/v2/` 响应里的 note id（根上的 `id`，或包在 `note` 里）。 */
   private static noteIdOf(body: string): string {
@@ -402,23 +374,6 @@ export class MobileEngage {
   private static noteFor(pk: string): string {
     const hit: string | undefined = MobileEngage.repostNotes.get(pk);
     return hit === undefined ? '' : hit;
-  }
-
-  /** 直接拿原始响应（转发那条要读 note id，`write()` 只回 bool）。 */
-  private static async writeRaw(endpoint: string, data: string, label: string,
-                                priority: number): Promise<MobileResult> {
-    const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
-    if (identity === null) {
-      hilog.info(DOMAIN, TAG, '%{public}s skipped: no session', label);
-      return new MobileResult(false, 'no-session', 0, 0, 0, '', 'no-session');
-    }
-    const extra: string = MobileRequest.formOf(MobileRequest.withExtraData(identity));
-    const payload: string = data.length > 0 ? `${extra}&${data}` : extra;
-    const result: MobileResult = await MobileRequest.send(endpoint, payload, '', true, null,
-      new MobileOptions(ApiThrottle.MOBILE, priority));
-    hilog.info(DOMAIN, TAG, '%{public}s ok=%{public}s %{public}s', label,
-      result.ok ? 'y' : 'n', result.summary());
-    return result;
   }
 
   /** oembed 返回里的 `media_id`（字符串，个别情况下是 number）。 */

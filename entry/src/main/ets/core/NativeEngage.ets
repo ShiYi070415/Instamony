@@ -17,7 +17,6 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { MobileEngage } from './mobileapi/MobileEngage';
-import { WebRepost } from './WebRepost';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeEngage';
@@ -210,41 +209,29 @@ export class NativeEngage {
       return new EngageResult(false, repost, 'no-media-id');
     }
     /*
-     * 两条腿，按"哪条真的通"排：
-     *   ① 移动端私有接口（`media/create_note/v2/`，见 MobileEngage.setReposted）；
-     *   ② 网页 GraphQL（`usePolarisCreateMediaRepostMutation`，见 core/WebRepost）——
-     *      IG 的网页端就是这么转发的，令牌从首页 HTML 里读，**不需要挂载网页组件**。
+     * **一发到底，只走移动端私有接口**（`media/create_note/v2/` / `media/delete_note/`）。
      *
-     * 为什么 ② 是主力：真机上 ① 对这个账号一律回 400（连普通 note 都发不出去），
-     * 而 ② 用的正是官方网页客户端自己那条变更。① 留着是因为它更省事，IG 哪天放开就直接生效。
+     * 字段抄自 instagrapi 的 `media_note_create` / `media_note_delete`（默认 audience=7、
+     * note_style=13），真机验证两个方向都通：
+     *   repost  unsigned ok=y http=200 bytes=1007  note=1899967584309457
+     *   unrepost unsigned ok=y http=200 bytes=35
+     *
+     * 曾经为了"不跳网页"加过一条 core/WebRepost（网页 GraphQL + 现读 lsd/fb_dtsg），
+     * 那条路 IG 一律回 `data:null`（静默不做），已经删掉 —— 别再加回来。
      */
     let ok: boolean = false;
     try {
       ok = await MobileEngage.setReposted(mediaId.trim().length > 0 ? mediaId : id, shortcode, repost);
     } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'mobile repost threw: %{public}s', (error as Error).message);
+      hilog.warn(DOMAIN, TAG, 'repost threw: %{public}s', (error as Error).message);
       ok = false;
     }
-    hilog.info(DOMAIN, TAG, 'repost mobile id=%{public}d on=%{public}s ok=%{public}s detail=%{public}s',
+    hilog.info(DOMAIN, TAG, 'repost id=%{public}d on=%{public}s ok=%{public}s detail=%{public}s',
       id.length, `${repost}`, ok ? 'y' : 'n', MobileEngage.lastRepostDetail());
     if (ok) {
       return new EngageResult(true, repost, 'mobile');
     }
-    let web: boolean = false;
-    try {
-      // 网页 GraphQL 的 `media_id` 要**纯 pk**（抓包实证），所以这里传解出来的 id。
-      web = await WebRepost.setReposted(id, repost);
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'web repost threw: %{public}s', (error as Error).message);
-      web = false;
-    }
-    hilog.info(DOMAIN, TAG, 'repost web id=%{public}d on=%{public}s ok=%{public}s detail=%{public}s',
-      id.length, `${repost}`, web ? 'y' : 'n', WebRepost.lastDetail());
-    if (web) {
-      return new EngageResult(true, repost, 'web');
-    }
-    return new EngageResult(false, repost,
-      `failed:${MobileEngage.lastRepostDetail()}/${WebRepost.lastDetail()}`);
+    return new EngageResult(false, repost, `failed:${MobileEngage.lastRepostDetail()}`);
   }
 
   /**
