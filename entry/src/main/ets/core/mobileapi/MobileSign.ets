@@ -215,6 +215,25 @@ export function utf8(text: string): Uint8Array {
   return encoded;
 }
 
+/**
+ * UTF-8 字节 → 字符串（`utf8` 的反向，实时通道解压后的 JSON 要用）。
+ *
+ * 用 `util.TextDecoder` 而不是手写解码：MQTT 的载荷里有中文（私信、region hint），
+ * 手写多字节解码容易在"截断在半个字符"上出错。
+ */
+export function textOf(bytes: Uint8Array): string {
+  try {
+    return decodeText(bytes);
+  } catch (error) {
+    return '';
+  }
+}
+
+function decodeText(bytes: Uint8Array): string {
+  const decoder: util.TextDecoder = util.TextDecoder.create('utf-8');
+  return decoder.decodeToString(bytes);
+}
+
 /** 字节 → 小写十六进制（sha256 摘要用）。 */
 export function hexOf(bytes: Uint8Array): string {
   const out: Array<string> = [];

@@ -1,86 +1,91 @@
 /*
- * MQTToT **握手可行性探针**（一次性验证；验完把 `Index.aboutToAppear` 里那一发删掉即可）。
+ * MQTToT / MQTT **收发链路**探针（一次性诊断，验完把 pages/Index 里那一发删掉即可）。
  *
- * ## 上一版为什么不够
- * 只对着 `edge-mqtt.facebook.com` 发 MQTToT CONNECT、等 8 秒，日志是**一片安静**：
- * TLS 连上了、包发出去了、对端既不给 CONNACK 也不关连接。这种"沉默"有三种可能
- * （报文不对 / 这条链路根本不通 / 这个域名不认这台客户端），只靠一次尝试分不开。
+ * ## 为什么要重写（上一版结论不可用）
+ * 上一版三段探针（对照组 broker.emqx.io、目标 edge-mqtt、备选 mqtt-mini）在真机上的结果是：
  *
- * ## 这一版怎么分
- * 三段，每段一个变量：
- *   ① **对照组**：`broker.emqx.io:8883` + 标准 MQTT 3.1.1 CONNECT。它回 CONNACK 就证明
- *      "TLS socket + 我们自己拼报文 + 收包"这三件都没问题（问题只可能出在 IG 侧）；
- *   ② **目标**：`edge-mqtt.facebook.com:443` + MQTToT（Thrift）CONNECT；
- *   ③ **备选主机**：`mqtt-mini.facebook.com:443` + 同一个 MQTToT 报文（FB 家接入点不止一个域名）。
+ *   control broker.emqx.io:8883  tls=ok remote=34.243.217.54:8883 sent=30  recv=0 connack=-1
+ *   target  edge-mqtt:443        tls=ok remote=57.145.12.144:443  sent=948 recv=0 connack=-1
  *
- * 判据仍然是 CONNACK 的返回码：`0` 才算握手通过。
+ * **连公共 broker 都一个字节没回** —— 那就不是 IG 不认我们，而是我们这侧的**收包路径**有问题
+ * （或者 TLS 用法有问题）。上一版把三发都打在 TLS 上，变量混在一起，分不出是哪一层断的。
  *
- * 顺带把 MQTToT 报文**整段十六进制**打进日志（按 64 字节切行）：Thrift + zlib 的载荷
- * 光看长度和头几个字节判不出对错，有了全量就能在电脑上跑一遍解码器逐字段核对。
+ * ## 这一版怎么分（每一发只改一个变量）
+ *   ① `1.1.1.1:80` + `GET / HTTP/1.0`（**纯 TCP**，不涉及 TLS、不涉及 MQTT）
+ *      —— 收到任何字节就说明"裸 TCP 能读"，问题在 TLS 或报文；
+ *   ② `broker.emqx.io:1883` + 标准 MQTT 3.1.1 CONNECT（**纯 TCP + MQTT**）
+ *      —— 收到 CONNACK 就说明报文拼得对、broker 认；
+ *   ③ `broker.emqx.io:8883` + 标准 CONNECT（**TLS + MQTT**，监听器改成 connect 之后再注册）
+ *      —— 与上一版唯一的差别就是"注册时机"，用它验证那条猜想；
+ *   ④ `edge-mqtt.facebook.com:443` + MQTToT（真目标，监听器同样 connect 后注册）。
+ *
+ * 每一发都记：`tls/tcp 是否成立`、`getState()`（OHOS 认为连接是否 connected/bound）、
+ * `sent`、`recv`、`首 12 字节`、`CONNACK 返回码`、`异常`。
  */
-
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { socket } from '@kit.NetworkKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { MobileIdentity, MobileSession } from './MobileSession';
-import { hexOf, utf8 } from './MobileSign';
+import { hexOf, textOf, utf8 } from './MobileSign';
+import { Inflate } from './Inflate';
 import { MobileMqtt, MqttPacketInfo } from './MobileMqtt';
+import { IrisState, MobileRealtime, RealtimeEvent } from './MobileRealtime';
+import { MobileDirect } from './MobileDirect';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'MqttProbe';
 
 /** IG 的 iris/MQTToT broker（instagrapi 的 `REALTIME_HOST`）。 */
 const MQTT_HOST: string = 'edge-mqtt.facebook.com';
-/** FB 的轻量 MQTT 接入点（备选）。 */
-const MINI_HOST: string = 'mqtt-mini.facebook.com';
 const MQTT_PORT: number = 443;
-/** 对照组：公共 broker（EMQX 官方测试服，支持 TLS + 标准 MQTT）。 */
+/** 公共 broker（对照组：标准 MQTT 3.1.1）。 */
 const CONTROL_HOST: string = 'broker.emqx.io';
-const CONTROL_PORT: number = 8883;
+const CONTROL_TLS_PORT: number = 8883;
+const CONTROL_PLAIN_PORT: number = 1883;
+/** 纯 TCP 的对照组：Cloudflare 的 80 端口，任何 HTTP 请求都会回一段明文。 */
+const TCP_HOST: string = '1.1.1.1';
+const TCP_PORT: number = 80;
 /** keepalive（秒）。instagrapi 的 `write_connect_packet(keep_alive=20)`。 */
 const KEEP_ALIVE_S: number = 20;
-/** TLS 握手超时（毫秒）。 */
-const CONNECT_TIMEOUT_MS: number = 12000;
-/** 老目标是 8 秒不够（很可能只是慢），这次给 14 秒；对照组不需要那么久。 */
-const CONNACK_WAIT_MS: number = 14000;
-const CONTROL_WAIT_MS: number = 8000;
-/** 收到 CONNACK 之后隔多久发 PINGREQ（毫秒）。 */
-const PING_DELAY_MS: number = 2500;
-/** 十五进制转储每行多少字节。 */
-const DUMP_LINE_BYTES: number = 64;
+/** TLS/TCP 握手超时（毫秒）。 */
+const CONNECT_TIMEOUT_MS: number = 10000;
+/** 每一发发出去之后等多久（毫秒）。之前给到 8~14 秒，实测那样在真机上很拖启动。 */
+const WAIT_MS: number = 6000;
+/** 实时通道连上之后观察多久（毫秒）：够收一条 region hint + 一次心跳。 */
+const OBSERVE_MS: number = 15000;
 
-/** 一次连接尝试的结果（见 MqttProbe.attempt）。 */
-class MqttAttempt {
+/** 一次尝试的结果（见 MqttProbe.runCase）。 */
+class CaseResult {
+  readonly label: string;
   readonly host: string;
   readonly port: number;
-  /** TLS 握手是否完成。 */
-  tls: boolean = false;
-  /** TLS 对端地址（握手后拿得到才填）。 */
-  remote: string = '';
-  /** 发出去的字节数。 */
+  readonly secure: boolean;
+  /** 传输层是否连上（TCP 连上 / TLS 握手完成）。 */
+  transport: boolean = false;
+  /** 连上之后 OHOS 报的状态（`getState()`）。 */
+  state: string = '-';
   sent: number = 0;
-  /** 收到的字节数。 */
-  bytes: number = 0;
+  recv: number = 0;
+  /** 收到的头 12 个字节（十六进制），判断"回的是什么"用。 */
+  head: string = '-';
   /** CONNACK 返回码（没收到就是 -1）。 */
-  connackRc: number = -1;
-  /** 对端是否关了连接。 */
+  connack: number = -1;
   closed: boolean = false;
-  /** 有没有收到 PINGRESP（握手通过后再看这个判断连接是否真可用）。 */
-  pingResp: boolean = false;
-  /** 异常信息（TLS 失败之类）。 */
   error: string = '';
 
-  constructor(host: string, port: number) {
+  constructor(label: string, host: string, port: number, secure: boolean) {
+    this.label = label;
     this.host = host;
     this.port = port;
+    this.secure = secure;
   }
 
-  /** 一行结论（直接打日志）。 */
+  /** 一行结论（直接进日志）。 */
   summary(): string {
-    return `${this.host}:${this.port} tls=${this.tls ? 'ok' : 'fail'} remote=${this.remote} `
-      + `sent=${this.sent} recv=${this.bytes} connack=${this.connackRc} `
-      + `pingresp=${this.pingResp ? 'y' : 'n'} closed=${this.closed ? 'y' : 'n'} `
-      + `err=${this.error.length > 0 ? this.error : '-'}`;
+    return `[${this.label}] ${this.host}:${this.port} ${this.secure ? 'tls' : 'tcp'}=${this.transport ? 'ok' : 'fail'}`
+      + ` state=${this.state} sent=${this.sent} recv=${this.recv} head=${this.head}`
+      + ` connack=${this.connack} closed=${this.closed ? 'y' : 'n'}`
+      + ` err=${this.error.length > 0 ? this.error : '-'}`;
   }
 }
 
@@ -89,7 +94,7 @@ export class MqttProbe {
   private static probed: boolean = false;
 
   /**
-   * 跑三段探针，结论全进日志。
+   * 跑四段探针，结论全进日志。
    *
    * @param force 传 true 可忽略"跑过"标记（调试时手动重跑用）。
    */
@@ -104,97 +109,107 @@ export class MqttProbe {
         hilog.info(DOMAIN, TAG, 'probe skipped: no mobile session');
         return;
       }
-      const packet: Uint8Array = MobileMqtt.buildConnect(identity, KEEP_ALIVE_S);
-      hilog.info(DOMAIN, TAG, 'mqttot packet len=%{public}d user=%{public}s',
-        packet.length, identity.userId);
-      MqttProbe.dumpHex('mqttot', packet);
-      // ① 对照组：公共 broker + 标准 CONNECT（client id 随便，关键是看有没有 CONNACK）。
-      const control: Uint8Array = MqttProbe.buildPlainConnect(`igar-probe-${Date.now() % 100000}`, 30);
-      const controlResult: MqttAttempt =
-        await MqttProbe.attempt(CONTROL_HOST, CONTROL_PORT, control, CONTROL_WAIT_MS, 'control');
-      hilog.info(DOMAIN, TAG, 'control (标准 MQTT 3.1.1) %{public}s', controlResult.summary());
-      // ② 目标主机。
-      const edgeResult: MqttAttempt =
-        await MqttProbe.attempt(MQTT_HOST, MQTT_PORT, packet, CONNACK_WAIT_MS, 'edge-mqtt');
-      hilog.info(DOMAIN, TAG, 'target edge-mqtt (MQTToT) %{public}s', edgeResult.summary());
-      if (edgeResult.connackRc === 0) {
-        hilog.info(DOMAIN, TAG, 'CONNACK 0 —— MQTToT 握手通过，可以往下做订阅');
-        return;
+      const mqttot: Uint8Array = MobileMqtt.buildConnect(identity, KEEP_ALIVE_S);
+      hilog.info(DOMAIN, TAG, 'probe start mqttot len=%{public}d user=%{public}s',
+        mqttot.length, identity.userId);
+
+      // ① 纯 TCP + HTTP：只验证"裸 socket 能不能收到字节"。
+      const http: Uint8Array = utf8('GET / HTTP/1.0\r\nHost: one.one.one.one\r\n\r\n');
+      const plain: CaseResult = await MqttProbe.runCase(TCP_HOST, TCP_PORT, false, http);
+      hilog.info(DOMAIN, TAG, 'case1 %{public}s', plain.summary());
+
+      // ② 纯 TCP + 标准 MQTT CONNECT。
+      const plainConnect: Uint8Array =
+        MqttProbe.buildPlainConnect(`igar-p-${Date.now() % 100000}`, 30);
+      const plainMqtt: CaseResult =
+        await MqttProbe.runCase(CONTROL_HOST, CONTROL_PLAIN_PORT, false, plainConnect);
+      hilog.info(DOMAIN, TAG, 'case2 %{public}s', plainMqtt.summary());
+
+      // ③ TLS + 标准 MQTT（监听器 connect 之后才注册 —— 与上一版唯一的差别）。
+      const tlsPlainConnect: Uint8Array =
+        MqttProbe.buildPlainConnect(`igar-t-${Date.now() % 100000}`, 30);
+      const tlsMqtt: CaseResult =
+        await MqttProbe.runCase(CONTROL_HOST, CONTROL_TLS_PORT, true, tlsPlainConnect);
+      hilog.info(DOMAIN, TAG, 'case3 %{public}s', tlsMqtt.summary());
+
+      // ④ 真目标：**用正式客户端**（core/mobileapi/MobileRealtime）连上并观察一段时间。
+      //    它内部和 instagrapi 的 RealtimeClient 一致：CONNECT → CONNACK → 心跳 → 收包派发。
+      MobileRealtime.onEvent((event: RealtimeEvent): void => {
+        hilog.info(DOMAIN, TAG, 'realtime event topic=%{public}s len=%{public}d text=%{public}s',
+          event.topic, event.text.length, event.text.substring(0, 200));
+      });
+      const up: boolean = await MobileRealtime.start();
+      hilog.info(DOMAIN, TAG, 'case4 realtime start=%{public}s %{public}s',
+        `${up}`, MobileRealtime.status());
+      // 有收件箱给的同步状态就顺手把私信订阅也发了（这才是实时私信的关键那一发）。
+      if (MobileDirect.syncSeqId > 0) {
+        await MobileRealtime.subscribeDirect(
+          new IrisState(MobileDirect.syncSeqId, MobileDirect.syncSnapshotAtMs));
+      } else {
+        hilog.info(DOMAIN, TAG, 'iris_subscribe skipped: 还没有 seq_id（收件箱还没拉过）');
       }
-      // ③ 备选主机（同一个报文；FB 家的接入点不止一个域名）。
-      const miniResult: MqttAttempt =
-        await MqttProbe.attempt(MINI_HOST, MQTT_PORT, packet, CONNACK_WAIT_MS, 'mqtt-mini');
-      hilog.info(DOMAIN, TAG, 'target mqtt-mini (MQTToT) %{public}s', miniResult.summary());
-      hilog.info(DOMAIN, TAG, 'probe done control=%{public}d edge=%{public}d mini=%{public}d',
-        controlResult.connackRc, edgeResult.connackRc, miniResult.connackRc);
+      await MqttProbe.sleep(OBSERVE_MS);
+      hilog.info(DOMAIN, TAG, 'case4 realtime after %{public}dms %{public}s',
+        OBSERVE_MS, MobileRealtime.status());
+
+      hilog.info(DOMAIN, TAG, 'probe done tcp=%{public}d plainMqtt=%{public}d tlsMqtt=%{public}d realtime=%{public}s',
+        plain.recv, plainMqtt.connack, tlsMqtt.connack, `${up}`);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'probe failed: %{public}s', (error as Error).message ?? 'unknown');
     }
   }
 
   /**
-   * 对一个主机做一次"连上 → 发包 → 等回包"（三段探针共用）。
+   * 一次"连上 → 发包 → 等回包"。
    *
-   * **异常也当成结果返回**：`TLS 被拒` 和 `连上了但没人应答` 是两种完全不同的失败，
-   * 都要能在日志里区分开（这正是上一版最缺的信息）。
+   * 监听器**在 connect 之后注册**：上一版是在 connect 之前注册的，真机上一点数据都没收到，
+   * 这一版把它当作一个变量单独验证（如果这样能收到，那就是注册时机的问题）。
    */
-  private static async attempt(host: string, port: number, packet: Uint8Array, waitMs: number,
-                               label: string): Promise<MqttAttempt> {
-    const result: MqttAttempt = new MqttAttempt(host, port);
-    let tcp: socket.TLSSocket | null = null;
+  private static async runCase(host: string, port: number, secure: boolean,
+                               packet: Uint8Array): Promise<CaseResult> {
+    const result: CaseResult = new CaseResult(secure ? 'tls' : 'tcp', host, port, secure);
+    let tcp: socket.TCPSocket | null = null;
+    let tls: socket.TLSSocket | null = null;
     try {
-      const ref: socket.TLSSocket = socket.constructTLSSocketInstance();
-      tcp = ref;
-      ref.on('close', (): void => {
-        result.closed = true;
-      });
-      ref.on('error', (err: BusinessError): void => {
-        result.error = `socket error: ${err.message ?? 'unknown'}`;
-      });
-      ref.on('message', (info: socket.SocketMessageInfo): void => {
-        const bytes: Uint8Array = new Uint8Array(info.message);
-        result.bytes += bytes.length;
-        const decoded: MqttPacketInfo = MobileMqtt.decodePacket(bytes);
-        hilog.info(DOMAIN, TAG,
-          '%{public}s recv %{public}s len=%{public}d rc=%{public}d head=%{public}s',
-          label, decoded.typeName, decoded.bytes, decoded.returnCode, hexOf(bytes.slice(0, 12)));
-        if (decoded.type === 2 && result.connackRc < 0) {
-          result.connackRc = decoded.returnCode;
-          // 握上了就 ping 一发：能收到 PINGRESP 才算这条连接真的可用。
-          if (decoded.returnCode === 0) {
-            setTimeout((): void => {
-              try {
-                ref.send(new Uint8Array([0xC0, 0x00]).buffer as ArrayBuffer);
-              } catch (error) {
-              }
-            }, PING_DELAY_MS);
-          }
-        }
-        if (decoded.type === 13) {
-          result.pingResp = true;
-          hilog.info(DOMAIN, TAG, '%{public}s PINGRESP —— 连接可用', label);
-        }
-      });
-      await ref.bind({ address: '0.0.0.0', port: 0 });
-      const options: socket.TLSConnectOptions = {
-        address: { address: host, port: port },
-        // 空的 secureOptions = 用系统预置 CA（与 core/DmRealtime 的写法一致）。
-        secureOptions: {},
-        timeout: CONNECT_TIMEOUT_MS
-      };
-      await ref.connect(options);
-      result.tls = true;
-      try {
-        const remote: socket.NetAddress = await ref.getRemoteAddress();
-        result.remote = `${remote.address}:${remote.port}`;
-      } catch (error) {
+      if (secure) {
+        const ref: socket.TLSSocket = socket.constructTLSSocketInstance();
+        tls = ref;
+        await ref.bind({ address: '0.0.0.0', port: 0 });
+        const options: socket.TLSConnectOptions = {
+          address: { address: host, port: port },
+          // 空 secureOptions = 用系统预置 CA（和 core/DmRealtime 的写法一致）。
+          secureOptions: {},
+          timeout: CONNECT_TIMEOUT_MS
+        };
+        await ref.connect(options);
+        result.transport = true;
+        await MqttProbe.attachTls(ref, result, 'tls');
+        await MqttProbe.afterConnect(ref, result, port);
+        await ref.send(packet.buffer as ArrayBuffer);
+        result.sent = packet.length;
+      } else {
+        const ref: socket.TCPSocket = socket.constructTCPSocketInstance();
+        tcp = ref;
+        await ref.bind({ address: '0.0.0.0', port: 0 });
+        await ref.connect({ address: { address: host, port: port }, timeout: CONNECT_TIMEOUT_MS });
+        result.transport = true;
+        await MqttProbe.attachTcp(ref, result, 'tcp');
+        const state: socket.SocketStateBase = await ref.getState();
+        result.state = `conn=${state.isConnected} bind=${state.isBound}`;
+        // TCPSocket 的 send 吃的是 options 对象（TLSSocket 才是裸 buffer）。
+        await ref.send({ data: packet.buffer as ArrayBuffer });
+        result.sent = packet.length;
       }
-      await ref.send(packet.buffer as ArrayBuffer);
-      result.sent = packet.length;
-      await MqttProbe.sleep(waitMs);
+      await MqttProbe.sleep(WAIT_MS);
     } catch (error) {
       result.error = (error as Error).message ?? 'unknown';
     } finally {
+      if (tls !== null) {
+        try {
+          tls.close();
+        } catch (inner) {
+        }
+      }
       if (tcp !== null) {
         try {
           tcp.close();
@@ -203,6 +218,78 @@ export class MqttProbe {
       }
     }
     return result;
+  }
+
+  /** TLS socket 的事件（connect 之后调用，见 runCase 的说明）。 */
+  private static async attachTls(ref: socket.TLSSocket, result: CaseResult,
+                                 label: string): Promise<void> {
+    ref.on('close', (): void => {
+      result.closed = true;
+    });
+    ref.on('error', (err: BusinessError): void => {
+      result.error = `socket error: ${err.message ?? 'unknown'}`;
+    });
+    ref.on('message', (info: socket.SocketMessageInfo): void => {
+      MqttProbe.onBytes(result, label, info.message);
+    });
+    try {
+      const remote: socket.NetAddress = await ref.getRemoteAddress();
+      const remoteText: string = `${remote.address}:${remote.port}`;
+      result.state = `remote=${remoteText}`;
+    } catch (error) {
+    }
+  }
+
+  /** 纯 TCP socket 的事件。 */
+  private static async attachTcp(ref: socket.TCPSocket, result: CaseResult,
+                                 label: string): Promise<void> {
+    ref.on('close', (): void => {
+      result.closed = true;
+    });
+    ref.on('error', (err: BusinessError): void => {
+      result.error = `socket error: ${err.message ?? 'unknown'}`;
+    });
+    ref.on('message', (info: socket.SocketMessageInfo): void => {
+      MqttProbe.onBytes(result, label, info.message);
+    });
+    try {
+      const remote: socket.NetAddress = await ref.getRemoteAddress();
+      result.state = `remote=${remote.address}:${remote.port}`;
+    } catch (error) {
+    }
+  }
+
+  /** 收到一段字节：记账 + 认是不是 CONNACK。 */
+  private static onBytes(result: CaseResult, label: string, raw: ArrayBuffer): void {
+    const bytes: Uint8Array = new Uint8Array(raw);
+    result.recv += bytes.length;
+    if (result.head === '-') {
+      result.head = hexOf(bytes.slice(0, Math.min(12, bytes.length)));
+    }
+    const decoded: MqttPacketInfo = MobileMqtt.decodePacket(bytes);
+    hilog.info(DOMAIN, TAG, '%{public}s recv %{public}s len=%{public}d rc=%{public}d topic=%{public}s',
+      label, decoded.typeName, decoded.bytes, decoded.returnCode,
+      decoded.topic.length > 0 ? decoded.topic : '-');
+    if (decoded.type === 2 && result.connack < 0) {
+      result.connack = decoded.returnCode;
+    }
+    if (decoded.type === 3 && decoded.body !== null) {
+      // PUBLISH：载荷通常是 zlib 压缩的 JSON（IG 的 region hint / iris 消息都是）。
+      // 用它验证 core/mobileapi/Inflate 对**真实 IG 数据**能不能解开。
+      const inflated: Uint8Array = Inflate.tryDecompress(decoded.body);
+      hilog.info(DOMAIN, TAG, 'publish topic=%{public}s raw=%{public}d inflated=%{public}d text=%{public}s',
+        decoded.topic, decoded.body.length, inflated.length, textOf(inflated).substring(0, 220));
+    }
+  }
+
+  /** connect 之后补一条状态（TLS 那边 `getState` 也要看）。 */
+  private static async afterConnect(ref: socket.TLSSocket, result: CaseResult,
+                                    port: number): Promise<void> {
+    try {
+      const state: socket.SocketStateBase = await ref.getState();
+      result.state = `${result.state} conn=${state.isConnected} bind=${state.isBound}`;
+    } catch (error) {
+    }
   }
 
   /**
@@ -235,19 +322,6 @@ export class MqttProbe {
       out.push(body[index]);
     }
     return new Uint8Array(out);
-  }
-
-  /**
-   * 把报文整段打进日志（**只在探针里用**）。
-   *
-   * 按 64 字节一行切开，避免单条日志被系统截断（hilog 单条有长度上限）。
-   */
-  private static dumpHex(label: string, bytes: Uint8Array): void {
-    for (let offset: number = 0; offset < bytes.length; offset += DUMP_LINE_BYTES) {
-      const end: number = Math.min(bytes.length, offset + DUMP_LINE_BYTES);
-      hilog.info(DOMAIN, TAG, 'hex %{public}s @%{public}d %{public}s',
-        label, offset, hexOf(bytes.slice(offset, end)));
-    }
   }
 
   private static sleep(ms: number): Promise<void> {

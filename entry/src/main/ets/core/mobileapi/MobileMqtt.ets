@@ -24,7 +24,7 @@
 
 import { MobileIdentity } from './MobileSession';
 import { IG_CAPABILITIES } from './MobileConfig';
-import { utf8 } from './MobileSign';
+import { textOf, utf8 } from './MobileSign';
 
 /** 安卓客户端 app id（instagrapi 的 `IG_REALTIME_APP_ID`，与 REST 那个同值）。 */
 const MQTT_APP_ID: number = 567067343352427;
@@ -207,19 +207,29 @@ class ThriftWriter {
   }
 }
 
-/** 对端回包的类型（只给日志用，不是完整解码器）。 */
+/** 对端回包的类型（只给日志/派发用，不是完整解码器）。 */
 export class MqttPacketInfo {
   readonly type: number;
   readonly typeName: string;
   readonly bytes: number;
   /** CONNACK 的返回码（其他包为 -1）。 */
   readonly returnCode: number;
+  /** PUBLISH 的 topic（其他包为空串）。 */
+  readonly topic: string;
+  /** PUBLISH 的 packet id（QoS>0 才有，其他为 -1）。 */
+  readonly packetId: number;
+  /** PUBLISH 的载荷（可能是 zlib 压缩的，其他包为 null）。 */
+  readonly body: Uint8Array | null;
 
-  constructor(type: number, typeName: string, bytes: number, returnCode: number) {
+  constructor(type: number, typeName: string, bytes: number, returnCode: number,
+              topic: string = '', packetId: number = -1, body: Uint8Array | null = null) {
     this.type = type;
     this.typeName = typeName;
     this.bytes = bytes;
     this.returnCode = returnCode;
+    this.topic = topic;
+    this.packetId = packetId;
+    this.body = body;
   }
 }
 
@@ -348,7 +358,73 @@ export class MobileMqtt {
     if (type === 2 && offset + 1 < bytes.length) {
       returnCode = bytes[offset + 1];
     }
+    if (type === 3) {
+      // PUBLISH：<topic 长度 2 字节> <topic> [<packet id 2 字节>（QoS>0）] <载荷>
+      const qos: number = (bytes[0] >> 1) & 0x03;
+      let cursor: number = offset;
+      let topic: string = '';
+      let packetId: number = -1;
+      if (cursor + 2 <= bytes.length) {
+        const topicLen: number = (bytes[cursor] << 8) | bytes[cursor + 1];
+        cursor += 2;
+        if (cursor + topicLen <= bytes.length) {
+          topic = textOf(bytes.slice(cursor, cursor + topicLen));
+          cursor += topicLen;
+        }
+      }
+      if (qos > 0 && cursor + 2 <= bytes.length) {
+        packetId = (bytes[cursor] << 8) | bytes[cursor + 1];
+        cursor += 2;
+      }
+      const body: Uint8Array = cursor < bytes.length ? bytes.slice(cursor) : new Uint8Array(0);
+      return new MqttPacketInfo(type, name, bytes.length, returnCode, topic, packetId, body);
+    }
     return new MqttPacketInfo(type, name, bytes.length, returnCode);
+  }
+
+  /**
+   * 组一条 **PUBLISH**（QoS 1）。
+   *
+   * 订阅相关的三个 topic 都靠它发（对应 instagrapi 的 `write_publish_packet`）：
+   *   · 134 `iris_subscribe`（私信实时同步的开关，载荷是 JSON）
+   *   · 149 `graph_ql_subscribe`（realtime sub，前端那套订阅）
+   *   · 88  pubsub（skywalker）
+   */
+  static buildPublish(topic: string, payload: Uint8Array, packetId: number): Uint8Array {
+    const topicBytes: Uint8Array = utf8(topic);
+    const body: Array<number> = [];
+    body.push((topicBytes.length >> 8) & 0xFF, topicBytes.length & 0xFF);
+    for (let index: number = 0; index < topicBytes.length; index++) {
+      body.push(topicBytes[index]);
+    }
+    body.push((packetId >> 8) & 0xFF, packetId & 0xFF);
+    for (let index: number = 0; index < payload.length; index++) {
+      body.push(payload[index]);
+    }
+    const out: Array<number> = [0x32];          // PUBLISH + QoS 1
+    let left: number = body.length;
+    do {
+      let digit: number = left % 128;
+      left = Math.floor(left / 128);
+      if (left > 0) {
+        digit = digit | 0x80;
+      }
+      out.push(digit);
+    } while (left > 0);
+    for (let index: number = 0; index < body.length; index++) {
+      out.push(body[index]);
+    }
+    return new Uint8Array(out);
+  }
+
+  /** 组一条 **PUBACK**（收到 QoS 1 的 publish 必须回，否则 broker 会重发）。 */
+  static buildPuback(packetId: number): Uint8Array {
+    return new Uint8Array([0x40, 0x02, (packetId >> 8) & 0xFF, packetId & 0xFF]);
+  }
+
+  /** 组一条 **PINGREQ**（keepalive 20 秒，见 CONNECT 里那个值）。 */
+  static buildPingreq(): Uint8Array {
+    return new Uint8Array([0xC0, 0x00]);
   }
 
   private static sleep(ms: number): Promise<void> {

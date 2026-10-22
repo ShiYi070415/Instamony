@@ -145,7 +145,9 @@ import { MobileSession } from '../core/mobileapi/MobileSession';
 import { MobileProbe } from '../core/mobileapi/MobileProbe';
 import { MqttProbe } from '../core/mobileapi/MqttProbe';
 import { NetProbe } from '../core/mobileapi/NetProbe';
-import { MobileMqttWs } from '../core/mobileapi/MobileMqttWs';
+// 实时通道（iris / MQTToT）：原生 TLS 直连，见 core/mobileapi/MobileRealtime 的文件头。
+import { IrisState, MobileRealtime, RealtimeEvent } from '../core/mobileapi/MobileRealtime';
+import { MobileDirect } from '../core/mobileapi/MobileDirect';
 import { MainThreadWatchdog } from '../core/MainThreadWatchdog';
 import { PROFILE_TAB_POSTS, PROFILE_TAB_REELS, PROFILE_TAB_TAGGED, ProfileViewModel } from '../viewmodel/ProfileViewModel';
 import { DirectViewModel } from '../viewmodel/DirectViewModel';
@@ -2052,31 +2054,22 @@ struct Index {
         PushCenter.requestPermissionNow(abilityContext);
       }, 4000);
       /*
-       * **实时通道的握手探针**（见 core/mobileapi/MqttProbe）。
+       * **实时私信通道（原生 MQTToT）**。
        *
-       * 私信现在的"实时"是 15 秒轮询；真正实时的通道是 IG 的 MQTToT（Thrift 版 CONNECT）。
-       * 探针跑三段：公共 broker 当对照组（验证 socket 与组包本身）、`edge-mqtt.facebook.com`、
-       * `mqtt-mini.facebook.com`，日志里给三行结论。等 9 秒是为了让启动那波预热先过去。
-       * **验完就可以把这一段删掉**（探针本身不产生任何副作用，也不改任何状态）。
+       * 这里原来挂的是 `MobileMqttWs`（把 WebSocket 塞进隐藏 WebView 里跑）—— 那是
+       * `TLSSocket` 收不到数据时的权宜之计。2026-10-23 真机定位到根因并修好了：
+       * **`on('message')` 必须在 `connect()` 之后注册**，之前注册的事件全被丢掉
+       * （连公共 broker 都 recv=0）。现在原生直连就能握手、订阅、收包，见
+       * core/mobileapi/MobileRealtime。
+       *
+       * 等 12 秒是为了让启动那波预热（feed / reels / 快拍）先过去，不和它们抢带宽；
+       * 连接本身是一条常驻 TLS，心跳 12 秒一次（约 2 字节/次）。
        */
       setTimeout((): void => {
-        MqttProbe.probe().catch((error: Error): void => {
-          hilog.warn(DOMAIN, TAG, 'mqtt probe rejected: %{public}s', error.message);
+        this.startRealtime().catch((error: Error): void => {
+          hilog.warn(DOMAIN, TAG, 'realtime start rejected: %{public}s', error.message);
         });
-      }, 9000);
-      /*
-       * **实时私信通道（MQTT over WebView WebSocket）**。
-       *
-       * 为什么走网页而不是原生：本运行时的 `TLSSocket` 收不到数据（实测见 NetProbe），
-       * 而隐藏 WebView 用的 Chromium 网络栈 WSS 是好的；原生只负责拼包/解包。
-       * 等 20 秒是为了让页面先加载完（注入脚本需要一个活文档），页面上那个 JS
-       * 会把收到的帧通过 `ogNative.onMqttEvent` 回传（见 core/mobileapi/MobileMqttWs）。
-       */
-      setTimeout((): void => {
-        MobileMqttWs.start(this.bridge.controller).catch((error: Error): void => {
-          hilog.warn(DOMAIN, TAG, 'mqtt ws start rejected: %{public}s', error.message);
-        });
-      }, 20000);
+      }, 12000);
       /*
        * **「你的快拍」头像先用落盘快照画出来**（用户报的"你的快拍头像加载很慢"）。
        *
@@ -2623,6 +2616,96 @@ struct Index {
   private setLocalStatus(text: ResourceStr): void {
     this.statusText = text;
     this.statusShown = true;
+  }
+
+  // ==========================================================================
+  // 实时通道（私信推送）
+  // ==========================================================================
+
+  /** 实时通道是否已经起来过（重入保护）。 */
+  private realtimeStarted: boolean = false;
+  /** 上一次因为实时事件刷新收件箱的时刻（毫秒；节流用）。 */
+  private realtimeInboxAt: number = 0;
+  /** 订阅被要求"重新快照"之后的重试次数（防循环）。 */
+  private realtimeResubscribe: number = 0;
+
+  /**
+   * 连上 IG 的实时通道（iris / MQTToT），并订阅私信同步。
+   *
+   * 对应 instagrapi 的 `realtime_connect()` + `RealtimeClient.direct_subscribe()`：
+   * 连上之后先拿收件箱响应里的 `seq_id` / `snapshot_at_ms`，再 `iris_subscribe`。
+   *
+   * 这一步和以前的 15 秒轮询是**并存**关系，不是替换：轮询留在私信页做兜底，
+   * 实时推过来的私信只负责"让它早点知道"。
+   */
+  private async startRealtime(): Promise<void> {
+    if (this.realtimeStarted) {
+      return;
+    }
+    this.realtimeStarted = true;
+    MobileRealtime.onEvent((event: RealtimeEvent): void => {
+      this.onRealtimeEvent(event);
+    });
+    const up: boolean = await MobileRealtime.start();
+    hilog.info(DOMAIN, TAG, 'realtime up=%{public}s %{public}s', `${up}`, MobileRealtime.status());
+    if (!up) {
+      return;
+    }
+    await this.syncRealtimeSubscription();
+  }
+
+  /**
+   * 广播"实时同步位点"（收件箱响应里那两个值）。
+   *
+   * 没有就**先拉一次收件箱**——那是唯一能拿到 `seq_id` 的接口（instagrapi 也是这么做的：
+   * `direct_threads(amount=1)` → 顶层 `seq_id` / `snapshot_at_ms` → `iris_subscribe`）。
+   */
+  private async syncRealtimeSubscription(): Promise<void> {
+    if (MobileDirect.syncSeqId <= 0) {
+      await MobileDirect.inbox('');
+    }
+    if (MobileDirect.syncSeqId <= 0) {
+      hilog.info(DOMAIN, TAG, 'realtime subscribe skipped: 收件箱没给 seq_id');
+      return;
+    }
+    await MobileRealtime.subscribeDirect(
+      new IrisState(MobileDirect.syncSeqId, MobileDirect.syncSnapshotAtMs));
+  }
+
+  /**
+   * 实时事件派发（只处理两类，其余全部只记日志）。
+   *
+   *   · topic 135 = `iris_subscribe` 的回执：`succeeded:false` 时多半是
+   *     "Resnapshot for app upgrade"（app 版本和快照对不上）→ 重拉收件箱再订阅一次；
+   *   · topic 146 / 149 = 私信/收件箱的增量补丁 → 让收件箱**静默刷新**一次
+   *     （3 秒节流，避免一波补丁连发时打爆接口）。
+   *
+   * 补丁本身（`/direct_v2/threads/<id>/items/<id>` 那些 path）暂时不逐条解析 ——
+   * 收件箱静默刷新拿到的就是同样一份结果，而且不用自己拼服务端状态。
+   */
+  private onRealtimeEvent(event: RealtimeEvent): void {
+    hilog.info(DOMAIN, TAG, 'realtime event topic=%{public}s len=%{public}d',
+      event.topic, event.text.length);
+    if (event.topic === '135') {
+      const ok: boolean = event.text.indexOf('"succeeded":true') >= 0;
+      if (!ok && this.realtimeResubscribe < 2) {
+        this.realtimeResubscribe++;
+        hilog.info(DOMAIN, TAG, 'realtime resubscribe (%{public}d): %{public}s',
+          this.realtimeResubscribe, event.text.substring(0, 120));
+        this.syncRealtimeSubscription().catch((): void => {
+        });
+      }
+      return;
+    }
+    if (event.topic === '146' || event.topic === '149' || event.topic === '88') {
+      const now: number = Date.now();
+      if (now - this.realtimeInboxAt < 3000) {
+        return;
+      }
+      this.realtimeInboxAt = now;
+      this.directVm.refreshQuietly().catch((): void => {
+      });
+    }
   }
 
   /**

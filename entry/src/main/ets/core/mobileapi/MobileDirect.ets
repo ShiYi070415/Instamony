@@ -107,7 +107,51 @@ export class MobileDirect {
       hilog.info(DOMAIN, TAG, 'inbox first title=%{public}s avatar=%{public}s',
         fixed.threads[0].title, fixed.threads[0].avatarUrl.substring(0, 90));
     }
+    MobileDirect.noteSyncState(result.body);
     return fixed;
+  }
+
+  /**
+   * 从收件箱响应里取出**实时通道的订阅状态**（`seq_id` / `snapshot_at_ms`）。
+   *
+   * 为什么在这儿取：instagrapi 的 `RealtimeClient.direct_subscribe` 就是这么做的 ——
+   * 先 `direct_threads(amount=1)`，再从 `last_json` 顶层读这两个值，然后 `iris_subscribe`。
+   * 它们是私信实时同步的**唯一门槛**（没有它订阅不了）。取到就缓存下来，
+   * 由 `pages/Index`（或私信页）在实时通道连上后转给 MobileRealtime.subscribeDirect。
+   */
+  private static noteSyncState(body: string): void {
+    const parsed: Record<string, Object> | null = MobileDirect.parse(body);
+    if (parsed === null) {
+      return;
+    }
+    const seq: number = MobileDirect.numberOf(parsed, 'seq_id');
+    const snapshot: number = MobileDirect.numberOf(parsed, 'snapshot_at_ms');
+    if (seq > 0 && snapshot > 0) {
+      MobileDirect.syncSeqId = seq;
+      MobileDirect.syncSnapshotAtMs = snapshot;
+      hilog.info(DOMAIN, TAG, 'inbox sync state seq=%{public}d snapshot=%{public}d',
+        seq, snapshot);
+      return;
+    }
+    // 没有就如实说：订阅私信实时同步要靠这两个值，缺了只能继续轮询。
+    hilog.info(DOMAIN, TAG, 'inbox has no sync state keys=%{public}s',
+      Object.keys(parsed).slice(0, 12).join(','));
+  }
+
+  /** 收件箱给出的实时同步状态（0 = 还没拿到；见 noteSyncState）。 */
+  static syncSeqId: number = 0;
+  static syncSnapshotAtMs: number = 0;
+
+  private static numberOf(holder: Record<string, Object>, key: string): number {
+    const value: Object | undefined = holder[key];
+    if (value === undefined || value === null) {
+      return 0;
+    }
+    if (typeof value === 'number') {
+      return value as number;
+    }
+    const parsed: number = Number(`${value}`);
+    return Number.isFinite(parsed) ? parsed : 0;
   }
 
   /**
