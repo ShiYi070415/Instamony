@@ -24,3 +24,8 @@
 /tools/*.json
 # DevEco CodeGenie 插件目录（里面自带的 .git 会让 git status 报 submodule 错）
 /.codegenie/
+
+# 发行产物（release/ 下要随仓库发布，其余 *.hap 仍忽略）
+!/release/**/*.hap
+!/release/**/*.app
+!/release/**/*.app.zip

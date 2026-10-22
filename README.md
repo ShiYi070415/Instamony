@@ -8,7 +8,7 @@
 [English](README.en.md) · 采用 [Apache-2.0](LICENSE) 许可证。
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.1.0-1677FF?style=flat-square" alt="version 1.1.0">
+  <img src="https://img.shields.io/badge/version-1.2.0-1677FF?style=flat-square" alt="version 1.2.0">
   <img src="https://img.shields.io/badge/HarmonyOS-API%2020-1677FF?style=flat-square" alt="HarmonyOS API 20">
   <img src="https://img.shields.io/badge/ArkTS-Stage-0B0B0D?style=flat-square" alt="ArkTS Stage model">
   <img src="https://img.shields.io/badge/License-Apache--2.0-2EA44F?style=flat-square" alt="Apache-2.0">
@@ -19,7 +19,7 @@
 | | |
 |:--|:--|
 | **完整的信息流体验** | 首页时间线（下拉刷新 / 触底翻页 / 骨架屏）、快拍托盘与播放器、Reels 全屏竖滑、帖子页与评论浮层。 |
-| **私信** | 收件箱、会话页（文本 / 媒体 / 分享帖 / Reel / 贴纸 / 语音等 XMA 类型）、发送文本、预取与快照缓存。 |
+| **私信** | 收件箱与会话页（文本 / 媒体 / 分享帖 / Reel / 贴纸 / 语音等 XMA 类型）、发送文本、**MQTToT 实时推送**（新消息直接插进当前会话）、本地通知与「点通知直达会话」。 |
 | **搜索** | 关键词搜账号、空关键词的三列推荐瀑布流、点开进 Reels。 |
 | **个人主页** | 帖子 / 视频 / 收藏 / 被标注四个分页，别人主页复用同一套页面，视频分页可进 Reels。 |
 | **通知** | 按 今天 / 昨天 / 过去 7 天 / 过去 30 天 / 更早 / 为你推荐 分段，过期分段折叠在「显示更多」后。 |
@@ -29,19 +29,21 @@
 
 ## 工作原理
 
-隐藏 WebView 负责**登录**并持有会话（Cookie 罐），原生侧把这份会话包装成"官方 Android App"
-的身份去请求 `i.instagram.com/api/v1/...`。所以：
+隐藏 WebView 只在**登录 / 安全验证 / 个别写操作的兜底**时按需挂载，并持有会话（Cookie 罐）；
+原生侧把这份会话包装成"官方 Android App"的身份去请求 `i.instagram.com/api/v1/...`。所以：
 
 - 界面**不**依赖抓网页 DOM 渲染（早期版本那样做过，慢且脆）；
-- 绝大多数数据源是一发私有 REST：快拍、私信、主页、通知、点赞、收藏、关注、搜索；
-- 少数没有 REST 等价物的（信息流时间线、Reels 首屏、转发、评论点赞）走**模板回放**：
-  让页面自己发一次请求、存成模板，之后原生照着重发，失败再退回网页驱动。
+- **全部**读接口都是一发移动端私有 REST（与 instagrapi 同源）：信息流、Reels、快拍、私信、
+  主页、通知、点赞、收藏、关注、搜索、评论；
+- **实时**走 MQTToT 长连接（`edge-mqtt.facebook.com:443`，Thrift CONNECT + zlib 载荷 +
+  `iris_subscribe`），私信新消息是**推**过来的；写操作一律留在 REST，节奏由 `ApiThrottle` 把关；
+- 1.2.0 起 `模板回放` 整段退役（`ApiRegistry` / `RestSession` / `api_templates.json` 已删除）。
 
 ## 工程配置
 
 | 项目 | 当前配置 |
 |:--|:--|
-| 应用 | `Instarmony` · `com.fanha.instarmony` · 版本 `1.1.0`（`versionCode` 1001000） |
+| 应用 | `Instarmony` · `com.oneleaf.instamony` · 版本 `1.2.0`（`versionCode` 1002000） |
 | 模块 | `entry` · Stage 模型 |
 | SDK | 目标 SDK `26.0.0` · **兼容 SDK `6.0.0 (API 20)`** |
 | 设备 | `phone`、`tablet` · 全屏 `EntryAbility` |
@@ -106,7 +108,8 @@ tools/                   构建与校验脚本
 
 ## 文档
 
-- [`RELEASE_1.1.md`](RELEASE_1.1.md) —— **本版（1.1.0）变化**、已知问题、未实现项
+- [`RELEASE_1.2.md`](RELEASE_1.2.md) —— **本版（1.2.0）变化**、已知问题、未实现项
+- [`RELEASE_1.1.md`](RELEASE_1.1.md) —— 1.1.0 的变化、已知问题、未实现项
 - [`RELEASE_1.0.md`](RELEASE_1.0.md) —— 1.0.0 的功能清单、已知问题、未实现项
 - [`INSTAGRAPI_PORT.md`](INSTAGRAPI_PORT.md) —— 移动端协议移植记录：端点表、参数、判据、限速结论
 - [`FINGERPRINT_ANALYSIS.md`](FINGERPRINT_ANALYSIS.md) —— "为什么会被判成自动化"的分析与降噪措施
