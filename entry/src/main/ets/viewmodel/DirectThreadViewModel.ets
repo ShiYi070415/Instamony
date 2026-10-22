@@ -74,6 +74,18 @@ const PENDING_RECHECK_MS: number = 1200;
  */
 const CONFIRMED_MEMO_MS: number = 5000;
 /**
+ * 一条"待发"的任务（乐观气泡已经上屏，等着写接口去发）。
+ *
+ * **`threadId` 必须在入队时就定下**：这个视图模型是全 App 共用的一份实例，
+ * 用户在发送途中退出会话、点进另一条会话的话，`this.threadId` 就变了 ——
+ * 拿它发消息会把 A 的话发到 B 那里去（"记录对不上对方账号"）。
+ */
+interface QueuedSend {
+  threadId: string;
+  localId: string;
+  text: string;
+}
+/**
  * 翻页"卡住"（去重后没多出任何一条）之后的冷却：这段时间内不再翻，过了允许再试一次。
  *
  * 为什么要它：这条查询的分页参数在真机上本来就不认（详见 NativeDirect 里的说明），一次卡住就把
@@ -92,6 +104,8 @@ export class DirectThreadViewModel {
     this.view = null;
     this.pending = [];
     this.confirmedIds = new Map<string, number>();
+    this.sendQueue = [];
+    this.failedSends = new Map<string, string>();
     this.busy = false;
     this.threadId = '';
     this.onView(null);
@@ -105,7 +119,14 @@ export class DirectThreadViewModel {
   onSeen: (threadId: string) => void = (threadId: string): void => {
   };
   private busy: boolean = false;
-  private sending: boolean = false;
+  /** 本地乐观气泡的序号（拼临时 id 用，保证同一毫秒连发也不撞）。 */
+  private sendSeq: number = 0;
+  /** 待发队列（见 QueuedSend）：**不是"忙就丢掉"**，是一条条排队发出去。 */
+  private sendQueue: Array<QueuedSend> = [];
+  /** 队列正在发（防重入）。 */
+  private draining: boolean = false;
+  /** 发送失败的乐观气泡：本地 id → 文本（界面标红 + 可点重试，见 isFailed / retryFailed）。 */
+  private failedSends: Map<string, string> = new Map<string, string>();
   private diag: string = '-';
   /** 乐观发送的临时消息（本地 id → 文本），成功/失败后清掉。 */
   private pending: Array<DirectMessage> = [];
@@ -167,6 +188,19 @@ export class DirectThreadViewModel {
    */
   open(threadId: string, title: string, avatar: string = '', isGroup: boolean = false,
        userId: string = '', username: string = ''): void {
+    /*
+     * **换会话时把上一条会话的待发/失败状态丢掉**。
+     *
+     * 队列里的每一条都自带 `threadId`（见 QueuedSend），所以就算不清也不会发错人；
+     * 但气泡已经不在屏上了（下面 `pending = []`），留着只会让用户以为发出去了。
+     * 正在飞的那一条会照旧发到它自己的会话里 —— 这点由队列保证。
+     */
+    if (this.sendQueue.length > 0 || this.failedSends.size > 0) {
+      hilog.warn(DOMAIN, TAG, 'open: 丢弃上一条会话的待发/失败气泡 queued=%{public}d failed=%{public}d',
+        this.sendQueue.length, this.failedSends.size);
+    }
+    this.sendQueue = [];
+    this.failedSends = new Map<string, string>();
     this.threadId = threadId;
     this.fallbackTitle = title;
     this.fallbackAvatar = avatar;
@@ -411,73 +445,152 @@ export class DirectThreadViewModel {
   async send(text: string): Promise<boolean> {
     const body: string = text.trim();
     // 入口留痕：界面气泡画出来了但网络没动静时，这一行能区分"没进 VM"与"VM 里被挡下"。
-    hilog.info(DOMAIN, TAG, 'send ui entry len=%{public}d thread=%{public}s busy=%{public}s',
-      body.length, this.threadId, `${this.sending}`);
-    if (body.length === 0 || this.threadId.length === 0 || this.sending) {
-      hilog.warn(DOMAIN, TAG, 'send ui blocked: len=%{public}d thread=%{public}d busy=%{public}s',
-        body.length, this.threadId.length, `${this.sending}`);
+    hilog.info(DOMAIN, TAG, 'send ui entry len=%{public}d thread=%{public}d queue=%{public}d',
+      body.length, this.threadId.length, this.sendQueue.length);
+    if (body.length === 0 || this.threadId.length === 0) {
+      hilog.warn(DOMAIN, TAG, 'send ui blocked: len=%{public}d thread=%{public}d',
+        body.length, this.threadId.length);
       return false;
     }
-    this.sending = true;
-    this.onBusy(true);
-    const temp: DirectMessage = new DirectMessage(`local-${Date.now()}`, '', true, Date.now(),
-      'text', body);
+    /*
+     * **乐观气泡立刻上屏，发送排队执行**（用户报："会出现一两条消息发不出去的情况"）。
+     *
+     * 原来是"上一发还在飞就直接 `return false`"：输入框在 `CommentInputBar.submit` 里
+     * **已经清空**了，于是那一条既没发出去、也没留在任何地方 —— 用户只看到"发不出去"。
+     * 现在连点几下就排几条，按顺序一条条发（写接口本来就有人速间隔，见 ApiThrottle.writeSlot）。
+     */
+    this.sendSeq++;
+    const temp: DirectMessage = new DirectMessage(`local-${Date.now()}-${this.sendSeq}`, '',
+      true, Date.now(), 'text', body);
     this.pending = this.pending.concat([temp]);
     this.onPending(this.pending);
-    try {
-      const ok: boolean = await NativeDirect.sendText(this.threadId, body);
-      if (!ok) {
-        /*
-         * 失败原因分两类说清楚：
-         *   · `challenge_required`：账号被要求**安全验证**（写接口全被拒，重试无用）——
-         *     让用户去首页横幅点「去验证」；真机实测发消息失败正是这个
-         *     （响应体 `{"message":"challenge_required", … "lock":true}`）。
-         *   · 其它：原样带上 detail（如 `send-1545023:…`），便于定位。
-         */
-        const why: string = NativeDirect.lastDetail();
-        this.onStatus(why === 'challenge_required'
-          ? '账号被要求安全验证：去首页点「去验证」之后再试'
-          : '发送失败：' + why);
-        return false;
-      }
-      this.onStatus('');
-      /*
-       * **自己刚发完消息 → 打开 30 秒的突发窗口**：这时候人确实在等回信，
-       * 密一点（4~6 秒）是人的行为；平时走 12~25 秒（见 THREAD_POLL_MIN_MS 的说明）。
-       */
-      this.burstUntilMs = Date.now() + THREAD_POLL_BURST_WINDOW_MS;
-      if (this.pollTimer < 0) {
-        this.armTimer();
-      }
-      /*
-       * **先拉一次把服务端那条拿到手，再撤掉乐观气泡。**
-       *
-       * 早先是"先 `pending = []` 再 `load()`"：中间那 1~3 秒里刚发出去的那条会**凭空消失**，
-       * 等刷新回来又出现 —— 用户报的"发出后消失再出现"就是这个闪烁。
-       * 现在反过来：气泡一直留着，直到新视图里真的出现"我发的、同一条文本"才撤掉，
-       * 视觉上是同一个气泡从"本地那条"无缝换成"服务端那条"。
-       *
-       * **这一发必须"增量合并"，不能 `load()`**（用户报："发新消息后页面会刷新导致动画又
-       * 播放一遍"）：`load()` 是把整份视图换掉，服务端那一页条数/窗口和我们屏上的可能不一样，
-       * 一换就整表重建（`ForEach` 的键含序号，序号一变整屏都当新条目），
-       * 于是所有气泡重播入场动画、列表还跳一下。合并只往后面追加，
-       * 已经有的一条都不动，动画自然也不会重播（见 mergeFresh）。
-       */
-      await this.refreshAfterSend();
-      this.dropConfirmedPending();
-      // 一次没对上（服务端还没返回）就过一会儿再看；这期间气泡继续留着，不会消失。
-      setTimeout((): void => {
-        this.dropConfirmedPending();
-      }, PENDING_RECHECK_MS);
-      return true;
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'send threw: %{public}s', (error as Error).message);
-      this.onStatus('发送出错');
-      return false;
-    } finally {
-      this.sending = false;
-      this.onBusy(false);
+    this.sendQueue.push({ threadId: this.threadId, localId: temp.id, text: body });
+    this.drainSends();
+    return true;
+  }
+
+  /**
+   * 把队列里的消息一条条发出去（`send` 只负责入队，见那里的说明）。
+   *
+   * 顺序发、不并发：发消息是最容易被 IG 判成脚本的写操作，`NativeDirect.sendText`
+   * 内部已经有人速间隔，这里再并发就白排了。
+   * 每成功一条就增量刷新一次（`refreshAfterSend`），把本地气泡换成服务端那条。
+   */
+  private async drainSends(): Promise<void> {
+    if (this.draining) {
+      return;
     }
+    this.draining = true;
+    this.onBusy(true);
+    try {
+      while (this.sendQueue.length > 0) {
+        const job: QueuedSend | undefined = this.sendQueue[0];
+        if (job === undefined) {
+          break;
+        }
+        // 会话被切走过：这一条只属于它自己那条会话（见 QueuedSend 的说明）。
+        if (job.threadId.length === 0) {
+          this.sendQueue.shift();
+          continue;
+        }
+        let ok: boolean = false;
+        try {
+          ok = await NativeDirect.sendText(job.threadId, job.text);
+        } catch (error) {
+          hilog.warn(DOMAIN, TAG, 'send threw: %{public}s', (error as Error).message);
+          ok = false;
+        }
+        this.sendQueue.shift();
+        if (!ok) {
+          /*
+           * **不吞掉**：气泡留在屏上并标红，用户点一下重试（见 retryFailed）。
+           * 失败原因分两类说清楚：
+           *   · `challenge_required`：账号被要求**安全验证**（写接口全被拒，重试无用）——
+           *     让用户去首页横幅点「去验证」；真机实测发消息失败正是这个
+           *     （响应体 `{"message":"challenge_required", … "lock":true}`）。
+           *   · 其它：原样带上 detail（如 `send-1545023:…`、`throttled-3min`），便于定位。
+           */
+          const why: string = NativeDirect.lastDetail();
+          this.failedSends.set(job.localId, job.text);
+          hilog.warn(DOMAIN, TAG, 'send failed local=%{public}s why=%{public}s left=%{public}d',
+            job.localId, why, this.sendQueue.length);
+          this.onStatus(why === 'challenge_required'
+            ? '账号被要求安全验证：去首页点「去验证」之后再试'
+            : `发送失败：${why}（点气泡重试）`);
+          this.onPending(this.pending);
+          continue;
+        }
+        this.failedSends.delete(job.localId);
+        /*
+         * **只有"这条会话还开着"才刷新**：用户在发送途中点进了另一条会话的话，
+         * 现在 `this.threadId` / `this.view` 都是别的会话的，合并进来会把 A 的消息塞进 B。
+         */
+        if (job.threadId !== this.threadId) {
+          hilog.info(DOMAIN, TAG, 'send ok for closed thread → skip refresh local=%{public}s',
+            job.localId);
+          continue;
+        }
+        this.onStatus('');
+        // 自己刚发完消息 → 30 秒内允许密一点的轮询（见 THREAD_POLL_BURST_*）。
+        this.burstUntilMs = Date.now() + THREAD_POLL_BURST_WINDOW_MS;
+        if (this.pollTimer < 0) {
+          this.armTimer();
+        }
+        /*
+         * **先拉一次把服务端那条拿到手，再撤掉乐观气泡。**
+         *
+         * 早先是"先 `pending = []` 再 `load()`"：中间那 1~3 秒里刚发出去的那条会**凭空消失**，
+         * 等刷新回来又出现 —— 用户报的"发出后消失再出现"就是这个闪烁。
+         * 现在反过来：气泡一直留着，直到新视图里真的出现"我发的、同一条文本"才撤掉。
+         *
+         * **这一发必须"增量合并"，不能 `load()`**（用户报："发新消息后页面会刷新导致动画又
+         * 播放一遍"）：`load()` 把整份视图换掉，服务端那一页条数/窗口和屏上的可能不一样，
+         * 一换就整表重建（序号一变整屏都当新条目）→ 所有气泡重播入场动画、列表还跳一下。
+         */
+        await this.refreshAfterSend();
+        this.dropConfirmedPending();
+        // 一次没对上（服务端还没返回）就过一会儿再看；这期间气泡继续留着，不会消失。
+        setTimeout((): void => {
+          this.dropConfirmedPending();
+        }, PENDING_RECHECK_MS);
+      }
+    } finally {
+      this.draining = false;
+      this.onBusy(false);
+      this.onPending(this.pending);
+    }
+  }
+
+  /** 这条乐观气泡发送失败了吗（界面据此标红）。 */
+  isFailed(localId: string): boolean {
+    return this.failedSends.has(localId);
+  }
+
+  /** 现在失败着的本地气泡 id（界面进会话时同步一份）。 */
+  failedIdsNow(): Array<string> {
+    const ids: Array<string> = [];
+    this.failedSends.forEach((text: string, id: string): void => {
+      ids.push(id);
+    });
+    return ids;
+  }
+
+  /**
+   * 重试一条发送失败的气泡（用户点气泡触发）。
+   *
+   * 气泡本身不重建（本地 id 不变），只是重新入队 —— 成功之后照常换成服务端那条。
+   */
+  retryFailed(localId: string): void {
+    const text: string | undefined = this.failedSends.get(localId);
+    if (text === undefined) {
+      return;
+    }
+    this.failedSends.delete(localId);
+    this.sendQueue.push({ threadId: this.threadId, localId: localId, text: text });
+    hilog.info(DOMAIN, TAG, 'retry send local=%{public}s queue=%{public}d',
+      localId, this.sendQueue.length);
+    this.onPending(this.pending);
+    this.drainSends();
   }
 
   /**

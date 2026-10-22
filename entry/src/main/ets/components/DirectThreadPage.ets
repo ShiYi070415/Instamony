@@ -155,6 +155,13 @@ export struct DirectThreadPage {
     };
   @State private view: DirectThreadView | null = null;
   @State private pending: Array<DirectMessage> = [];
+  /**
+   * 发送失败的那几个乐观气泡的本地 id（见 DirectThreadViewModel.isFailed）。
+   *
+   * 为什么镜像一份到 `@State`：气泡里要根据它画"未发送 · 点击重试"，
+   * 而 `vm` 上的 Map 变了 ArkUI 不会知道（它不是响应式对象）。
+   */
+  @State private failedIds: Array<string> = [];
   @State private status: string = '';
   @State private busy: boolean = false;
   @State private screenWidthVp: number = FALLBACK_WIDTH_VP;
@@ -245,6 +252,8 @@ export struct DirectThreadPage {
     this.vm.onPending = (items: Array<DirectMessage>): void => {
       const grew: boolean = items.length > this.pending.length;
       this.pending = items;
+      // 失败标记跟着一起同步（气泡里要画"未发送 · 点击重试"）。
+      this.failedIds = this.vm.failedIdsNow();
       /*
        * **新加的乐观气泡要立刻可见**（用户报："发送消息会有延迟，一开始不会"）。
        *
@@ -673,7 +682,31 @@ export struct DirectThreadPage {
     Row({ space: 8 }) {
       if (message.mine) {
         Blank()
-        this.bubbleContent(message)
+        Column({ space: 4 }) {
+          this.bubbleContent(message)
+          /*
+           * **发送失败的标记**（用户报："会出现一两条消息发不出去的情况"）。
+           *
+           * 以前发送被挡下（上一发还在飞 / 写接口被拒）时，输入框已经清空、气泡也不再有任何提示，
+           * 用户以为发出去了；退出重进一对记录就发现"对方那边没有"。
+           * 现在失败的那条留在屏上、下面标红，点一下原样重发（气泡不重建，id 不变）。
+           */
+          if (this.failedIds.indexOf(message.id) >= 0) {
+            Row({ space: 4 }) {
+              SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+                .fontSize(12)
+                .fontColor([$r('app.color.accent')])
+              Text($r('app.string.direct_send_failed'))
+                .fontSize(11)
+                .fontColor($r('app.color.accent'))
+            }
+            .padding({ right: 4, top: 2 })
+            .onClick((): void => {
+              this.vm.retryFailed(message.id);
+            })
+          }
+        }
+        .alignItems(HorizontalAlign.End)
       } else {
         if (this.showsAvatar(index, message)) {
           Image(this.view !== null && this.view.withAvatar.length > 0

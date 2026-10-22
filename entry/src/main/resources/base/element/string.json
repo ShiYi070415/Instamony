@@ -441,6 +441,10 @@
       "value": "还没有消息，打个招呼吧"
     },
     {
+      "name": "direct_send_failed",
+      "value": "未发送 · 点这里重试"
+    },
+    {
       "name": "direct_open_web",
       "value": "在网页中打开"
     },

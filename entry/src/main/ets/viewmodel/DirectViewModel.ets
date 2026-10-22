@@ -273,13 +273,15 @@ export class DirectViewModel {
     /*
      * 先记账拿到"这一轮涨了几条"，再发**一条**带内容的通知。
      *
-     * 标题用 `username`（`@xxx` 那个，需求）：`title` 是显示名/群名，会重名、也占行宽。
+     * 标题用**显示名**（`title`，比如 `XingLi`），没有显示名才退回 `username`（`xingli_415`）。
+     * 需求（用户第二次明确）：「通知标题要 XingLi 这个用户名，而不是 xingli_415 这个用户名称」
+     * —— 也就是说用户想要的是人看得懂的那个名字，不是 `@` 后面的句柄；群聊的 `title` 就是群名。
      * 正文用最新那条消息的文本；会话 id 一并带上，点通知以后能直达这条会话。
      * （以前是 noteUnread 先发一条"你有 N 条新私信"、再被这条覆盖，等于响两次，现已合并成一次。）
      */
     const added: number = PushCenter.noteUnread('direct', total);
     if (added > 0) {
-      const sender: string = newest.username.length > 0 ? newest.username : newest.title;
+      const sender: string = newest.title.length > 0 ? newest.title : newest.username;
       PushCenter.notifyDirect(sender, DirectViewModel.previewOf(newest), added, newest.id);
     }
   }
