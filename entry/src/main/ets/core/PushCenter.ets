@@ -57,6 +57,13 @@ class UnreadMark {
 /** 本地通知的通知 id（同一类复用同一个 id，后一条会覆盖前一条，不会堆一屏）。 */
 const NOTIFY_ID_DIRECT: number = 9101;
 const NOTIFY_ID_FEED: number = 9102;
+/**
+ * 取 WantAgent 最多等多久（毫秒）。
+ *
+ * 通知"出不出来"不该取决于一个点击跳转对象能不能拿到：超过这个时间就先发出去 ——
+ * 代价只是这一次点开只回到 App（不是那条会话），换来的是通知本身一定出现。
+ */
+const NOTIFY_AGENT_WAIT_MS: number = 400;
 
 export class PushCenter {
   /** Push Kit 给的 token（空 = 没拿到 / 没配 AGC）。 */
@@ -65,6 +72,8 @@ export class PushCenter {
   private static started: boolean = false;
   /** 通知分类（slot）注册过没有（幂等）。 */
   private static slotsReady: boolean = false;
+  /** "通知开关"那行日志打过了没有（见 logEnabledOnce）。 */
+  private static enabledLogged: boolean = false;
   /** 上一条未读数：kind → total。 */
   private static marks: Array<UnreadMark> = [];
   /** UIAbility 的 context（取包名要用；`start` 时注入）。 */
@@ -263,11 +272,27 @@ export class PushCenter {
    *
    * 同一类通知用**同一个 id**：后来的覆盖前一条，通知栏不会堆一屏"n 条新私信"。
    *
+   * ## 全程异步、绝不挡住调用方
+   * 调用它的地方是**实时补丁到达**那一拍（`DirectRealtime` → `DirectViewModel`），
+   * 那是最不该被别的活拖住的一刻。所以：
+   *   · 整个流程挪到**下一拍**再跑（`defer`），调用方立刻返回；
+   *   · 取 WantAgent 只等 400ms，超时就"先发出去、这次点开只回首页"，
+   *     绝不让一条通知因为等一个 agent 而不出现（以前 `.then` 里才 publish，
+   *     `getWantAgent` 一旦卡住/失败，通知就永远不弹）。
+   *
    * @param slotType 落哪个通知分类（见 ensureSlots）
-   * @param threadId 非空时写进 want 参数，点通知能知道是哪条会话
+   * @param threadId 非空时写进 want 参数，点通知能直达那条会话
    */
   private static publish(id: number, title: string, text: string,
                          slotType: notificationManager.SlotType, threadId: string): void {
+    // 挪到下一拍：这个函数只入队，不在实时回调的调用栈里干活。
+    setTimeout((): void => {
+      PushCenter.publishNow(id, title, text, slotType, threadId);
+    }, 0);
+  }
+
+  private static publishNow(id: number, title: string, text: string,
+                            slotType: notificationManager.SlotType, threadId: string): void {
     try {
       const request: notificationManager.NotificationRequest = {
         id: id,
@@ -280,19 +305,24 @@ export class PushCenter {
         },
         notificationSlotType: slotType
       };
+      // 分类没登记成功时 publish 会拿默认级别（没有横幅）；这里补一次，幂等。
+      PushCenter.ensureSlots();
+      PushCenter.logEnabledOnce();
       /*
-       * 点通知拉起 app：**没有 wantAgent 的通知点了没反应**，所以这一项必须给。
-       * 会话 id 放进 parameters，Index 那边以后可以据此直接打开那条会话。
+       * 点通知拉起 app：**没有 wantAgent 的通知点了没反应**，所以这一项要尽量给上；
+       * 但它是"加分项"，拿不到也必须把通知发出去（见上面 400ms 的说法）。
        */
-      PushCenter.wantAgentFor(threadId).then((agent: WantAgent | undefined): void => {
-        const finalRequest: notificationManager.NotificationRequest = request;
-        if (agent !== undefined) {
-          finalRequest.wantAgent = agent;
-        }
-        PushCenter.send(finalRequest, id);
-      }).catch((): void => {
-        PushCenter.send(request, id);
-      });
+      PushCenter.agentWithin(threadId, NOTIFY_AGENT_WAIT_MS)
+        .then((agent: WantAgent | undefined): void => {
+          const finalRequest: notificationManager.NotificationRequest = request;
+          if (agent !== undefined) {
+            finalRequest.wantAgent = agent;
+          }
+          PushCenter.send(finalRequest, id);
+        })
+        .catch((): void => {
+          PushCenter.send(request, id);
+        });
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'notification publish threw: %{public}s',
         (error as Error).message);
@@ -303,15 +333,73 @@ export class PushCenter {
     try {
       notificationManager.publish(request)
         .then((): void => {
-          hilog.info(DOMAIN, TAG, 'notification published id=%{public}d', id);
+          hilog.info(DOMAIN, TAG, 'notification published id=%{public}d slot=%{public}d',
+            id, request.notificationSlotType === undefined ? -1 : request.notificationSlotType);
         })
         .catch((error: BusinessError): void => {
+          /*
+           * 常见码（定位用，不改行为）：
+           *   1600004 = 通知被关闭（用户在设置里关了这个 App 的通知 / 拒过一次权限）
+           *   1600008 = 没有对应分类
+           *   201     = 权限不足
+           */
           hilog.warn(DOMAIN, TAG, 'notification publish failed (%{public}d): %{public}s',
             error.code, error.message ?? '-');
         });
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'notification publish rejected: %{public}s',
         (error as Error).message);
+    }
+  }
+
+  /**
+   * 打一行"通知开关现在是什么状态"（**只记日志，不改行为**）。
+   *
+   * 用户报"突然不弹通知"时，这一行能立刻区分是"我们没发"还是"系统不让发"；
+   * 只打一次，避免每次通知都多一次 IPC。
+   */
+  private static logEnabledOnce(): void {
+    if (PushCenter.enabledLogged) {
+      return;
+    }
+    PushCenter.enabledLogged = true;
+    try {
+      notificationManager.isNotificationEnabled()
+        .then((enabled: boolean): void => {
+          hilog.info(DOMAIN, TAG, 'notification enabled=%{public}s', `${enabled}`);
+        })
+        .catch((error: BusinessError): void => {
+          hilog.warn(DOMAIN, TAG, 'isNotificationEnabled failed (%{public}d)', error.code);
+        });
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'isNotificationEnabled threw: %{public}s',
+        (error as Error).message);
+    }
+  }
+
+  /**
+   * 取 WantAgent，但**最多等 `timeoutMs`**（超时给 undefined）。
+   *
+   * 这样通知不会因为"等 agent"而不出现；`getWantAgent` 失败也只记日志。
+   */
+  private static async agentWithin(threadId: string,
+                                   timeoutMs: number): Promise<WantAgent | undefined> {
+    try {
+      const pending: Promise<WantAgent | undefined> = PushCenter.wantAgentFor(threadId);
+      const timeout: Promise<WantAgent | undefined> = new Promise<WantAgent | undefined>(
+        (resolve: (value: WantAgent | undefined) => void): void => {
+          setTimeout((): void => {
+            resolve(undefined);
+          }, timeoutMs);
+        });
+      const agent: WantAgent | undefined = await Promise.race([pending, timeout]);
+      if (agent === undefined) {
+        hilog.warn(DOMAIN, TAG, 'wantAgent timeout(%{public}dms) → 先发通知', timeoutMs);
+      }
+      return agent;
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'wantAgent failed: %{public}s', (error as Error).message);
+      return undefined;
     }
   }
 

@@ -27,12 +27,20 @@ export class DirectViewModel {
     this.busy = false;
     this.loadedAtMs = 0;
     this.diag = '-';
+    this.notifiedTs = new Map<string, number>();
   }
 
   private threads: Array<DirectThread> = [];
   private endCursor: string = '';
   private more: boolean = false;
   private busy: boolean = false;
+  /**
+   * 每条会话"上次为它弹过通知"的那条消息的时间戳（会话 id → tsMs）。
+   *
+   * 见 applyRealtimeMessage / markNotified：未读条数封顶 4，只看总条数会漏判
+   * "同一条会话继续来新消息"，于是出现"突然不弹通知"。
+   */
+  private notifiedTs: Map<string, number> = new Map<string, number>();
   /**
    * 上次**成功**拉到收件箱的时刻（毫秒；0 = 还没拉到过）。
    *
@@ -178,8 +186,44 @@ export class DirectViewModel {
     this.onThreads(this.threads, this.more);
     hilog.info(DOMAIN, TAG, 'realtime row updated id=%{public}d at=0 unread=%{public}s mine=%{public}s',
       threadId.length, `${unread}`, `${message.mine}`);
-    // 未读变多时顺手弹通知（readHere / 自己发的不加未读，所以这里不会响）。
-    this.noteNewUnread();
+    /*
+     * **通知按"这条会话真的来了新消息"判，不按未读总数判**（用户报："突然不弹通知"）。
+     *
+     * 以前的判据是"未读总数比上次多"（见 PushCenter.noteUnread），而每行的未读**封顶 4**
+     * —— 同一条会话从 4 条涨到 5 条时总数没变，于是再也不弹，直到用户进去读掉。
+     * 现在看这条会话的最新消息时间有没有比"上次通知过的那条"更新（markNotified）。
+     */
+    const total: number = DirectViewModel.unreadTotal(this.threads);
+    if (unread && this.markNotified(updated, true)) {
+      PushCenter.noteUnread('direct', total);
+      const sender: string = updated.title.length > 0 ? updated.title : updated.username;
+      PushCenter.notifyDirect(sender, DirectViewModel.previewOf(updated), 1, updated.id);
+    } else {
+      // 正在看这条会话（readHere）/ 自己发的 / 没有更新：只记账，不响。
+      this.noteNewUnread();
+    }
+    return true;
+  }
+
+  /**
+   * 这条会话的最新消息是不是**比上次通知过的还新**（是就记账并返回 true）。
+   *
+   * 见 applyRealtimeMessage 里那段：未读条数封顶 4，光看总数会漏掉"同一条会话继续来消息"。
+   *
+   * @param allowFirstSight 第一次见到这条会话时要不要也响。
+   *        实时通道传 true（那条消息确实是刚推来的）；轮询传 false
+   *        （第一次见到只是"拉到了旧消息"，否则一启动就"叮"一条）。
+   */
+  private markNotified(thread: DirectThread, allowFirstSight: boolean): boolean {
+    const prev: number | undefined = this.notifiedTs.get(thread.id);
+    if (prev === undefined) {
+      this.notifiedTs.set(thread.id, thread.tsMs);
+      return allowFirstSight;
+    }
+    if (thread.tsMs <= prev) {
+      return false;
+    }
+    this.notifiedTs.set(thread.id, thread.tsMs);
     return true;
   }
 
@@ -271,18 +315,23 @@ export class DirectViewModel {
       return;
     }
     /*
-     * 先记账拿到"这一轮涨了几条"，再发**一条**带内容的通知。
+     * 先记账（让"读完之后又收到一条"能重新响），再发**一条**带内容的通知。
      *
      * 标题用**显示名**（`title`，比如 `XingLi`），没有显示名才退回 `username`（`xingli_415`）。
      * 需求（用户第二次明确）：「通知标题要 XingLi 这个用户名，而不是 xingli_415 这个用户名称」
      * —— 也就是说用户想要的是人看得懂的那个名字，不是 `@` 后面的句柄；群聊的 `title` 就是群名。
      * 正文用最新那条消息的文本；会话 id 一并带上，点通知以后能直达这条会话。
      * （以前是 noteUnread 先发一条"你有 N 条新私信"、再被这条覆盖，等于响两次，现已合并成一次。）
+     *
+     * **要不要响看 markNotified（按这条会话的消息时间），不看未读总数**：
+     * 总数会被"每行未读封顶 4"卡住，同一条会话继续来消息时就再也不弹了（用户报的"突然不弹通知"）。
+     * 轮询这条路上第一次见到某条会话**不响**（那些是拉到的旧消息，否则一启动就叮一条）。
      */
     const added: number = PushCenter.noteUnread('direct', total);
-    if (added > 0) {
+    if (this.markNotified(newest, false)) {
       const sender: string = newest.title.length > 0 ? newest.title : newest.username;
-      PushCenter.notifyDirect(sender, DirectViewModel.previewOf(newest), added, newest.id);
+      const count: number = added > 0 ? added : 1;
+      PushCenter.notifyDirect(sender, DirectViewModel.previewOf(newest), count, newest.id);
     }
   }
 
