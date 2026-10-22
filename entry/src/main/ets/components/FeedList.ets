@@ -24,6 +24,7 @@ import { BackdropTone } from '../core/BackdropTone';
 import { PosterCache } from '../core/PosterCache';
 import { FollowState, FOLLOW_VERSION_KEY } from '../core/FollowState';
 import { SaveState } from '../core/SaveState';
+import { RepostState } from '../core/RepostState';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { FeedSkeleton } from './FeedSkeleton';
 import { TranslateLabel } from './TranslateLabel';
@@ -1132,11 +1133,21 @@ export struct FeedList {
       if (ui.commentCount !== post.commentCount) {
         ui.commentCount = post.commentCount;
       }
-      if (ui.reposted !== post.reposted) {
-        ui.reposted = post.reposted;
+      /*
+       * 转发状态：和「收藏」同一套口径 —— **以本机台账为准**（见 core/RepostState）。
+       * IG 的载荷里没有这个字段，只看 `post.reposted` 的话，卡片重建/换页/重启之后
+       * 对勾就会掉（用户报的"已转发状态会被刷掉"）。
+       */
+      const repostedNow: boolean = RepostState.resolve(post.id, post.shortcode, post.reposted);
+      if (ui.reposted !== repostedNow) {
+        ui.reposted = repostedNow;
       }
       if (ui.repostCount !== post.repostCount) {
         ui.repostCount = post.repostCount;
+      }
+      // 转过的那条至少显示 1（载荷常常不给这个数，见 FeedMapper.withReposted）。
+      if (repostedNow && ui.repostCount === 0) {
+        ui.repostCount = 1;
       }
       if (ui.shareCount !== post.shareCount) {
         ui.shareCount = post.shareCount;

@@ -28,6 +28,7 @@ import { PosterCache } from '../core/PosterCache';
 import { MediaPrefetch } from '../core/MediaPrefetch';
 // 关注流的筛选要批量问"这些人我关注了吗"（见 filterFollowing）。
 import { NativeFollow } from '../core/NativeFollow';
+import { RepostState } from '../core/RepostState';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'FeedViewModel';
@@ -1574,16 +1575,25 @@ export class FeedViewModel {
     this.onPosts(restored);
   }
 
-  /** 按 repostedKeys 把「本机转过」的标记补回列表（没变就原样返回，省一次无谓的重绘）。 */
+  /**
+   * 按台账把「本机转过」的标记补回列表（没变就原样返回，省一次无谓的重绘）。
+   *
+   * 两个来源，任一说"转过"就算转过：
+   *   ① 本进程点过的（`repostedKeys`，即时、零开销）；
+   *   ② 落盘台账 `core/RepostState`（跨重启、跨"信息流/帖子页/个人页"三种键写法）。
+   * IG 的载荷里没有这个字段，所以这里是唯一能把对勾补回来的地方。
+   */
   private applyRepostedLedger(posts: MediaPost[]): MediaPost[] {
-    if (this.repostedKeys.size === 0) {
+    if (this.repostedKeys.size === 0 && !RepostState.hasAny()) {
       return posts;
     }
     let changed: boolean = false;
     const next: MediaPost[] = [];
     for (let index: number = 0; index < posts.length; index++) {
       const post: MediaPost = posts[index];
-      if (this.repostedKeys.has(FeedMapper.keyOf(post))) {
+      const marked: boolean = this.repostedKeys.has(FeedMapper.keyOf(post))
+        || RepostState.resolve(post.id, post.shortcode, false);
+      if (marked) {
         // 本机转过的：标记补成"已转发"，**转发数至少给 1** ——
         // 接口/网页都可能不给这个数（见 FeedMapper.withReposted 的说明），
         // 那样刚转过的帖子在刷新后又会变成没有数字。

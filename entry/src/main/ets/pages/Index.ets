@@ -69,6 +69,7 @@ import { NativeFollow, FollowResult } from '../core/NativeFollow';
 import { NativeProfile } from '../core/NativeProfile';
 import { FollowState, FOLLOW_VERSION_KEY } from '../core/FollowState';
 import { SaveState } from '../core/SaveState';
+import { RepostState } from '../core/RepostState';
 import { NativeSave, SaveResult } from '../core/NativeSave';
 import { NativeEngage, EngageResult, EngageState } from '../core/NativeEngage';
 import { NativeNotifications } from '../core/NativeNotifications';
@@ -1760,6 +1761,8 @@ struct Index {
     }
     // 台账：媒体 id 必须直接记（同 likeReel，见那里的说明），短码那份由 setRepostedEverywhere 写。
     EngageState.rememberReposted(id, result.state);
+    // 落盘台账也记一份（reels 那条列表重建时靠它，见 core/RepostState）。
+    RepostState.remember(id, reel.shortcode, result.state);
     this.setRepostedEverywhere(reel.shortcode.length > 0 ? reel.shortcode : id, result.state);
     return true;
   }
@@ -2778,6 +2781,8 @@ struct Index {
     FollowState.clear();
     SaveState.clear();
     EngageState.clear();
+    // 转发台账也跟账号走（见 core/RepostState）：换人之后绝不能继承上一个人的对勾。
+    RepostState.clear();
   }
 
   private async signOut(): Promise<void> {
@@ -8543,6 +8548,14 @@ struct Index {
       EngageState.rememberReposted(id, reposted);
     }
     EngageState.rememberRepostedByCode(key, reposted);
+    /*
+     * **落盘台账**（见 core/RepostState）：IG 的载荷里没有"转过没有"这个字段，
+     * 而以前只记在内存 + 只认 shortcode 键上 —— 重启、或从帖子页/个人页进来时
+     * 对勾就会掉（用户报的"已转发状态会被刷掉"）。这里按**媒体 id + shortcode** 双键记。
+     */
+    if (id.length > 0 || key.length > 0) {
+      RepostState.remember(id.length > 0 ? id : key, key, reposted);
+    }
     const updated: Array<MediaPost> | null = FeedMapper.withReposted(this.postPagePosts, key, reposted);
     if (updated !== null) {
       this.postPagePosts = updated;

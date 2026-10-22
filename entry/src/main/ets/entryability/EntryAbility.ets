@@ -26,6 +26,7 @@ import { NativeReels } from '../core/NativeReels';
 import { ReelsCache } from '../core/ReelsCache';
 // 快拍托盘的落盘缓存（冷启动先画上次那排头像，见 core/TrayCache）。
 import { TrayCache } from '../core/TrayCache';
+import { RepostState } from '../core/RepostState';
 import { NetworkState } from '../core/NetworkState';
 import { PlatformCap } from '../core/PlatformCap';
 import { MobileSession } from '../core/mobileapi/MobileSession';
@@ -141,6 +142,14 @@ export default class EntryAbility extends UIAbility {
        * （用户报的"快拍列表冷启动渲染的很慢"就是它）。
        */
       TrayCache.init(this.context);
+      /*
+       * 「这条我转过没有」的本机台账（见 core/RepostState）。
+       *
+       * IG 的载荷里没有这个字段（媒体详情里只有 `media_repost_count` / `media_notes`，
+       * 没有 viewer 侧的标记），所以只能自己记。以前记在内存里，进程一重启对勾就掉了
+       * （用户报的"已转发的状态会被刷掉"），落盘之后跨重启还在。
+       */
+      RepostState.init(this.context);
       // 移动 API 的设备身份（见 core/mobileapi/MobileSession）：**只开落盘文件**，
       // 不读 Cookie 罐、不发请求。身份必须跨重启稳定，所以这里同步把上次那份读回内存。
       MobileSession.init(this.context);
