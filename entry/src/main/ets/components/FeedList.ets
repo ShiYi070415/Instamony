@@ -212,6 +212,21 @@ const LIST_ID: string = 'feed-list';
 /** 卡片根节点的 id 前缀：聚焦判据量的是整张卡片。 */
 const CARD_ID_PREFIX: string = 'feedcard-';
 /**
+ * **媒体盒子**节点的 id 前缀（见 mediaId / mediaSpan）。
+ *
+ * 聚焦播放要的是"这块媒体在屏幕上露出多少"，不是"整张卡片占了多少" —— 卡片还含表头、
+ * 正文、动作区，高度和媒体高度在长短文案/长视频之间差别很大（这正是"不同媒体高度下
+ * 聚焦不灵"的主因之一）。
+ */
+const MEDIA_ID_PREFIX: string = 'feedmedia-';
+/**
+ * 几何记忆的有效期（毫秒）：`getRectangleById` 量不到时，用这段时间内量到的值顶上。
+ *
+ * 250ms 足够覆盖"卡片被回收/重建"的一个或几个刷新周期（`FOCUS_SCROLL_THROTTLE_MS` = 120ms）；
+ * 再长就会把"已经滚出屏幕"的旧位置当成真的，焦点会粘在屏幕外那条上。
+ */
+const FOCUS_GEOM_TTL_MS: number = 250;
+/**
  * 视为「竖版」的宽高比上限。
  *
  * 9:16 是 0.5625、4:5 是 0.8 —— 取 0.7 正好把 9:16 这类竖视频和 4:5 分开。
@@ -292,6 +307,30 @@ class CardSpan {
 
   center(): number {
     return (this.top + this.bottom) / 2;
+  }
+}
+
+/**
+ * 一条媒体**几何记忆**（见 mediaSpan / knownGeom）。
+ *
+ * 为什么需要：卡片被 List 回收的那一两个刷新周期里，`getRectangleById` 会抛错 ——
+ * 旧实现把这种"量不到"当成了"不在屏幕上"，于是焦点跳到邻居、正在播的视频停掉
+ * （日志里的 `focus: visible set empty` / `keep lost`）。有了这份缓存，
+ * "卡片正被回收"和"真的滚出屏幕"就能区分开。
+ */
+class GeomEntry {
+  readonly top: number;
+  readonly bottom: number;
+  /** 量到的时刻（毫秒）。 */
+  readonly at: number;
+  /** 这一份是怎么来的：`node`（媒体节点）/ `card`（卡片折算）。 */
+  readonly source: string;
+
+  constructor(top: number, bottom: number, at: number, source: string) {
+    this.top = top;
+    this.bottom = bottom;
+    this.at = at;
+    this.source = source;
   }
 }
 
@@ -909,6 +948,10 @@ export struct FeedList {
    * 就不该再靠"它是当前焦点"继续占着焦点（否则屏幕外的视频会接着播）。
    */
   private focusVisiblePx: number = -1;
+  /** 最近量到的媒体几何（key → 几何 + 时间戳），见 mediaSpan / knownGeom。 */
+  private geomCache: Map<string, GeomEntry> = new Map<string, GeomEntry>();
+  /** 这一轮里有几条是靠几何记忆顶上的（诊断用：>0 说明卡片正在被回收）。 */
+  private geomHits: number = 0;
   /**
    * 当前在屏幕上的帖子：key → 列表索引。
    *
@@ -1249,6 +1292,118 @@ export struct FeedList {
   /** 卡片根节点的 id：聚焦判据量的是整张卡片（见 cardSpan）。 */
   private cardId(post: MediaPost): string {
     return `${CARD_ID_PREFIX}${FeedMapper.keyOf(post)}`;
+  }
+
+  /**
+   * **媒体盒子**根节点的 id。
+   *
+   * 聚焦播放真正该看的是"这块媒体在屏幕上露出多少"，而不是整张卡片 —— 卡片还含表头、
+   * 正文、动作区，一张小图配长文案的卡片能有 0.7 屏高、而媒体只占 0.15 屏。
+   * 见 mediaSpan / PendingGeom。
+   */
+  private mediaId(post: MediaPost): string {
+    return `${MEDIA_ID_PREFIX}${FeedMapper.keyOf(post)}`;
+  }
+
+  /**
+   * 量一条的**媒体矩形**（窗口坐标 px）；量不到返回 measurable=false。
+   *
+   * 兜底顺序见 mediaSpan：媒体节点 → 卡片节点按媒体占比折算 → 上次已知（TTL 内）。
+   */
+  private mediaSpanRaw(index: number): CardSpan {
+    if (index < 0 || index >= this.posts.length) {
+      return new CardSpan(0, 0, false);
+    }
+    try {
+      const info = this.getUIContext().getComponentUtils()
+        .getRectangleById(this.mediaId(this.posts[index]));
+      const top: number = info.windowOffset.y;
+      if (info.size.height > 0) {
+        return new CardSpan(top, top + info.size.height, true);
+      }
+    } catch (err) {
+    }
+    return new CardSpan(0, 0, false);
+  }
+
+  /** 卡片宽高比（宽/高）→ 用来把卡片高度里"不属于媒体的部分"扣掉。 */
+  private cardWidthPx(index: number): number {
+    if (index < 0 || index >= this.posts.length) {
+      return 0;
+    }
+    try {
+      const info = this.getUIContext().getComponentUtils()
+        .getRectangleById(this.cardId(this.posts[index]));
+      return info.size.width;
+    } catch (err) {
+      return 0;
+    }
+  }
+
+  /**
+   * **媒体矩形（带回退）** —— 聚焦判据唯一该用的几何。
+   *
+   * 三级回退（每一级都带"这条是怎么量到的"日志，出问题时能直接看出是哪一级在起作用）：
+   *   ① 媒体盒子节点本身（最准）；
+   *   ② 卡片矩形 + 按已知宽高比折算的媒体高度（卡片在、媒体节点刚被回收）；
+   *   ③ 本进程内**最近 250ms** 量到过的值（卡片正在回收/重建的那个窗口）；
+   * 都不成立 → measurable=false（调用方按"未知"处理，而不是当成"在屏幕外"）。
+   */
+  private mediaSpan(index: number): CardSpan {
+    const raw: CardSpan = this.mediaSpanRaw(index);
+    if (raw.measurable) {
+      this.rememberGeom(index, raw, 'node');
+      return raw;
+    }
+    const card: CardSpan = this.cardSpan(index);
+    if (card.measurable) {
+      const width: number = this.cardWidthPx(index);
+      const aspect: number = this.mediaBoxAspect(this.posts[index]);
+      const mediaHeight: number = (width > 0 && aspect > 0) ? width / aspect : 0;
+      /*
+       * 卡片的媒体在最上面（表头/正文/动作区都在它下面；沉浸式视频那支表头是叠在上面的，
+       * 也计入媒体高度）→ 媒体矩形 = [卡片顶, 卡片顶 + 媒体高]，再夹进卡片范围内。
+       */
+      if (mediaHeight > 0) {
+        const bottom: number = Math.min(card.top + mediaHeight, card.bottom);
+        const span: CardSpan = new CardSpan(card.top, bottom, true);
+        this.rememberGeom(index, span, 'card');
+        return span;
+      }
+      this.rememberGeom(index, card, 'card');
+      return card;
+    }
+    const cached: CardSpan | null = this.knownGeom(index);
+    if (cached !== null) {
+      return cached;
+    }
+    return new CardSpan(0, 0, false);
+  }
+
+  /** 记下这次量到的媒体矩形（见 knownGeom 的说明）。 */
+  private rememberGeom(index: number, span: CardSpan, source: string): void {
+    if (index < 0 || index >= this.posts.length) {
+      return;
+    }
+    const key: string = FeedMapper.keyOf(this.posts[index]);
+    this.geomCache.set(key, new GeomEntry(span.top, span.bottom, Date.now(), source));
+  }
+
+  /** 取"250ms 内量到过的"那条几何；过期/没有返回 null。 */
+  private knownGeom(index: number): CardSpan | null {
+    if (index < 0 || index >= this.posts.length) {
+      return null;
+    }
+    const key: string = FeedMapper.keyOf(this.posts[index]);
+    const hit: GeomEntry | undefined = this.geomCache.get(key);
+    if (hit === undefined) {
+      return null;
+    }
+    if (Date.now() - hit.at > FOCUS_GEOM_TTL_MS) {
+      return null;
+    }
+    this.geomHits = this.geomHits + 1;
+    return new CardSpan(hit.top, hit.bottom, true);
   }
 
   /**
@@ -2630,6 +2785,7 @@ export struct FeedList {
           this.onLikeMedia(post);
         })
     )
+    .id(this.mediaId(post))
   }
 
   /**
