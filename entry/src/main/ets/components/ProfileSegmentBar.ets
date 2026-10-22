@@ -109,15 +109,12 @@ export struct ProfileSegmentBar {
    */
   @Prop availableWidthVp: number = 0;
   /**
-   * 宿主是不是 **HDS 标题栏**。
+   * 宿主是不是 **HDS 标题栏**（Reels 那条走 `bottomBuilder`，见 pages/Index 的 shellTitleContent）。
    *
-   * 是的话**不挂沉浸光感材质**：标题栏自己已经是一层材质，官方《沉浸光感功耗优化》明确
-   * "避免材质嵌套"（同一子树里只应在最外层设一次），嵌套时内层材质不生效 —— 表现就是胶囊
-   * 完全没有玻璃底、只剩那颗灰底孤零零地杵着。所以标题栏那一版改用"低透明度中性底 +
-   * 背景模糊"凑出同一层观感（老接口，稳）。
-   *
-   * 注：需求后来要求"改回沉浸光感样式"，所以这个开关**默认不用**（两版都走材质），
-   * 留着是为了万一标题栏里材质真的不生效时能一行切回去。
+   * 是的话**不挂系统材质**，改用「低透明度中性底 + 背景模糊」凑同一层玻璃观感。
+   * 原因（真机实测 2026-10-22）：标题栏自己已经是一层材质，官方《沉浸光感–功耗优化》明确
+   * "避免材质嵌套（同一子树里只应在最外层设一次）"—— 嵌套时内层材质**静默失效**，
+   * 表现就是胶囊完全没有玻璃底、只剩那颗灰底药丸孤零零地杵在视频上（Reels 页当初就是这样）。
    */
   @Prop inTitleBar: boolean = false;
   /** 材质厚薄（跟设定页联动）。 */
@@ -269,10 +266,9 @@ export struct ProfileSegmentBar {
       .backgroundColor(Color.Transparent)
       // 选中态透明：否则点一下整颗变蓝（同 MaterialSurface 的说明）。
       .selectedColor(Color.Transparent)
-      // 材质**两版都挂**（需求："分段按钮改回沉浸光感样式"）。标题栏那一版按官方说法属于
-      // 材质嵌套，但实测观感就是要它这层玻璃，所以不再区分宿主；真出问题把 inTitleBar
-      // 那个开关接回来即可（见它的说明）。
-      .attributeModifier(new SurfaceModifier(this.materialThickness, false, true))
+      // 材质：页面里那一版挂系统沉浸光感；**标题栏里那一版强制走"低透明度底 + 背景模糊"**
+      // （材质嵌套会被官方建议禁掉、实测内层静默失效，见 inTitleBar 的说明）。
+      .attributeModifier(new SurfaceModifier(this.materialThickness, false, true, this.inTitleBar))
       .onChange((): void => {
         // 纯容器，不接功能（四段各自接点击）。
       })

@@ -72,6 +72,17 @@ export class SurfaceModifier implements AttributeModifier<ToggleAttribute> {
   private readonly thickness: string;
   private readonly invert: boolean;
   private readonly applyShadow: boolean;
+  /**
+   * **强制用降级观感**（不碰 `systemMaterial`），即使设备支持材质。
+   *
+   * 为什么需要这个开关（真机实测 2026-10-22）：把分段按钮挂到 HDS 标题栏的 `bottomBuilder`
+   * 里之后，胶囊的玻璃底**整块消失**，只剩那颗灰底药丸孤零零地悬着 —— 官方《沉浸光感–功耗优化》
+   * 说得很清楚："避免材质嵌套（同一子树里只应在最外层设一次）"。标题栏自己已经是一层材质，
+   * 内层再设一次就不生效（而且不报错，就是看不见）。
+   *
+   * 这种情况退回「低透明度中性底 + 背景模糊」那套老接口凑同一层观感（同下面的降级分支）。
+   */
+  private readonly forceFallback: boolean;
 
   /**
    * @param thickness 材质厚度档位。
@@ -82,15 +93,18 @@ export class SurfaceModifier implements AttributeModifier<ToggleAttribute> {
    *   **两处例外不归这里管**：悬浮页签、HDS 导航栏的菜单按钮走的是 HDS 的材质
    *   （`systemMaterialEffect`，见 pages/Index 的 floatingStyle / pageTitleStyle），
    *   hdsMaterial 里压根没有 applyShadow 字段 —— 它们的阴影由 HDS 自己决定。
+   * @param forceFallback 见字段说明（标题栏里那条分段按钮传 true）。
    */
-  constructor(thickness: string, invert: boolean = true, applyShadow: boolean = true) {
+  constructor(thickness: string, invert: boolean = true, applyShadow: boolean = true,
+              forceFallback: boolean = false) {
     this.thickness = thickness;
     this.invert = invert;
     this.applyShadow = applyShadow;
+    this.forceFallback = forceFallback;
   }
 
   applyNormalAttribute(instance: ToggleAttribute): void {
-    if (PlatformCap.hasArkMaterial()) {
+    if (PlatformCap.hasArkMaterial() && !this.forceFallback) {
       // 材质接口是 26 起的：声明里有、**运行时未必有**（模拟器上 `withTheme` 就是这么炸的，
       // 见 core/ImmersiveLight 的 safeCall）。这里同样兜一层，最坏退化成没有材质的按钮，
       // 而不是把整个界面带崩。

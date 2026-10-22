@@ -656,9 +656,26 @@ const OVERLAY_SINK_DISTANCE: number = BAR_SINK_DISTANCE + BAR_SINK_HEIGHT;
  * 需求是"置中显示"，所以它不能铺满标题栏：两段文字各两个字，208vp 的胶囊（每段约 88vp）
  * 已经是"一眼能点、又明显是个按钮"的比例。想更宽/更窄只改这一个数。
  */
-const REELS_SEGMENT_WIDTH_VP: number = 208;
+const REELS_SEGMENT_WIDTH_VP: number = 160;
 /** 分段按钮的高度（vp，与 ProfileSegmentBar 的 SEGMENT_HEIGHT 对齐）。 */
 const REELS_SEGMENT_HEIGHT_VP: number = 40;
+/**
+ * 标题栏里**自己画的那份标题**（Reels）的字号（fp）。
+ *
+ * 为什么自己画：`stackBuilder` 一给，HDS 就不再画它自己的 mainTitle（真机验证），
+ * 而需求要"保留 Reels 标题 + 按钮放到标题和菜单中间"，只能在 stack 区里再画一遍。
+ * 30fp/Bold 是照着 HDS MINI 标题那一行量的（真机截图对比），要更像只改这一个数。
+ */
+const REELS_TITLE_SIZE: number = 28;
+/** 标题左边距（vp）：和 HDS 原生标题的左边距对齐（16）。 */
+const REELS_TITLE_LEFT_PAD_VP: number = 16;
+/**
+ * 分段按钮与右侧菜单（静音/下载）之间留的缝（vp）。
+ *
+ * 菜单是 HDS 自己画的，位置摸不到；实测两个按钮约占 100vp 宽，而 stackBuilder 的可用宽度
+ * 一直铺到菜单底下，所以只能自己往左退一点。真机上要再挤一点/松一点就改这个数。
+ */
+const REELS_SEGMENT_MENU_GAP_VP: number = 108;
 /** 切段动画时长（ms）：和系统 Tab 的过渡接近，快一点更"跟手"。 */
 const REELS_SWITCH_MS: number = 220;
 /** 切段时那一页的横向位移（vp）：只做一点点，观感是"翻过去"而不是"飞过去"。 */
@@ -6722,17 +6739,22 @@ struct Index {
 
   private shellTitleContent(): TitleBarContentOptions {
     /*
-     * Reels 标签那一页的标题栏**让位给分段按钮**（需求："把关注流和探索流分开两页，
-     * 在 reels 页的 hdstitle 中显示分段按钮，置中显示"）。
+     * Reels 标签那一页：**标题栏那一行**里塞进分段按钮 —— 需求："保留 Reels 标题，
+     * 把按钮放在 hdstitle 和 menus 按钮中间"。
      *
-     * 用 HDS 的 `stackBuilder`（6.0.0(20) 起就有的"标题栏 stack 区自定义 builder"）：
-     * 它替换的就是 mainTitle/subTitle 那块，**右上角菜单不受影响**（静音/下载两颗还在）。
-     * 不要用 `bottomBuilder`：那一行会被算进标题栏，标题栏的毛玻璃会跟着长高
-     * ——「我的」页当初就是踩了这个（见 ProfilePage.pinnedSegmentBar 的说明）。
+     * 用的还是 HDS 的 `stackBuilder`（6.0.0(20) 起）：它占的是**标题那一块**（mainTitle/subTitle
+     * 所在的 stack 区），右边留给 `menu`（静音/下载）。所以布局是
+     *   [我们的 stackBuilder（标题文字 + 分段按钮）] [menu]
+     * —— 标题文字由我们自己画（`REELS_TITLE_TEXT`），因为 stackBuilder 一旦给了，
+     * HDS 就不再画它自己的 mainTitle 了（给了也看不见，见下面的实测记录）。
+     *
+     * 为什么不用 `bottomBuilder`（上一版就是这么做的）：那一行会被算进标题栏、标题栏的毛玻璃
+     * 跟着长高，而且内层材质**静默失效**（官方《沉浸光感–功耗优化》禁止材质嵌套），
+     * 胶囊只剩一颗灰底药丸浮着 —— 用户要的是"改回去沉浸光感 + 放到标题和菜单中间"。
      */
     if (this.currentTab() === AppTab.Reels) {
       return {
-        // 标题文字让位（分段按钮自己就是标题）；空串而不是不传，HDS 那边两版都稳。
+        // 标题由 stackBuilder 里自己画（见 reelsTitleSegment），这里留空。
         title: { mainTitle: '' },
         menu: this.menus(),
         /*
@@ -6743,9 +6765,7 @@ struct Index {
          * `this.observeComponentCreation2(...)`，于是真机上当场崩：
          *   TypeError: Cannot read property observeComponentCreation2 of undefined
          *     at reelsTitleSegment entry (pages/Index.ets:6751)
-         * 箭头函数按词法捕获 `this`，包一层就正常（`navDestination(this.xxx)` 那种能直接传，
-         * 是因为它在 ArkUI 自己的属性上、编译器会替我们包一层；这里是原生组件的配置对象内部，
-         * 编译器不管）。
+         * 箭头函数按词法捕获 `this`，包一层就正常。
          */
         stackBuilder: (): void => {
           this.reelsTitleSegment();
@@ -6756,28 +6776,46 @@ struct Index {
   }
 
   /**
-   * Reels 标题栏里那条分段按钮：**探索 / 关注**，置中。
+   * Reels 标题栏那一行：**[Reels] …… [探索 | 关注]**（右侧紧挨着菜单，菜单由 HDS 画）。
    *
-   * 观感直接套「我的」页那一款（同一个 ProfileSegmentBar：沉浸光感材质 + 会滑动的灰底药丸 +
-   * 点按/横拖都能切）；差别只有"段里是文字""上下不留白"（见它的 compact / SEGMENT_MODE_REELS）。
+   * 标题文字自己画一份的原因：`stackBuilder` 会顶掉 HDS 自己的 mainTitle（真机验证），
+   * 想要"标题留着"，只能在这儿按 HDS 的观感再画一遍（字号/字重见 REELS_TITLE_*）。
+   * 分段按钮套「我的」页那一款（ProfileSegmentBar：沉浸光感材质 + 会滑动的灰底药丸 + 点按/横拖）。
    */
   @Builder
   reelsTitleSegment() {
     Row() {
-      ProfileSegmentBar({
-        tab: this.reelsSegment,
-        count: 2,
-        mode: SEGMENT_MODE_REELS,
-        // 标题栏里没有上下留白的余地（行高 56vp，胶囊 40vp）。
-        compact: true,
-        availableWidthVp: REELS_SEGMENT_WIDTH_VP,
-        onSelect: (segment: number): void => {
-          this.selectReelsSegment(segment);
-        }
-      })
+      Text(this.pageTitle())
+        .fontSize(REELS_TITLE_SIZE)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.primary_text'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+      Blank()
+      Column() {
+        ProfileSegmentBar({
+          tab: this.reelsSegment,
+          count: 2,
+          mode: SEGMENT_MODE_REELS,
+          // 标题栏那一行只有 56vp：胶囊 40vp，上下不留白。
+          compact: true,
+          // **沉浸光感照旧**（需求："改回去沉浸光感效果"）：标题栏那一行是 stack 区、
+          // 不是 bottomBuilder 那种被算进标题栏的行，实测这层材质在这里是生效的。
+          availableWidthVp: REELS_SEGMENT_WIDTH_VP,
+          onSelect: (segment: number): void => {
+            this.selectReelsSegment(segment);
+          }
+        })
+      }
+      .width(REELS_SEGMENT_WIDTH_VP)
+      .height(REELS_SEGMENT_HEIGHT_VP)
+      // 和菜单按钮之间留一点缝（菜单是 HDS 画的，位置我们摸不到，只能自己退一点）。
+      .margin({ right: REELS_SEGMENT_MENU_GAP_VP })
     }
-    .width(REELS_SEGMENT_WIDTH_VP)
-    .height(REELS_SEGMENT_HEIGHT_VP)
+    .width('100%')
+    .height('100%')
+    .alignItems(VerticalAlign.Center)
+    .padding({ left: REELS_TITLE_LEFT_PAD_VP })
   }
 
   /**
