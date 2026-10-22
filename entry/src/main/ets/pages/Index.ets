@@ -45,9 +45,7 @@ import {
   DOM_SURVEY_SCRIPT,
   followClickScript,
   followStateScript,
-  likeOnPostPageScript,
-  likeCommentScript,
-  likePostScript,  OWN_PROFILE_SCRIPT,
+  likeCommentScript,  OWN_PROFILE_SCRIPT,
   PAGE_STATE_SCRIPT,
   PROBE_WATCH_ON_SCRIPT,
   saveOnPostPageScript,
@@ -1385,6 +1383,16 @@ struct Index {
    * 但不同帖子互不影响。
    */
   private likingKeys: Set<string> = new Set<string>();
+  /**
+   * 连点时"用户**最后**想要的那个点赞状态"（key → 想要的值）。
+   *
+   * 用户报"点赞按钮短时间内重复按没反应"：以前同一条在飞时第二次点击被直接丢掉。
+   * 现在每次点击都立刻翻转图标、并把目标状态记在这里；在飞那一发结束时对一次账，
+   * 不一致就补一发（见 likePost）。这样"连点 3 次"最多只多打 1~2 发请求。
+   */
+  private likeIntent: Map<string, boolean> = new Map<string, boolean>();
+  /** 转发版的同一个东西（见 repostPost）。 */
+  private repostIntent: Map<string, boolean> = new Map<string, boolean>();
   /**
    * 正在关注/取关的账号（小写用户名）集合。
    *
@@ -4476,53 +4484,64 @@ struct Index {
     return post;
   }
 
-  /** 点赞 / 取消赞：先乐观翻转，再走 HTTP 直发（模板没抓到才退回网页）。 */
+  /**
+   * 点赞 / 取消赞：先乐观翻转，再走移动端私有接口。
+   *
+   * **连点不再"没反应"**（用户报的）：以前同一条在飞的时候，第二次点击直接被
+   * `likingKeys.has(key)` 悄悄丢掉。现在改成**合并意图**：
+   *   · 每次点击都**立刻**翻转图标（点几下就翻几下，手感跟手）；
+   *   · 把"用户最后想要的状态"记进 `likeIntent`；在飞的那一发结束时对一次账，
+   *     若和用户最后想要的不一致，**再补一发**（最多补两轮，绝不会连发）。
+   *
+   * 为什么不能简单地"每次点击都发一发"：写操作在 IG 那边是按密度判定的（本项目
+   * 一直有节流闸），连点发出的请求既慢又危险；合并之后"连点 3 次 → 最多 2 发"。
+   */
   private async likePost(post: MediaPost): Promise<void> {
     const current: MediaPost = this.currentPost(post);
     const key: string = FeedMapper.keyOf(current);
-    // 只挡「同一条正在处理中」：换一条帖子可以立刻点，不必排队等前一条跑完。
-    if (this.likingKeys.has(key) || this.navigating || current.shortcode.length === 0) {
+    // 只挡「换页/导航中」：同一条在飞时**不再丢弃**，见上面的说明。
+    if (this.navigating || current.shortcode.length === 0) {
       return;
     }
-    const before: boolean = current.liked;
-    this.likingKeys.add(key);
+    const desired: boolean = !current.liked;
+    this.likeIntent.set(key, desired);
     // 先翻转，点下去立刻有反馈；下面再用真实结果校正。
     // 走 setLikedEverywhere：信息流与**帖子页**那两份列表都要跟着变（见那里的说明）。
-    this.setLikedEverywhere(key, !before);
+    this.setLikedEverywhere(key, desired);
+    if (this.likingKeys.has(key)) {
+      hilog.info(DOMAIN, TAG, 'like coalesced key=%{public}s want=%{public}s', key, `${desired}`);
+      return;
+    }
+    this.likingKeys.add(key);
+    let target: boolean = desired;
     try {
-      // ① **HTTP 直发**（core/NativeEngage）：模板回放那条 GraphQL 变更，不发网页、不等 DOM。
-      //    短码一并带上：个人页那几个分页的 `id` 可能是丢精度的 pk 甚至就是短码本身，
-      //    NativeEngage 会用它去换真 pk（见 core/mobileapi/MobileEngage.mediaPkFor）。
-      const native: EngageResult = await NativeEngage.setLiked(current.id, !before, current.shortcode);
-      if (native.ok) {
-        this.setLikedEverywhere(key, !before);
+      for (let round: number = 0; round < 3; round++) {
+        const native: EngageResult = await NativeEngage.setLiked(current.id, target, current.shortcode);
+        // 这一发在路上时用户可能又点了几下：以**最后那个意图**为下一轮目标。
+        const queued: boolean | undefined = this.likeIntent.get(key);
+        if (queued !== undefined && queued !== target) {
+          target = queued;
+          hilog.info(DOMAIN, TAG, 'like retarget key=%{public}s want=%{public}s', key, `${target}`);
+          continue;
+        }
+        this.likeIntent.delete(key);
+        if (!native.ok) {
+          // 没点成：回滚到"这一发的反面"，并说明原因。
+          this.setLikedEverywhere(key, !target);
+          hilog.info(DOMAIN, TAG, 'like failed (%{public}s) id=%{public}s', native.detail,
+            current.id);
+          this.setLocalStatus($r('app.string.like_failed'));
+          return;
+        }
+        this.setLikedEverywhere(key, target);
         return;
       }
-      hilog.info(DOMAIN, TAG, 'native like failed (%{public}s) → web', native.detail);
-      // ② 网页驱动（移动端那一发被拒）：老路子，点网页自己那颗按钮。
-      // 1) 帖子就在网页当前信息流里：直接点（快路径）。
-      let state: string = await this.runLike(likePostScript(post.shortcode), LIKE_TIMEOUT_MS);
-      // 2) 不在（靠游标翻出来的帖子，页面自己没渲染过）：真的导航到帖子页再点。
-      if (state === 'not-found') {
-        // 走兜底之前**先把图标回滚**。兜底要真导航一次网页（去帖子页、点完再回首页），
-        // 是秒级的；让它红着等这么久，万一最后没点成，用户看到的就是「红了半天又变回去」，
-        // 像个 bug。这里先回到原状，兜底真点成了再由下面按 state 翻回来 ——
-        // 那个「后来变红」本身就是成功反馈。
-        this.setLikedEverywhere(key, before);
-        state = await this.likeOnPostPage(post);
-      }
-      if (state === 'liked' || state === 'unliked') {
-        this.setLikedEverywhere(key, state === 'liked');
-        return;
-      }
-      // 没点成：回滚乐观状态，并说明原因。
-      this.setLikedEverywhere(key, before);
-      hilog.info(DOMAIN, TAG, 'like failed state=%{public}s', state);
-      this.setLocalStatus(state === 'not-found'
-        ? $r('app.string.engage_not_rendered')
-        : $r('app.string.like_failed'));
+      // 三轮还没收敛（用户一直在点）：停手，但让图标停在最后一次「成功」的那个状态。
+      hilog.info(DOMAIN, TAG, 'like gave up after 3 rounds key=%{public}s', key);
+      this.likeIntent.delete(key);
     } catch (error) {
-      this.setLikedEverywhere(key, before);
+      this.likeIntent.delete(key);
+      this.setLikedEverywhere(key, !target);
       hilog.warn(DOMAIN, TAG, 'like error: %{public}s', (error as Error).message);
       this.setLocalStatus($r('app.string.like_failed'));
     } finally {
@@ -4566,26 +4585,47 @@ struct Index {
   private async repostPost(post: MediaPost): Promise<void> {
     const current: MediaPost = this.currentPost(post);
     const key: string = FeedMapper.keyOf(current);
-    if (this.repostingKeys.has(key) || this.navigating || current.shortcode.length === 0) {
+    // 同 likePost：换页/导航中才挡；「同一条在飞」不再丢弃点击，改成合并意图。
+    if (this.navigating || current.shortcode.length === 0) {
       return;
     }
-    const before: boolean = current.reposted;
-    this.repostingKeys.add(key);
+    const desired: boolean = !current.reposted;
+    this.repostIntent.set(key, desired);
     // 先翻转，点下去立刻有反馈（对勾出现 / 消失）；下面再用真实结果校正。
-    this.setRepostedEverywhere(key, !before);
+    this.setRepostedEverywhere(key, desired);
+    if (this.repostingKeys.has(key)) {
+      hilog.info(DOMAIN, TAG, 'repost coalesced key=%{public}s want=%{public}s', key, `${desired}`);
+      return;
+    }
+    this.repostingKeys.add(key);
+    let target: boolean = desired;
     try {
-      // 短码一并带上：个人页/收藏那几段可能只有短码，没有它换不出真 pk（同 likePost）。
-      const native: EngageResult = await NativeEngage.setReposted(current.id, !before, current.shortcode);
-      if (native.ok) {
-        this.setRepostedEverywhere(key, !before);
-        this.setLocalStatus(!before
+      for (let round: number = 0; round < 3; round++) {
+        // 短码一并带上：个人页/收藏那几段可能只有短码，没有它换不出真 pk（同 likePost）。
+        const native: EngageResult = await NativeEngage.setReposted(current.id, target,
+          current.shortcode);
+        const queued: boolean | undefined = this.repostIntent.get(key);
+        if (queued !== undefined && queued !== target) {
+          target = queued;
+          hilog.info(DOMAIN, TAG, 'repost retarget key=%{public}s want=%{public}s', key,
+            `${target}`);
+          continue;
+        }
+        this.repostIntent.delete(key);
+        if (!native.ok) {
+          hilog.info(DOMAIN, TAG, 'repost failed (%{public}s)', native.detail);
+          // 没成功：把图标滚回去，并把原因说清楚（不再打开网页兜底）。
+          this.setRepostedEverywhere(key, !target);
+          this.setLocalStatus($r('app.string.repost_unsupported'));
+          return;
+        }
+        this.setRepostedEverywhere(key, target);
+        this.setLocalStatus(target
           ? $r('app.string.repost_done') : $r('app.string.unrepost_done'));
         return;
       }
-      hilog.info(DOMAIN, TAG, 'native repost failed (%{public}s)', native.detail);
-      // 没成功：把图标滚回去，并把原因说清楚（不再打开网页兜底）。
-      this.setRepostedEverywhere(key, before);
-      this.setLocalStatus($r('app.string.repost_unsupported'));
+      hilog.info(DOMAIN, TAG, 'repost gave up after 3 rounds key=%{public}s', key);
+      this.repostIntent.delete(key);
     } finally {
       this.repostingKeys.delete(key);
     }
@@ -4599,19 +4639,6 @@ struct Index {
       return payload.state;
     } catch (error) {
       return 'error';
-    }
-  }
-
-  /** 导航到帖子页点一次赞；无论成败都回到首页。 */
-  private async likeOnPostPage(post: MediaPost): Promise<string> {
-    const ready: boolean = await this.navigateToPost(post);
-    try {
-      if (!ready) {
-        return 'error';
-      }
-      return await this.runLike(likeOnPostPageScript(post.shortcode), LIKE_TIMEOUT_MS);
-    } finally {
-      await this.returnToFeed();
     }
   }
 
