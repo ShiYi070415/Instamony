@@ -1,13 +1,18 @@
 /*
  * Reels 的**移动端私有通道**（对应 instagrapi 的 `reels` / `explore_reels`）。
  *
- * ## 三个端点，实测结论（真机 2026-10-21，见下面的实验记录）
+ * ## 端点与实测结论（真机 2026-10-22 逐页复验）
  *
  * | 端点 | 形状 | 翻页 | 用不用 |
  * | --- | --- | --- | --- |
- * | `POST clips/connected/` | `items[5]`（关注流，无 `paging_info`） | 无游标 | **首屏暖场**（小、快） |
- * | `GET discover/topical_explore/` | `sectional_items[]`（见 MobileDiscover） | **`max_id` 真能换页** | **主路** |
- * | `POST clips/discover/` | `items[]` 空 + `items_with_ads[4]` | **换不了页** | 最后兜底 |
+ * | `POST clips/connected/` | `items[5]`（关注流） | 换不动 | **首屏快通道**（281KB / 1~3 秒） |
+ * | `POST clips/discover/` | `items_with_ads[4]`（探索 Reels） | 换不动 | **首屏快通道**（203KB / 1~2 秒） |
+ * | `POST clips/discover/social/` | `items[6]`（Friends，instagrapi 的 `friends_reels`） | 换不动 | **首屏快通道**（324KB / 1~2 秒） |
+ * | `GET discover/topical_explore/` | `sectional_items[]`（见 MobileDiscover） | **`max_id` 真能换页** | 翻页兜底 / 补作者池 |
+ *
+ * 三条 `clips/*` 全是**清一色视频**，但**每页都回同一批条目**（逐页验过：`clips/discover/`
+ * 连续 4 页短码完全一样、字节数只差在顺序；`social`(6 条) 与 `connected`(5 条) 同理）。
+ * 所以它们只负责"首屏 2~4 秒铺满十几条"，**翻页交给作者页与探索流**（见 NativeReels.fetchPage）。
  *
  * ### `clips/discover/` 为什么不能当主路（这条是本节的重点）
  *
@@ -64,6 +69,11 @@ export class MobileClips {
    */
   static async discover(cursor: string = ''): Promise<string | null> {
     return MobileClips.post(CLIPS_DISCOVER, cursor);
+  }
+
+  /** `clips/discover/social/`（instagrapi 的 `friends_reels`：Friends 那个 tab）。 */
+  static async friends(cursor: string = ''): Promise<string | null> {
+    return MobileClips.post('clips/discover/social/', cursor);
   }
 
   /**
