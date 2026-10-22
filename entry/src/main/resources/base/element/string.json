@@ -445,6 +445,10 @@
       "value": "未发送 · 点这里重试"
     },
     {
+      "name": "direct_sending",
+      "value": "发送中…"
+    },
+    {
       "name": "direct_open_web",
       "value": "在网页中打开"
     },

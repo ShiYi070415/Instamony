@@ -85,6 +85,11 @@ interface QueuedSend {
   localId: string;
   text: string;
 }
+/** 一条发送失败、等着用户点重试的消息（见 DirectThreadViewModel.failedSends）。 */
+interface FailedSend {
+  threadId: string;
+  text: string;
+}
 /**
  * 翻页"卡住"（去重后没多出任何一条）之后的冷却：这段时间内不再翻，过了允许再试一次。
  *
@@ -105,7 +110,8 @@ export class DirectThreadViewModel {
     this.pending = [];
     this.confirmedIds = new Map<string, number>();
     this.sendQueue = [];
-    this.failedSends = new Map<string, string>();
+    this.failedSends = new Map<string, FailedSend>();
+    this.pendingThread = new Map<string, string>();
     this.busy = false;
     this.threadId = '';
     this.onView(null);
@@ -125,8 +131,15 @@ export class DirectThreadViewModel {
   private sendQueue: Array<QueuedSend> = [];
   /** 队列正在发（防重入）。 */
   private draining: boolean = false;
-  /** 发送失败的乐观气泡：本地 id → 文本（界面标红 + 可点重试，见 isFailed / retryFailed）。 */
-  private failedSends: Map<string, string> = new Map<string, string>();
+  /** 发送失败的乐观气泡：本地 id → 失败详情（界面标红 + 可点重试，见 isFailed / retryFailed）。 */
+  private failedSends: Map<string, FailedSend> = new Map<string, FailedSend>();
+  /**
+   * 每个乐观气泡属于哪条会话（本地 id → threadId）。
+   *
+   * 视图模型是全局共用的一个实例：切会话时不能把"别的会话还没发完的气泡"画到当前会话里，
+   * 但它们也**不能丢**（队列还在发）—— 回到原来那条会话时气泡原样回来（见 open）。
+   */
+  private pendingThread: Map<string, string> = new Map<string, string>();
   private diag: string = '-';
   /** 乐观发送的临时消息（本地 id → 文本），成功/失败后清掉。 */
   private pending: Array<DirectMessage> = [];
@@ -189,18 +202,22 @@ export class DirectThreadViewModel {
   open(threadId: string, title: string, avatar: string = '', isGroup: boolean = false,
        userId: string = '', username: string = ''): void {
     /*
-     * **换会话时把上一条会话的待发/失败状态丢掉**。
+     * **换会话时只隐藏"别的会话"的乐观气泡，队列一条都不许丢**。
      *
-     * 队列里的每一条都自带 `threadId`（见 QueuedSend），所以就算不清也不会发错人；
-     * 但气泡已经不在屏上了（下面 `pending = []`），留着只会让用户以为发出去了。
-     * 正在飞的那一条会照旧发到它自己的会话里 —— 这点由队列保证。
+     * 上一版在这里把 `sendQueue` 整个清掉（还打了"丢弃待发"的日志）—— 结果就是
+     * 用户连着发两三条、中途退出会话再进来，那几条**再也不会发出去**，
+     * 退出重进对记录当然对不上（用户报的"一发都出不去了"）。
+     * 队列里每条都自带 `threadId`（见 QueuedSend），会照旧发到它自己的会话。
+     * 回到同一条会话时，气泡原样还在（`pendingThread` 记着它们属于谁）。
      */
-    if (this.sendQueue.length > 0 || this.failedSends.size > 0) {
-      hilog.warn(DOMAIN, TAG, 'open: 丢弃上一条会话的待发/失败气泡 queued=%{public}d failed=%{public}d',
-        this.sendQueue.length, this.failedSends.size);
+    const kept: Array<DirectMessage> = [];
+    for (let index: number = 0; index < this.pending.length; index++) {
+      const one: DirectMessage = this.pending[index];
+      const owner: string | undefined = this.pendingThread.get(one.id);
+      if (owner === undefined || owner === threadId) {
+        kept.push(one);
+      }
     }
-    this.sendQueue = [];
-    this.failedSends = new Map<string, string>();
     this.threadId = threadId;
     this.fallbackTitle = title;
     this.fallbackAvatar = avatar;
@@ -210,7 +227,7 @@ export class DirectThreadViewModel {
     this.view = null;
     this.onView(this.view);
     this.diag = '-';
-    this.pending = [];
+    this.pending = kept;
     this.confirmedIds = new Map<string, number>();
     this.onPending(this.pending);
   }
@@ -463,6 +480,8 @@ export class DirectThreadViewModel {
     const temp: DirectMessage = new DirectMessage(`local-${Date.now()}-${this.sendSeq}`, '',
       true, Date.now(), 'text', body);
     this.pending = this.pending.concat([temp]);
+    // 记下这条气泡属于哪条会话（切走了就藏起来、回来还在，见 open）。
+    this.pendingThread.set(temp.id, this.threadId);
     this.onPending(this.pending);
     this.sendQueue.push({ threadId: this.threadId, localId: temp.id, text: body });
     this.drainSends();
@@ -511,7 +530,7 @@ export class DirectThreadViewModel {
            *   · 其它：原样带上 detail（如 `send-1545023:…`、`throttled-3min`），便于定位。
            */
           const why: string = NativeDirect.lastDetail();
-          this.failedSends.set(job.localId, job.text);
+          this.failedSends.set(job.localId, { threadId: job.threadId, text: job.text });
           hilog.warn(DOMAIN, TAG, 'send failed local=%{public}s why=%{public}s left=%{public}d',
             job.localId, why, this.sendQueue.length);
           this.onStatus(why === 'challenge_required'
@@ -566,11 +585,13 @@ export class DirectThreadViewModel {
     return this.failedSends.has(localId);
   }
 
-  /** 现在失败着的本地气泡 id（界面进会话时同步一份）。 */
+  /** 现在失败着的本地气泡 id（只给当前这条会话的；界面进会话时同步一份）。 */
   failedIdsNow(): Array<string> {
     const ids: Array<string> = [];
-    this.failedSends.forEach((text: string, id: string): void => {
-      ids.push(id);
+    this.failedSends.forEach((one: FailedSend, id: string): void => {
+      if (one.threadId === this.threadId) {
+        ids.push(id);
+      }
     });
     return ids;
   }
@@ -581,12 +602,12 @@ export class DirectThreadViewModel {
    * 气泡本身不重建（本地 id 不变），只是重新入队 —— 成功之后照常换成服务端那条。
    */
   retryFailed(localId: string): void {
-    const text: string | undefined = this.failedSends.get(localId);
-    if (text === undefined) {
+    const one: FailedSend | undefined = this.failedSends.get(localId);
+    if (one === undefined) {
       return;
     }
     this.failedSends.delete(localId);
-    this.sendQueue.push({ threadId: this.threadId, localId: localId, text: text });
+    this.sendQueue.push({ threadId: one.threadId, localId: localId, text: one.text });
     hilog.info(DOMAIN, TAG, 'retry send local=%{public}s queue=%{public}d',
       localId, this.sendQueue.length);
     this.onPending(this.pending);
@@ -687,11 +708,21 @@ export class DirectThreadViewModel {
     let dropped: number = 0;
     for (let index: number = 0; index < this.pending.length; index++) {
       const one: DirectMessage = this.pending[index];
+      /*
+       * 只确认"属于当前这条会话"的气泡：切会话后 `this.view` 是别人的，
+       * 拿它去匹配会把另一条会话里同样文本的气泡误判成"已发送"（那样它就再也不发了）。
+       */
+      const owner: string | undefined = this.pendingThread.get(one.id);
+      if (owner !== undefined && owner !== this.threadId) {
+        keep.push(one);
+        continue;
+      }
       const hitId: string = DirectThreadViewModel.serverCopyOf(this.view, one, used);
       if (hitId.length > 0) {
         used.add(hitId);
         // 记一下：界面看到这条时不要再播入场动画（见 wasConfirmed）。
         this.confirmedIds.set(hitId, Date.now());
+        this.pendingThread.delete(one.id);
         dropped++;
         continue;
       }

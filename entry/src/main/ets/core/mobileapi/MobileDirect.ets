@@ -251,9 +251,15 @@ export class MobileDirect {
     hilog.info(DOMAIN, TAG, 'send mobile entry thread=%{public}s len=%{public}d idLen=%{public}d',
       id, body.length, id.length);
     // **不签名**（instagrapi 的 with_signature=False）：第 4 个参数是 false。
+    /*
+     * 优先级用 **urgent**（不是 interactive）：发消息是用户当场在等的写操作，
+     * 而全局队列里经常排着一长串读（真机日志里 story 拉取单个请求能排到 20~35 秒），
+     * 按 interactive 排的话一发消息要先等 4 秒甚至更久 —— 用户看到的就是"发不出去"。
+     * 写在 IG 那边的密度由 `ApiThrottle.writeSlot` 的 3~6 秒人速间隔把关，不靠这里的排队。
+     */
     const result: MobileResult = await MobileRequest.send(
       'direct_v2/threads/broadcast/text/', MobileRequest.formOf(data), '', false, null,
-      new MobileOptions(ApiThrottle.DIRECT, ApiThrottle.interactive()));
+      new MobileOptions(ApiThrottle.DIRECT, ApiThrottle.urgent()));
     if (!result.ok) {
       hilog.warn(DOMAIN, TAG, 'send miss thread=%{public}s %{public}s body=%{public}s',
         id, result.summary(), result.body.substring(0, 160).replace(/[\r\n]+/g, ' '));

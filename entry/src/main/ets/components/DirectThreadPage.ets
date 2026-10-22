@@ -676,6 +676,23 @@ export struct DirectThreadPage {
     return message.tsMs - prev.tsMs > GROUP_GAP_MS;
   }
 
+  /**
+   * 这条气泡还在"发送中"吗（本地乐观气泡、且没失败）。
+   *
+   * 收件箱/服务端来的消息 id 不是 `local-` 前缀（见 DirectThreadViewModel.send）。
+   */
+  private isSending(id: string): boolean {
+    if (id.indexOf('local-') !== 0) {
+      return false;
+    }
+    for (let index: number = 0; index < this.pending.length; index++) {
+      if (this.pending[index].id === id) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** 一条消息（自己的靠右、对方的靠左；对方的按时间段在左侧带头像）。 */
   @Builder
   bubble(message: DirectMessage, index: number) {
@@ -704,6 +721,15 @@ export struct DirectThreadPage {
             .onClick((): void => {
               this.vm.retryFailed(message.id);
             })
+          } else if (this.isSending(message.id)) {
+            /*
+             * **"发送中…"**：发消息要过 3~6 秒的人速间隔（见 ApiThrottle.writeSlot），
+             * 没有这行字的话用户看到的就是"点了发送没反应"（用户报过两次）。
+             */
+            Text($r('app.string.direct_sending'))
+              .fontSize(11)
+              .fontColor($r('app.color.secondary_text'))
+              .padding({ right: 4, top: 2 })
           }
         }
         .alignItems(HorizontalAlign.End)

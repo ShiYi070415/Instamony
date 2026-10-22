@@ -99,9 +99,14 @@ const PRIORITY_WARM: number = 1;
 /** 空闲优先级：诊断、自检、后台补缓存 —— 排最后，别抢用户的请求。 */
 const PRIORITY_IDLE: number = 2;
 
-/** 写操作之间的人速间隔（毫秒）：3 秒 + 0~5 秒随机。 */
+/**
+ * 写操作之间的人速间隔（毫秒）：3 秒 + 0~3 秒随机。
+ *
+ * 原来是 0~5 秒（3~8 秒）。用户反复报"发送有延迟"，而连发两三条时的等待就是它累加出来的：
+ * 3~8 秒 → 3~6 秒后，两条之间的最坏等待从 16 秒降到 12 秒，密度仍然远低于"脚本"。
+ */
 const WRITE_GAP_MIN_MS: number = 3000;
-const WRITE_GAP_JITTER_MS: number = 5000;
+const WRITE_GAP_JITTER_MS: number = 3000;
 
 /** 排队等闸门的一个请求。 */
 class PaceWaiter {
