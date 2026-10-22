@@ -4,8 +4,13 @@
  * 版式：进入就定位到最新消息；自己靠右、对方靠左并在"时间段第一条"左侧显示头像；
  * 相邻两条同发送者间隔 ≤2 分钟算一段（段内紧、段间留白）；输入条悬浮在列表之上。
  *
- * 加载更老：**上拉到顶部后继续下拉触发 `Refresh`** 才去取（需求），取回来之后把视口
- * **锚回加载前那条消息**（`scrollToIndex`），所以页面位置不变、不闪。
+ * 视口：列表**从屏幕最顶端开始**（y=0），顶部给标题栏让出的那 96vp 由 `contentStartOffset`
+ * 表达（属于内容、跟着滚动走）—— 停在最上面时第一条消息在栏下方，往后滑时消息从半透明的
+ * 标题栏**底下穿过去**，不再被一条硬边界裁掉。
+ *
+ * 加载更老：**触顶就自动取**（`onReachStart`）；原生 `Refresh` 组件按需求移除
+ * （它自带的下拉指示器无法关掉），"刷新动画"由列表顶部那一行加载圈负责（高度 0→36 带补间）。
+ * 取回来之后把视口**锚回加载前那条消息**（`scrollToIndex` + 回退标题栏高度），所以位置不变、不闪。
  */
 
 import { display, window, componentUtils } from '@kit.ArkUI';
@@ -26,8 +31,6 @@ const TAG: string = 'DirectThreadPage';
  * 见 pages/Index 里 bottomBuilder 那段注释），留 56vp 时最上面一条消息会被蒙版压住。
  */
 const PAGE_TOP_OFFSET: number = 96;
-/** 触顶自动下拉时，顶部占位往下弹多少（vp）—— 就是"下拉"那一段看得见的过程。 */
-const PULL_DOWN_VP: number = 56;
 const BOTTOM_OFFSET: number = 92;
 const FALLBACK_WIDTH_VP: number = 411;
 const SIDE_PADDING: number = 16;
@@ -51,6 +54,11 @@ const GROUP_GAP_MS: number = 2 * 60 * 1000;
  * （"加载更老以后位置跳一条"）。留一个恒定下标就永远不会错。
  */
 const LOADING_ROW_VP: number = 36;
+/**
+ * 触顶刷新的最小间隔（毫秒）：onReachStart 会在回弹里重复上报，
+ * 不加这道闸一次下拉会连发好几页（真机实测连发三发）。
+ */
+const REACH_COOLDOWN_MS: number = 1200;
 /**
  * 贴底后再补几次"仍然贴底"的检查（毫秒）。
  *
@@ -94,10 +102,6 @@ export struct DirectThreadPage {
   @State private pending: Array<DirectMessage> = [];
   @State private status: string = '';
   @State private busy: boolean = false;
-  /** 顶部下拉刷新（= 取更老那批）的状态。 */
-  @State private refreshing: boolean = false;
-  /** 模拟"下拉"的下沉量（vp）：触顶时把内容弹下去一点再回来，做出原生下拉的过程。 */
-  @State private pullVp: number = 0;
   @State private screenWidthVp: number = FALLBACK_WIDTH_VP;
   /** 屏幕高度（vp）——只为诊断日志（对齐输入法坐标系用）。 */
   private windowHeightVp: number = 0;
@@ -331,27 +335,30 @@ export struct DirectThreadPage {
    * 这些裸 `setTimeout` 的句柄（审计项 A2：以前既没句柄、`aboutToDisappear` 也没清）。
    *
    * 组件销毁后它们仍会跑：`scrollToNewest` 那三个去读已放掉的 `listScroller`，
-   * 8 秒兜底那个去写 `@State refreshing`（还可能把新一次加载的圈误收掉）。
+   * 8 秒兜底那个会把新一次加载的兜底定时器提前清掉。
    */
   private scrollTimers: Array<number> = [];
-  /** 8 秒兜底收圈那个定时器（见 loadOlderKeepPosition）。 */
+  /** 8 秒兜底那个定时器（见 loadOlderKeepPosition / settleRefresh）。 */
   private settleTimer: number = -1;
+  /** 上一次触顶刷新的时刻（毫秒；见 REACH_COOLDOWN_MS）。 */
+  private lastReachAtMs: number = 0;
 
   /**
    * 取更老那批，并把视口**锚回加载前的那条消息**（需求："加载后页面位置保持不变"）。
    *
-   * 加载前记住条数；加载后"新增的条数"就是前面插进来多少条，用 `scrollToIndex(新增条数)`
+   * 加载前记住条数；加载后"新增的条数"就是前面插进来多少条，用 `scrollToIndex(新增条数 + 1)`
    * 把**原来的第一条**重新对齐到顶部 —— 位置看起来没动，也不会先跳到底再弹回来那种闪烁。
+   *
+   * 但列表现在**从屏幕最顶端开始**（消息从标题栏底下穿过去，见 build 的说明），
+   * 而对齐到 `START` 等于把那条消息顶到 y=0（标题栏背后）。所以对齐之后再往回滚
+   * `PAGE_TOP_OFFSET`（内容整体下移 96vp），它才刚好落在标题栏下方 —— 和以前列表自带
+   * 那 96vp 顶部留白时的落点完全一致。
    */
-  private loadOlderKeepPosition(showSpinner: boolean = false): void {
+  private loadOlderKeepPosition(): void {
     const before: number = this.allMessages().length;
-    // 只有**手动下拉**（原生 Refresh 的回调）才亮圈；触顶自动加载静默进行，不显示下拉动画。
-    if (showSpinner) {
-      this.refreshing = true;
-    }
     /*
-     * 兜底：取数这条路万一没回来，8 秒后也把圈收掉。句柄存起来：新一次加载开始时要**取消上一次**
-     * （否则上一发的兜底会把这一发的圈提前收掉），销毁时也要清（审计项 A2）。
+     * 兜底：取数这条路万一没回来，8 秒后也把状态收掉。句柄存起来：新一次加载开始时要**取消上一次**
+     * （否则上一发的兜底会把这一发的状态提前收掉），销毁时也要清（审计项 A2）。
      */
     if (this.settleTimer >= 0) {
       clearTimeout(this.settleTimer);
@@ -361,11 +368,11 @@ export struct DirectThreadPage {
       this.settleRefresh();
     }, 8000);
     /*
-     * **首屏还没读出来时，下拉就是"重试加载"**（审计 C3）。
+     * **首屏还没读出来时，触顶就是"重试加载"**（审计 C3）。
      *
      * `loadOlder()` 第一行就是 `if (this.busy || this.view === null || …) return;` —— 首屏失败
-     * （`view` 一直为 null）之后，下拉触顶只会立刻返回：用户看到的是"圈转一下就没了、什么也不发生"，
-     * 而这一页再也没有别的入口去重试。这里把下拉接到 `load()` 上，等于给用户一个重试键。
+     * （`view` 一直为 null）之后，触顶只会立刻返回：用户看到的是"圈转一下就没了、什么也不发生"，
+     * 而这一页再也没有别的入口去重试。这里把触顶接到 `load()` 上，等于给用户一个重试键。
      */
     if (this.vm.viewNow() === null) {
       this.vm.load()
@@ -386,6 +393,8 @@ export struct DirectThreadPage {
           try {
             // **+1**：列表第 0 格是那行"加载中"占位（见 LOADING_ROW_VP），消息从下标 1 开始。
             this.listScroller.scrollToIndex(added + 1, false, ScrollAlign.START);
+            // 再退回标题栏那一条的高度，让它停在栏下方而不是藏在栏背后（见方法头）。
+            this.listScroller.scrollBy(0, -PAGE_TOP_OFFSET);
           } catch (error) {
           }
         }
@@ -396,10 +405,17 @@ export struct DirectThreadPage {
       });
   }
 
-  /** 收起刷新圈（下拉量归零）。 */
+  /**
+   * 一次"触顶刷新"的收尾：**只清掉兜底定时器**。
+   *
+   * 界面上的加载圈由 `busy`（视图模型回调）驱动，不再有原生 `Refresh` 那种需要手动收敛的
+   * 独立状态（组件已按需求移除，见 build）。
+   */
   private settleRefresh(): void {
-    this.pullVp = 0;
-    this.refreshing = false;
+    if (this.settleTimer >= 0) {
+      clearTimeout(this.settleTimer);
+      this.settleTimer = -1;
+    }
   }
 
   private bubbleMaxVp(): number {
@@ -561,144 +577,135 @@ export struct DirectThreadPage {
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
       Column() {
-        Stack()
-          .width('100%')
-          .height(PAGE_TOP_OFFSET + this.pullVp)
-
-        if (this.status.length > 0) {
-          Text(this.status)
-            .fontSize(12)
-            .fontColor($r('app.color.secondary_text'))
-            .width('100%')
-            .maxLines(2)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .padding({ left: SIDE_PADDING, right: SIDE_PADDING, bottom: 4 })
-        }
-
         /*
-         * **临时调试入口**：把这条会话在**可见网页**里打开。
+         * **列表直接铺到屏幕最上面（y=0），消息从 HDS 标题栏底下穿过去**（需求）。
          *
-         * 用途只有一个：网页的消息容器认**真实触摸**，只有它在屏幕上、我用真手指滑动时，页面
-         * 才会去加载更老的消息 —— 那时我们的网络钩子就能抓到"翻历史到底用哪条请求"。
-         * （隐藏网页里试过 scrollTop / wheel / scrollIntoView / 合成 touch 事件，页面都不动。）
-         * 打通之后这个入口和下面那个探针定时器一起删掉。
+         * 以前这里上面压着一块 `PAGE_TOP_OFFSET` 的占位 —— 于是列表的**视口**从 96vp 才开始，
+         * 往上一滑，消息到那一条线就被裁掉，看起来像被标题栏"切断"。
+         * 现在改成：列表占满整屏，顶部让位改由 `contentStartOffset` 表达（它是**内容的一部分**，
+         * 会跟着滚动走）—— 停在最上面时第一条消息正好在标题栏下方，滚动时消息则从半透明的
+         * 标题栏底下穿过去。
          */
-        Row() {
-          Text($r('app.string.direct_open_web'))
-            .fontSize(12)
-            .fontColor($r('app.color.accent'))
-            .padding({ left: 12, right: 12, top: 4, bottom: 4 })
-            .onClick((): void => {
-              this.onOpenWeb();
-            })
-        }
-        .width('100%')
-        .justifyContent(FlexAlign.End)
-        .padding({ right: SIDE_PADDING, bottom: 4 })
+        List({ space: 0, scroller: this.listScroller }) {
+          /*
+           * **顶部"加载中"动画（始终占位、置中）**（用户："加载时在最顶部消息上方显示刷新动画，
+           * 置中显示"）。
+           *
+           * 为什么固定占一格（高度 0/36 切换）而不是 `if (busy)` 才插：见 LOADING_ROW_VP 的说明
+           * ——列表靠 `scrollToIndex(added + 1)` 锚位置，下标必须是恒定的。
+           *
+           * **现在它就是"触顶刷新"唯一的动画**：原生 `Refresh` 已按需求去掉（见下面 build 的说明），
+           * 高度切换挂 `.animation`，于是触顶加载时这一圈是**顺着滑下来**的，不是一个百分点地跳。
+           */
+          ListItem() {
+            Row() {
+              if (this.busy) {
+                LoadingProgress()
+                  .width(24)
+                  .height(24)
+                  .color($r('app.color.secondary_text'))
+              }
+            }
+            .width('100%')
+            .height(this.busy ? LOADING_ROW_VP : 0)
+            .justifyContent(FlexAlign.Center)
+            .animation({ duration: 160, curve: Curve.EaseOut })
+          }
 
-        // **顶部下拉刷新 = 取更老那批**（需求："上滑触顶需要继续上滑触发 refresh 才能加载"）。
-        // 「查看更多消息」那颗按钮和"触顶自动加载"都按需求删掉了，只留这一个入口。
-        Refresh({ refreshing: $$this.refreshing }) {
-          List({ space: 0, scroller: this.listScroller }) {
-            /*
-             * **顶部"加载中"动画（始终占位、置中）**（用户："加载时在最顶部消息上方显示刷新动画，
-             * 置中显示"）。
-             *
-             * 为什么固定占一格（高度 0/36 切换）而不是 `if (busy)` 才插：见 LOADING_ROW_VP 的说明
-             * ——列表靠 `scrollToIndex(added + 1)` 锚位置，下标必须是恒定的。
-             * 那一圈**在原生的下拉指示器之外**：原生那颗只在"手动下拉"那一下看得见，
-             * 而"触顶自动加载""点开会话""媒体补齐重排"这些都不经过手势，用户看不到任何反馈。
-             */
+          ForEach(this.allMessages(), (message: DirectMessage, index: number): void => {
             ListItem() {
-              Row() {
-                if (this.busy) {
-                  LoadingProgress()
-                    .width(24)
-                    .height(24)
-                    .color($r('app.color.secondary_text'))
+              this.bubble(message, index)
+            }
+          }, (message: DirectMessage, index: number): string => `${index}-${message.id}`)
+
+          if (this.allMessages().length === 0 && !this.busy) {
+            ListItem() {
+              Column({ space: 8 }) {
+                SymbolGlyph($r('sys.symbol.paperplane'))
+                  .fontSize(30)
+                  .fontColor([$r('app.color.secondary_text')])
+                Text($r('app.string.direct_thread_empty'))
+                  .fontSize(14)
+                  .fontColor($r('app.color.secondary_text'))
+                /*
+                 * **读失败的原因放在空态里**（它只在这一屏真没内容时才有意义）。
+                 *
+                 * 以前它是一条常驻在列表上方的文字行 —— 现在列表铺满整屏（消息从标题栏底下穿过），
+                 * 那行字要么占掉列表高度、要么浮在消息上面挡一条（两种都试过，都难看）。
+                 * 有消息时不显示任何状态字：用户看的就是消息本身。
+                 */
+                if (this.status.length > 0) {
+                  Text(this.status)
+                    .fontSize(12)
+                    .fontColor($r('app.color.secondary_text'))
+                    .maxLines(3)
+                    .textAlign(TextAlign.Center)
+                    .padding({ left: SIDE_PADDING, right: SIDE_PADDING })
+                  Text($r('app.string.direct_open_web'))
+                    .fontSize(14)
+                    .fontColor($r('app.color.accent'))
+                    .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+                    .borderRadius(16)
+                    .backgroundColor($r('app.color.field_background'))
+                    .onClick((): void => {
+                      this.onOpenWeb();
+                    })
                 }
               }
               .width('100%')
-              .height(this.busy ? LOADING_ROW_VP : 0)
+              .height(200)
               .justifyContent(FlexAlign.Center)
             }
-
-            ForEach(this.allMessages(), (message: DirectMessage, index: number): void => {
-              ListItem() {
-                this.bubble(message, index)
-              }
-            }, (message: DirectMessage, index: number): string => `${index}-${message.id}`)
-
-            if (this.allMessages().length === 0 && !this.busy) {
-              ListItem() {
-                Column({ space: 8 }) {
-                  SymbolGlyph($r('sys.symbol.paperplane'))
-                    .fontSize(30)
-                    .fontColor([$r('app.color.secondary_text')])
-                  Text($r('app.string.direct_thread_empty'))
-                    .fontSize(14)
-                    .fontColor($r('app.color.secondary_text'))
-                  /*
-                   * 读失败时（状态行有字 = 原生三条路都断了）多给一颗出口按钮。
-                   * 读成功但真的没有消息（status 为空）时不显示 —— 那种情况不该诱使用户去网页。
-                   */
-                  if (this.status.length > 0) {
-                    Text($r('app.string.direct_open_web'))
-                      .fontSize(14)
-                      .fontColor($r('app.color.accent'))
-                      .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-                      .borderRadius(16)
-                      .backgroundColor($r('app.color.field_background'))
-                      .onClick((): void => {
-                        this.onOpenWeb();
-                      })
-                  }
-                }
-                .width('100%')
-                .height(200)
-                .justifyContent(FlexAlign.Center)
-              }
-            }
           }
-          .width('100%')
-          .height('100%')
-          .scrollBar(BarState.Off)
-          .edgeEffect(EdgeEffect.Spring)
-          .contentEndOffset(BOTTOM_OFFSET)
-          .clip(false)
-          .onDidScroll((scrollOffset: number, scrollState: ScrollState): void => {
-            const y: number = this.listScroller.currentOffset().yOffset;
-            /*
-             * 用户**往上翻**了（偏移在减小）：记成"不在贴底状态"，后面那几次延迟补贴底就不再抢位置
-             * （见 scrollToNewest(false) 与 pinnedToBottom 的说明）。往回滚到底部时照旧贴底。
-             */
-            if (y < this.lastOffsetY - 12) {
-              this.pinnedToBottom = false;
-            }
-            this.lastOffsetY = y;
-            this.scrollDelta.report(y, scrollState, this.onFeedScroll);
-          })
-          /*
-           * **触顶自动加载**：滑到最上面就自动去取更老那批，但**不**自己去点亮刷新圈
-           * —— 刷新圈交给原生 `Refresh`：手动下拉时它有原生的弹性动画、并在 `refreshing`
-           * 收敛后自己收起（自己置 true 会出现"加载完了圈还在转"）。
-           */
-          .onReachStart((): void => {
-            if (this.busy) {
-              return;
-            }
-            if (this.view === null || !this.view.hasOlder
-              || this.view.oldestCursor.length === 0) {
-              return;
-            }
-            this.loadOlderKeepPosition();
-          })
         }
         .width('100%')
         .layoutWeight(1)
+        /*
+         * 顶部让位（vp）：标题栏那块（含它下面那层毛玻璃）的高度。它属于**内容**，
+         * 滚动时会跟着走 —— 这正是"停在最上面时第一条不被压住、滑动时消息从栏下穿过"的实现。
+         */
+        .contentStartOffset(PAGE_TOP_OFFSET)
+        .contentEndOffset(BOTTOM_OFFSET)
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
         .clip(false)
-        .onRefreshing((): void => {
-          this.loadOlderKeepPosition(true);
+        .onDidScroll((scrollOffset: number, scrollState: ScrollState): void => {
+          const y: number = this.listScroller.currentOffset().yOffset;
+          /*
+           * 用户**往上翻**了（偏移在减小）：记成"不在贴底状态"，后面那几次延迟补贴底就不再抢位置
+           * （见 scrollToNewest(false) 与 pinnedToBottom 的说明）。往回滚到底部时照旧贴底。
+           */
+          if (y < this.lastOffsetY - 12) {
+            this.pinnedToBottom = false;
+          }
+          this.lastOffsetY = y;
+          this.scrollDelta.report(y, scrollState, this.onFeedScroll);
+        })
+        /*
+         * **触顶刷新**（需求："保留触顶刷新和动画"）：滑到最上面就自动去取更老那批。
+         *
+         * 原生 `Refresh` 组件已按需求移除（它自带的下拉指示器/回弹都在组件内部，关不掉），
+         * 所以"动画"改由上面那一行加载圈负责（高度 0→36 带 `.animation`），
+         * 这里只保留"到顶就加载"这条触发。
+         */
+        .onReachStart((): void => {
+          if (this.busy) {
+            return;
+          }
+          if (this.view === null || !this.view.hasOlder
+            || this.view.oldestCursor.length === 0) {
+            return;
+          }
+          /*
+           * **同一次"拉到底"只触发一发**：`onReachStart` 在弹性的每次回弹都会再报一次，
+           * 不加这道闸的话，一次下拉连弹三下就会连发三页（真机实测 +20、+20、+20）。
+           */
+          const now: number = Date.now();
+          if (now - this.lastReachAtMs < REACH_COOLDOWN_MS) {
+            return;
+          }
+          this.lastReachAtMs = now;
+          this.loadOlderKeepPosition();
         })
       }
       .width('100%')
