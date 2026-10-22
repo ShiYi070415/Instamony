@@ -266,17 +266,31 @@ export default class EntryAbility extends UIAbility {
   /**
    * 把"点通知要进哪条会话"记下来（见 core/NotifyRoute）。
    *
-   * 只认本 App 的通知：want 里没有 `threadId` 就是普通启动，什么都不做。
+   * **两条路都认**：
+   *   ① want 的 `parameters.threadId`（PushCenter 主要给的）；
+   *   ② want 的 `uri` 里的 `instarmony://open?route=direct&id=…&from=notify`
+   *      （同一条信息编码进 uri 的兜底 —— 真机上遇到过"第一条通知点了没反应"）。
+   *
+   * 每次都打一行日志（连"没带任何东西"也打）：这样"点了没反应"到底是
+   * **want 没到** 还是 **到了但没参数**，日志里一眼能分。
    */
   private stashNotifyRoute(want: Want, from: string): void {
     const parameters: Record<string, Object> | undefined =
       want === undefined ? undefined : want.parameters;
-    const threadId: string = NotifyRoute.threadIdOf(parameters);
+    const uri: string = want === undefined || want.uri === undefined ? '' : `${want.uri}`;
+    const byParam: string = NotifyRoute.threadIdOf(parameters);
+    const intent: DeepLinkIntent | null = DeepLink.parse(uri);
+    const byUri: string = intent !== null && intent.isFromNotify() ? intent.id : '';
+    hilog.info(DOMAIN, 'testTag',
+      'want in (%{public}s) uriLen=%{public}d paramKeys=%{public}d threadByParam=%{public}d threadByUri=%{public}d',
+      from, uri.length, parameters === undefined ? 0 : Object.keys(parameters).length,
+      byParam.length, byUri.length);
+    const threadId: string = byParam.length > 0 ? byParam : byUri;
     if (threadId.length === 0) {
       return;
     }
     NotifyRoute.stash(threadId);
-    hilog.info(DOMAIN, 'testTag', 'notify route (%{public}s) thread=%{public}d',
+    hilog.info(DOMAIN, 'testTag', 'notify route (%{public}s) → thread=%{public}d',
       from, threadId.length);
   }
 
@@ -289,6 +303,15 @@ export default class EntryAbility extends UIAbility {
     const uri: string = want === undefined || want.uri === undefined ? '' : `${want.uri}`;
     const intent: DeepLinkIntent | null = DeepLink.parse(uri);
     if (intent === null) {
+      return null;
+    }
+    if (intent.isFromNotify()) {
+      /*
+       * **点通知**：这条 uri 只是"会话 id 的兜底载体"，由 stashNotifyRoute 处理过，
+       * 交给 pages/Index 直接进会话。这里返回 null，避免它被当成外部深链
+       * → 冷启动会先铺落地页 pages/LinkIn，等于让用户多点一次。
+       */
+      hilog.info(DOMAIN, 'testTag', 'notify uri (%{public}s) handled by NotifyRoute', from);
       return null;
     }
     if (!intent.isComplete()) {

@@ -23,12 +23,15 @@
  */
 
 import { common, UIAbility, WantAgent, wantAgent } from '@kit.AbilityKit';
+import { Want } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { notificationManager } from '@kit.NotificationKit';
 import { pushService } from '@kit.PushKit';
 // 点通知要进哪条会话：参数名只留一份真源（放在 core/NotifyRoute）。
 import { NOTIFY_THREAD_KEY } from './NotifyRoute';
+// 会话 id 除了放进 parameters，也编码进 uri 兜底（见 wantAgentFor）。
+import { DEEPLINK_PREFIX } from './DeepLink';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'PushCenter';
@@ -409,14 +412,25 @@ export class PushCenter {
     if (threadId.length > 0) {
       parameters[NOTIFY_THREAD_KEY] = threadId;
     }
+    /*
+     * **同一份信息走两条路**：parameters 之外再编码进 `uri`。
+     *
+     * 真机上遇到过"第一条通知点了没反应" —— 如果哪次 agent 的 parameters 没被带过来，
+     * uri 还在（`START_ABILITY` 会把 uri 原样交给 ability），于是 EntryAbility 仍能从
+     * `instarmony://open?route=direct&id=…&from=notify` 里把会话 id 取回来。
+     * `from=notify` 用来区分"外部深链"（那种仍按课程要求走落地页 pages/LinkIn）。
+     */
+    const uri: string = threadId.length > 0
+      ? `${DEEPLINK_PREFIX}?route=direct&id=${encodeURIComponent(threadId)}&from=notify`
+      : '';
+    const want: Want = {
+      bundleName: PushCenter.bundleName(),
+      abilityName: 'EntryAbility',
+      parameters: parameters,
+      uri: uri
+    };
     const info: wantAgent.WantAgentInfo = {
-      wants: [
-        {
-          bundleName: PushCenter.bundleName(),
-          abilityName: 'EntryAbility',
-          parameters: parameters
-        }
-      ],
+      wants: [want],
       actionType: wantAgent.OperationType.START_ABILITY,
       /*
        * **按会话给不同的 requestCode**：WantAgent 的身份是

@@ -48,11 +48,24 @@ export class DeepLinkIntent {
   readonly route: string;
   readonly id: string;
   readonly raw: string;
+  /**
+   * `from` 参数（`instarmony://open?...&from=notify`）。
+   *
+   * 用它把"**本 App 自己发的通知点击**"和"外部 App/浏览器的深链"分开：
+   * 前者要直接进会话（不经过落地页），后者仍按课程要求先铺 pages/LinkIn。
+   */
+  readonly from: string;
 
-  constructor(route: string, id: string, raw: string) {
+  constructor(route: string, id: string, raw: string, from: string = '') {
     this.route = route;
     this.id = id;
     this.raw = raw;
+    this.from = from;
+  }
+
+  /** 这是不是"点通知"带来的意图（见 from）。 */
+  isFromNotify(): boolean {
+    return this.from === 'notify';
   }
 
   /** 这个链接是不是一个"认识"的目标（不认识就只提示、不乱跳）。 */
@@ -116,7 +129,7 @@ export class DeepLink {
       route = DeepLinkRoute.Home;
     }
     const id: string = DeepLink.paramOf(query, 'id');
-    return new DeepLinkIntent(route, id, text);
+    return new DeepLinkIntent(route, id, text, DeepLink.paramOf(query, 'from'));
   }
 
   /** 存下待执行的 intent（热启动路径）。 */
