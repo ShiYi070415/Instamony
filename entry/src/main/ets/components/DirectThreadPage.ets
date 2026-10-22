@@ -13,7 +13,7 @@
  * 取回来之后把视口**锚回加载前那条消息**（`scrollToIndex` + 回退标题栏高度），所以位置不变、不闪。
  */
 
-import { display, window, componentUtils } from '@kit.ArkUI';
+import { curves, display, window, componentUtils } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { DirectMessage, DirectThreadView } from '../model/Direct';
@@ -80,6 +80,24 @@ const ALIGN_MAX_ATTEMPTS: number = 6;
 const ALIGN_TOLERANCE_PX: number = 8;
 /** 输入条的节点 id（自校正要靠它量实际位置）。 */
 const INPUT_BAR_ID: string = 'dm-thread-input-bar';
+
+/**
+ * 气泡"弹出"的起始缩放（0.86 = 从 86% 长到 100%）。
+ *
+ * 配合 `centerY: '100%'`（贴底边缩放）与 +16vp 的上升位移，观感就是"从下往上、由小至大"。
+ */
+const BUBBLE_POP_FROM: number = 0.86;
+/** 气泡弹出时从下方多远升上来（vp）。 */
+const BUBBLE_POP_RISE_VP: number = 16;
+/** 弹簧的初速度（`curves.springMotion` 第一个参数；0.5~0.8 之间手感最像"弹出来"）。 */
+const BUBBLE_SPRING_VELOCITY: number = 0.65;
+/**
+ * 弹簧的阻尼比（第二个参数）。
+ *
+ * 1 = 临界阻尼（不回落）；0.56 会**过冲一点再回正** —— 需求要的"非线性弹性"就是这个过冲。
+ * 想要更"橡皮"就往下调（0.4 上下），想要更稳就往 0.8 调。
+ */
+const BUBBLE_SPRING_DAMPING: number = 0.56;
 
 @Component
 export struct DirectThreadPage {
@@ -207,6 +225,7 @@ export struct DirectThreadPage {
     this.vm.startPolling((): void => {
       this.scrollToNewest();
     });
+
   }
 
   aboutToDisappear(): void {
@@ -574,6 +593,32 @@ export struct DirectThreadPage {
       || lower.indexOf('photo') >= 0 || lower.indexOf('video') >= 0;
   }
 
+  /**
+   * 气泡的进出场效果（见 ForEach 上的说明）：**从下面升上来 + 由小至大 + 渐显**，曲线是弹簧。
+   *
+   * 做成静态方法而不是内联在 build 里：`TransitionEffect` 每次重建都要新建一串对象，
+   * 而这里是**同一个效果**给所有气泡用，没必要每帧造。
+   *
+   * 退场只做淡出（120ms）—— 气泡被删掉（极少见：撤回/消息替换）时不该有弹跳。
+   */
+  private static bubbleIn(): TransitionEffect {
+    const appear: TransitionEffect = TransitionEffect.OPACITY
+      .combine(TransitionEffect.scale({
+        x: BUBBLE_POP_FROM,
+        y: BUBBLE_POP_FROM,
+        // 贴底边缩放：气泡像从自己的下沿"长出来"。
+        centerX: '50%',
+        centerY: '100%'
+      }))
+      .combine(TransitionEffect.translate({ y: BUBBLE_POP_RISE_VP }))
+      .animation({
+        curve: curves.springMotion(BUBBLE_SPRING_VELOCITY, BUBBLE_SPRING_DAMPING)
+      });
+    const disappear: TransitionEffect = TransitionEffect.OPACITY
+      .animation({ duration: 120, curve: Curve.EaseOut });
+    return TransitionEffect.asymmetric(appear, disappear);
+  }
+
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
       Column() {
@@ -616,6 +661,21 @@ export struct DirectThreadPage {
             ListItem() {
               this.bubble(message, index)
             }
+            /*
+             * **气泡弹出动画**（需求："从下往上，由小至大渐显弹出，非线性弹性动画"）。
+             *
+             * 用 `transition` 而不是 `animateTo`：它只在**这条气泡被插入时**跑一次
+             * （实时推来的新消息、自己刚发出去的那条、翻出来的历史），页面首帧那一批不在此列
+             * —— 不会一进会话就满屏乱弹。
+             *
+             * 三个方向叠在一起，起点都是"下、小、透明"：
+             *   · `translate` y=+16 → 从下面升上来（数值是"起点相对终点的偏移"）；
+             *   · `scale` 0.86、缩放中心 `centerY: 100%` → **贴着气泡底边长起来**，不是从中心涨；
+             *   · `OPACITY` → 渐显。
+             * 曲线用 `curves.springMotion`（速度 + 阻尼）：阻尼 0.56 落定时带一点回弹过冲，
+             * 这才是"非线性弹性"的观感（`Curve.EaseOut` 只是纯减速、没有过冲）。
+             */
+            .transition(DirectThreadPage.bubbleIn())
           }, (message: DirectMessage, index: number): string => `${index}-${message.id}`)
 
           if (this.allMessages().length === 0 && !this.busy) {
