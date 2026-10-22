@@ -63,17 +63,41 @@ const TOKEN_TTL_MS: number = 10 * 60 * 1000;
 const WEB_UA: string = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
   + '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
-/** 网页令牌（`lsd` / `fb_dtsg` / `jazoest`）。 */
+/**
+ * 网页端那套"站点参数"（网页客户端每次 POST 都会带）。
+ *
+ * 为什么要带全：IG 的 GraphQL 变更对这套很敏感，少了它**不报错**，只是把结果解析成 null
+ * （`{"data":{"xdt_create_media_note_v2":null},"status":"ok"}`）—— 真机上就是被这个坑住的。
+ * 真机实证：这些值都能从首页 HTML 的 SiteData 里读到（2026-10-22）：
+ *   `"client_revision":1051294174` / `"haste_session":"20748.HYP:…"` /
+ *   `"hsi":"7699460273512893842"` / `"__spin_b":"trunk"` / `"comet_env":7`
+ */
 class WebTokens {
   readonly lsd: string;
   readonly dtsg: string;
   readonly jazoest: string;
+  /** `__hs`（haste_session）。 */
+  readonly hs: string;
+  /** `__hsi`。 */
+  readonly hsi: string;
+  /** `__rev` 与 `__spin_r`（客户端的 rollout hash）。 */
+  readonly rev: string;
+  /** `__spin_b`（分支名，通常是 `trunk`）。 */
+  readonly spinB: string;
+  /** `__comet_req`（comet_env）。 */
+  readonly cometEnv: string;
   readonly atMs: number;
 
-  constructor(lsd: string, dtsg: string, jazoest: string, atMs: number) {
+  constructor(lsd: string, dtsg: string, jazoest: string, hs: string, hsi: string, rev: string,
+              spinB: string, cometEnv: string, atMs: number) {
     this.lsd = lsd;
     this.dtsg = dtsg;
     this.jazoest = jazoest;
+    this.hs = hs;
+    this.hsi = hsi;
+    this.rev = rev;
+    this.spinB = spinB;
+    this.cometEnv = cometEnv;
     this.atMs = atMs;
   }
 }
@@ -131,8 +155,6 @@ export class WebRepost {
     return ok;
   }
 
-  // ---------------------------------------------------------------- 两条变更
-
   private static async sendRepost(actorId: string, pk: string): Promise<boolean> {
     const input: Record<string, Object> = {};
     input['actor_id'] = actorId;
@@ -168,7 +190,8 @@ export class WebRepost {
    * 成功判据：HTTP 200、能解析成 JSON、**没有 `errors`**（网页端失败也常常是 200 + errors）。
    */
   private static async sendMutation(actorId: string, name: string, docId: string,
-                                    input: Record<string, Object>, label: string): Promise<boolean> {
+                                     input: Record<string, Object>,
+                                     label: string): Promise<boolean> {
     const variables: Record<string, Object> = {};
     variables['input'] = input;
     const variablesJson: string = JSON.stringify(variables);
@@ -377,27 +400,31 @@ export class WebRepost {
       const lsd: string = WebRepost.tokenAfter(html, '"LSD",[],{"token":"');
       const dtsg: string = WebRepost.tokenAfter(html, '"DTSGInitialData",[],{"token":"');
       /*
-       * 顺手判一下**这份 Cookie 到底还登着没有**。
+       * `loggedIn` 只是**诊断**，不用它拦请求。
        *
-       * 为什么关键：未登录时首页 HTML 照样有 `LSD`/`DTSGInitialData`（所以令牌能读到），
-       * 但 GraphQL 变更会回 `{"data":{"…":null},"status":"ok"}` —— 看起来 200，实际什么都没做。
-       * 真机踩过：会话失效后我们就一直在收这种"假成功"，光看 HTTP 码永远查不出来。
+       * 教训（真机踩的）：我一开始拿"首页 HTML 里有没有 `"logged_in_user"`"当登录判据，
+       * 结果会话明明是好的，那份 HTML 里就是没有这几个字 —— 于是每一发转发都在本地被
+       * 自己挡掉，用户看到的现象是"点转发完全没反应"（连请求都没发出去）。
+       * 登录态该由服务端的应答来说话：真发出去，`data` 里有非 null 结果才算成功。
        */
-      const loggedIn: boolean = html.indexOf('"logged_in_user"') >= 0
-        || html.indexOf('"viewer":{') >= 0;
+      /*
+       * 站点参数（见 WebTokens 的说明）：全从首页 HTML 的 SiteData 里读。
+       */
+      const hs: string = WebRepost.valueAfter(html, '"haste_session":"');
+      const hsi: string = WebRepost.valueAfter(html, '"hsi":"');
+      const rev: string = WebRepost.valueAfter(html, '"client_revision":');
+      const spinB: string = WebRepost.valueAfter(html, '"__spin_b":"');
+      const cometEnv: string = WebRepost.valueAfter(html, '"comet_env":');
       hilog.info(DOMAIN, TAG,
-        'web tokens http=%{public}d bytes=%{public}d lsd=%{public}d dtsg=%{public}d loggedIn=%{public}s',
-        response.responseCode, html.length, lsd.length, dtsg.length, loggedIn ? 'y' : 'n');
+        'web tokens http=%{public}d bytes=%{public}d lsd=%{public}d dtsg=%{public}d hs=%{public}d hsi=%{public}d rev=%{public}s spinB=%{public}s comet=%{public}s',
+        response.responseCode, html.length, lsd.length, dtsg.length, hs.length, hsi.length,
+        rev, spinB, cometEnv);
       if (lsd.length === 0 || dtsg.length === 0) {
         WebRepost.detail = 'no-tokens-in-html';
         return null;
       }
-      if (!loggedIn) {
-        WebRepost.detail = 'session-logged-out';
-        hilog.warn(DOMAIN, TAG, 'web session looks logged out; repost cannot work until re-login');
-        return null;
-      }
-      return new WebTokens(lsd, dtsg, WebRepost.jazoestOf(dtsg), Date.now());
+      return new WebTokens(lsd, dtsg, WebRepost.jazoestOf(dtsg), hs, hsi, rev, spinB, cometEnv,
+        Date.now());
     } catch (error) {
       WebRepost.detail = `token-fetch-threw:${(error as Error).message}`;
       hilog.warn(DOMAIN, TAG, 'token fetch failed: %{public}s', (error as Error).message);
@@ -422,6 +449,33 @@ export class WebRepost {
       return '';
     }
     return html.substring(from, end);
+  }
+
+  /**
+   * 值型参数（`"client_revision":1051294174` 这种**不带引号**的）：读到逗号 / 右括号为止。
+   * 带引号的（`"haste_session":"…"`）走 tokenAfter。
+   */
+  private static valueAfter(html: string, marker: string): string {
+    const at: number = html.indexOf(marker);
+    if (at < 0) {
+      return '';
+    }
+    const from: number = at + marker.length;
+    if (from >= html.length) {
+      return '';
+    }
+    if (html.charAt(from) === '"') {
+      return WebRepost.tokenAfter(html, marker);
+    }
+    let end: number = from;
+    while (end < html.length) {
+      const ch: string = html.charAt(end);
+      if (ch === ',' || ch === '}' || ch === ']' || ch === '"') {
+        break;
+      }
+      end++;
+    }
+    return html.substring(from, end).trim();
   }
 
   /**
@@ -494,9 +548,18 @@ export class WebRepost {
     add('__user', '0');
     add('__a', '1');
     add('__req', Math.floor(Math.random() * 1679616).toString(36));
+    /*
+     * 站点参数（见 WebTokens）：真机实证"不带这套 → 服务端静默回 data:null"。
+     * `__hs` / `__hsi` / `__rev` / `__spin_b` / `__comet_req` 全部来自首页 HTML 的 SiteData。
+     */
+    add('__hs', tokens.hs);
+    add('__hsi', tokens.hsi);
+    add('__rev', tokens.rev);
+    add('__spin_r', tokens.rev);
+    add('__spin_b', tokens.spinB);
     add('dpr', '3');
     add('__ccg', 'EXCELLENT');
-    add('__comet_req', '7');
+    add('__comet_req', tokens.cometEnv.length > 0 ? tokens.cometEnv : '7');
     add('lsd', tokens.lsd);
     add('fb_dtsg', tokens.dtsg);
     add('jazoest', tokens.jazoest);
@@ -521,6 +584,11 @@ export class WebRepost {
     out['X-FB-LSD'] = tokens.lsd;
     out['X-IG-App-ID'] = WEB_APP_ID;
     out['X-ASBD-ID'] = ASBD_ID;
+    /*
+     * `X-IG-WWW-Claim: 0` —— 网页端在没有 claim 时就是这么发的（真机抓到的首页 HTML 里
+     * 没有 `www_claim` 字段）。试过改用 Cookie 里的 `rur` 当 claim：**结果一模一样**（还是
+     * `data:null`），所以别再从那儿凑，保持 0。
+     */
     out['X-IG-WWW-Claim'] = '0';
     out['X-Requested-With'] = 'XMLHttpRequest';
     out['Origin'] = 'https://www.instagram.com';
