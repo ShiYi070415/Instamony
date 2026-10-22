@@ -593,30 +593,49 @@ export struct DirectThreadPage {
     return Math.min(200, width * 0.52);
   }
 
-  private showsAvatar(index: number): boolean {
+  /**
+   * 取 `index` 那条消息的上一条。
+   *
+   * **必须容错**：`ForEach` 的 `index` 是**建表那一刻**的序号，而气泡的 `updateFunc` 会在之后的
+   * 状态变化里再跑一遍 —— 那时 `allMessages()` 可能已经不一样了（实时消息插了一条、
+   * 待发消息列表清空、整表替换……），直接 `list[index]` 就是
+   * `TypeError: Cannot read property mine of undefined` 然后整个应用闪退（真机日志实录）。
+   *
+   * 索引对不上时按 `message.id` 反查自己的位置，再取它前面那条；实在找不到就当"没有上一条"。
+   */
+  private prevOf(index: number, message: DirectMessage): DirectMessage | undefined {
     const list: Array<DirectMessage> = this.allMessages();
-    if (index <= 0) {
-      return true;
+    if (index > 0 && index < list.length) {
+      return list[index - 1];
     }
-    const prev: DirectMessage = list[index - 1];
-    const cur: DirectMessage = list[index];
-    if (prev.mine !== cur.mine) {
-      return true;
+    for (let at: number = 0; at < list.length; at++) {
+      if (list[at].id === message.id) {
+        return at > 0 ? list[at - 1] : undefined;
+      }
     }
-    return cur.tsMs - prev.tsMs > GROUP_GAP_MS;
+    return undefined;
   }
 
-  private isNewGroup(index: number): boolean {
-    const list: Array<DirectMessage> = this.allMessages();
-    if (index <= 0) {
-      return false;
-    }
-    const prev: DirectMessage = list[index - 1];
-    const cur: DirectMessage = list[index];
-    if (prev.mine !== cur.mine) {
+  private showsAvatar(index: number, message: DirectMessage): boolean {
+    const prev: DirectMessage | undefined = this.prevOf(index, message);
+    if (prev === undefined) {
       return true;
     }
-    return cur.tsMs - prev.tsMs > GROUP_GAP_MS;
+    if (prev.mine !== message.mine) {
+      return true;
+    }
+    return message.tsMs - prev.tsMs > GROUP_GAP_MS;
+  }
+
+  private isNewGroup(index: number, message: DirectMessage): boolean {
+    const prev: DirectMessage | undefined = this.prevOf(index, message);
+    if (prev === undefined) {
+      return false;
+    }
+    if (prev.mine !== message.mine) {
+      return true;
+    }
+    return message.tsMs - prev.tsMs > GROUP_GAP_MS;
   }
 
   /** 一条消息（自己的靠右、对方的靠左；对方的按时间段在左侧带头像）。 */
@@ -627,7 +646,7 @@ export struct DirectThreadPage {
         Blank()
         this.bubbleContent(message)
       } else {
-        if (this.showsAvatar(index)) {
+        if (this.showsAvatar(index, message)) {
           Image(this.view !== null && this.view.withAvatar.length > 0
             ? this.view.withAvatar : $r('app.media.startIcon'))
             .draggable(false)
@@ -648,7 +667,7 @@ export struct DirectThreadPage {
     .padding({
       left: SIDE_PADDING,
       right: SIDE_PADDING,
-      top: this.isNewGroup(index) ? GROUP_GAP_VP : BUBBLE_GAP_VP,
+      top: this.isNewGroup(index, message) ? GROUP_GAP_VP : BUBBLE_GAP_VP,
       bottom: 0
     })
   }
