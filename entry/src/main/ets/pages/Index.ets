@@ -2254,6 +2254,18 @@ struct Index {
         this.feedRetryLeft = 0;
         return;
       }
+      /*
+       * **会话/账号级的失败不再重试**（真机踩过：`login_required` 一旦出现，后面 20 次重试
+       * 全是同样的 403 —— 等于自己把"越打越久"又演一遍，还可能把账号的挂起状态拖更长）。
+       * 这种只能人去处理（重新登录 / 去网页里把 IG 的提示点掉），重试帮不上忙。
+       */
+      const blocked: string = MobileRequest.error();
+      if (blocked === 'login_required' || blocked === 'challenge_required'
+        || blocked === 'feedback_required' || blocked === 'two_factor_required') {
+        hilog.warn(DOMAIN, TAG, 'feed auto-retry stopped: %{public}s', blocked);
+        this.feedRetryLeft = 0;
+        return;
+      }
       this.feedRetryLeft--;
       hilog.info(DOMAIN, TAG, 'feed auto-retry left=%{public}d', this.feedRetryLeft);
       this.viewModel.loadFeed();

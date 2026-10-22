@@ -257,7 +257,8 @@ export class MobileRequest {
   static async send(endpoint: string, data: string = '', params: string = '',
                     withSignature: boolean = true,
                     extraHeaders: Record<string, string> | null = null,
-                    options: MobileOptions | null = null): Promise<MobileResult> {
+                    options: MobileOptions | null = null,
+                    jsonBody: boolean = false): Promise<MobileResult> {
     const opts: MobileOptions = options === null ? new MobileOptions() : options;
     const started: number = Date.now();
     MobileRequest.sends = MobileRequest.sends + 1;
@@ -293,9 +294,16 @@ export class MobileRequest {
     }
     const isPost: boolean = data.length > 0;
     if (isPost) {
-      headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=UTF-8';
+      /*
+       * `jsonBody`：少数较新的动作端点（note / repost 那一族）只吃 **JSON** 体。
+       * 用表单发过去一律 `400 {"message":"很抱歉，出错了，请重试。"}`（真机实证），
+       * 所以这里留一个开关；默认仍是 instagrapi 那套表单 + `signed_body`。
+       */
+      headers['Content-Type'] = jsonBody
+        ? 'application/json; charset=UTF-8'
+        : 'application/x-www-form-urlencoded; charset=UTF-8';
     }
-    const payload: string = isPost && withSignature ? signedBody(data) : data;
+    const payload: string = isPost && withSignature && !jsonBody ? signedBody(data) : data;
     hilog.info(DOMAIN, TAG, 'send %{public}s %{public}s m=%{public}s body=%{public}d auth=%{public}s',
       endpoint, MobileRequest.shortUrl(url), isPost ? 'POST' : 'GET', payload.length,
       identity.authorization.length > 0 ? 'y' : 'n');
@@ -413,7 +421,17 @@ export class MobileRequest {
     if (message === MOBILE_LOGIN_REQUIRED || code === 403) {
       error = message === MOBILE_LOGIN_REQUIRED ? MOBILE_LOGIN_REQUIRED : MOBILE_FORBIDDEN;
     }
-    if (message === MOBILE_CHALLENGE || errorType === MOBILE_CHALLENGE) {
+    /*
+     * **`Prompt has contribution`（error_code 4415001）**：IG 的一种"先处理这个提示"的闸。
+     *
+     * 真机实证：它出现之后，同一账号的所有端点开始一起回 `login_required`（403）——
+     * 也就是说这不是"某条请求参数错"，而是**账号级被挂起**，和 challenge 同一类：
+     * 重试没有意义，必须真人去 App/网页里把那个提示处理掉。所以归到 challenge 一支
+     * （`MobileChallenge.note` 会把地址记进台账，界面据此提示"去验证"）。
+     */
+    const prompting: boolean = text.indexOf('4415001') >= 0
+      || text.indexOf('Prompt has contribution') >= 0;
+    if (message === MOBILE_CHALLENGE || errorType === MOBILE_CHALLENGE || prompting) {
       /*
        * **账号安全验证**：把挑战地址记进台账（见 core/mobileapi/MobileChallenge），
        * 界面据此提示"去网页里验证"。这一支**重试没有意义** —— 必须真人/设备验证通过。

@@ -40,7 +40,7 @@ const TAG: string = 'MobileEngage';
  * 为什么单独一个类而不是三个字符串参数：这四样**必须来自同一发**
  * `media/{pk}/info/` 的响应，混着传就很容易把 A 媒体的 token 用到 B 上。
  */
-class RepostContext {
+export class RepostContext {
   /** 容器媒体 id（`<广播pk>_<作者pk>`，note 挂它）。 */
   readonly mediaId: string;
   /** 真正挂 note 的子媒体 id（多图帖取第一个子媒体，否则同容器）。 */
@@ -222,6 +222,23 @@ export class MobileEngage {
   }
 
   /**
+   * 转发用的**上下文**（公开版：core/WebRepost 也要同一份，见那边的 GraphQL 变更）。
+   *
+   * @param mediaId  可能带 `_作者` 后缀（信息流给的就是这个形状）
+   * @param shortcode 只有短码的条目用它换真 pk
+   */
+  static async repostContextOf(mediaId: string,
+                               shortcode: string): Promise<RepostContext | null> {
+    const pk: string = await MobileEngage.mediaIdOf(mediaId, shortcode);
+    if (pk.length === 0) {
+      MobileEngage.repostDetail = 'no-media-id';
+      return null;
+    }
+    const composite: string = `${mediaId}`.trim().length > 0 ? `${mediaId}`.trim() : pk;
+    return await MobileEngage.repostContext(pk, composite);
+  }
+
+  /**
    * **转发 / 取消转发**（IG 的 repost 在服务端就是一条"带媒体的 note"）。
    *
    * 以前这条只能"让隐藏网页去点它自己的按钮"（GraphQL `usePolarisCreateMediaRepostMutation`，
@@ -235,6 +252,10 @@ export class MobileEngage {
    *
    * **取消转发** = `POST notes/delete_note/`，把那一发建出来的 note 删掉 —— 所以建完
    *   **必须记住 note id**（见 repostNotes）：记不住就只能如实失败，绝不假装成功。
+   *
+   * ⚠️ 真机实测：这条 REST 对这个账号一律回 400（连普通 note 都发不出去），
+   * 所以线上真正跑通的是 core/WebRepost（同一条操作的 GraphQL 版）。这里保留是因为
+   * IG 哪天放开就直接生效，而且它比走网页少一发请求。
    *
    * @returns 成功返回 true；拿不到 id / 拿不到 tracking token / 服务端拒绝都返回 false。
    */
