@@ -17,6 +17,8 @@ import { AbilityConstant, Configuration, ConfigurationConstant, UIAbility, Want 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window, uiMaterial } from '@kit.ArkUI';
 import { AppLifecycle } from '../core/AppLifecycle';
+// 点私信通知要直接进那条会话：这里只负责把 want 里的会话 id 交给 core/NotifyRoute。
+import { NotifyRoute } from '../core/NotifyRoute';
 import { AppSettings } from '../core/AppSettings';
 import { MediaPrefetch } from '../core/MediaPrefetch';
 import { NativeFeed } from '../core/NativeFeed';
@@ -215,6 +217,12 @@ export default class EntryAbility extends UIAbility {
     // 记下启动原因，出问题时能区分"被 startAbility 拉起"还是"预加载/迁移"。
     const reason: number = launchParam === undefined ? -1 : launchParam.launchReason;
     this.coldWantHandled = true;
+    /*
+     * **点私信通知**（本 App 自己发的，want.parameters 里带会话 id）：先记下来，
+     * 由 pages/Index 起来后直接进那条会话。它没有 uri，所以下面那条深链解析
+     * 不会命中、首屏仍然是 pages/Index（不经过落地页）。
+     */
+    this.stashNotifyRoute(want, 'onCreate');
     const intent: DeepLinkIntent | null = this.parseIntent(want, 'onCreate');
     if (intent === null) {
       return;
@@ -245,12 +253,31 @@ export default class EntryAbility extends UIAbility {
       this.coldWantHandled = false;
       return;
     }
+    // 热启动点通知（App 已经在，可能停在别的页面）：同样先记下会话 id。
+    this.stashNotifyRoute(want, 'onNewWant');
     const intent: DeepLinkIntent | null = this.parseIntent(want, 'onNewWant');
     if (intent === null) {
       return;
     }
     DeepLink.stash(intent);
     hilog.info(DOMAIN, 'testTag', 'warm deep link %{public}s', intent.describe());
+  }
+
+  /**
+   * 把"点通知要进哪条会话"记下来（见 core/NotifyRoute）。
+   *
+   * 只认本 App 的通知：want 里没有 `threadId` 就是普通启动，什么都不做。
+   */
+  private stashNotifyRoute(want: Want, from: string): void {
+    const parameters: Record<string, Object> | undefined =
+      want === undefined ? undefined : want.parameters;
+    const threadId: string = NotifyRoute.threadIdOf(parameters);
+    if (threadId.length === 0) {
+      return;
+    }
+    NotifyRoute.stash(threadId);
+    hilog.info(DOMAIN, 'testTag', 'notify route (%{public}s) thread=%{public}d',
+      from, threadId.length);
   }
 
   /**

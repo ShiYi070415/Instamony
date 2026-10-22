@@ -99,6 +99,8 @@ import { PlatformCap } from '../core/PlatformCap';
 import { SettingsPanel } from '../components/SettingsPanel';
 import { AppTab } from '../model/AppTab';
 import { DeepLink, DeepLinkIntent, DeepLinkRoute } from '../core/DeepLink';
+// 点私信通知要直接进那条会话（EntryAbility 把会话 id 交给它，见 consumeNotifyRoute）。
+import { NotifyRoute } from '../core/NotifyRoute';
 import { CommentItem, CommentsPayload, LikePayload, SavePayload } from '../model/Comment';
 import { FeedMapper } from '../model/FeedMapper';
 import { FeedStatus } from '../model/FeedStatus';
@@ -209,6 +211,21 @@ const SEARCH_REELS_PAGE: string = 'searchReels';
  * 以前点一行是 `openWeb(thread.threadUrl())`（把隐藏网页导航到私信会话），现在不再需要网页。
  */
 const DIRECT_THREAD_PAGE: string = 'directThread';
+/**
+ * "点私信通知进会话"的重试参数（见 Index.consumeNotifyRoute）。
+ *
+ * 冷启动早期登录态一落定就会 `session changed → nav stack cleared`，把刚 push 的会话页
+ * 一起清掉；所以每 500ms 复查一次、最多试 15 次（约 7 秒），进了就收工。
+ */
+const NOTIFY_ROUTE_RETRY_MS: number = 500;
+const NOTIFY_ROUTE_MAX_TRIES: number = 15;
+/**
+ * 收件箱还没读回来的话，前几拍先等它（见 consumeNotifyRoute 里那段）。
+ *
+ * 4 拍 × 500ms = 2 秒：冷启动的 `direct_v2/inbox/` 真机实测 1.5~3 秒回来，
+ * 等到了标题/头像就是真的；等不到就按 id 硬进（标题栏稍后由会话读数补上）。
+ */
+const NOTIFY_ROUTE_WAIT_TRIES: number = 4;
 /**
  * 帖子页每轮最多补几条视频地址（见 Index.loadPostPageVideos）。
  *
@@ -2031,6 +2048,18 @@ struct Index {
      * 不需要挂载任何 Web 组件就已经能读，见 core/InstagramCookieJar）。
      */
     this.refreshSessionFromJar().catch((): void => {
+    });
+    /*
+     * **点私信通知进会话**：这里挂"有新意图"的回调。
+     *
+     * 为什么不能只靠 onPageShow：App 本来就在前台时点通知（下拉通知栏再点），页面不会重新
+     * 显示一次，onPageShow 不触发 —— 那种情况现在就靠这个回调接住。
+     * 挪到下一拍再执行：EntryAbility 的生命周期回调里直接推页面容易和首帧撞上。
+     */
+    NotifyRoute.onPending((): void => {
+      setTimeout((): void => {
+        this.consumeNotifyRoute();
+      }, 0);
     });
     // 快拍取数已经只走移动端私有接口（core/mobileapi/MobileStories）：
     // 原来那三个"抓网页模板 / 读页面媒体 / 补 claim"的钩子已随模板机制删除。
@@ -4608,6 +4637,124 @@ struct Index {
    */
   onPageShow(): void {
     this.consumePendingDeepLink();
+    // 点私信通知进 App：直接进那条会话（见 core/NotifyRoute / consumeNotifyRoute）。
+    this.consumeNotifyRoute();
+  }
+
+  // ==========================================================================
+  // 通知 → 会话（点私信通知直接进那条会话）
+  // ==========================================================================
+
+  /** 正在执行"点通知进会话"（防重入：会切 tab + push 页面）。 */
+  private notifyRouteRunning: boolean = false;
+  /** 还没送到的目标会话 id（一直留到真的进去了，见 consumeNotifyRoute）。 */
+  private notifyThread: string = '';
+  /** 已经试了几次（冷启动早期 nav 栈会被清，需要重试，见下）。 */
+  private notifyTries: number = 0;
+
+  /**
+   * 取走"点通知要进哪条会话"并执行。
+   *
+   * 通知是**本 App 自己发的**，`PushCenter` 把会话 id 写进了 wantAgent 的 parameters
+   * （见 core/PushCenter.wantAgentFor），`EntryAbility` 在 onCreate / onNewWant 里
+   * 把它交给 `core/NotifyRoute`。这里负责真正把人送进那条会话 —— 以前这条链只到
+   * "把 App 打开"，所以点通知只会停在首页（用户报的 bug）。
+   *
+   * ## 为什么要**重试**
+   * 冷启动时这一下常常太早：真机日志里紧接着就出现了
+   * `session changed → nav stack cleared`（登录态落定那一步会把导航栈清空），
+   * 刚 push 的会话页被一起清掉；底栏也会被重新选回首页。
+   * 所以目标 id **不取一次就扔**，而是每 500ms 复查一次、最多 15 次（约 7 秒）：
+   * 每次先看"是不是已经在目标会话里了"，是就收工。
+   */
+  private consumeNotifyRoute(): void {
+    if (this.notifyRouteRunning) {
+      return;
+    }
+    if (this.notifyThread.length === 0) {
+      this.notifyThread = NotifyRoute.take();
+      this.notifyTries = 0;
+    }
+    const threadId: string = this.notifyThread;
+    if (threadId.length === 0) {
+      return;
+    }
+    const inDirectTab: boolean = this.selectedTab === AppTab.Direct;
+    // 已经到了（会话页在栈顶、**而且底栏就停在私信页**）：清掉，收工。
+    if (this.topPage === DIRECT_THREAD_PAGE
+      && this.directThreadVm.threadIdNow() === threadId) {
+      if (!inDirectTab) {
+        /*
+         * 真机上见过这一幕：会话页还在 Nav 栈上（`topPage` 也是它），但用户/初始化
+         * 把底栏切回了首页 —— 这时"我在会话里"是假象，屏幕上是首页。
+         * 先把底栏切回私信页，下一拍复查时才算真的进去了。
+         */
+        this.selectTab(AppTab.Direct);
+      } else {
+        if (this.notifyTries > 0) {
+          hilog.info(DOMAIN, TAG, 'notify route: 已进入会话（第 %{public}d 次尝试）id=%{public}d',
+            this.notifyTries, threadId.length);
+        }
+        this.notifyThread = '';
+        this.notifyTries = 0;
+        return;
+      }
+    } else {
+      this.notifyRouteRunning = true;
+      try {
+        if (this.topPage === DIRECT_THREAD_PAGE) {
+          // 人已经在别的会话页上：先退出去，下一拍再 push（不叠一层同样的页面）。
+          this.navStack.pop();
+        } else {
+          this.selectTab(AppTab.Direct);
+          const list: Array<DirectThread> = this.directVm.list();
+          let hit: DirectThread | null = null;
+          for (let index: number = 0; index < list.length; index++) {
+            if (list[index].id === threadId) {
+              hit = list[index];
+              break;
+            }
+          }
+          if (hit !== null) {
+            this.openDirectThread(hit);
+          } else if (list.length === 0 && this.notifyTries < NOTIFY_ROUTE_WAIT_TRIES) {
+            /*
+             * 收件箱还没读回来（冷启动那一发要 1~3 秒）：**再等两拍**。
+             *
+             * 不等的话只能"按 id 硬进"，标题栏先空一下（占位是「还没有消息」），
+             * 看着像进错了会话；等收件箱到了再用那一行进，标题/头像一上来就是对的。
+             */
+          } else {
+            this.openDirectThreadById(threadId);
+          }
+        }
+      } finally {
+        this.notifyRouteRunning = false;
+      }
+    }
+    this.notifyTries++;
+    if (this.notifyTries > NOTIFY_ROUTE_MAX_TRIES) {
+      hilog.warn(DOMAIN, TAG, 'notify route: 放弃（%{public}d 次都没进去）id=%{public}d',
+        this.notifyTries - 1, threadId.length);
+      this.notifyThread = '';
+      this.notifyTries = 0;
+      return;
+    }
+    setTimeout((): void => {
+      this.consumeNotifyRoute();
+    }, NOTIFY_ROUTE_RETRY_MS);
+  }
+
+  /**
+   * 按会话 id 直接开会话页（收件箱里还没有这一行时的兜底，见 consumeNotifyRoute）。
+   *
+   * 标题/头像先空着：`DirectThreadViewModel.load()` 一落定，标题栏就用读到的真名/头像
+   * （见 titleNow / avatarNow），所以这里给个占位是安全的。
+   */
+  private openDirectThreadById(threadId: string): void {
+    const placeholder: DirectThread = new DirectThread(threadId, '', '', '', false, false,
+      false, false, Date.now(), '', 'text', '', 0);
+    this.openDirectThread(placeholder);
   }
 
   // ==========================================================================

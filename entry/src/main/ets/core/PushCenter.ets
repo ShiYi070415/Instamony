@@ -27,14 +27,21 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { notificationManager } from '@kit.NotificationKit';
 import { pushService } from '@kit.PushKit';
+// 点通知要进哪条会话：参数名只留一份真源（放在 core/NotifyRoute）。
+import { NOTIFY_THREAD_KEY } from './NotifyRoute';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'PushCenter';
 
 /** 兜底包名（拿不到系统信息时用；和 AppScope/app.json5 保持一致）。 */
 const FALLBACK_BUNDLE: string = 'com.oneleaf.instamony';
-/** 私信通知在 want 里带的参数名（以后 Index 里"点通知直接进会话"要用）。 */
-export const NOTIFY_KEY_THREAD: string = 'threadId';
+/**
+ * 私信通知在 want 里带的参数名。
+ *
+ * **必须**和 `core/NotifyRoute.NOTIFY_THREAD_KEY` 是同一个字符串：那边负责读，
+ * 这里负责写。为了只留一份真源，这里直接引用它（原来两边各写一份字面量，容易写歪）。
+ */
+export const NOTIFY_KEY_THREAD: string = NOTIFY_THREAD_KEY;
 
 /** 上一次的未读总数（按 kind 分开）：只有**变多**才弹通知。 */
 class UnreadMark {
@@ -312,7 +319,7 @@ export class PushCenter {
   private static async wantAgentFor(threadId: string): Promise<WantAgent | undefined> {
     const parameters: Record<string, Object> = {};
     if (threadId.length > 0) {
-      parameters[NOTIFY_KEY_THREAD] = threadId;
+      parameters[NOTIFY_THREAD_KEY] = threadId;
     }
     const info: wantAgent.WantAgentInfo = {
       wants: [
@@ -323,10 +330,28 @@ export class PushCenter {
         }
       ],
       actionType: wantAgent.OperationType.START_ABILITY,
-      requestCode: 0,
+      /*
+       * **按会话给不同的 requestCode**：WantAgent 的身份是
+       * `(bundle, ability, requestCode)`，同一个 requestCode 会被当成**同一个** agent ——
+       * 那样后一条通知的 want 会把前一条的覆盖掉，点旧通知就进到最新的那条会话里。
+       */
+      requestCode: PushCenter.requestCodeOf(threadId),
       actionFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG]
     };
     return await wantAgent.getWantAgent(info);
+  }
+
+  /** 会话 id → 稳定的 requestCode（同一条会话永远同一个，不同会话大概率不同）。 */
+  private static requestCodeOf(threadId: string): number {
+    if (threadId.length === 0) {
+      return 0;
+    }
+    let sum: number = 0;
+    for (let index: number = 0; index < threadId.length; index++) {
+      // 逐位滚动累加：19~20 位数字的会话 id 也能散开，且同一 id 每次结果一致。
+      sum = (sum * 31 + threadId.charCodeAt(index)) % 1000000;
+    }
+    return sum;
   }
 
   /** 本应用的包名（拿不到就用常量兜底）。 */
