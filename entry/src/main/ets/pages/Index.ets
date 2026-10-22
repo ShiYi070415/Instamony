@@ -2712,21 +2712,27 @@ struct Index {
   /**
    * 一条**实时推来的私信消息**。
    *
-   * 当前正开着这条会话 → 直接插进那一屏（`applyIncoming`，不请求、不缓存）；
-   * 否则 → 让收件箱刷新（列表里那条会话的预览/未读要跟着变）。
+   * 两条路都**不发请求**（需求："私信列表接一下 MQTT 实时更新"）：
+   *   · 当前正开着这条会话 → 插进那一屏（`applyIncoming`）；
+   *   · **收件箱列表那一行** → `applyRealtimeMessage` 就地改摘要/时间/未读并置顶；
+   * 只有"列表里根本没有这条会话"（新会话、翻页还没到）才退回刷一次收件箱。
    */
   private onRealtimeMessage(incoming: RealtimeMessage): void {
     const onThisThread: boolean = this.topPage === DIRECT_THREAD_PAGE
       && this.directThreadVm.threadIdNow() === incoming.threadId;
+    let readHere: boolean = false;
     if (onThisThread) {
       const applied: boolean = this.directThreadVm.applyIncoming(incoming.message);
       hilog.info(DOMAIN, TAG, 'realtime message on open thread applied=%{public}s %{public}s',
         `${applied}`, DirectRealtime.describe());
-      if (applied) {
-        return;
-      }
+      // 插进去了 = 用户正在看这条 → 列表那一行不加未读、也不弹通知。
+      readHere = applied;
     }
-    this.scheduleDirectInboxRefresh();
+    const inList: boolean = this.directVm.applyRealtimeMessage(incoming.threadId,
+      incoming.message, readHere);
+    if (!inList) {
+      this.scheduleDirectInboxRefresh();
+    }
   }
 
   /**

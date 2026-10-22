@@ -12,7 +12,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { NativeDirect } from '../core/NativeDirect';
 // 新私信的本地通知（见 core/PushCenter）。
 import { PushCenter } from '../core/PushCenter';
-import { DirectThread } from '../model/Direct';
+import { DirectMessage, DirectThread } from '../model/Direct';
 import { DirectInboxPage } from '../model/Direct';
 
 const DOMAIN: number = 0xFF00;
@@ -116,6 +116,71 @@ export class DirectViewModel {
     } finally {
       this.polling = false;
     }
+  }
+
+  /**
+   * **把实时推来的一条私信直接落到列表那一行**（需求："私信列表接一下 MQTT 实时更新"）。
+   *
+   * 以前实时补丁只做一件事：触发一次收件箱 HTTP 刷新（30KB 起、还要排队）。
+   * 现在能就地改：那一行的**摘要文字/时间/未读**按这条消息更新、并把该会话**置顶**，
+   * 一次请求都不发。列表因此和会话页一样是"推过来的"。
+   *
+   * @param threadId 会话 id
+   * @param message  推来的那条消息
+   * @param readHere 这条消息此刻正在被读（会话页开着、并且已经插进去了）：
+   *                 那就别加未读、别弹通知（否则用户正看着，通知栏还"叮"一下）。
+   * @returns true = 这一行已经就地更新好；false = 列表里没有这条会话（新会话/还没加载到），
+   *          调用方该退回"刷一次收件箱"。
+   */
+  applyRealtimeMessage(threadId: string, message: DirectMessage, readHere: boolean): boolean {
+    if (threadId.length === 0) {
+      return false;
+    }
+    let at: number = -1;
+    for (let index: number = 0; index < this.threads.length; index++) {
+      if (this.threads[index].id === threadId) {
+        at = index;
+        break;
+      }
+    }
+    if (at < 0) {
+      hilog.info(DOMAIN, TAG, 'realtime thread not in list id=%{public}d → 需要刷收件箱',
+        threadId.length);
+      return false;
+    }
+    const old: DirectThread = this.threads[at];
+    /*
+     * 补丁会重发、轮询也可能把同一条带回来：比这一行还旧的消息直接忽略
+     * （但**算已处理**，不然调用方还要白刷一次收件箱）。
+     */
+    if (message.tsMs > 0 && old.tsMs > 0 && message.tsMs < old.tsMs) {
+      hilog.info(DOMAIN, TAG, 'realtime stale message ts=%{public}d old=%{public}d',
+        message.tsMs, old.tsMs);
+      return true;
+    }
+    const unread: boolean = readHere || message.mine ? false : true;
+    const unreadCount: number = readHere || message.mine
+      ? 0 : Math.min(4, Math.max(1, old.unreadCount + 1));
+    const updated: DirectThread = new DirectThread(old.id, old.key, old.title, old.avatarUrl,
+      old.isGroup, unread, old.muted, old.pinned,
+      message.tsMs > 0 ? message.tsMs : old.tsMs,
+      message.text.length > 0 ? message.text : old.text,
+      message.text.length > 0 ? message.kind : old.kind,
+      old.username, unreadCount);
+    const next: Array<DirectThread> = [updated];
+    for (let index: number = 0; index < this.threads.length; index++) {
+      if (index !== at) {
+        next.push(this.threads[index]);
+      }
+    }
+    this.threads = next;
+    this.loadedAtMs = Date.now();
+    this.onThreads(this.threads, this.more);
+    hilog.info(DOMAIN, TAG, 'realtime row updated id=%{public}d at=0 unread=%{public}s mine=%{public}s',
+      threadId.length, `${unread}`, `${message.mine}`);
+    // 未读变多时顺手弹通知（readHere / 自己发的不加未读，所以这里不会响）。
+    this.noteNewUnread();
+    return true;
   }
 
   /** 两份列表"看着一样"吗（轮询用它决定要不要重绘）。 */
