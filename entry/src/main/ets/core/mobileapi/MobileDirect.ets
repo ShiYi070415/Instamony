@@ -22,6 +22,8 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ApiThrottle } from '../ApiThrottle';
+// 实时同步位点要落盘，冷启动才能"先订阅、后补差"（见 noteSyncState / primeSyncStateFromDisk）。
+import { AppSettings } from '../AppSettings';
 import { MobileRequest, MobileResult, MobileOptions } from './MobileRequest';
 import { MobileSession, MobileIdentity } from './MobileSession';
 // 发消息要现生成两个 uuid（`client_context` / `mutation_token`）。
@@ -129,6 +131,8 @@ export class MobileDirect {
     if (seq > 0 && snapshot > 0) {
       MobileDirect.syncSeqId = seq;
       MobileDirect.syncSnapshotAtMs = snapshot;
+      // 落盘：下次冷启动可以**先用这个位点订阅**，不用等收件箱（见 syncRealtimeSubscription）。
+      AppSettings.saveDirectSync(seq, snapshot);
       hilog.info(DOMAIN, TAG, 'inbox sync state seq=%{public}d snapshot=%{public}d',
         seq, snapshot);
       return;
@@ -141,6 +145,39 @@ export class MobileDirect {
   /** 收件箱给出的实时同步状态（0 = 还没拿到；见 noteSyncState）。 */
   static syncSeqId: number = 0;
   static syncSnapshotAtMs: number = 0;
+  /** 落盘位点最多算"新鲜"多久（毫秒）：超过就重新等收件箱（见 primeSyncStateFromDisk）。 */
+  private static readonly SYNC_STATE_MAX_AGE_MS: number = 24 * 3600 * 1000;
+
+  /**
+   * **先用落盘的位点**把同步状态填上（冷启动专用，见 noteSyncState 的说明）。
+   *
+   * 只在内存里还没有位点时才用；有落盘值就算"能先订阅"，收件箱回来后会覆盖成新的。
+   *
+   * @returns 是否填上了
+   */
+  static primeSyncStateFromDisk(): boolean {
+    if (MobileDirect.syncSeqId > 0 && MobileDirect.syncSnapshotAtMs > 0) {
+      return true;
+    }
+    const saved: Array<number> = AppSettings.loadDirectSync();
+    if (saved.length < 2) {
+      return false;
+    }
+    /*
+     * **太旧的位点不用**：对端会按这个位点补一大段差量（甚至又要求重新快照）。
+     * 24 小时是"还算新鲜"的经验线；超过就照旧等收件箱那一发。
+     */
+    if (Date.now() - saved[1] > MobileDirect.SYNC_STATE_MAX_AGE_MS) {
+      hilog.info(DOMAIN, TAG, 'sync state on disk too old (age=%{public}dms) → 等收件箱',
+        Date.now() - saved[1]);
+      return false;
+    }
+    MobileDirect.syncSeqId = saved[0];
+    MobileDirect.syncSnapshotAtMs = saved[1];
+    hilog.info(DOMAIN, TAG, 'sync state from disk seq=%{public}d snapshot=%{public}d',
+      MobileDirect.syncSeqId, MobileDirect.syncSnapshotAtMs);
+    return true;
+  }
 
   private static numberOf(holder: Record<string, Object>, key: string): number {
     const value: Object | undefined = holder[key];

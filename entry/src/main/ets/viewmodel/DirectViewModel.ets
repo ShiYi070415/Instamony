@@ -17,6 +17,13 @@ import { DirectInboxPage } from '../model/Direct';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'DirectViewModel';
+/**
+ * 只为"这么多毫秒以内"的消息弹通知（见 applyRealtimeMessage 的 fresh 闸）。
+ *
+ * 为什么需要：冷启动用落盘位点先订阅时，对端会把离线期间的补丁重放一遍；
+ * 那些几分钟前的消息不该在启动瞬间"叮"一下。
+ */
+const NOTIFY_MAX_AGE_MS: number = 120000;
 
 export class DirectViewModel {
   /** 清空自己（退出登录 / 换账号时调，见 ReelsViewModel.reset 的说明）。 */
@@ -194,7 +201,14 @@ export class DirectViewModel {
      * 现在看这条会话的最新消息时间有没有比"上次通知过的那条"更新（markNotified）。
      */
     const total: number = DirectViewModel.unreadTotal(this.threads);
-    if (unread && this.markNotified(updated, true)) {
+    /*
+     * 还有一道"新鲜度"闸：用落盘位点先订阅时（见 MobileDirect.primeSyncStateFromDisk），
+     * 对端会把**离线期间**的补丁重放一遍 —— 那些消息可能是几分钟前的，不该再"叮"一次。
+     * 只给 2 分钟内的消息弹通知。
+     */
+    const fresh: boolean = message.tsMs <= 0
+      || Date.now() - message.tsMs < NOTIFY_MAX_AGE_MS;
+    if (unread && fresh && this.markNotified(updated, true)) {
       PushCenter.noteUnread('direct', total);
       const sender: string = updated.title.length > 0 ? updated.title : updated.username;
       PushCenter.notifyDirect(sender, DirectViewModel.previewOf(updated), 1, updated.id);

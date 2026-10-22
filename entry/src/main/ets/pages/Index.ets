@@ -2746,19 +2746,39 @@ struct Index {
   /**
    * 广播"实时同步位点"（收件箱响应里那两个值）。
    *
-   * 没有就**先拉一次收件箱**——那是唯一能拿到 `seq_id` 的接口（instagrapi 也是这么做的：
-   * `direct_threads(amount=1)` → 顶层 `seq_id` / `snapshot_at_ms` → `iris_subscribe`）。
+   * **先用手上的位点订阅，收件箱回来再补一次**（用户报："实时通道连接很慢"）。
+   *
+   * 以前是"没有位点就 await 一次收件箱"：那一发是 30KB 起步、还要在全局闸门排队
+   * （真机日志里见过排到 30 秒），于是实时通道虽然 TLS 已经连上，**订阅却迟迟发不出去**，
+   * 用户看到的就是"连接很慢"。
+   * 现在位点会落盘（见 MobileDirect.noteSyncState / AppSettings.saveDirectSync），
+   * 冷启动先 `primeSyncStateFromDisk()` 拿上次的位点立刻订阅（对端按位点补差量），
+   * 收件箱那一发照旧在后台跑，回来后位点更新了就再订阅一次。
    */
   private async syncRealtimeSubscription(): Promise<void> {
-    if (MobileDirect.syncSeqId <= 0) {
-      await MobileDirect.inbox('');
+    MobileDirect.primeSyncStateFromDisk();
+    if (MobileDirect.syncSeqId > 0) {
+      hilog.info(DOMAIN, TAG, 'realtime subscribe now seq=%{public}d snapshot=%{public}d',
+        MobileDirect.syncSeqId, MobileDirect.syncSnapshotAtMs);
+      await MobileRealtime.subscribeDirect(
+        new IrisState(MobileDirect.syncSeqId, MobileDirect.syncSnapshotAtMs));
     }
-    if (MobileDirect.syncSeqId <= 0) {
-      hilog.info(DOMAIN, TAG, 'realtime subscribe skipped: 收件箱没给 seq_id');
+    /*
+     * 位点是"上次的"（或干脆没有）：把收件箱那一发放到后台补齐，回来后**位点变新了就再订阅**。
+     * 这一步不挡上面那发订阅 —— 实时通道只要订阅过一次就开始推了。
+     */
+    const before: number = MobileDirect.syncSeqId;
+    if (before > 0) {
+      // 有位点了就别急：交给启动预热里那一发收件箱（见 warmOtherTabs），它回来会更新位点。
       return;
     }
-    await MobileRealtime.subscribeDirect(
-      new IrisState(MobileDirect.syncSeqId, MobileDirect.syncSnapshotAtMs));
+    await MobileDirect.inbox('');
+    if (MobileDirect.syncSeqId > 0) {
+      await MobileRealtime.subscribeDirect(
+        new IrisState(MobileDirect.syncSeqId, MobileDirect.syncSnapshotAtMs));
+      return;
+    }
+    hilog.info(DOMAIN, TAG, 'realtime subscribe skipped: 收件箱没给 seq_id');
   }
 
   /**

@@ -40,13 +40,20 @@ const PING_TIMEOUT_MS: number = 8000;
 /** TLS 连接超时。 */
 const CONNECT_TIMEOUT_MS: number = 10000;
 /**
+ * 等 CONNACK 的上限（毫秒）。
+ *
+ * 4 秒：明显大于正常握手（真机 wifi 上 200~400ms），但又不能让"根本没应答"的连接挂太久。
+ * 关键是**一收到 CONNACK 就往下走**，不再固定等一个秒数（见 waitConnack）。
+ */
+const CONNACK_WAIT_MS: number = 4000;
+/**
  * "解压+派发"超过这个毫秒数就当"占住主线程了"，打 warn（见 decodeAndDispatch）。
  *
  * 一帧 16ms；这条工作已经挪到独立的一拍里，超过 8ms 就该查是不是补丁特别大。
  */
 const DECODE_SLOW_MS: number = 8;
 /** 重连退避（毫秒，按次数取，取完停在最后一个）。 */
-const BACKOFF_MS: Array<number> = [2000, 5000, 15000, 60000];
+const BACKOFF_MS: Array<number> = [500, 1500, 4000, 10000, 30000];
 
 /** 一条收到的实时事件（给上层派发用）。 */
 export class RealtimeEvent {
@@ -91,6 +98,35 @@ export class MobileRealtime {
   private static eventCount: number = 0;
   private static lastError: string = '-';
   private static handlers: Array<(event: RealtimeEvent) => void> = [];
+  /** 等到 CONNACK 时要叫醒的回调（见 waitConnack）。 */
+  private static connackWaiter: (() => void) | undefined = undefined;
+  /** 连上的时刻（毫秒；日志里算"从 start 到 ready 花了多久"）。 */
+  private static connectAtMs: number = 0;
+
+  /**
+   * 等 CONNACK（最多 `timeoutMs`），**一到就返回**。
+   *
+   * 早先是固定 `sleep(1500)` 再看 `connected`：握手快时白等 1.2 秒；弱网/TLS 慢时
+   * 1.5 秒还没到就被判 `no-connack`、断线重连（日志里就是这样，白丢 4 秒）。
+   */
+  private static waitConnack(timeoutMs: number): Promise<boolean> {
+    if (MobileRealtime.connected) {
+      return Promise.resolve(true);
+    }
+    return new Promise<boolean>((resolve: (value: boolean) => void): void => {
+      let settled: boolean = false;
+      const done: () => void = (): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        MobileRealtime.connackWaiter = undefined;
+        resolve(MobileRealtime.connected);
+      };
+      MobileRealtime.connackWaiter = done;
+      setTimeout(done, timeoutMs);
+    });
+  }
 
   /** 状态一行（诊断/界面都看它）。 */
   static status(): string {
@@ -149,12 +185,17 @@ export class MobileRealtime {
       await ref.send(packet.buffer as ArrayBuffer);
       hilog.info(DOMAIN, TAG, 'connect sent len=%{public}d user=%{public}s',
         packet.length, identity.userId);
-      // CONNACK 会在收包回调里置 connected（见 onPacket），这里只等一小会儿。
-      await MobileRealtime.sleep(1500);
+      // CONNACK 会在收包回调里置 connected（见 onPacket）。这里**等它，而不是死等 1.5 秒**：
+      // 早先固定 `sleep(1500)` 有两个毛病 —— 握手快的时候白等 1.2 秒；
+      // 握手慢（弱网、TLS 重协商）时 1.5 秒还没到 CONNACK，被当成 no-connack 断开重连。
+      const waited: number = Date.now();
+      const up: boolean = await MobileRealtime.waitConnack(CONNACK_WAIT_MS);
       MobileRealtime.attempts = 0;
-      if (MobileRealtime.connected) {
+      if (up) {
+        hilog.info(DOMAIN, TAG, 'realtime ready in %{public}dms', Date.now() - waited);
         MobileRealtime.schedulePing();
       } else {
+        hilog.warn(DOMAIN, TAG, 'no CONNACK in %{public}dms → reconnect', Date.now() - waited);
         MobileRealtime.onClosed('no-connack');
       }
       return MobileRealtime.connected;
@@ -291,8 +332,15 @@ export class MobileRealtime {
       // CONNACK：返回码 0 才算真的连上。
       if (info.returnCode === 0) {
         MobileRealtime.connected = true;
+        MobileRealtime.connectAtMs = Date.now();
         MobileRealtime.attempts = 0;
         hilog.info(DOMAIN, TAG, 'CONNACK 0 —— 实时通道已连上');
+        // 叫醒 start() 里那个等待（见 waitConnack）。
+        const waiter: (() => void) | undefined = MobileRealtime.connackWaiter;
+        MobileRealtime.connackWaiter = undefined;
+        if (waiter !== undefined) {
+          waiter();
+        }
       } else {
         MobileRealtime.lastError = `connack rc=${info.returnCode}`;
         hilog.warn(DOMAIN, TAG, 'CONNACK rc=%{public}d', info.returnCode);
@@ -403,6 +451,12 @@ export class MobileRealtime {
     }
     MobileRealtime.connected = false;
     MobileRealtime.clearTimers();
+    // 叫醒还在等 CONNACK 的那一发，让它立刻按"没连上"处理（不然要白等到超时）。
+    const waiter: (() => void) | undefined = MobileRealtime.connackWaiter;
+    MobileRealtime.connackWaiter = undefined;
+    if (waiter !== undefined) {
+      waiter();
+    }
     const ref: socket.TLSSocket | null = MobileRealtime.sock;
     MobileRealtime.sock = null;
     if (ref !== null) {

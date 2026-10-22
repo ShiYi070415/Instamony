@@ -370,6 +370,39 @@ export class AppSettings {
     return AppSettings.readString(`profile_header_${uid}`, '');
   }
 
+  /**
+   * 存/取**私信实时同步位点**（`seq_id` / `snapshot_at_ms`）。
+   *
+   * 为什么值得落盘：冷启动要连实时通道，而订阅需要这两个值，它们只有一个来源 ——
+   * 一次完整收件箱请求（30KB 起，还要在全局闸门排队，真机上见过排 30 秒）。
+   * 存下来之后，冷启动可以**立刻用上次的位点先订阅**（对端会按位点补差量），
+   * 收件箱回来后如果更新了位点再补一次订阅 —— 实时通道从"等几秒~几十秒"变成"开局就在"。
+   */
+  static saveDirectSync(seqId: number, snapshotAtMs: number): void {
+    if (seqId <= 0 || snapshotAtMs <= 0) {
+      return;
+    }
+    AppSettings.write('direct_sync', `${seqId}|${snapshotAtMs}`);
+  }
+
+  /** 上次存下的同步位点（`seqId <= 0` = 没有）。 */
+  static loadDirectSync(): Array<number> {
+    const raw: string = AppSettings.readString('direct_sync', '');
+    if (raw.length === 0) {
+      return [];
+    }
+    const parts: Array<string> = raw.split('|');
+    if (parts.length < 2) {
+      return [];
+    }
+    const seq: number = Number(parts[0]);
+    const snapshot: number = Number(parts[1]);
+    if (!Number.isFinite(seq) || !Number.isFinite(snapshot) || seq <= 0 || snapshot <= 0) {
+      return [];
+    }
+    return [seq, snapshot];
+  }
+
   private static readString(key: string, fallback: string): string {
     try {
       if (AppSettings.store !== null) {
