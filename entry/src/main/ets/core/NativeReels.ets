@@ -662,15 +662,19 @@ export class NativeReels {
   }
 
   /**
-   * **关注流首屏**：`clips/connected/`（你关注的人）+ `clips/discover/social/`（好友）并发。
+   * **好友流首屏**（这一页在界面上叫「好友」，内部键仍是 `REELS_SOURCE_FOLLOWING`）：
+   * `clips/discover/social/`（好友）+ `clips/connected/`（你关注的人）并发。
+   *
+   * 顺序是"好友在前"：按钮叫好友，第一屏就该先出现好友那批（`social` 是亲密关系那一条，
+   * 见 core/mobileapi/MobileClips 的端点表）。两批其实都是"你认识的人"，混着看才对。
    *
    * 两发都挂（被限流 / 新号没关注人）才退回探索流 —— 那时语义差一点，总比空屏强。
    */
   private static async firstFollowing(lane: ReelsLane): Promise<NativeReelsPage | null> {
     const started: number = Date.now();
     const parts: Array<NativeReelsPage | null> = await Promise.all([
-      NativeReels.viaConnected(lane, ''),
-      NativeReels.viaFriends(lane, '')
+      NativeReels.viaFriends(lane, ''),
+      NativeReels.viaConnected(lane, '')
     ]);
     const merged: NativeReelsPage | null = NativeReels.mergeList(parts, started);
     if (merged !== null && merged.reels.length >= NativeReels.FIRST_MIN_REELS) {

@@ -50,6 +50,21 @@ const NATIVE_PAGE_COUNT: number = 7;
  */
 const NATIVE_CACHE_PAGES: number = 3;
 const NATIVE_WARM_MAX_AGE_MS: number = 120000;
+/**
+ * 一次翻页最多**上屏**几条（剩下的留在缓冲里，见 drainInterleaved）。
+ *
+ * 取 10 而不是"有多少铺多少"：缓冲里多留几条，下一次上屏才有料继续交替作者
+ * （同一作者不连着出现）。10 条也够用户滑一阵，滑到需要下一页时数据已经在了。
+ */
+const DRAIN_PER_REQUEST: number = 10;
+/** 一次上屏至少铺这么多条之后，才允许因为"缓冲里只剩一个作者"提前收手（见 drainInterleaved）。 */
+const DRAIN_MIN: number = 4;
+/**
+ * 待上屏缓冲最多囤多少条（防呆：预取还在跑时不至于无限长大）。
+ *
+ * 36 = 三个作者那页的量；到这个量就不再预取，等上屏把这批吃掉。
+ */
+const PENDING_MAX: number = 36;
 
 export class ReelsViewModel implements ReelStreamVm {
   /**
@@ -78,6 +93,10 @@ export class ReelsViewModel implements ReelStreamVm {
     this.endCursor = '';
     this.more = true;
     this.busy = false;
+    this.pending = [];
+    this.shown.clear();
+    this.nativeQueue = [];
+    this.nativeCursor = '';
   }
 
   private reels: Array<Reel> = [];
@@ -85,6 +104,15 @@ export class ReelsViewModel implements ReelStreamVm {
   private more: boolean = true;
   private busy: boolean = false;
   private diag: string = '-';
+  /** 已经上屏的短码（去重只有这一份真相，见 ingestPage）。 */
+  private shown: Set<string> = new Set<string>();
+  /**
+   * **取到手、还没上屏**的条目（见 drainInterleaved）。
+   *
+   * 为什么要这一层：翻页的主力是"某个作者的全部 Reels"（一次 12 条全是同一个人），
+   * 整页照铺就是"连着十几条同一个作者"（用户报的）。先攒进缓冲，再按作者交替上屏。
+   */
+  private pending: Array<Reel> = [];
   /** 当前看到第几条（切 tab 重建页面时要恢复，见 activeIndex）。 */
   private active: number = 0;
   /** 原生已经取好、等着上滑切换时直接铺的那些页（最多 NATIVE_CACHE_PAGES 页，先进先出）。 */
@@ -152,7 +180,7 @@ export class ReelsViewModel implements ReelStreamVm {
         const fallback: NativeReelsPage | null = await NativeReels.fetchPage(this.source, NATIVE_PAGE_COUNT, '', true);
         if (fallback !== null) {
           this.noteCursor(fallback.nextCursor);
-          this.applyNativePage(fallback, false);
+          this.applyFirstPage(fallback);
           hilog.info(DOMAIN, TAG, 'reels first via explore fallback n=%{public}d ms=%{public}d',
             fallback.reels.length, Date.now() - startedMs);
           this.onStatus('已加载 ' + fallback.reels.length + ' 条（视频接口受限，先用推荐流顶上）');
@@ -164,7 +192,7 @@ export class ReelsViewModel implements ReelStreamVm {
       const warm: NativeReelsPage | null = NativeReels.takeWarm(this.source, NATIVE_WARM_MAX_AGE_MS);
       if (warm !== null) {
         this.noteCursor(warm.nextCursor);
-        this.applyNativePage(warm, false);
+        this.applyFirstPage(warm);
         hilog.info(DOMAIN, TAG, 'reels first from warm n=%{public}d ms=%{public}d',
           warm.reels.length, Date.now() - startedMs);
         this.prefetchNativePage();
@@ -174,7 +202,7 @@ export class ReelsViewModel implements ReelStreamVm {
       const native: NativeReelsPage | null = await NativeReels.fetchPage(this.source, NATIVE_PAGE_COUNT, '', true);
       if (native !== null) {
         this.noteCursor(native.nextCursor);
-        this.applyNativePage(native, false);
+        this.applyFirstPage(native);
         hilog.info(DOMAIN, TAG, 'reels first native n=%{public}d ms=%{public}d ms=%{public}d',
           native.reels.length, native.ms, Date.now() - startedMs);
         this.prefetchNativePage();
@@ -202,40 +230,133 @@ export class ReelsViewModel implements ReelStreamVm {
   }
 
   /**
-   * 把原生取到的一页铺上（首屏或翻页都用它，去重规则只有一份）。
+   * 把原生取到的一页**收进待上屏缓冲**（不直接上屏，见 drainInterleaved）。
    *
-   * @param append true = 追加到已有列表后面；false = 当作第一页整体替换。
-   * @returns 真正新增了几条（用来判断"这一页是不是全重复"）。
+   * 去重只有这一份真相：`shown`（已经上屏的短码）+ `pending` 里已有的短码。
+   *
+   * @returns 真正新增了几条（0 = 整页都是见过的）。
    */
-  private applyNativePage(page: NativeReelsPage, append: boolean): number {
-    const known: Set<string> = new Set<string>();
-    if (append) {
-      for (let index: number = 0; index < this.reels.length; index++) {
-        known.add(this.reels[index].shortcode);
-      }
-    }
-    const fresh: Array<Reel> = [];
+  private ingestPage(page: NativeReelsPage): number {
+    let added: number = 0;
     for (let index: number = 0; index < page.reels.length; index++) {
       const reel: Reel = page.reels[index];
-      if (known.has(reel.shortcode)) {
+      if (this.shown.has(reel.shortcode)) {
         continue;
       }
-      known.add(reel.shortcode);
-      fresh.push(reel);
+      let dup: boolean = false;
+      for (let at: number = 0; at < this.pending.length; at++) {
+        if (this.pending[at].shortcode === reel.shortcode) {
+          dup = true;
+          break;
+        }
+      }
+      if (dup) {
+        continue;
+      }
+      this.pending.push(reel);
+      added++;
     }
-    this.reels = append ? this.reels.concat(fresh) : fresh;
+    return added;
+  }
+
+  /** 待上屏缓冲里有几家作者（补货时用它判断"够不够打散"）。 */
+  private pendingAuthors(): number {
+    const seen: Set<string> = new Set<string>();
+    for (let index: number = 0; index < this.pending.length; index++) {
+      const id: string = this.pending[index].authorId;
+      if (id.length > 0) {
+        seen.add(id);
+      }
+    }
+    return seen.size;
+  }
+
+  /**
+   * **按作者打散**后上屏（这是"连着几条都是同一个人"的修法）。
+   *
+   * 为什么必须打散：翻页的主力是「某个作者的全部 Reels」（`clips/user/{pk}/`，一次 12 条
+   * **全是同一个人的**）。整页照铺的话，用户看到的就是连续十几条同一个作者 —— 用户报的正是这个。
+   *
+   * 取法：优先挑"和上一条、上上条都不同作者"的，其次"和上一条不同"，实在没有就随便取。
+   *
+   * @param limit 这一次最多上屏几条。
+   * @param stopOnSingle **缓冲里只剩一个作者时就收手**（翻页用）。
+   *   不加这道闸的话，`12 条 A + 3 条别人` 这种组合铺到后面必然是一串 A（别人先被挑光了）；
+   *   收手之后那 10 条 A 留在缓冲里，等下一发新页（另一个作者）回来再交替 —— 这样才不会
+   *   出现"连着好几条同一个人"。首屏不能收手（它必须铺满屏），所以那条路传 false。
+   * @returns 真正新增了几条。
+   */
+  private drainInterleaved(limit: number, stopOnSingle: boolean): number {
+    if (this.pending.length === 0) {
+      return 0;
+    }
+    const out: Array<Reel> = [];
+    const size: number = this.reels.length;
+    let last: string = size > 0 ? this.reels[size - 1].authorId : '';
+    let prev: string = size > 1 ? this.reels[size - 2].authorId : '';
+    while (out.length < limit && this.pending.length > 0) {
+      if (stopOnSingle && out.length >= DRAIN_MIN && this.pendingAuthors() === 1) {
+        break;
+      }
+      let pick: number = -1;
+      // ① 和最近两条都不是同一作者
+      for (let index: number = 0; index < this.pending.length; index++) {
+        const id: string = this.pending[index].authorId;
+        if (id.length === 0 || (id !== last && id !== prev)) {
+          pick = index;
+          break;
+        }
+      }
+      // ② 退一步：只要不和上一条相同
+      if (pick < 0) {
+        for (let index: number = 0; index < this.pending.length; index++) {
+          const id: string = this.pending[index].authorId;
+          if (id.length === 0 || id !== last) {
+            pick = index;
+            break;
+          }
+        }
+      }
+      // ③ 缓冲里只剩同一个作者了（补货还没回来）：认了，先铺
+      if (pick < 0) {
+        pick = 0;
+      }
+      const one: Reel = this.pending[pick];
+      this.pending.splice(pick, 1);
+      if (this.shown.has(one.shortcode)) {
+        continue;
+      }
+      this.shown.add(one.shortcode);
+      prev = last;
+      last = one.authorId;
+      out.push(one);
+    }
+    if (out.length === 0) {
+      return 0;
+    }
+    this.reels = this.reels.concat(out);
     this.onReels(this.reels, this.more);
     this.onStatus('已加载 ' + this.reels.length + ' 条' + (this.more ? '' : '（到底了）'));
     // 落盘一份：**首屏和翻页都存**（首页那条查询首屏有时只回 2~4 条，光存第一页太少）。
     // 被限流/没网时这几十条就是视频标签能显示的全部内容（见 core/ReelsCache）。
     ReelsCache.save(this.reels, ReelsCache.keyFor(this.source));
-    return fresh.length;
+    return out.length;
+  }
+
+  /** 首屏那一页：整页收进来再整页上屏（同样打散，首屏里也可能连着同一个人）。 */
+  private applyFirstPage(page: NativeReelsPage): number {
+    // 首屏 = **整体替换**：旧列表、旧去重表、旧缓冲一起清掉。
+    this.reels = [];
+    this.shown.clear();
+    this.pending = [];
+    this.ingestPage(page);
+    return this.drainInterleaved(page.reels.length + 1, false);
   }
 
   /**
    * **记下游标**（谁取到带游标的页，谁就调它一次）。
    *
-   * 为什么不在 `applyNativePage` 里顺手记：预取的那几页是**先排队、晚些才铺上屏**的，
+   * 为什么不在铺页那一步顺手记：预取的那几页是**先排队、晚些才铺上屏**的，
    * 而"下一次预取用哪个游标"必须跟着**取到的页**走 —— 早先两者混用同一个字段，
    * 结果是连发两次同一个游标、拿回同一页（去重后一条都不新增，看起来就像"不加载新的了"）。
    * 作者那页（`clips/user/`）的游标是空串，调进来也什么都不改（它推进不了探索流）。
@@ -273,8 +394,9 @@ export class ReelsViewModel implements ReelStreamVm {
 
   /** 一页 reels 补进缓存队列（队列 = 上滑切换时"已经等在内存里"的那些页）。 */
   private prefetchNativePage(): void {
-    // 深度固定 2 页，理由同 FeedViewModel（上滑要有货）。
-    if (this.nativeFetching || this.nativeQueue.length >= NATIVE_CACHE_PAGES) {
+    // 深度固定 2 页，理由同 FeedViewModel（上滑要有货）。缓冲里囤够了就先停手。
+    if (this.nativeFetching || this.nativeQueue.length >= NATIVE_CACHE_PAGES
+      || this.pending.length >= PENDING_MAX) {
       return;
     }
     /*
@@ -365,116 +487,102 @@ export class ReelsViewModel implements ReelStreamVm {
     return page === undefined ? null : page;
   }
 
-  /** 翻页：先吃原生缓存，再走原生现抓（用户驱动，允许探索流兜底）。 */
+  /**
+   * 取下一页：**缓存队列优先，其次现拉**（限流时只吃队列，不发请求）。
+   *
+   * 拉的那一发内部已经是"作者页优先 → 探索流 → 首屏兜底"（见 core/NativeReels.fetchPage），
+   * 这里不用再自己排一遍顺序。
+   */
+  private async nextPage(limited: boolean): Promise<NativeReelsPage | null> {
+    const cached: NativeReelsPage | null = this.takeNativePage();
+    if (cached !== null) {
+      this.noteCursor(cached.nextCursor);
+      hilog.info(DOMAIN, TAG, 'reels page from cache n=%{public}d queued=%{public}d',
+        cached.reels.length, this.nativeQueue.length);
+      return cached;
+    }
+    if (limited) {
+      return null;
+    }
+    const cursor: string = this.nativeCursor.length > 0 ? this.nativeCursor : this.endCursor;
+    const live: NativeReelsPage | null =
+      await NativeReels.fetchPage(this.source, NATIVE_PAGE_COUNT, cursor, true);
+    if (live !== null) {
+      this.noteCursor(live.nextCursor);
+      hilog.info(DOMAIN, TAG, 'reels page live n=%{public}d ms=%{public}d',
+        live.reels.length, live.ms);
+      return live;
+    }
+    if (ApiThrottle.blocked(ApiThrottle.CLIPS)) {
+      return null;
+    }
+    /*
+     * 游标成了死链（这一发真没拿到）：重取一次第一页。
+     * IG 的服务端排序会变，用户手动"退出再进来"拿到的就是这一批 —— 这里替他做掉。
+     */
+    const fresh: NativeReelsPage | null =
+      await NativeReels.fetchPage(this.source, NATIVE_PAGE_COUNT, '', true);
+    if (fresh !== null) {
+      this.noteCursor(fresh.nextCursor);
+      hilog.info(DOMAIN, TAG, 'reels page restarted n=%{public}d', fresh.reels.length);
+    }
+    return fresh;
+  }
+
+  /**
+   * 翻页：先补够"待上屏"的缓冲（至少两家作者），再**按作者打散**上屏。
+   *
+   * ⚠️ 这一段是"连着十几条都是同一个人"的正面修法，改动它之前先读 drainInterleaved：
+   * 一次翻页的主力是某个作者的 12 条视频，直接铺就是十几条同一个人；
+   * 攒两页再交替取，才能做到同一个作者不连着出现。
+   *
+   * 不用 `more` 提前拦：IG 的 clips 分页经常给了游标却把 `more_available` 写成 false，
+   * 按它拦就是"滑到底一次都不再请求"。能不能翻由**结果**决定。
+   */
   async requestMore(): Promise<void> {
     if (this.busy) {
       return;
     }
-    // 被限流期间不再往下要（缓存队列里那页还是照铺，见下）。
     const limited: boolean = ApiThrottle.blocked(ApiThrottle.CLIPS);
-    // 原生缓存里有页就直接铺（**即使 this.more 已经是 false 也先看一眼**：
-    // more 是按上一页算的，队列里那页可能还有内容；否则会出现"缓存里明明有、却不动"）。
-    const cached: NativeReelsPage | null = this.takeNativePage();
-    if (cached !== null) {
-      this.busy = true;
-      this.onBusy(true);
-      try {
-        this.noteCursor(cached.nextCursor);
-        const added: number = this.applyNativePage(cached, true);
-        hilog.info(DOMAIN, TAG, 'reels page from cache n=%{public}d added=%{public}d queued=%{public}d',
-          cached.reels.length, added, this.nativeQueue.length);
-        this.prefetchNativePage();
-      } finally {
-        this.busy = false;
-        this.onBusy(false);
-      }
-      return;
-    }
-    if (limited) {
-      // 队列空了又在冷却里：如实说一句，不去发那一发注定被拒的请求。
-      hilog.info(DOMAIN, TAG, 'more skipped: rate limited');
-      this.onStatus(`Instagram 暂时限制了视频接口，约 ${ApiThrottle.remainingMinutes(ApiThrottle.CLIPS)} 分钟后再试`);
-      return;
-    }
-    /*
-     * **不再用 `more` 提前拦**：IG 的 clips 分页经常把游标给了却把 `more_available` 写成 false，
-     * 按它拦就是"滑到底一次都不再请求"（用户报的"reels 无法获取新的视频"）。
-     * 能不能翻由**结果**决定：真的拿不到新内容才把 `more` 置 false。
-     */
     this.busy = true;
     this.onBusy(true);
     try {
       /*
-       * ① 继续按游标翻（用户驱动，允许探索流兜底）。
+       * ① 补缓冲：一直要页，直到缓冲里**有两家以上作者**且够这一次上屏的量，最多三发。
        *
-       * `allowExplore = true` 是必须的：首屏在 clips 被限流时是由**探索流**顶上的（见 loadFirst），
-       * 两条路的游标互不通用 —— 拿探索流的 `max_id` 去问 clips 必然是空。
+       * 缓冲本来就有货时（上一次没铺完的）这一圈直接不进，上屏是**零延迟**的。
        */
-      let attempt: number = 0;
-      while (attempt < 2) {
-        const cursor: string = this.nativeCursor.length > 0 ? this.nativeCursor : this.endCursor;
-        if (cursor.length === 0) {
+      let rounds: number = 0;
+      while (rounds < 3 && (this.pendingAuthors() < 2 || this.pending.length < DRAIN_PER_REQUEST)) {
+        const page: NativeReelsPage | null = await this.nextPage(limited);
+        if (page === null) {
           break;
         }
-        const live: NativeReelsPage | null = await NativeReels.fetchPage(this.source, NATIVE_PAGE_COUNT, cursor, true);
-        attempt++;
-        if (live !== null) {
-          this.noteCursor(live.nextCursor);
-          const added: number = this.applyNativePage(live, true);
-          hilog.info(DOMAIN, TAG, 'reels page live n=%{public}d ms=%{public}d added=%{public}d attempt=%{public}d',
-            live.reels.length, live.ms, added, attempt);
-          this.prefetchNativePage();
-          if (added > 0) {
-            return;
-          }
-          // 整页都是已经有的（IG 的分页游标常把上一条/上几条又带回来）：拿新游标再试一次。
-          continue;
-        }
-        // 这一发没拿到（限流 / 端点抖动）：被限流时保留 more，等冷却结束还能接着翻。
-        if (ApiThrottle.blocked(ApiThrottle.CLIPS)) {
-          this.onStatus(`Instagram 暂时限制了视频接口，约 ${ApiThrottle.remainingMinutes(ApiThrottle.CLIPS)} 分钟后再试`);
-          return;
-        }
-        break;
+        const fresh: number = this.ingestPage(page);
+        rounds++;
+        hilog.info(DOMAIN, TAG, 'reels fill n=%{public}d fresh=%{public}d authors=%{public}d round=%{public}d',
+          page.reels.length, fresh, this.pendingAuthors(), rounds);
       }
-      /*
-       * ② **游标翻不动时，直接从探索流拿一页**。
-       *
-       * 为什么不是"重取第一页"：第一页就是开头那三条 `clips/*`，它们是**固定的一批**
-       * （每次冷启动都回同一组）—— 重取只会整页重复，一条都新增不了，等于白花一发。
-       * 探索流是唯一"每次都能给新条目"的源（它的 `max_id` 真的往后走），所以这里先问它。
-       */
-      const explore: NativeReelsPage | null = await NativeReels.fetchExplorePage(this.source);
-      if (explore !== null) {
-        const added: number = this.applyNativePage(explore, true);
-        hilog.info(DOMAIN, TAG, 'reels page explore n=%{public}d ms=%{public}d added=%{public}d',
-          explore.reels.length, explore.ms, added);
-        if (added > 0) {
-          this.prefetchNativePage();
-          return;
-        }
+      // ② 上屏：按作者打散（一次最多铺一页的量，剩下的留给下次）
+      const added: number = this.drainInterleaved(DRAIN_PER_REQUEST, true);
+      hilog.info(DOMAIN, TAG,
+        'reels more added=%{public}d pending=%{public}d authors=%{public}d rounds=%{public}d queued=%{public}d limited=%{public}s',
+        added, this.pending.length, this.pendingAuthors(), rounds, this.nativeQueue.length,
+        `${limited}`);
+      if (added > 0) {
+        this.more = true;
+        this.prefetchNativePage();
+        return;
       }
-      /*
-       * ③ 探索流也没新增：重取一次第一页（IG 的服务端排序会变，偶尔能带回没见过的条目）。
-       * 这就是用户手动做的事（退出再进来）—— 这里替他在"滑到底"这一刻自动做掉。
-       */
-      const fresh: NativeReelsPage | null = await NativeReels.fetchPage(this.source, NATIVE_PAGE_COUNT, '', true);
-      if (fresh !== null) {
-        this.noteCursor(fresh.nextCursor);
-        const added: number = this.applyNativePage(fresh, true);
-        hilog.info(DOMAIN, TAG, 'reels page restarted n=%{public}d added=%{public}d',
-          fresh.reels.length, added);
-        if (added > 0) {
-          this.prefetchNativePage();
-          return;
-        }
-        if (ApiThrottle.blocked(ApiThrottle.CLIPS)) {
-          return;
-        }
+      if (limited) {
+        // 队列空了又在冷却里：如实说一句，不去发那一发注定被拒的请求。
+        this.onStatus(`Instagram 暂时限制了视频接口，约 ${ApiThrottle.remainingMinutes(ApiThrottle.CLIPS)} 分钟后再试`);
+        return;
       }
-      // 真的拿不到新内容：收工，等用户下次上滑再试（下次仍会先试游标）。
+      // 真的拿不到新内容：收工，等用户下次上滑再试。
       this.more = false;
       this.onReels(this.reels, this.more);
+      this.onStatus('已加载 ' + this.reels.length + ' 条（到底了）');
     } finally {
       this.busy = false;
       this.onBusy(false);

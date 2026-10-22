@@ -606,11 +606,11 @@
     },
     {
       "name": "reels_segment_following",
-      "value": "关注"
+      "value": "好友"
     },
     {
       "name": "reels_following_empty",
-      "value": "关注的人还没发视频"
+      "value": "好友还没发视频"
     },
     {
       "name": "reels_loading",

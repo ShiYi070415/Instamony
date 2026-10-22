@@ -182,7 +182,7 @@
     },
     {
       "name": "action_following",
-      "value": "Following"
+      "value": "Friends"
     },
     {
       "name": "action_more",
@@ -290,7 +290,7 @@
     },
     {
       "name": "profile_stat_following",
-      "value": "Following"
+      "value": "Friends"
     },
     {
       "name": "profile_loading_more",
@@ -490,11 +490,11 @@
     },
     {
       "name": "reels_segment_following",
-      "value": "Following"
+      "value": "Friends"
     },
     {
       "name": "reels_following_empty",
-      "value": "No videos from people you follow yet"
+      "value": "No videos from your friends yet"
     },
     {
       "name": "reels_loading",

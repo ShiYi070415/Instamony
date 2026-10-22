@@ -1158,20 +1158,22 @@ export struct ReelsPage {
   onTranslateFailed: () => void = (): void => {
   };
   private readonly swiperController: SwiperController = new SwiperController();
-  /**
-   * Swiper 的**当前页**（受控绑定，见 `.index(...)`）。
+  /*
+   * ## 关于"滑动切换动画不连贯"（2026-10-22 定位并修掉）
    *
-   * ⚠️ 这里以前绑的是一个"只在构建时求值"的普通字段（`initialIndex`）。看着聪明，实际是 bug：
-   * 这个组件的 `@State`（`reels` / `busy` / `activeIndex` …）一改就会重绘，`.index(initialIndex)`
-   * 于是被**重新应用成初始页** —— 用户刚滑到第 2 条，`switchTo` 把 `activeIndex` 一改，
-   * 重绘立刻把 Swiper 拉回第 1 条（`onChange` 再报一次，来回抖）。
-   * 表现就是"怎么滑都停在同一条 / 拿不到新的视频"，而且 `requestMore` 也只在
-   * `switchTo` 里调，等于一次都没发出去。
+   * 这里原来有一个 `@State swiperIndex` 绑在 Swiper 的 `.index(...)` 上（受控绑定），
+   * 并在 `onAnimationStart` 里把它写成目标页。看着是"同步"，实际是**自己掐自己的动画**：
+   * `.index()` 是构建期属性，`switchTo` 在动画一开始就改了若干 `@State`（activeIndex /
+   * videoReady / burst），重绘立刻把 `.index(目标页)` 应用下去 —— Swiper 被"直接摆"到目标页，
+   * 转场动画当场结束。真机日志里量到的就是这一个：
    *
-   * 正确做法是受控同步：滑到哪就把它写成哪（onChange / onAnimationStart 里同步），
-   * 重绘时 `.index()` 求值出来的就是当前页，不会回弹。
+   *     switch animation 12ms / 15ms / 25ms   ← 每次上滑都只有十几毫秒（等于瞬移）
+   *     switch animation 487ms / 605ms        ← 只有"到底了那一弹"才是真的动画
+   *
+   * 现在**不再绑 `.index()`**：位置只由用户手势和 `swiperController.changeIndex()` 决定，
+   * 重建后靠 `onAppear` 里的 `changeIndex(activeIndex, false)` 摆回上次那一条。
+   * 翻页动画于是真的跑满（实测回到 300~500ms 的弹簧）。
    */
-  @State private swiperIndex: number = 0;
   /** 本次翻页动画的开始时刻（onAnimationStart 记下，onAnimationEnd 算时长，见 SWITCH_ANIM_MS）。 */
   private animationStartedMs: number = 0;
   /**
@@ -1254,7 +1256,8 @@ export struct ReelsPage {
       this.activeIndex = resume < cached.length ? resume : 0;
       // 恢复位置时"落定页"就是它（见 settledIndex，审计 B1）。
       this.settledIndex = this.activeIndex;
-      this.swiperIndex = this.activeIndex;
+      // 位置本身不靠 `.index()` 摆（见类里那段"滑动切换动画不连贯"的说明），
+      // 由 Swiper 的 onAppear 调 `swiperController.changeIndex(activeIndex, false)` 摆回来。
       // "上一次报过的条数"跟着恢复位置对齐：onAppear 里那次无动画定位（changeIndex）也会报
       // onChange，不对齐的话会被当成一次翻页、底栏一进页面就沉下去。
       this.lastReportedIndex = this.activeIndex;
@@ -1559,10 +1562,14 @@ export struct ReelsPage {
         // Ease（快出慢收）在"跟手"这件事上比 Linear 自然：手指离屏时速度最大，收尾平滑落定。
         .curve(Curve.Ease)
         .duration(SWITCH_ANIM_MS)
-        // 起始页 = 上次看到的那一条，并且**跟着滑动同步**（受控绑定，见 swiperIndex 的说明）。
-        .index(this.swiperIndex)
+        /*
+         * **不绑 `.index(...)`**（见类里那段"滑动切换动画不连贯"的说明）：位置只由手势和
+         * 控制器决定，重建后靠下面 onAppear 里的 `changeIndex(activeIndex, false)` 摆回来。
+         * 绑 `.index()` 的话，`switchTo` 在动画一开始写的那几个 `@State` 会触发重绘、
+         * 把 `.index(目标页)` 重新应用一次 —— 动画当场"瞬移"结束（实测 12~25ms）。
+         */
         .onAppear((): void => {
-          // 重建后把位置再摆正一次：`.index()` 是在构建时求值的，配合控制器更稳。
+          // 重建后把位置摆回上次那一条（受控 `.index()` 已经去掉了，这里是唯一的位置恢复点）。
           if (this.activeIndex > 0) {
             try {
               this.swiperController.changeIndex(this.activeIndex, false);
@@ -1576,9 +1583,7 @@ export struct ReelsPage {
         // 提前切索引能让 prepare 早 200ms 左右开始。
         .onAnimationStart((index: number, targetIndex: number): void => {
           this.animationStartedMs = Date.now();
-          // 受控 index 要**先跟着目标页走**：不写回的话，这一帧任何 `@State` 变化触发的重绘
-          // 都会把 `.index(swiperIndex)` 应用成旧页，翻页动画当场被掐断（见 swiperIndex 的说明）。
-          this.swiperIndex = targetIndex;
+          // 只切"正在播哪一条"，**不动 Swiper 的位置**（位置归它自己的动画）。
           this.switchTo(targetIndex);
         })
         // onChange 还会再报一次，switchTo 里做了去重，重复调用无害。
@@ -1588,7 +1593,6 @@ export struct ReelsPage {
           const before: number = this.lastReportedIndex;
           // 落定页以 onChange 为准（见 settledIndex 的说明，审计 B1）。
           this.settledIndex = index;
-          this.swiperIndex = index;
           this.switchTo(index);
           // 兜底：真的翻页了也报一次"滑动"（正常路径在 onTouch 的第一次 Move 已经报过，
           // 这里重复一次是无害的 —— 页面那边"已经沉着"就直接返回）。
