@@ -601,6 +601,18 @@
       "value": "私信发送自检"
     },
     {
+      "name": "reels_segment_explore",
+      "value": "探索"
+    },
+    {
+      "name": "reels_segment_following",
+      "value": "关注"
+    },
+    {
+      "name": "reels_following_empty",
+      "value": "关注的人还没发视频"
+    },
+    {
       "name": "reels_loading",
       "value": "正在加载视频…"
     },

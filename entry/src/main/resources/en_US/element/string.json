@@ -485,6 +485,18 @@
       "value": "DM send self-test"
     },
     {
+      "name": "reels_segment_explore",
+      "value": "Explore"
+    },
+    {
+      "name": "reels_segment_following",
+      "value": "Following"
+    },
+    {
+      "name": "reels_following_empty",
+      "value": "No videos from people you follow yet"
+    },
+    {
       "name": "reels_loading",
       "value": "Loading video…"
     },

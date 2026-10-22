@@ -143,101 +143,138 @@ export class NativeReelsPage {
   }
 }
 
+/**
+ * **两条流**（需求："把关注流和探索流分开两页"）。
+ *
+ * 语义按 instagrapi 的端点分工来分，不是随便挑的：
+ *   · `explore`   = 探索 —— `clips/discover/`（探索 Reels，清一色视频）+ 探索流
+ *     （`discover/topical_explore/`，真正个性化的推荐，也是唯一能一直往下翻的那条）；
+ *   · `following` = 关注 —— `clips/connected/`（你关注的人的 Reels）+
+ *     `clips/discover/social/`（好友/亲密关系那批，instagrapi 叫 friends_reels），
+ *     翻页用**这些人的作品页**（`clips/user/{pk}/`）—— 一句话：这一页只出现你关注的人。
+ *
+ * 两条流的状态（作者池 / 游标 / 缓存 / 预热）**必须各一份**：
+ * 混用的话，关注页里会冒出探索流里那些陌生人（语义就错了），而且两页会互相把对方的
+ * 游标带偏（正是"翻页翻出重复内容"的老根子）。
+ */
+export const REELS_SOURCE_EXPLORE: string = 'explore';
+export const REELS_SOURCE_FOLLOWING: string = 'following';
+
+/** 一条流自己的可变状态（探索 / 关注 各一个实例，见 NativeReels.laneOf）。 */
+class ReelsLane {
+  /** 首屏预热好的那一页（见 warmStart）。 */
+  warm: NativeReelsPage | null = null;
+  /** 预热是否在进行中（防重复）。 */
+  warming: boolean = false;
+  /** 补货池：流里见过的作者（见 noteAuthors）。 */
+  authors: Array<string> = [];
+  /** 作者 id → 该作者的下一页游标（不在表里 = 还没取过；空串 = 已到底）。 */
+  cursors: Map<string, string> = new Map<string, string>();
+  /** 已经进过池子的作者（防重复）。 */
+  seen: Set<string> = new Set<string>();
+  /** 探索流的游标（首屏后台预取拿到，翻页直接用；空 = 还没拿到）。 */
+  exploreCursor: string = '';
+  /** 后台预取探索流那一发是否在进行中。 */
+  exploring: boolean = false;
+  /**
+   * 后台预取到、**还没被消费**的那一页探索流。
+   *
+   * 为什么留内容而不只留游标：探索流第一页要 5~9 秒、几百 KB，只留游标等于把这一页白扔掉，
+   * 之后翻页还得再花一次同样的时间；留着的话首屏之后第一发翻页直接吃它（已经等在那里了）。
+   */
+  exploreWarm: NativeReelsPage | null = null;
+  /** 最近几十秒内拉过的快通道页（key → 页），避免同一时刻重复请求同一发。 */
+  recent: Map<string, NativeReelsPage> = new Map<string, NativeReelsPage>();
+  /** 这一页是从哪条路来的（`explore` / `connected` / `friends` / `clips` / `author` / `-`），诊断用。 */
+  lastSource: string = '-';
+}
+
 export class NativeReels {
-  /** 启动预热的那一页（见 warmStart）。 */
-  private static warmPage: NativeReelsPage | null = null;
-  private static warming: boolean = false;
   /** "作者对象里没有 id"那条诊断只打一次（见 toReel）。 */
   private static uidDiagDone: boolean = false;
   /** "载荷里有没有关注状态"那条诊断只打一次（见 toReel）。 */
   private static followDiagDone: boolean = false;
   /** "载荷里有没有收藏状态"那条诊断只打一次（见 toReel）。 */
   private static saveDiagDone: boolean = false;
-  /**
-   * **这一页是从哪条路来的**（`explore` / `connected` / `clips` / `author` / `-`）。
-   *
-   * 翻页时用得上：只有探索流的 `max_id` 真的能换页（真机实测，见 core/mobileapi/MobileClips
-   * 文件头那张表），另外几条的游标换了也没新内容，所以**不能拿它们的游标去翻页**。
-   */
-  private static lastSource: string = '-';
 
   /**
-   * 首屏那三发 `clips/*` 换不动游标（每页都回同一批），所以首屏交付一个**占位游标**，
-   * 让视图模型认为"还有下一页"；翻页时由探索流接手（见 fetchNextPage）。
+   * 首屏那些 `clips/*` 换不动游标（每页都回同一批），所以首屏交付一个**占位游标**，
+   * 让视图模型认为"还有下一页"；翻页时由作者页 / 探索流接手（见 fetchNextPage）。
    */
   private static readonly CURSOR_SENTINEL: string = '#clips';
-  /** 首屏快通道至少要凑够几条才算"够数"（不够就走探索流兜底）。 */
+  /** 关注流首屏至少要凑够几条才算"够数"（不够就退回探索流兜底）。 */
   private static readonly FIRST_MIN_REELS: number = 6;
-  /** 探索流的游标（首屏后台预取拿到，翻页直接用；空 = 还没拿到）。 */
-  private static exploreCursor: string = '';
-  /** 后台预取探索流游标是否在进行中（防重复）。 */
-  private static exploreWarming: boolean = false;
-  /** 最近几分钟内拉过的快通道页（key → 页 + 时刻），避免同一时刻重复请求同一发。 */
-  private static readonly recentPages: Map<string, NativeReelsPage> =
-    new Map<string, NativeReelsPage>();
+  /** 探索流首屏至少要有几条才接受（`clips/discover/` 一般给 3~4 条视频）。 */
+  private static readonly EXPLORE_MIN_REELS: number = 3;
   /** 快通道页的重用窗口（毫秒）：真机上见过同一时刻重复拉 `connected`、白花 6.6 秒。 */
   private static readonly RECENT_REUSE_MS: number = 90 * 1000;
-
-  /** 上一页用的是哪条源（`explore` / `connected` / `friends` / `clips` / `author` / `-`），诊断用。 */
-  static source(): string {
-    return NativeReels.lastSource;
-  }
-  /**
-   * **补货池**：流里见过的作者（按出现顺序消费）。
-   *
-   * 为什么需要它：能翻页的探索流是图文混排，实测 8 条里只有 1~3 条是视频（500KB / 5 秒），
-   * 光靠它撑不住"一直往下刷"。而 `clips/user/{pk}/`（主页 Reels 那一发，见 MobileProfile.tab）
-   * 是**该用户的全部 Reels**：100% 是视频、几十 KB、一两秒。
-   * 所以每翻一页探索流，就从池子里取一个作者补一页真视频，两条交替，密度和速度都够。
-   */
-  private static authors: Array<string> = [];
-  /** 作者 id → 该作者的下一页游标（不在表里 = 还没取过；值为空串 = 已到底，不再要）。 */
-  private static authorCursors: Map<string, string> = new Map<string, string>();
-  /** 已经进过池子的作者（防重复）。 */
-  private static authorSeen: Set<string> = new Set<string>();
+  /** 两条流的全部状态（键 = REELS_SOURCE_*）。 */
+  private static readonly lanes: Map<string, ReelsLane> = new Map<string, ReelsLane>();
   /** 池子最多排多少人（够刷很久了，池子本身会跟着探索流一直长大）。 */
   private static readonly AUTHOR_POOL_MAX: number = 40;
   /** "作者那页解析不出 Reel"那条诊断只打一次（见 fetchAuthorPage）。 */
   private static authorDiagDone: boolean = false;
 
+  /** 取某条流的状态（没有就建一个）。 */
+  private static laneOf(source: string): ReelsLane {
+    let lane: ReelsLane | undefined = NativeReels.lanes.get(source);
+    if (lane === undefined) {
+      lane = new ReelsLane();
+      NativeReels.lanes.set(source, lane);
+    }
+    return lane;
+  }
+
+  /** 上一页用的是哪条源（诊断用）。 */
+  static source(): string {
+    const lane: ReelsLane | undefined = NativeReels.lanes.get(REELS_SOURCE_EXPLORE);
+    return lane === undefined ? '-' : lane.lastSource;
+  }
+
   /**
-   * app 启动时就发一发 reels 第一页，结果留在内存里等 Reels 页来取（幂等）。
+   * app 启动时就发一发某条流的第一页，结果留在内存里等 Reels 页来取（幂等）。
    *
    * 和信息流那条一样的道理：切到 Reels 时多半已经有数据，用户看到的是"秒出"。
+   * 只给**探索**那条预热（它是默认落点）；关注那条等用户第一次点过去再拉
+   * （两页都预热会在启动时多打两个请求，把信息流的预热往后挤）。
    */
-  static warmStart(first: number): void {
-    if (NativeReels.warming || NativeReels.warmPage !== null) {
+  static warmStart(source: string, first: number): void {
+    const lane: ReelsLane = NativeReels.laneOf(source);
+    if (lane.warming || lane.warm !== null) {
       return;
     }
-    NativeReels.warming = true;
+    lane.warming = true;
     const started: number = Date.now();
-    NativeReels.fetchPage(first, '').then((page: NativeReelsPage | null): void => {
-      NativeReels.warming = false;
+    NativeReels.fetchPage(source, first, '').then((page: NativeReelsPage | null): void => {
+      lane.warming = false;
       if (page === null) {
-        hilog.info(DOMAIN, TAG, 'warmStart miss after %{public}dms', Date.now() - started);
+        hilog.info(DOMAIN, TAG, 'warmStart[%{public}s] miss after %{public}dms',
+          source, Date.now() - started);
         return;
       }
-      NativeReels.warmPage = page;
-      hilog.info(DOMAIN, TAG, 'warmStart ready n=%{public}d ms=%{public}d (since launch %{public}d)',
-        page.reels.length, page.ms, Date.now() - started);
+      lane.warm = page;
+      hilog.info(DOMAIN, TAG, 'warmStart[%{public}s] ready n=%{public}d ms=%{public}d (since launch %{public}d)',
+        source, page.reels.length, page.ms, Date.now() - started);
     }).catch((): void => {
-      NativeReels.warming = false;
+      lane.warming = false;
     });
   }
 
   /** 取走预热的那一页（取走即清空；太旧的不要）。 */
-  static takeWarm(maxAgeMs: number): NativeReelsPage | null {
-    const page: NativeReelsPage | null = NativeReels.warmPage;
+  static takeWarm(source: string, maxAgeMs: number): NativeReelsPage | null {
+    const lane: ReelsLane = NativeReels.laneOf(source);
+    const page: NativeReelsPage | null = lane.warm;
     if (page === null) {
       return null;
     }
-    NativeReels.warmPage = null;
+    lane.warm = null;
     if (Date.now() - page.at > maxAgeMs) {
-      hilog.info(DOMAIN, TAG, 'warm page discarded age=%{public}dms', Date.now() - page.at);
+      hilog.info(DOMAIN, TAG, 'warm page discarded source=%{public}s age=%{public}dms',
+        source, Date.now() - page.at);
       return null;
     }
-    hilog.info(DOMAIN, TAG, 'warm page used age=%{public}dms n=%{public}d',
-      Date.now() - page.at, page.reels.length);
+    hilog.info(DOMAIN, TAG, 'warm page used source=%{public}s age=%{public}dms n=%{public}d',
+      source, Date.now() - page.at, page.reels.length);
     return page;
   }
 
@@ -245,10 +282,11 @@ export class NativeReels {
    * `clips/discover/social/` 那一发（instagrapi 的 `friends_reels`：Friends 那个 tab）。
    *
    * 也是清一色视频、6 条 / 324KB / 1~2 秒；同样换不动游标，只用来把首屏铺满。
+   * 归**关注**那条流：这一批是"好友/亲密关系"，不是推荐。
    */
-  private static async viaFriends(cursor: string): Promise<NativeReelsPage | null> {
+  private static async viaFriends(lane: ReelsLane, cursor: string): Promise<NativeReelsPage | null> {
     const started: number = Date.now();
-    const cached: NativeReelsPage | null = NativeReels.recent('friends');
+    const cached: NativeReelsPage | null = NativeReels.recent(lane, 'friends');
     if (cached !== null && cursor.length === 0) {
       return cached;
     }
@@ -261,21 +299,21 @@ export class NativeReels {
       hilog.info(DOMAIN, TAG, 'friends unparsable bytes=%{public}d', body.length);
       return null;
     }
-    NativeReels.lastSource = 'friends';
-    NativeReels.noteAuthors(page.reels);
+    lane.lastSource = 'friends';
+    NativeReels.noteAuthors(lane, page.reels);
     hilog.info(DOMAIN, TAG, 'reels via friends n=%{public}d more=%{public}s ms=%{public}d',
       page.reels.length, `${page.hasMore}`, page.ms);
-    return NativeReels.remember('friends', page);
+    return NativeReels.remember(lane, 'friends', page);
   }
 
   /** 取"最近拉过"的那一页（超时/没有给 null）。 */
-  private static recent(key: string): NativeReelsPage | null {
-    const page: NativeReelsPage | undefined = NativeReels.recentPages.get(key);
+  private static recent(lane: ReelsLane, key: string): NativeReelsPage | null {
+    const page: NativeReelsPage | undefined = lane.recent.get(key);
     if (page === undefined) {
       return null;
     }
     if (Date.now() - page.at > NativeReels.RECENT_REUSE_MS) {
-      NativeReels.recentPages.delete(key);
+      lane.recent.delete(key);
       return null;
     }
     hilog.info(DOMAIN, TAG, 'reuse recent %{public}s age=%{public}dms n=%{public}d', key,
@@ -284,8 +322,9 @@ export class NativeReels {
   }
 
   /** 记下这一页，供 `recent` 复用。 */
-  private static remember(key: string, page: NativeReelsPage): NativeReelsPage {
-    NativeReels.recentPages.set(key, page);
+  private static remember(lane: ReelsLane, key: string,
+                          page: NativeReelsPage): NativeReelsPage {
+    lane.recent.set(key, page);
     return page;
   }
 
@@ -327,14 +366,14 @@ export class NativeReels {
   }
 
   /**
-   * **关注流那一发**（`clips/connected/`）：首屏暖场。
+   * **关注流那一发**（`clips/connected/`）：关注页首屏就是它。
    *
    * 5 条、几十 KB、很快，但**没有 `paging_info`**（游标为空），所以它只负责"一进视频页就有东西播"，
-   * 翻页由探索流接管（见 fetchPage）。
+   * 翻页由**这些人的作品页**接管（见 fetchAuthorPage）。
    */
-  private static async viaConnected(cursor: string): Promise<NativeReelsPage | null> {
+  private static async viaConnected(lane: ReelsLane, cursor: string): Promise<NativeReelsPage | null> {
     const started: number = Date.now();
-    const cached: NativeReelsPage | null = NativeReels.recent('connected');
+    const cached: NativeReelsPage | null = NativeReels.recent(lane, 'connected');
     if (cached !== null && cursor.length === 0) {
       return cached;
     }
@@ -347,20 +386,20 @@ export class NativeReels {
       hilog.info(DOMAIN, TAG, 'connected unparsable bytes=%{public}d', body.length);
       return null;
     }
-    NativeReels.lastSource = 'connected';
-    NativeReels.noteAuthors(page.reels);
+    lane.lastSource = 'connected';
+    NativeReels.noteAuthors(lane, page.reels);
     hilog.info(DOMAIN, TAG, 'reels via connected n=%{public}d more=%{public}s cursor=%{public}d ms=%{public}d',
       page.reels.length, `${page.hasMore}`, page.nextCursor.length, page.ms);
-    return NativeReels.remember('connected', page);
+    return NativeReels.remember(lane, 'connected', page);
   }
 
   /**
-   * `clips/discover/` 那一发（**只当兜底**）。
+   * `clips/discover/` 那一发 = **探索流的首屏**。
    *
-   * 真机上它每页都回同样 4 条、游标换不动（见 core/mobileapi/MobileClips 文件头），
-   * 所以只在"探索流 + 关注流都挂了"时用它，至少还有 4 条能播。
+   * 真机上它每页都回同样 3~4 条、游标换不动（见 core/mobileapi/MobileClips 文件头），
+   * 所以只当"一进探索页就有东西播"的第一屏，翻页交给探索流 + 作者页。
    */
-  private static async viaClips(cursor: string): Promise<NativeReelsPage | null> {
+  private static async viaClips(lane: ReelsLane, cursor: string): Promise<NativeReelsPage | null> {
     const started: number = Date.now();
     const body: string | null = await MobileClips.discover(cursor);
     if (body === null) {
@@ -372,16 +411,16 @@ export class NativeReels {
         body.length, NativeReels.diagnose(body));
       return null;
     }
-    NativeReels.lastSource = 'clips';
-    NativeReels.noteAuthors(page.reels);
+    lane.lastSource = 'clips';
+    NativeReels.noteAuthors(lane, page.reels);
     hilog.info(DOMAIN, TAG, 'reels via clips n=%{public}d more=%{public}s cursor=%{public}d ms=%{public}d',
       page.reels.length, `${page.hasMore}`, page.nextCursor.length, page.ms);
     return page;
   }
 
   /** 补货池里还有几个作者（视图模型用它决定"这一发要不要补货"）。 */
-  static authorPoolSize(): number {
-    return NativeReels.authors.length;
+  static authorPoolSize(source: string): number {
+    return NativeReels.laneOf(source).authors.length;
   }
 
   /**
@@ -390,27 +429,32 @@ export class NativeReels {
    * 为什么是这条路：探索流实测 8 条里只有 1~3 条是视频（500KB / 5 秒），单靠它刷不动；
    * 而一个作者那页是**清一色视频**、几十 KB、一两秒（主页 Reels 分页同一条，已真机验证）。
    *
-   * 返回的那一页 **`nextCursor` 是空串**：它推进不了探索流的游标，视图模型那边看到空游标
-   * 就知道"这条不是分页用的，别拿它覆盖探索流游标"（见 ReelsViewModel.applyNativePage）。
-   * 作者自己还有下一页时，他被重新排到队尾（游标记在 authorCursors 里）。
+   * 池子是**每条流自己**的（见 ReelsLane）：
+   *   · 关注页的池子只装 `clips/connected/` + `clips/discover/social/` 里出现的人
+   *     —— 所以关注页往下翻永远是"你关注的人的其他视频"，不会冒出陌生人；
+   *   · 探索页的池子装探索里出现的人。
+   *
+   * 返回的那一页 **`nextCursor` 是占位哨兵**（它推进不了探索流的游标，见 fetchExplorePage）。
+   * 作者自己还有下一页时，他被重新排到队尾（游标记在 lane.cursors 里）。
    *
    * 一个作者给不出东西（私密/零 Reels/被限流）就换下一个，最多试两个 —— 不在这儿死磕。
    */
-  static async fetchAuthorPage(): Promise<NativeReelsPage | null> {
+  static async fetchAuthorPage(source: string): Promise<NativeReelsPage | null> {
+    const lane: ReelsLane = NativeReels.laneOf(source);
     let tries: number = 0;
-    while (NativeReels.authors.length > 0 && tries < 2) {
-      const pk: string | undefined = NativeReels.authors.shift();
+    while (lane.authors.length > 0 && tries < 2) {
+      const pk: string | undefined = lane.authors.shift();
       if (pk === undefined || pk.length === 0) {
         continue;
       }
-      const cursor: string = NativeReels.authorCursors.get(pk) ?? '';
+      const cursor: string = lane.cursors.get(pk) ?? '';
       const started: number = Date.now();
       const grid: MobileGridPage | null = await MobileProfile.tab('clips', pk, cursor,
         AUTHOR_PAGE_COUNT, ApiThrottle.interactive());
       tries++;
       if (grid === null) {
         // 这个作者这一发没成：不放回池子（别在一个人身上反复失败），试下一个。
-        NativeReels.authorCursors.delete(pk);
+        lane.cursors.delete(pk);
         continue;
       }
       const reels: Array<Reel> = [];
@@ -444,19 +488,19 @@ export class NativeReels {
       }
       if (grid.nextCursor.length > 0) {
         // 他还有更早的 Reels：记下游标，排到队尾，下次轮到他要下一页。
-        NativeReels.authorCursors.set(pk, grid.nextCursor);
-        NativeReels.authors.push(pk);
+        lane.cursors.set(pk, grid.nextCursor);
+        lane.authors.push(pk);
       } else {
-        NativeReels.authorCursors.delete(pk);
+        lane.cursors.delete(pk);
       }
       if (reels.length === 0) {
         continue;
       }
       hilog.info(DOMAIN, TAG,
-        'reels via author pk=%{public}s n=%{public}d items=%{public}d more=%{public}s ms=%{public}d',
-        pk, reels.length, grid.items.length, grid.nextCursor.length > 0 ? 'y' : 'n',
+        'reels via author src=%{public}s pk=%{public}s n=%{public}d items=%{public}d more=%{public}s ms=%{public}d',
+        source, pk, reels.length, grid.items.length, grid.nextCursor.length > 0 ? 'y' : 'n',
         Date.now() - started);
-      return new NativeReelsPage(reels, '', true, Date.now() - started);
+      return new NativeReelsPage(reels, NativeReels.CURSOR_SENTINEL, true, Date.now() - started);
     }
     return null;
   }
@@ -469,40 +513,49 @@ export class NativeReels {
    * 永远只会回作者页 —— 于是同一批作者的作品会被反复切成一段一段，整个视频流就成了
    * 一份固定的播放表（用户报的"全部都是固定重复的"）。
    *
-   * 游标用内部那个 `exploreCursor`（首屏预热时拿到，见 warmExploreCursor），成功后推进它。
-   * 返回的 `nextCursor` 仍是**占位哨兵**：探索流的 `max_id` 由本类自己管，不交给视图模型。
+   * 游标用这条流自己的 `exploreCursor`（首屏预热时拿到，见 warmExplorePage）；另外首屏预热
+   * 那一页的内容**留着直接给**（`lane.exploreWarm`），不白扔一次 5~9 秒的请求。
+   * 返回的 `nextCursor` 是**占位哨兵**：探索流的 `max_id` 由本类自己管，不交给视图模型。
    */
-  static async fetchExplorePage(): Promise<NativeReelsPage | null> {
+  static async fetchExplorePage(source: string): Promise<NativeReelsPage | null> {
+    const lane: ReelsLane = NativeReels.laneOf(source);
+    const warm: NativeReelsPage | null = lane.exploreWarm;
+    if (warm !== null) {
+      lane.exploreWarm = null;
+      hilog.info(DOMAIN, TAG, 'reels explore from warm src=%{public}s n=%{public}d',
+        source, warm.reels.length);
+      return new NativeReelsPage(warm.reels, NativeReels.CURSOR_SENTINEL, true, warm.ms);
+    }
     const started: number = Date.now();
-    const page: NativeReelsPage | null = await NativeReels.viaExplore(NativeReels.exploreCursor);
+    const page: NativeReelsPage | null = await NativeReels.viaExplore(lane, lane.exploreCursor);
     if (page === null) {
       return null;
     }
-    NativeReels.exploreCursor = page.nextCursor;
+    lane.exploreCursor = page.nextCursor;
     return new NativeReelsPage(page.reels, NativeReels.CURSOR_SENTINEL, true,
       Date.now() - started);
   }
 
-  /** 把一页里出现过的作者收进补货池（去重，限量，**插在随机位置**）。 */
-  private static noteAuthors(reels: Array<Reel>): void {
+  /** 把一页里出现过的作者收进这条流的补货池（去重，限量，**插在随机位置**）。 */
+  private static noteAuthors(lane: ReelsLane, reels: Array<Reel>): void {
     for (let index: number = 0; index < reels.length; index++) {
       const pk: string = reels[index].authorId;
-      if (pk.length === 0 || NativeReels.authorSeen.has(pk)) {
+      if (pk.length === 0 || lane.seen.has(pk)) {
         continue;
       }
-      if (NativeReels.authors.length >= NativeReels.AUTHOR_POOL_MAX) {
+      if (lane.authors.length >= NativeReels.AUTHOR_POOL_MAX) {
         return;
       }
-      NativeReels.authorSeen.add(pk);
+      lane.seen.add(pk);
       /*
        * **随机位置插入**（不是一律排到队尾）。
        *
-       * 首屏那三条 `clips/*` 是**固定的一批**（真机实测每次都回同一组），于是它们的作者顺序
+       * 首屏那些 `clips/*` 是**固定的一批**（真机实测每次都回同一组），于是它们的作者顺序
        * 也是固定的 —— 一律排队尾的话，每次冷启动看到的作者顺序一模一样，整条视频流就成了
        * 一份可以背下来的播放表。随机插入让"下一个是哪个作者"每次都不同，代价为零。
        */
-      const at: number = Math.floor(Math.random() * (NativeReels.authors.length + 1));
-      NativeReels.authors.splice(at, 0, pk);
+      const at: number = Math.floor(Math.random() * (lane.authors.length + 1));
+      lane.authors.splice(at, 0, pk);
     }
   }
 
@@ -590,51 +643,99 @@ export class NativeReels {
    *
    * @param userDriven 预留（现在不再区分：快通道本身就很轻，预热也用同一套）
    */
-  static async fetchPage(first: number, cursor: string,
+  static async fetchPage(source: string, first: number, cursor: string,
                          userDriven: boolean = false): Promise<NativeReelsPage | null> {
     if (cursor.length === 0) {
-      return await NativeReels.fetchFirstPage();
+      return await NativeReels.fetchFirstPage(source);
     }
-    // 有游标（含首屏的占位哨兵）= 翻页；哨兵会在 fetchNextPage 里换成探索流的真游标。
-    return await NativeReels.fetchNextPage(cursor);
+    // 有游标（含首屏的占位哨兵）= 翻页。
+    return await NativeReels.fetchNextPage(source, cursor);
+  }
+
+  /** **首屏**：按流分派（关注 = 关注/好友那两发，探索 = 探索 Reels 那一发）。 */
+  private static async fetchFirstPage(source: string): Promise<NativeReelsPage | null> {
+    const lane: ReelsLane = NativeReels.laneOf(source);
+    if (source === REELS_SOURCE_FOLLOWING) {
+      return await NativeReels.firstFollowing(lane);
+    }
+    return await NativeReels.firstExplore(lane);
   }
 
   /**
-   * **首屏**：三条 `clips/*` 快通道并行 → 够数就交付；探索流只做后台预热（拿游标）。
+   * **关注流首屏**：`clips/connected/`（你关注的人）+ `clips/discover/social/`（好友）并发。
+   *
+   * 两发都挂（被限流 / 新号没关注人）才退回探索流 —— 那时语义差一点，总比空屏强。
    */
-  private static async fetchFirstPage(): Promise<NativeReelsPage | null> {
+  private static async firstFollowing(lane: ReelsLane): Promise<NativeReelsPage | null> {
     const started: number = Date.now();
-    const quick: NativeReelsPage | null = await NativeReels.fetchQuickPages();
-    // 只为拿游标：不 await，成功后在翻页里直接用它。
-    NativeReels.warmExploreCursor();
-    if (quick !== null && quick.reels.length >= NativeReels.FIRST_MIN_REELS) {
-      hilog.info(DOMAIN, TAG, 'reels first quick n=%{public}d ms=%{public}d（不含探索流）',
-        quick.reels.length, Date.now() - started);
-      return new NativeReelsPage(quick.reels, NativeReels.CURSOR_SENTINEL, true,
-        Date.now() - started);
-    }
-    /*
-     * 快通道不够（被限流 / 新号 / 三条都空）：退回探索流第一页 —— 它慢（5~9 秒）但视频更多，
-     * 是"至少让用户有东西看"的兜底。
-     */
-    const explore: NativeReelsPage | null = await NativeReels.viaExplore('');
-    if (explore !== null) {
-      NativeReels.exploreCursor = explore.nextCursor;
-      if (quick === null) {
-        return explore;
-      }
-      const merged: NativeReelsPage = NativeReels.mergePages(quick, explore);
-      hilog.info(DOMAIN, TAG, 'reels first quick+explore n=%{public}d ms=%{public}d',
+    const parts: Array<NativeReelsPage | null> = await Promise.all([
+      NativeReels.viaConnected(lane, ''),
+      NativeReels.viaFriends(lane, '')
+    ]);
+    const merged: NativeReelsPage | null = NativeReels.mergeList(parts, started);
+    if (merged !== null && merged.reels.length >= NativeReels.FIRST_MIN_REELS) {
+      hilog.info(DOMAIN, TAG, 'reels[following] first n=%{public}d ms=%{public}d',
         merged.reels.length, Date.now() - started);
       return new NativeReelsPage(merged.reels, NativeReels.CURSOR_SENTINEL, true,
         Date.now() - started);
     }
-    if (quick !== null) {
-      // 探索流也挂了：快通道有什么给什么（能不空白就行）。
-      return new NativeReelsPage(quick.reels, NativeReels.CURSOR_SENTINEL, true,
+    const explore: NativeReelsPage | null = await NativeReels.viaExplore(lane, '');
+    if (explore !== null) {
+      lane.exploreCursor = explore.nextCursor;
+      if (merged !== null) {
+        const head: NativeReelsPage = NativeReels.mergePages(merged, explore);
+        hilog.info(DOMAIN, TAG, 'reels[following] first+explore n=%{public}d ms=%{public}d',
+          head.reels.length, Date.now() - started);
+        return new NativeReelsPage(head.reels, NativeReels.CURSOR_SENTINEL, true,
+          Date.now() - started);
+      }
+      hilog.info(DOMAIN, TAG, 'reels[following] first explore only n=%{public}d',
+        explore.reels.length);
+      return new NativeReelsPage(explore.reels, NativeReels.CURSOR_SENTINEL, true,
         Date.now() - started);
     }
-    hilog.info(DOMAIN, TAG, 'reels first miss: quick + explore both empty');
+    if (merged !== null) {
+      return new NativeReelsPage(merged.reels, NativeReels.CURSOR_SENTINEL, true,
+        Date.now() - started);
+    }
+    hilog.info(DOMAIN, TAG, 'reels[following] first miss: connected + friends + explore empty');
+    return null;
+  }
+
+  /**
+   * **探索流首屏**：`clips/discover/`（3~4 条、1~3 秒、全是视频）+ 后台预热探索流第一页。
+   *
+   * 探索流第一页要 5~9 秒 —— **不等它**，让它在后台跑；拿到的内容留在 `lane.exploreWarm`，
+   * 首屏之后第一发翻页直接吃（不白扔一次请求，也不让用户盯着转圈）。
+   */
+  private static async firstExplore(lane: ReelsLane): Promise<NativeReelsPage | null> {
+    const started: number = Date.now();
+    const clips: NativeReelsPage | null = await NativeReels.viaClips(lane, '');
+    NativeReels.warmExplorePage(lane);
+    if (clips !== null && clips.reels.length >= NativeReels.EXPLORE_MIN_REELS) {
+      hilog.info(DOMAIN, TAG, 'reels[explore] first n=%{public}d ms=%{public}d',
+        clips.reels.length, Date.now() - started);
+      return new NativeReelsPage(clips.reels, NativeReels.CURSOR_SENTINEL, true,
+        Date.now() - started);
+    }
+    // `clips/discover/` 太薄或被限流：退回探索流第一页（慢，但至少满屏）。
+    const explore: NativeReelsPage | null = await NativeReels.viaExplore(lane, '');
+    if (explore !== null) {
+      lane.exploreCursor = explore.nextCursor;
+      if (clips === null) {
+        return explore;
+      }
+      const merged: NativeReelsPage = NativeReels.mergePages(clips, explore);
+      hilog.info(DOMAIN, TAG, 'reels[explore] first clips+explore n=%{public}d ms=%{public}d',
+        merged.reels.length, Date.now() - started);
+      return new NativeReelsPage(merged.reels, NativeReels.CURSOR_SENTINEL, true,
+        Date.now() - started);
+    }
+    if (clips !== null) {
+      return new NativeReelsPage(clips.reels, NativeReels.CURSOR_SENTINEL, true,
+        Date.now() - started);
+    }
+    hilog.info(DOMAIN, TAG, 'reels[explore] first miss: clips + explore both empty');
     return null;
   }
 
@@ -649,72 +750,69 @@ export class NativeReels {
    *   代价是排序会变成"按作者成段"而不是个性化混排 —— 视频页的"能一直往下刷、每页都有货"
    *   比排序更重要（这正是用户报的两件事）。
    */
-  private static async fetchNextPage(cursor: string): Promise<NativeReelsPage | null> {
+  private static async fetchNextPage(source: string, cursor: string): Promise<NativeReelsPage | null> {
+    const lane: ReelsLane = NativeReels.laneOf(source);
     const started: number = Date.now();
-    const author: NativeReelsPage | null = await NativeReels.fetchAuthorPage();
+    const author: NativeReelsPage | null = await NativeReels.fetchAuthorPage(source);
     if (author !== null && author.reels.length > 0) {
-      hilog.info(DOMAIN, TAG, 'reels next author n=%{public}d ms=%{public}d pool=%{public}d',
-        author.reels.length, Date.now() - started, NativeReels.authors.length);
+      hilog.info(DOMAIN, TAG, 'reels next author src=%{public}s n=%{public}d ms=%{public}d pool=%{public}d',
+        source, author.reels.length, Date.now() - started, lane.authors.length);
       // 游标继续给哨兵：下一次翻页仍然"作者优先"，池子空了才会去打探索流。
       return new NativeReelsPage(author.reels, NativeReels.CURSOR_SENTINEL, true,
         Date.now() - started);
     }
     const exploreCursor: string = (cursor === NativeReels.CURSOR_SENTINEL)
-      ? NativeReels.exploreCursor : cursor;
-    const explore: NativeReelsPage | null = await NativeReels.viaExplore(exploreCursor);
+      ? lane.exploreCursor : cursor;
+    const explore: NativeReelsPage | null = await NativeReels.viaExplore(lane, exploreCursor);
     if (explore !== null) {
-      NativeReels.exploreCursor = explore.nextCursor;
-      hilog.info(DOMAIN, TAG, 'reels next explore n=%{public}d ms=%{public}d pool=%{public}d',
-        explore.reels.length, Date.now() - started, NativeReels.authors.length);
+      lane.exploreCursor = explore.nextCursor;
+      hilog.info(DOMAIN, TAG, 'reels next explore src=%{public}s n=%{public}d ms=%{public}d pool=%{public}d',
+        source, explore.reels.length, Date.now() - started, lane.authors.length);
       return new NativeReelsPage(explore.reels, NativeReels.CURSOR_SENTINEL, true,
         Date.now() - started);
     }
-    const quick: NativeReelsPage | null = await NativeReels.fetchQuickPages();
+    let quick: NativeReelsPage | null = null;
+    if (source === REELS_SOURCE_FOLLOWING) {
+      const parts: Array<NativeReelsPage | null> = [
+        await NativeReels.viaConnected(lane, ''),
+        await NativeReels.viaFriends(lane, '')
+      ];
+      quick = NativeReels.mergeList(parts, Date.now());
+    } else {
+      quick = await NativeReels.viaClips(lane, '');
+    }
     if (quick !== null) {
-      hilog.info(DOMAIN, TAG, 'reels next fallback to quick n=%{public}d', quick.reels.length);
+      hilog.info(DOMAIN, TAG, 'reels next fallback src=%{public}s n=%{public}d',
+        source, quick.reels.length);
       return new NativeReelsPage(quick.reels, NativeReels.CURSOR_SENTINEL, true,
         Date.now() - started);
     }
-    hilog.info(DOMAIN, TAG, 'reels miss: all sources empty cursor=%{public}d limited=%{public}s',
-      cursor.length, `${ApiThrottle.blocked(ApiThrottle.CLIPS)}`);
+    hilog.info(DOMAIN, TAG, 'reels miss src=%{public}s cursor=%{public}d limited=%{public}s',
+      source, cursor.length, `${ApiThrottle.blocked(ApiThrottle.CLIPS)}`);
     return null;
   }
 
   /**
-   * 三条 `clips/*` 快通道一起打（`connected` / `discover` / `discover/social`）。
+   * 后台把**探索流第一页**打下来：既拿它的 `max_id`，也把内容留着给首屏之后那一发翻页。
    *
-   * 并行而不是串行：三发互不依赖，闸门允许两发同时在飞，总耗时接近最慢那一发（1~3 秒）。
-   * 关注流那一发如果几十秒内刚拉过（预热/上一页），直接用缓存，不再重复打（真机上见过
-   * 同一时刻重复请求它、白花 6.6 秒）。
+   * 为什么不只留游标：那一页值 5~9 秒 / 几百 KB，只留游标等于白扔一次请求，
+   * 之后翻页还得再等一次同样长的时间（见 ReelsLane.exploreWarm）。
    */
-  private static async fetchQuickPages(): Promise<NativeReelsPage | null> {
-    const started: number = Date.now();
-    const warm: NativeReelsPage | null = NativeReels.recent('connected');
-    const connected: Promise<NativeReelsPage | null> =
-      warm !== null ? Promise.resolve(warm) : NativeReels.viaConnected('');
-    const results: Array<NativeReelsPage | null> = await Promise.all([
-      connected,
-      NativeReels.viaFriends(''),
-      NativeReels.viaClips('')
-    ]);
-    return NativeReels.mergeList(results, started);
-  }
-
-  /** 后台把探索流第一页打下来，只为拿它的 `max_id`（不阻塞首屏）。 */
-  private static warmExploreCursor(): void {
-    if (NativeReels.exploreCursor.length > 0 || NativeReels.exploreWarming) {
+  private static warmExplorePage(lane: ReelsLane): void {
+    if (lane.exploreCursor.length > 0 || lane.exploring || lane.exploreWarm !== null) {
       return;
     }
-    NativeReels.exploreWarming = true;
-    NativeReels.viaExplore('').then((page: NativeReelsPage | null): void => {
-      NativeReels.exploreWarming = false;
+    lane.exploring = true;
+    NativeReels.viaExplore(lane, '').then((page: NativeReelsPage | null): void => {
+      lane.exploring = false;
       if (page !== null) {
-        NativeReels.exploreCursor = page.nextCursor;
-        hilog.info(DOMAIN, TAG, 'explore cursor warmed len=%{public}d',
-          NativeReels.exploreCursor.length);
+        lane.exploreCursor = page.nextCursor;
+        lane.exploreWarm = page;
+        hilog.info(DOMAIN, TAG, 'explore page warmed n=%{public}d cursor=%{public}d',
+          page.reels.length, lane.exploreCursor.length);
       }
     }).catch((): void => {
-      NativeReels.exploreWarming = false;
+      lane.exploring = false;
     });
   }
 
@@ -752,7 +850,7 @@ export class NativeReels {
    *
    * 只收有视频的（探索流里也夹着图片帖）：`toReel` 自己会剔除。
    */
-  private static async viaExplore(cursor: string): Promise<NativeReelsPage | null> {
+  private static async viaExplore(lane: ReelsLane, cursor: string): Promise<NativeReelsPage | null> {
     const page: MobileMediaPage | null = await MobileDiscover.explore(cursor,
       ApiThrottle.interactive(), ApiThrottle.CLIPS);
     if (page === null) {
@@ -776,8 +874,8 @@ export class NativeReels {
         page.medias.length);
       return null;
     }
-    NativeReels.lastSource = 'explore';
-    NativeReels.noteAuthors(reels);
+    lane.lastSource = 'explore';
+    NativeReels.noteAuthors(lane, reels);
     hilog.info(DOMAIN, TAG,
       'reels via explore n=%{public}d medias=%{public}d more=%{public}s cursor=%{public}d ms=%{public}d',
       reels.length, page.medias.length, `${page.hasMore}`, page.nextCursor.length, page.ms);

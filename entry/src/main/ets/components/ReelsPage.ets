@@ -1265,6 +1265,14 @@ export struct ReelsPage {
       this.publishAction();
       return;
     }
+    /*
+     * 空列表（首屏要现拉）：**先把标题栏那两颗按钮收掉**。
+     *
+     * Reels 这页现在有两份数据源（探索 / 关注，见 pages/Index 的 reelsSegment），切过去时新那页
+     * 可能还是空的；不主动报一次，标题栏会一直挂着**上一页那条视频**的"下载"地址 ——
+     * 用户点下载会下到另一条（真机上就是这么发现的同类问题，见 core/ReelsAction 的说明）。
+     */
+    ReelsAction.publish(this.source, false, '', '');
     this.vm.loadFirst()
       .then((): void => {
         this.syncFromVm();

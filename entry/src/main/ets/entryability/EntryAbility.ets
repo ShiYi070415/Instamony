@@ -22,7 +22,7 @@ import { MediaPrefetch } from '../core/MediaPrefetch';
 import { NativeFeed } from '../core/NativeFeed';
 import { FeedCache } from '../core/FeedCache';
 import { NativeSearch } from '../core/NativeSearch';
-import { NativeReels } from '../core/NativeReels';
+import { NativeReels, REELS_SOURCE_EXPLORE } from '../core/NativeReels';
 import { ReelsCache } from '../core/ReelsCache';
 // 快拍托盘的落盘缓存（冷启动先画上次那排头像，见 core/TrayCache）。
 import { TrayCache } from '../core/TrayCache';
@@ -180,7 +180,8 @@ export default class EntryAbility extends UIAbility {
        */
       if (NetworkState.allowPrefetch()) {
         setTimeout((): void => {
-          NativeReels.warmStart(WARM_REELS_COUNT);
+          // 只预热**探索**那条（Reels 标签的默认落点）；关注那条等用户第一次点过去再拉。
+          NativeReels.warmStart(REELS_SOURCE_EXPLORE, WARM_REELS_COUNT);
         }, WARM_REELS_DELAY_MS);
       }
       hilog.info(DOMAIN, 'testTag', 'warmup kicked off %{public}s', NetworkState.describe());

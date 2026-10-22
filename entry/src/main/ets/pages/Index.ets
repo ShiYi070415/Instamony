@@ -29,6 +29,7 @@ import {
   HdsNavigationMenuContentOptions,
   HdsNavigationMenuItemOptions,
   HdsNavigationTitleMode,
+  TitleBarContentOptions,
   TitleBarStyleOptions,
   HdsTabs,
   HdsTabsController,
@@ -112,7 +113,7 @@ import {
   NotifyPayloadItem
 } from '../model/Notification';
 import { ProfilePage } from '../components/ProfilePage';
-import { SEGMENT_MODE_USER } from '../components/ProfileSegmentBar';
+import { ProfileSegmentBar, SEGMENT_MODE_REELS, SEGMENT_MODE_USER } from '../components/ProfileSegmentBar';
 import { DirectPage } from '../components/DirectPage';
 import { DirectThreadPage } from '../components/DirectThreadPage';
 import { SearchPage } from '../components/SearchPage';
@@ -152,6 +153,8 @@ import { DirectThreadViewModel } from '../viewmodel/DirectThreadViewModel';
 import { NativeDirect } from '../core/NativeDirect';
 import { SearchViewModel } from '../viewmodel/SearchViewModel';
 import { ReelsViewModel } from '../viewmodel/ReelsViewModel';
+// 两条流的标识（需求："把关注流和探索流分开两页"，见 core/NativeReels 的 REELS_SOURCE_*）。
+import { REELS_SOURCE_EXPLORE, REELS_SOURCE_FOLLOWING } from '../core/NativeReels';
 import { ProfileReelsViewModel } from '../viewmodel/ProfileReelsViewModel';
 import { MediaDetail, NativeMediaInfo } from '../core/NativeMediaInfo';
 import { NativeUserInfo } from '../core/NativeUserInfo';
@@ -648,6 +651,19 @@ const BAR_SINK_DISTANCE: number = 10;
  */
 const OVERLAY_SINK_DISTANCE: number = BAR_SINK_DISTANCE + BAR_SINK_HEIGHT;
 /**
+ * Reels 标题栏那条分段按钮（探索 / 关注）的**胶囊总宽**（vp，含它自己的左右内缩）。
+ *
+ * 需求是"置中显示"，所以它不能铺满标题栏：两段文字各两个字，208vp 的胶囊（每段约 88vp）
+ * 已经是"一眼能点、又明显是个按钮"的比例。想更宽/更窄只改这一个数。
+ */
+const REELS_SEGMENT_WIDTH_VP: number = 208;
+/** 分段按钮的高度（vp，与 ProfileSegmentBar 的 SEGMENT_HEIGHT 对齐）。 */
+const REELS_SEGMENT_HEIGHT_VP: number = 40;
+/** 切段动画时长（ms）：和系统 Tab 的过渡接近，快一点更"跟手"。 */
+const REELS_SWITCH_MS: number = 220;
+/** 切段时那一页的横向位移（vp）：只做一点点，观感是"翻过去"而不是"飞过去"。 */
+const REELS_SWITCH_SLIDE_VP: number = 48;
+/**
  * **系统显隐**那支：同方向累计滚过这么多 vp 才翻转栏的状态。
  *
  * 为什么累加而不是看单帧：慢速拖动时单帧增量可能只有 1vp 上下，看单帧就永远不触发。
@@ -979,7 +995,29 @@ struct Index {
   /** 底部标签「我的」那个原生页面的视图模型（页面一直在，状态留着，切回来不白屏）。 */
   private profileVm: ProfileViewModel = new ProfileViewModel();
   /** Reels 视频流的视图模型（同上：数据留在视图模型里，切 tab 不重拉）。 */
-  private reelsVm: ReelsViewModel = new ReelsViewModel();
+  private reelsVm: ReelsViewModel = new ReelsViewModel(REELS_SOURCE_EXPLORE);
+  /**
+   * **关注那条流**的视图模型（需求："把关注流和探索流分开两页"）。
+   *
+   * 和 `reelsVm` 完全独立：两条流各有自己的列表、翻页游标、作者池、落盘缓存（见
+   * core/NativeReels 的 ReelsLane 与 core/ReelsCache.keyFor）。共用一份的话，
+   * 关注页里会冒出探索流里的陌生人，两个列表还会互相当成"已加载过"而去重掉。
+   */
+  private reelsFollowVm: ReelsViewModel = new ReelsViewModel(REELS_SOURCE_FOLLOWING);
+  /**
+   * Reels 页现在停在哪一段：**0 = 探索，1 = 关注**（标题栏那条分段按钮的两个落点）。
+   *
+   * 真相放在这一层（不是 ReelsPage 里）：切段会销毁/重建 ReelsPage（见 reelsTab），
+   * 组件里的 @State 会归零；而且标题栏那条分段按钮也要读它。
+   */
+  @State private reelsSegment: number = 0;
+  /**
+   * 上一次切段的方向（1 = 探索→关注，-1 = 关注→探索）。
+   *
+   * 只用来决定切页动画的位移方向：同一个 `TransitionEffect` 正反用一次，
+   * 看起来才是"往前翻一页 / 往回退一页"，而不是两段都往同一边推。
+   */
+  @State private reelsSwitchDir: number = 1;
   /** 私信收件箱的视图模型（同上）。 */
   private directVm: DirectViewModel = new DirectViewModel();
   /** 私信**会话页**的视图模型（一条会话的消息 + 发送，见 DirectThreadViewModel）。 */
@@ -2870,6 +2908,7 @@ struct Index {
     // 各页面的列表与游标。
     this.viewModel.reset();
     this.reelsVm.reset();
+    this.reelsFollowVm.reset();
     this.searchVm.clear();
     this.profileVm.reset();
     this.directVm.reset();
@@ -6681,11 +6720,100 @@ struct Index {
     })
   }
 
-  /** Reels 标签：现在只有视频流（见 ReelsPage）。 */
+  private shellTitleContent(): TitleBarContentOptions {
+    /*
+     * Reels 标签那一页的标题栏**让位给分段按钮**（需求："把关注流和探索流分开两页，
+     * 在 reels 页的 hdstitle 中显示分段按钮，置中显示"）。
+     *
+     * 用 HDS 的 `stackBuilder`（6.0.0(20) 起就有的"标题栏 stack 区自定义 builder"）：
+     * 它替换的就是 mainTitle/subTitle 那块，**右上角菜单不受影响**（静音/下载两颗还在）。
+     * 不要用 `bottomBuilder`：那一行会被算进标题栏，标题栏的毛玻璃会跟着长高
+     * ——「我的」页当初就是踩了这个（见 ProfilePage.pinnedSegmentBar 的说明）。
+     */
+    if (this.currentTab() === AppTab.Reels) {
+      return {
+        // 标题文字让位（分段按钮自己就是标题）；空串而不是不传，HDS 那边两版都稳。
+        title: { mainTitle: '' },
+        menu: this.menus(),
+        /*
+         * ⚠️ **必须包一层箭头函数**，不能直接写 `stackBuilder: this.reelsTitleSegment`。
+         *
+         * HDS 是原生组件，它回调这个 builder 时走的是 NAPI（`napi_call_function`），
+         * 直接传方法引用会**丢掉 `this` 绑定** —— 编译出来的 builder 体第一句就是
+         * `this.observeComponentCreation2(...)`，于是真机上当场崩：
+         *   TypeError: Cannot read property observeComponentCreation2 of undefined
+         *     at reelsTitleSegment entry (pages/Index.ets:6751)
+         * 箭头函数按词法捕获 `this`，包一层就正常（`navDestination(this.xxx)` 那种能直接传，
+         * 是因为它在 ArkUI 自己的属性上、编译器会替我们包一层；这里是原生组件的配置对象内部，
+         * 编译器不管）。
+         */
+        stackBuilder: (): void => {
+          this.reelsTitleSegment();
+        }
+      };
+    }
+    return { title: { mainTitle: this.pageTitle() }, menu: this.menus() };
+  }
+
+  /**
+   * Reels 标题栏里那条分段按钮：**探索 / 关注**，置中。
+   *
+   * 观感直接套「我的」页那一款（同一个 ProfileSegmentBar：沉浸光感材质 + 会滑动的灰底药丸 +
+   * 点按/横拖都能切）；差别只有"段里是文字""上下不留白"（见它的 compact / SEGMENT_MODE_REELS）。
+   */
   @Builder
-  reelsTab() {
+  reelsTitleSegment() {
+    Row() {
+      ProfileSegmentBar({
+        tab: this.reelsSegment,
+        count: 2,
+        mode: SEGMENT_MODE_REELS,
+        // 标题栏里没有上下留白的余地（行高 56vp，胶囊 40vp）。
+        compact: true,
+        availableWidthVp: REELS_SEGMENT_WIDTH_VP,
+        onSelect: (segment: number): void => {
+          this.selectReelsSegment(segment);
+        }
+      })
+    }
+    .width(REELS_SEGMENT_WIDTH_VP)
+    .height(REELS_SEGMENT_HEIGHT_VP)
+  }
+
+  /**
+   * 切段（探索 ⇄ 关注）：**带切页动画**。
+   *
+   * 两段是同一个组件（ReelsPage）的两份数据源，切换时**只换视图模型**：
+   * 用 `if/else` 让它整块换掉（离开的那页会 aboutToDisappear → 停播、释放播放器），
+   * 外面套一层 `animateTo`，两边的 transition 就会一进一出 —— 观感是"横着翻过去一页"。
+   * 为什么不并把两份都挂在 Stack 里：那是两个全屏视频页同时在播（声音、解码器、内存都翻倍）。
+   */
+  private selectReelsSegment(index: number): void {
+    if (index === this.reelsSegment) {
+      return;
+    }
+    // 方向决定位移的正负（见 reelsSwitchDir）：往后翻从右边进，往回退从左边进。
+    this.reelsSwitchDir = index > this.reelsSegment ? 1 : -1;
+    hilog.info(DOMAIN, TAG, 'reels segment %{public}d -> %{public}d',
+      this.reelsSegment, index);
+    this.getUIContext().animateTo({
+      duration: REELS_SWITCH_MS,
+      curve: Curve.EaseInOut
+    }, () => {
+      this.reelsSegment = index;
+    });
+  }
+
+  /**
+   * 一段 Reels 页（探索 / 关注共用这一份装配，只有视图模型不同）。
+   *
+   * 抽出来是因为 `reelsTab` 要把两份数据源都装配一遍；写两遍必然分叉
+   * （点赞/转发/关注这些回调漏一个就是"这页点了没反应"）。
+   */
+  @Builder
+  reelsStream(vm: ReelsViewModel) {
     ReelsPage({
-      vm: this.reelsVm,
+      vm: vm,
       // 标题栏那两颗按钮按**来源**取用（见 core/ReelsAction）：这是底栏那一页。
       source: ReelsAction.HOME,
       // 刷到自己的视频时不画关注按钮（同其它两页）。
@@ -6729,6 +6857,44 @@ struct Index {
       }
     })
   }
+
+  /** Reels 标签：探索 / 关注两页（见 reelsSegment）。 */
+  @Builder
+  reelsTab() {
+    Stack({ alignContent: Alignment.Center }) {
+      if (this.reelsSegment === 1) {
+        Column() {
+          this.reelsStream(this.reelsFollowVm)
+        }
+        .width('100%')
+        .height('100%')
+        .transition(this.reelsSwitch())
+      } else {
+        Column() {
+          this.reelsStream(this.reelsVm)
+        }
+        .width('100%')
+        .height('100%')
+        .transition(this.reelsSwitch())
+      }
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  /**
+   * 切段的进出场效果：淡入淡出 + 一点横向位移。
+   *
+   * 进出共用一条（方向由 `reelsSwitchDir` 决定正负）：进场从侧面 48vp 滑到位，
+   * 出场往反方向滑走 48vp —— 和系统"翻一页"的手感一致。
+   */
+  private reelsSwitch(): TransitionEffect {
+    const dir: number = this.reelsSwitchDir;
+    return TransitionEffect.OPACITY
+      .combine(TransitionEffect.translate({ x: REELS_SWITCH_SLIDE_VP * dir }))
+      .animation({ duration: REELS_SWITCH_MS, curve: Curve.EaseInOut });
+  }
+
 
   /**
    * 私信标签：原生收件箱（会话列表）。
@@ -7665,14 +7831,8 @@ struct Index {
     .height('100%')
     .mode(NavigationMode.Stack)
     .titleBar({
-      content: {
-        // 标题跟当前分页走（首页=应用名，其余页=页面标题），菜单也按分页给（见 menus）。
-        title: { mainTitle: this.pageTitle() },
-        menu: this.menus()
-        // **没有 bottomBuilder**（需求："模糊只盖到 HDS 标题行"）：搜索框和「我的」页那条
-        // 分段按钮都改成了各自页面里的浮层（见 SearchPage / ProfilePage）。挂 bottomBuilder
-        // 会把那一行算进标题栏，标题栏的毛玻璃蒙层跟着从 94vp 长到 146/154vp。
-      },
+      // 标题/菜单按分页取（见 shellTitleContent）：Reels 那一页的标题栏让位给分段按钮。
+      content: this.shellTitleContent(),
       style: this.pageTitleStyle(),
       // 和官方示例保持一致：两个都 false。
       // 这两个开关管的是 HDS 要不要替标题栏/内容避让系统安全区；示例一路 false，

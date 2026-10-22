@@ -30,6 +30,8 @@ const TAG: string = 'ReelsCache';
 /** 落盘的 preferences 文件名与键。 */
 const STORE: string = 'instarmony_reels_cache';
 const KEY: string = 'page1_v1';
+/** 关注那条流自己那份（两条流分开两页之后各存各的，别互相覆盖，见 pages/Index 的 reelsSegment）。 */
+const KEY_FOLLOWING: string = 'page1_follow_v1';
 /** 缓存格式版本：改了结构就 +1，旧的一律当没有。 */
 const FORMAT: number = 2;
 /** 有效期（毫秒）：6 小时（见文件头）。 */
@@ -91,6 +93,11 @@ export class CachedReelsPage {
 }
 
 export class ReelsCache {
+  /** 落盘用的键：探索那条用默认的，关注那条用它自己那份（见 KEY_FOLLOWING）。 */
+  static keyFor(source: string): string {
+    return source === 'following' ? KEY_FOLLOWING : KEY;
+  }
+
   private static store: preferences.Preferences | null = null;
 
   /** 打开缓存文件（EntryAbility.onCreate 里调一次即可；幂等）。 */
@@ -101,14 +108,14 @@ export class ReelsCache {
     try {
       ReelsCache.store = preferences.getPreferencesSync(context, { name: STORE });
       // 按账号分区（见 core/AccountScope）。
-      AccountScope.register(ReelsCache.store, [KEY]);
+      AccountScope.register(ReelsCache.store, [KEY, KEY_FOLLOWING]);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'open store failed: %{public}s', (error as Error).message);
     }
   }
 
   /** 存一份第一页（同步写 + flush，同 FeedCache）。 */
-  static save(reels: Array<Reel>): void {
+  static save(reels: Array<Reel>, key: string = KEY): void {
     const store: preferences.Preferences | null = ReelsCache.store;
     if (store === null || reels.length === 0) {
       return;
@@ -150,7 +157,7 @@ export class ReelsCache {
         hilog.warn(DOMAIN, TAG, 'page1 too big to cache: %{public}d chars', text.length);
         return;
       }
-      store.putSync(AccountScope.slot(KEY), text);
+      store.putSync(AccountScope.slot(key), text);
       store.flushSync();
       hilog.info(DOMAIN, TAG, 'saved n=%{public}d chars=%{public}d', total, text.length);
     } catch (error) {
@@ -163,13 +170,13 @@ export class ReelsCache {
    *
    * @param maxAgeMs 超过这个年龄就当没有（默认 6 小时，见 MAX_AGE_MS）。
    */
-  static load(maxAgeMs: number = MAX_AGE_MS): CachedReelsPage | null {
+  static load(key: string = KEY, maxAgeMs: number = MAX_AGE_MS): CachedReelsPage | null {
     const store: preferences.Preferences | null = ReelsCache.store;
     if (store === null) {
       return null;
     }
     try {
-      const text: string = store.getSync(AccountScope.slot(KEY), '') as string;
+      const text: string = store.getSync(AccountScope.slot(key), '') as string;
       if (text.length === 0) {
         return null;
       }

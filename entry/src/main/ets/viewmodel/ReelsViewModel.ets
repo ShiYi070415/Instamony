@@ -10,7 +10,12 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { InstagramPageBridge } from '../bridge/PageBridge';
 import { AppConfig } from '../config/AppConfig';
 import { Reel, ReelMapper, ReelsDto, ReelsPage, ReelStreamVm } from '../model/Reel';
-import { NativeReels, NativeReelsPage } from '../core/NativeReels';
+import {
+  NativeReels,
+  NativeReelsPage,
+  REELS_SOURCE_EXPLORE,
+  REELS_SOURCE_FOLLOWING
+} from '../core/NativeReels';
 import { ApiThrottle } from '../core/ApiThrottle';
 import { CachedReelsPage, ReelsCache } from '../core/ReelsCache';
 
@@ -47,6 +52,19 @@ const NATIVE_CACHE_PAGES: number = 3;
 const NATIVE_WARM_MAX_AGE_MS: number = 120000;
 
 export class ReelsViewModel implements ReelStreamVm {
+  /**
+   * **这一份是哪条流**（需求："把关注流和探索流分开两页"）。
+   *
+   * 两条流各一个实例（`pages/Index` 里 `reelsVm` / `reelsFollowVm`），
+   * 取数那边的状态（作者池、游标、缓存、预热）也各一份 —— 见 core/NativeReels 的 ReelsLane。
+   * 这里只做转发，视图模型本身不关心两者的差别。
+   */
+  private readonly source: string;
+
+  constructor(source: string = REELS_SOURCE_EXPLORE) {
+    this.source = source;
+  }
+
   private readonly bridge: InstagramPageBridge = InstagramPageBridge.getInstance();
   /**
    * **清空自己**（退出登录 / 换账号时调，见 core/AccountScope 的文件头）。
@@ -131,7 +149,7 @@ export class ReelsViewModel implements ReelStreamVm {
        */
       if (ApiThrottle.blocked(ApiThrottle.CLIPS)) {
         this.fromCacheOrSay(ApiThrottle.remainingMinutes(ApiThrottle.CLIPS));
-        const fallback: NativeReelsPage | null = await NativeReels.fetchPage(NATIVE_PAGE_COUNT, '', true);
+        const fallback: NativeReelsPage | null = await NativeReels.fetchPage(this.source, NATIVE_PAGE_COUNT, '', true);
         if (fallback !== null) {
           this.noteCursor(fallback.nextCursor);
           this.applyNativePage(fallback, false);
@@ -143,7 +161,7 @@ export class ReelsViewModel implements ReelStreamVm {
         return;
       }
       // ---- 1) 启动预热那一页（app 一起来就发了，见 EntryAbility / NativeReels.warmStart）----
-      const warm: NativeReelsPage | null = NativeReels.takeWarm(NATIVE_WARM_MAX_AGE_MS);
+      const warm: NativeReelsPage | null = NativeReels.takeWarm(this.source, NATIVE_WARM_MAX_AGE_MS);
       if (warm !== null) {
         this.noteCursor(warm.nextCursor);
         this.applyNativePage(warm, false);
@@ -153,7 +171,7 @@ export class ReelsViewModel implements ReelStreamVm {
         return;
       }
       // ---- 2) 原生直发（有落盘模板 + 登录态时可走）----
-      const native: NativeReelsPage | null = await NativeReels.fetchPage(NATIVE_PAGE_COUNT, '', true);
+      const native: NativeReelsPage | null = await NativeReels.fetchPage(this.source, NATIVE_PAGE_COUNT, '', true);
       if (native !== null) {
         this.noteCursor(native.nextCursor);
         this.applyNativePage(native, false);
@@ -210,7 +228,7 @@ export class ReelsViewModel implements ReelStreamVm {
     this.onStatus('已加载 ' + this.reels.length + ' 条' + (this.more ? '' : '（到底了）'));
     // 落盘一份：**首屏和翻页都存**（首页那条查询首屏有时只回 2~4 条，光存第一页太少）。
     // 被限流/没网时这几十条就是视频标签能显示的全部内容（见 core/ReelsCache）。
-    ReelsCache.save(this.reels);
+    ReelsCache.save(this.reels, ReelsCache.keyFor(this.source));
     return fresh.length;
   }
 
@@ -239,7 +257,7 @@ export class ReelsViewModel implements ReelStreamVm {
    * @param minutes 还有几分钟解禁（只用来写提示语）。
    */
   private fromCacheOrSay(minutes: number): void {
-    const cached: CachedReelsPage | null = ReelsCache.load();
+    const cached: CachedReelsPage | null = ReelsCache.load(ReelsCache.keyFor(this.source));
     if (cached !== null && cached.reels.length > 0) {
       this.reels = cached.reels;
       // 缓存那份没有游标：当成"到底了"，免得触底哨兵一直空转要下一页。
@@ -263,9 +281,21 @@ export class ReelsViewModel implements ReelStreamVm {
      * **两条源交替**（这是"视频刷不完"的关键，理由见 core/NativeReels 的补货池说明）：
      *   · 探索流：能一直往下翻，但图文混排（实测 8 条里只有 1~3 条是视频、500KB / 5 秒）；
      *   · 作者那页（`clips/user/`）：清一色视频、几十 KB、一两秒。
-     * 上一次补的是探索流，这次就补一个作者；反过来也一样。没有作者可补时才连续走探索流。
+     *
+     * **关注那条不交替**（需求："把关注流和探索流分开两页"）：它的作者池里装的全是
+     * `clips/connected/` / `clips/discover/social/` 里出现过的人 —— 也就是"你关注的人"，
+     * 一直从池子里取就永远是关注内容。往里掺探索流的页等于把陌生人塞进关注页，
+     * 那这一页就跟探索页没区别了。只有池子真的取空（都翻到底了）才落到探索流兜底。
      */
-    const authorReady: boolean = !this.lastFillWasAuthor && NativeReels.authorPoolSize() > 0;
+    if (this.source === REELS_SOURCE_FOLLOWING) {
+      if (NativeReels.authorPoolSize(this.source) > 0) {
+        this.fillFromAuthor();
+        return;
+      }
+      this.fillFromExplore();
+      return;
+    }
+    const authorReady: boolean = !this.lastFillWasAuthor && NativeReels.authorPoolSize(this.source) > 0;
     if (authorReady) {
       this.fillFromAuthor();
       return;
@@ -276,7 +306,7 @@ export class ReelsViewModel implements ReelStreamVm {
   /** 补一页"某个作者的 Reels"进队列（不推进探索流游标）。 */
   private fillFromAuthor(): void {
     this.nativeFetching = true;
-    NativeReels.fetchAuthorPage().then((page: NativeReelsPage | null): void => {
+    NativeReels.fetchAuthorPage(this.source).then((page: NativeReelsPage | null): void => {
       this.nativeFetching = false;
       if (page === null) {
         // 池子里的作者这一轮都问不出来：别停下，退回探索流接着补。
@@ -288,7 +318,7 @@ export class ReelsViewModel implements ReelStreamVm {
       this.lastFillWasAuthor = true;
       this.nativeQueue.push(page);
       hilog.info(DOMAIN, TAG, 'reels author page queued n=%{public}d pool=%{public}d queued=%{public}d',
-        page.reels.length, NativeReels.authorPoolSize(), this.nativeQueue.length);
+        page.reels.length, NativeReels.authorPoolSize(this.source), this.nativeQueue.length);
       this.prefetchNativePage();
     }).catch((): void => {
       this.nativeFetching = false;
@@ -305,7 +335,7 @@ export class ReelsViewModel implements ReelStreamVm {
      * 于是补货永远是同一条路，探索流那份个性化推荐一次都进不来，整条流就是
      * "固定那批作者的最新 12 条"反复切段（用户报的"全部都是固定重复的"）。
      */
-    NativeReels.fetchExplorePage()
+    NativeReels.fetchExplorePage(this.source)
       .then((page: NativeReelsPage | null): void => {
         this.nativeFetching = false;
         if (page === null) {
@@ -386,7 +416,7 @@ export class ReelsViewModel implements ReelStreamVm {
         if (cursor.length === 0) {
           break;
         }
-        const live: NativeReelsPage | null = await NativeReels.fetchPage(NATIVE_PAGE_COUNT, cursor, true);
+        const live: NativeReelsPage | null = await NativeReels.fetchPage(this.source, NATIVE_PAGE_COUNT, cursor, true);
         attempt++;
         if (live !== null) {
           this.noteCursor(live.nextCursor);
@@ -414,7 +444,7 @@ export class ReelsViewModel implements ReelStreamVm {
        * （每次冷启动都回同一组）—— 重取只会整页重复，一条都新增不了，等于白花一发。
        * 探索流是唯一"每次都能给新条目"的源（它的 `max_id` 真的往后走），所以这里先问它。
        */
-      const explore: NativeReelsPage | null = await NativeReels.fetchExplorePage();
+      const explore: NativeReelsPage | null = await NativeReels.fetchExplorePage(this.source);
       if (explore !== null) {
         const added: number = this.applyNativePage(explore, true);
         hilog.info(DOMAIN, TAG, 'reels page explore n=%{public}d ms=%{public}d added=%{public}d',
@@ -428,7 +458,7 @@ export class ReelsViewModel implements ReelStreamVm {
        * ③ 探索流也没新增：重取一次第一页（IG 的服务端排序会变，偶尔能带回没见过的条目）。
        * 这就是用户手动做的事（退出再进来）—— 这里替他在"滑到底"这一刻自动做掉。
        */
-      const fresh: NativeReelsPage | null = await NativeReels.fetchPage(NATIVE_PAGE_COUNT, '', true);
+      const fresh: NativeReelsPage | null = await NativeReels.fetchPage(this.source, NATIVE_PAGE_COUNT, '', true);
       if (fresh !== null) {
         this.noteCursor(fresh.nextCursor);
         const added: number = this.applyNativePage(fresh, true);

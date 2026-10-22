@@ -32,6 +32,8 @@ import { SurfaceModifier, trackMaterialTouch } from './MaterialSurface';
 const SEGMENT_HEIGHT: number = 40;
 /** 段内图标字号（vp）。 */
 const SEGMENT_ICON: number = 20;
+/** 文字模式（Reels 那条）的段内字号（fp）。 */
+const SEGMENT_LABEL_SIZE: number = 14;
 /** 灰底在段内的上下内缩（vp）：看起来是嵌在胶囊里的一颗药丸。 */
 const SEGMENT_THUMB_INSET: number = 4;
 /** 横向移动超过这么多 vp 才算"拖动"（PanGesture 的距离阈值）；轻点不满足它，走各段 onClick。 */
@@ -53,6 +55,15 @@ const FALLBACK_WIDTH_VP: number = 360;
  */
 export const SEGMENT_MODE_SELF: string = 'self';
 export const SEGMENT_MODE_USER: string = 'user';
+/**
+ * **Reels 页那条**：两段、**文字**（探索 / 关注），挂在 HDS 标题栏里。
+ *
+ * 为什么复用这个组件而不是另写一个：需求是"套用用户主页的那款" —— 沉浸光感材质、
+ * 会滑动的灰底药丸、点按/横拖切换，这些东西在这里已经调过一轮了（材质必须挂在 Toggle 上、
+ * 灰底靠算出来的段宽平移、不能自绘 .shadow()），另写一份必然再踩一遍。
+ * 差别只有两条：段里放**文字**而不是图标；胶囊要窄一点（段数只有 2）并居中。
+ */
+export const SEGMENT_MODE_REELS: string = 'reels';
 const ICONS_SELF_NORMAL: Array<Resource> = [
   $r('sys.symbol.square_grid_2x2'),
   $r('sys.symbol.template'),
@@ -111,6 +122,13 @@ export struct ProfileSegmentBar {
   @Prop inTitleBar: boolean = false;
   /** 材质厚薄（跟设定页联动）。 */
   @StorageProp(SETTING_MATERIAL_THICKNESS) materialThickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
+  /**
+   * **标题栏里那一版**：上下不留白（Reels 那条用）。
+   *
+   * 页面里那版上下各留 8/12 vp（让胶囊和周围内容有呼吸）；标题栏的行高只有 56vp，
+   * 再留白会把胶囊挤出那一条。左右仍然内缩 SEGMENT_SIDE（胶囊要比屏幕窄一点、居中）。
+   */
+  @Prop compact: boolean = false;
   /** 选了某一段（点击或拖动松手）。 */
   onSelect: (index: number) => void = (index: number): void => {
   };
@@ -148,6 +166,16 @@ export struct ProfileSegmentBar {
   private iconSelected(index: number): Resource {
     const icons: Array<Resource> = this.mode === SEGMENT_MODE_USER ? ICONS_USER_SELECTED : ICONS_SELF_SELECTED;
     return index >= 0 && index < icons.length ? icons[index] : icons[0];
+  }
+
+  /** 文字模式（Reels 那条）用的标签：0 = 探索，1 = 关注。 */
+  private labelOf(index: number): ResourceStr {
+    return index === 1 ? $r('app.string.reels_segment_following') : $r('app.string.reels_segment_explore');
+  }
+
+  /** 这一段是文字还是图标（见 SEGMENT_MODE_REELS）。 */
+  private textMode(): boolean {
+    return this.mode === SEGMENT_MODE_REELS;
   }
 
   /** ForEach 用的下标表（段数可配，不能写死 [0,1,2,3]）。 */
@@ -204,10 +232,21 @@ export struct ProfileSegmentBar {
           Row() {
             ForEach(this.indices(), (index: number): void => {
               Row() {
-                SymbolGlyph(this.tab === index ? this.iconSelected(index) : this.iconNormal(index))
-                  .fontSize(SEGMENT_ICON)
-                  .fontColor([this.tab === index
-                    ? $r('app.color.primary_text') : $r('app.color.secondary_text')])
+                if (this.textMode()) {
+                  // 文字模式（Reels 那条）：选中态加粗一点，颜色跟图标那套一致（不改背景色）。
+                  Text(this.labelOf(index))
+                    .fontSize(SEGMENT_LABEL_SIZE)
+                    .fontWeight(this.tab === index ? FontWeight.Medium : FontWeight.Regular)
+                    // Text 的 fontColor 收单个颜色（图标那个是数组，见下面的 SymbolGlyph）。
+                    .fontColor(this.tab === index
+                      ? $r('app.color.primary_text') : $r('app.color.secondary_text'))
+                    .maxLines(1)
+                } else {
+                  SymbolGlyph(this.tab === index ? this.iconSelected(index) : this.iconNormal(index))
+                    .fontSize(SEGMENT_ICON)
+                    .fontColor([this.tab === index
+                      ? $r('app.color.primary_text') : $r('app.color.secondary_text')])
+                }
               }
               .layoutWeight(1)
               .height('100%')
@@ -262,7 +301,12 @@ export struct ProfileSegmentBar {
     }
     .width('100%')
     // 只留按钮自己的内边距：**不铺底色块**（需求："把分段按钮的背景色块去掉"）。
-    .padding({ left: SEGMENT_SIDE, right: SEGMENT_SIDE, top: 8, bottom: 12 })
+    .padding({
+      left: SEGMENT_SIDE,
+      right: SEGMENT_SIDE,
+      top: this.compact ? 0 : 8,
+      bottom: this.compact ? 0 : 12
+    })
     // 量一次真实可用宽度：两个宿主的内宽不一样，灰底定位必须按**量到的**算（见 availableWidthVp）。
     .onAreaChange((oldArea: Area, newArea: Area): void => {
       const width: number = typeof newArea.width === 'number' ? newArea.width as number : 0;
