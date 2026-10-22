@@ -243,7 +243,19 @@ export struct DirectThreadPage {
       }
     };
     this.vm.onPending = (items: Array<DirectMessage>): void => {
+      const grew: boolean = items.length > this.pending.length;
       this.pending = items;
+      /*
+       * **新加的乐观气泡要立刻可见**（用户报："发送消息会有延迟，一开始不会"）。
+       *
+       * 列表只把新条目追加在末尾，滚动位置不动 —— 底部那条就被输入条/键盘挡住，
+       * 用户看到的是"点了发送没反应"，一直等到刷新那一下才跳出来。
+       * 这里在"发出去的那条刚进列表"时立刻贴底（贴底由 pinnedToBottom 把关，
+       * 用户翻历史时不会被拽走）。
+       */
+      if (grew && this.pinnedToBottom) {
+        this.scrollToNewest(false);
+      }
       // 发出去的那条乐观气泡也要吃到入场动画（见 noteMessages / popDelayFor）。
       this.noteMessages();
     };
@@ -835,7 +847,17 @@ export struct DirectThreadPage {
             }
             // 退场只淡出：气泡被删掉（撤回/消息替换）时不该有弹跳。
             .transition(TransitionEffect.OPACITY.animation({ duration: 120, curve: Curve.EaseOut }))
-          }, (message: DirectMessage, index: number): string => `${index}-${message.id}`)
+            /*
+             * **键只认消息 id，不带序号**。
+             *
+             * 以前是 `${index}-${id}`：只要列表前面多/少一条（实时补 insert、待发那条撤掉、
+             * 刷新换了窗口），**后面每一行的序号都变**，`ForEach` 把它们全当新条目重建 ——
+             * 用户看到的就是"刷新一下，整屏气泡又弹一遍"。
+             * 消息 id 是稳定的，序号变化不该影响条目身份（`bubble` 里的序号只是排间距用，
+             * 真取数据已经改成按 id 反查，见 prevOf）。
+             */
+          }, (message: DirectMessage, index: number): string =>
+            message.id.length > 0 ? message.id : `row-${index}`)
 
           if (this.allMessages().length === 0 && !this.busy) {
             ListItem() {

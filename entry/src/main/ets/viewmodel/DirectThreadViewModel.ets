@@ -456,8 +456,14 @@ export class DirectThreadViewModel {
        * 等刷新回来又出现 —— 用户报的"发出后消失再出现"就是这个闪烁。
        * 现在反过来：气泡一直留着，直到新视图里真的出现"我发的、同一条文本"才撤掉，
        * 视觉上是同一个气泡从"本地那条"无缝换成"服务端那条"。
+       *
+       * **这一发必须"增量合并"，不能 `load()`**（用户报："发新消息后页面会刷新导致动画又
+       * 播放一遍"）：`load()` 是把整份视图换掉，服务端那一页条数/窗口和我们屏上的可能不一样，
+       * 一换就整表重建（`ForEach` 的键含序号，序号一变整屏都当新条目），
+       * 于是所有气泡重播入场动画、列表还跳一下。合并只往后面追加，
+       * 已经有的一条都不动，动画自然也不会重播（见 mergeFresh）。
        */
-      await this.load();
+      await this.refreshAfterSend();
       this.dropConfirmedPending();
       // 一次没对上（服务端还没返回）就过一会儿再看；这期间气泡继续留着，不会消失。
       setTimeout((): void => {
@@ -473,6 +479,84 @@ export class DirectThreadViewModel {
       this.onBusy(false);
     }
   }
+
+  /**
+   * 发送成功后的那次刷新：**只追加，不整份替换**（见 send 里的说明）。
+   *
+   * 之前这里调的是 `load()` —— 它把整份视图换成"服务端最新一页"。问题有两个：
+   *   · 服务端那一页的条数/窗口和屏上的不一定一样，换一次整表序号就变，
+   *     `ForEach` 把每一行都当新条目重建，于是**整屏气泡重播入场动画、列表还跳一下**
+   *     （用户报的"发新消息后页面会刷新导致动画又播放一遍"）；
+   *   · 用户已经上滑翻出来的历史会被那一页挤掉。
+   *
+   * 合并逻辑与轮询共用一份（`mergeFresh`），行为完全一致。
+   */
+  private async refreshAfterSend(): Promise<void> {
+    if (this.threadId.length === 0) {
+      return;
+    }
+    let fresh: DirectThreadView | null = null;
+    try {
+      fresh = await NativeDirect.thread(this.threadId, '', this.fallbackUserId,
+        ApiThrottle.interactive());
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'refreshAfterSend threw: %{public}s', (error as Error).message);
+      return;
+    }
+    if (fresh === null) {
+      // 拉不到就靠 1200ms 后那次复查；乐观气泡继续留着，不会消失。
+      hilog.info(DOMAIN, TAG, 'refreshAfterSend failed detail=%{public}s', NativeDirect.lastDetail());
+      return;
+    }
+    this.lastLoadAtMs = Date.now();
+    const added: number = this.mergeFresh(fresh);
+    hilog.info(DOMAIN, TAG, 'refreshAfterSend +%{public}d total=%{public}d',
+      added, this.view === null ? -1 : this.view.messages.length);
+  }
+
+  /**
+   * 把"服务端最新一页"并进现有视图：**只追加没见过的 id，绝不整份替换**。
+   *
+   * 保留旧的 `hasOlder` / `oldestCursor`：那个游标对应"我们手上最老那条"，
+   * 换成最新页的游标会让下一次上拉把已有的消息再取一遍（看着像没反应）。
+   *
+   * @returns 真正追加的条数（0 = 屏上已经是最新）
+   */
+  private mergeFresh(fresh: DirectThreadView): number {
+    const view: DirectThreadView | null = this.view;
+    // 还没有首屏（理论上不会）：那就当首屏用。
+    if (view === null) {
+      this.view = fresh;
+      this.onView(this.view);
+      this.dropConfirmedPending();
+      return fresh.messages.length;
+    }
+    const known: Array<string> = [];
+    for (let index: number = 0; index < view.messages.length; index++) {
+      known.push(view.messages[index].id);
+    }
+    let added: number = 0;
+    const merged: Array<DirectMessage> = view.messages.slice(0);
+    for (let index: number = 0; index < fresh.messages.length; index++) {
+      const one: DirectMessage = fresh.messages[index];
+      if (known.indexOf(one.id) < 0) {
+        known.push(one.id);
+        merged.push(one);
+        added++;
+      }
+    }
+    if (added === 0) {
+      return 0;
+    }
+    merged.sort((a: DirectMessage, b: DirectMessage): number => a.tsMs - b.tsMs);
+    this.view = new DirectThreadView(view.id, view.title, view.withUsername, view.withAvatar,
+      view.withId, merged, view.hasOlder, view.oldestCursor, view.isGroup, view.withFullName);
+    this.onView(this.view);
+    // 服务端副本进来 → 本地那条乐观气泡在同一个 tick 里撤掉（见 applyIncoming 的说明）。
+    this.dropConfirmedPending();
+    return added;
+  }
+
 
   /**
    * 把**已经在服务端出现**的乐观气泡撤掉（见 send 里的说明）。
@@ -758,47 +842,21 @@ export class DirectThreadViewModel {
       if (fresh === null || this.view === null) {
         return;
       }
-      const known: Array<string> = [];
-      for (let index: number = 0; index < this.view.messages.length; index++) {
-        known.push(this.view.messages[index].id);
-      }
-      let added: number = 0;
-      for (let index: number = 0; index < fresh.messages.length; index++) {
-        if (known.indexOf(fresh.messages[index].id) < 0) {
-          added++;
-        }
-      }
       /*
-       * **只追加没见过的新消息，绝不整份替换。**
+       * **只追加没见过的新消息，绝不整份替换**（见 mergeFresh）。
        *
        * 这里原来是 `this.view = fresh`（觉得"新那份是权威的"）—— 但 REST 那条只回**最新一页**，
-       * 于是下拉刷新取回来的历史会被整段丢掉：用户继续上滑就看到"页面被重置、历史消息消失"。
-       * 同时**保留旧的 hasOlder / oldestCursor**：那个游标对应"我们手上最老那条"，
-       * 换成最新页的游标会让下一次下拉把已经有的消息再取一遍（下拉看着没反应）。
+       * 于是上拉取回来的历史会被整段丢掉：用户继续上滑就看到"页面被重置、历史消息消失"。
+       * 顺带也是那句"发新消息后页面会刷新导致动画又播放一遍"的同一个病根：
+       * 整表被换掉 → 每行的 `ForEach` 键都变 → 全屏气泡重建重播。
        */
+      const added: number = this.mergeFresh(fresh);
       if (added === 0) {
         return;
       }
-      const merged: Array<DirectMessage> = this.view.messages.slice(0);
-      for (let index: number = 0; index < fresh.messages.length; index++) {
-        const one: DirectMessage = fresh.messages[index];
-        if (known.indexOf(one.id) < 0) {
-          merged.push(one);
-        }
-      }
-      merged.sort((a: DirectMessage, b: DirectMessage): number => a.tsMs - b.tsMs);
-      this.view = new DirectThreadView(this.view.id, this.view.title, this.view.withUsername,
-        this.view.withAvatar, this.view.withId, merged, this.view.hasOlder,
-        this.view.oldestCursor, this.view.isGroup, this.view.withFullName);
       hilog.info(DOMAIN, TAG, 'poll: +%{public}d messages (total=%{public}d)',
-        added, merged.length);
-      this.onView(this.view);
-      /*
-       * 轮询也顺手做一次"确认撤销"：自己发出去的那条，服务端回来后由这里换成真身
-       * （见 dropConfirmedPending 与 send 里的说明）。放在 onNew 之前，
-       * 这样界面一次性拿到的是"气泡已撤、真身已到"的最终状态，不会多闪一帧。
-       */
-      this.dropConfirmedPending();
+        added, this.view === null ? -1 : this.view.messages.length);
+      // mergeFresh 里已经 onView + dropConfirmedPending（同帧撤乐观气泡）。
       if (this.onNew !== undefined) {
         this.onNew();
       }
