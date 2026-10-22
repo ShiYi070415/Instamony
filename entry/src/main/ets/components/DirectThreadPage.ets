@@ -98,6 +98,29 @@ const BUBBLE_SPRING_VELOCITY: number = 0.65;
  * 想要更"橡皮"就往下调（0.4 上下），想要更稳就往 0.8 调。
  */
 const BUBBLE_SPRING_DAMPING: number = 0.56;
+/**
+ * 级联入场时每条气泡之间的间隔（毫秒）。
+ *
+ * 需求："进入会话时动画要从最新消息一个个播放到最上面的消息，要迅速一点" —— 22ms 一档，
+ * 一整屏（10 条左右）也就 220ms 走完，眼睛跟得上、又不拖沓。
+ */
+const POP_STEP_MS: number = 22;
+/**
+ * 级联最多数这么多档（再往上一起播）。
+ *
+ * 会话可能有一百多条：一条条排下去要两三秒，那是"卡"不是"弹"。封顶 16 档 ≈ 350ms，
+ * 更老的虽然同时入场，但那时它们大多在视口之外，看不见。
+ */
+const POP_MAX_STEPS: number = 16;
+/**
+ * 没有任何延迟时也至少等这么久再"就位"。
+ *
+ * 隐式动画要求属性**真的变化过**：同一帧里把 `shown` 设成 true，首帧已经是终态，
+ * 就没有"从 0.86 弹到 1"这个过程了。等一帧（16ms）就有了。
+ */
+const POP_MIN_DELAY_MS: number = 16;
+/** 一批气泡播完之后，排名表再多留一会儿（毫秒）再清，见 noteMessages。 */
+const POP_RANK_KEEP_MS: number = 500;
 
 @Component
 export struct DirectThreadPage {
@@ -207,6 +230,8 @@ export struct DirectThreadPage {
     };
     this.vm.onPending = (items: Array<DirectMessage>): void => {
       this.pending = items;
+      // 发出去的那条乐观气泡也要吃到入场动画（见 noteMessages / popDelayFor）。
+      this.noteMessages();
     };
     this.vm.onStatus = (text: string): void => {
       this.status = text;
@@ -247,6 +272,10 @@ export struct DirectThreadPage {
     if (this.settleTimer >= 0) {
       clearTimeout(this.settleTimer);
       this.settleTimer = -1;
+    }
+    if (this.rankClearTimer >= 0) {
+      clearTimeout(this.rankClearTimer);
+      this.rankClearTimer = -1;
     }
   }
 
@@ -309,6 +338,80 @@ export struct DirectThreadPage {
     this.view = this.vm.viewNow();
     this.pending = this.vm.pendingNow();
     this.busy = this.vm.busyNow();
+    this.noteMessages();
+  }
+
+  /**
+   * **记下"这一批新出现的是哪几条"**，给气泡的级联入场动画算延迟（见 popDelayFor）。
+   *
+   * ## 两条规矩（需求："只有从进入视口的消息气泡才播放动画，刷新不会触发全局动画，
+   * 只有刷新出来的消息才有动画"）
+   *   1. **每条气泡一辈子只播一次**（`playedIds`）—— 刷新、列表回收、滚动回来再创建，
+   *      都不会让它重播；否则一次刷新就变成"满屏又弹一遍"。
+   *   2. 没播过的才算"这一批"：进会话时是整屏（从最新一条往回数）；翻历史时是刚插进来那一页；
+   *      滚到视口里才第一次被创建的那几条也算。延迟按"这一批里从最新往回数"的序号给，
+   *      所以永远是**最新的先弹、越老越后**。
+   *
+   * 排名表只活一小会儿（`POP_MAX_STEPS * POP_STEP_MS + 500ms`）：清掉之后，
+   * 后面滚动才创建的气泡拿不到延迟，立刻入场，不会越用越慢。
+   */
+  private noteMessages(): void {
+    const list: Array<DirectMessage> = this.allMessages();
+    const fresh: Set<string> = new Set<string>();
+    for (let index: number = 0; index < list.length; index++) {
+      const id: string = list[index].id;
+      if (id.length > 0 && !this.playedIds.has(id)) {
+        fresh.add(id);
+      }
+    }
+    if (fresh.size === 0) {
+      return;
+    }
+    /*
+     * 排名**从最新的往回数**（最新 = 0）：界面是老的在上、新的在下，所以延迟要从后往前发。
+     */
+    this.freshRank = new Map<string, number>();
+    let rank: number = 0;
+    for (let index: number = list.length - 1; index >= 0; index--) {
+      const id: string = list[index].id;
+      if (fresh.has(id) && !this.freshRank.has(id)) {
+        this.freshRank.set(id, rank);
+        rank++;
+      }
+    }
+    if (this.rankClearTimer >= 0) {
+      clearTimeout(this.rankClearTimer);
+    }
+    this.rankClearTimer = setTimeout((): void => {
+      this.rankClearTimer = -1;
+      this.freshRank = new Map<string, number>();
+    }, POP_MAX_STEPS * POP_STEP_MS + POP_RANK_KEEP_MS);
+  }
+
+  /** 这条气泡**开始播**了（由 PopInBubble 回调）：记下来，之后重建不再重播。 */
+  private markPlayed(id: string): void {
+    if (id.length > 0) {
+      this.playedIds.add(id);
+    }
+  }
+
+  /**
+   * 这一条气泡的入场延迟（毫秒）。
+   *
+   * @returns **-1 = 不播动画**（这条已经播过、或者不是这一批新出现的）。
+   *          其余是"这一批里从最新往回数"的档位 × 22ms，越新越先、越老越后，且整体封顶。
+   */
+  private popDelayFor(id: string): number {
+    if (id.length === 0 || this.playedIds.has(id)) {
+      return -1;
+    }
+    const rank: number | undefined = this.freshRank.get(id);
+    if (rank === undefined) {
+      // 不在这一批里（滚动到视口才第一次创建的那种）：立刻播，不排队。
+      return 0;
+    }
+    const steps: number = rank < POP_MAX_STEPS ? rank : POP_MAX_STEPS;
+    return steps * POP_STEP_MS;
   }
 
   private allMessages(): Array<DirectMessage> {
@@ -361,6 +464,17 @@ export struct DirectThreadPage {
   private settleTimer: number = -1;
   /** 上一次触顶刷新的时刻（毫秒；见 REACH_COOLDOWN_MS）。 */
   private lastReachAtMs: number = 0;
+  /**
+   * **已经播过入场动画**的消息 id（见 noteMessages）。
+   *
+   * 刷新、列表回收、滚回来再创建都不该重播 —— 这就是需求里"刷新不会触发全局动画、
+   * 只有刷新出来的消息才有动画"的那道闸。
+   */
+  private playedIds: Set<string> = new Set<string>();
+  /** 这一批新消息的入场排名（id → 从最新往回数的序号；见 popDelayFor）。 */
+  private freshRank: Map<string, number> = new Map<string, number>();
+  /** 清空排名表的定时器（见 noteMessages）。 */
+  private rankClearTimer: number = -1;
 
   /**
    * 取更老那批，并把视口**锚回加载前的那条消息**（需求："加载后页面位置保持不变"）。
@@ -593,32 +707,6 @@ export struct DirectThreadPage {
       || lower.indexOf('photo') >= 0 || lower.indexOf('video') >= 0;
   }
 
-  /**
-   * 气泡的进出场效果（见 ForEach 上的说明）：**从下面升上来 + 由小至大 + 渐显**，曲线是弹簧。
-   *
-   * 做成静态方法而不是内联在 build 里：`TransitionEffect` 每次重建都要新建一串对象，
-   * 而这里是**同一个效果**给所有气泡用，没必要每帧造。
-   *
-   * 退场只做淡出（120ms）—— 气泡被删掉（极少见：撤回/消息替换）时不该有弹跳。
-   */
-  private static bubbleIn(): TransitionEffect {
-    const appear: TransitionEffect = TransitionEffect.OPACITY
-      .combine(TransitionEffect.scale({
-        x: BUBBLE_POP_FROM,
-        y: BUBBLE_POP_FROM,
-        // 贴底边缩放：气泡像从自己的下沿"长出来"。
-        centerX: '50%',
-        centerY: '100%'
-      }))
-      .combine(TransitionEffect.translate({ y: BUBBLE_POP_RISE_VP }))
-      .animation({
-        curve: curves.springMotion(BUBBLE_SPRING_VELOCITY, BUBBLE_SPRING_DAMPING)
-      });
-    const disappear: TransitionEffect = TransitionEffect.OPACITY
-      .animation({ duration: 120, curve: Curve.EaseOut });
-    return TransitionEffect.asymmetric(appear, disappear);
-  }
-
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
       Column() {
@@ -659,23 +747,24 @@ export struct DirectThreadPage {
 
           ForEach(this.allMessages(), (message: DirectMessage, index: number): void => {
             ListItem() {
-              this.bubble(message, index)
+              /*
+               * **气泡入场**：外面这层只负责动画（见 PopInBubble），内容还是宿主画。
+               *
+               * `delayMs` 就是"级联"的节拍：进入会话时**从最新一条开始、往上一格格弹出来**（需求）；
+               * 新消息 / 自己刚发的那条 / 翻出来的历史同样走这一套（见 popDelayFor）。
+               */
+              PopInBubble({
+                delayMs: this.popDelayFor(message.id),
+                messageId: message.id,
+                onPlayed: (id: string): void => {
+                  this.markPlayed(id);
+                }
+              }) {
+                this.bubble(message, index)
+              }
             }
-            /*
-             * **气泡弹出动画**（需求："从下往上，由小至大渐显弹出，非线性弹性动画"）。
-             *
-             * 用 `transition` 而不是 `animateTo`：它只在**这条气泡被插入时**跑一次
-             * （实时推来的新消息、自己刚发出去的那条、翻出来的历史），页面首帧那一批不在此列
-             * —— 不会一进会话就满屏乱弹。
-             *
-             * 三个方向叠在一起，起点都是"下、小、透明"：
-             *   · `translate` y=+16 → 从下面升上来（数值是"起点相对终点的偏移"）；
-             *   · `scale` 0.86、缩放中心 `centerY: 100%` → **贴着气泡底边长起来**，不是从中心涨；
-             *   · `OPACITY` → 渐显。
-             * 曲线用 `curves.springMotion`（速度 + 阻尼）：阻尼 0.56 落定时带一点回弹过冲，
-             * 这才是"非线性弹性"的观感（`Curve.EaseOut` 只是纯减速、没有过冲）。
-             */
-            .transition(DirectThreadPage.bubbleIn())
+            // 退场只淡出：气泡被删掉（撤回/消息替换）时不该有弹跳。
+            .transition(TransitionEffect.OPACITY.animation({ duration: 120, curve: Curve.EaseOut }))
           }, (message: DirectMessage, index: number): string => `${index}-${message.id}`)
 
           if (this.allMessages().length === 0 && !this.busy) {
@@ -837,5 +926,89 @@ export struct DirectThreadPage {
     .width('100%')
     // 常规留白 + **输入法抬升**：键盘弹起时输入条抬到键盘上方（抬多少由自校正量出来）。
     .padding({ bottom: COMMENT_INPUT_BOTTOM_VP + this.keyboardVp })
+  }
+}
+
+/**
+ * **气泡的入场外壳**：只负责"弹出"动画，内容由宿主通过 `@BuilderParam` 传进来。
+ *
+ * ## 为什么要单独一个组件
+ * 动画状态必须是**每条气泡自己的** `@State`。写在宿主里的话，开关一变要靠宿主重绘 ——
+ * 而 `ForEach` 对"键没变"的条目**不会重跑 item builder**（本项目踩过这个坑，见
+ * pages/Index 里分段按钮的说明），气泡就永远停在初始状态。
+ * 独立组件各自持有 `shown`，翻一次自己就重绘自己，与宿主、与别的气泡互不牵连。
+ *
+ * ## 动画本身（需求："从下往上，由小至大渐显弹出，非线性弹性"）
+ *   · `translate` y:+16 → 从下方升上来；
+ *   · `scale` 0.86、缩放中心 `centerY: 100%` → **贴着底边长起来**（不是从中心涨开）；
+ *   · `opacity` 0 → 渐显；
+ *   · 曲线 `curves.springMotion(0.65, 0.56)`：阻尼比 < 1，落定时带一点过冲，这才是弹性。
+ *
+ * ## 级联
+ * `delayMs` 由宿主按"从最新一条往回数"的顺序给出（见 DirectThreadPage.popDelayFor），
+ * 于是进会话时整屏气泡是**从下往上一格格弹出来**的。
+ */
+@Component
+struct PopInBubble {
+  /**
+   * 入场延迟（毫秒）。
+   *
+   * **负数 = 不播动画、直接就位**：这条气泡已经播过（宿主记在 `playedIds` 里）——
+   * 刷新列表、列表回收后重新创建时都走这一支，于是"刷新不会让满屏再弹一遍"。
+   */
+  @Prop delayMs: number = 0;
+  /** 气泡 id（播完回调宿主记账用）。 */
+  @Prop messageId: string = '';
+  /** 气泡本体（宿主画：方向、头像、内容都在里面）。 */
+  @BuilderParam content: () => void;
+  /** 开始播时通知宿主（记进 playedIds，之后不再重播）。 */
+  onPlayed: (id: string) => void = (id: string): void => {
+  };
+  /** 已经"就位"了没有（false = 还停在起点：小、低、透明）。 */
+  @State private shown: boolean = false;
+  /** 延迟用的定时器句柄（组件销毁要清，否则会去写已卸载的状态）。 */
+  private delayTimer: number = -1;
+
+  aboutToAppear(): void {
+    if (this.delayMs < 0) {
+      // 已经播过：直接就位，不再动（需求："刷新不会触发全局动画"）。
+      this.shown = true;
+      return;
+    }
+    // 先跟宿主报账，免得这一条在延迟期间被重建又播一遍。
+    this.onPlayed(this.messageId);
+    /*
+     * **一定要至少等一帧**再把 `shown` 打开：同一帧里设成 true 的话，
+     * 首帧就已经是终态、压根没有"从 0.86 弹到 1"这个过程（隐式动画要求属性真的变化过）。
+     */
+    const delay: number = this.delayMs > 0 ? this.delayMs : POP_MIN_DELAY_MS;
+    this.delayTimer = setTimeout((): void => {
+      this.delayTimer = -1;
+      this.shown = true;
+    }, delay);
+  }
+
+  aboutToDisappear(): void {
+    if (this.delayTimer >= 0) {
+      clearTimeout(this.delayTimer);
+      this.delayTimer = -1;
+    }
+  }
+
+  build() {
+    Column() {
+      this.content()
+    }
+    .width('100%')
+    .opacity(this.shown ? 1 : 0)
+    .scale({
+      x: this.shown ? 1 : BUBBLE_POP_FROM,
+      y: this.shown ? 1 : BUBBLE_POP_FROM,
+      centerX: '50%',
+      centerY: '100%'
+    })
+    .translate({ y: this.shown ? 0 : BUBBLE_POP_RISE_VP })
+    // 隐式动画：上面三个属性一变就按这条弹簧补出来。
+    .animation({ curve: curves.springMotion(BUBBLE_SPRING_VELOCITY, BUBBLE_SPRING_DAMPING) })
   }
 }
