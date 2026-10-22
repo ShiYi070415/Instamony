@@ -133,7 +133,22 @@ const VISIBLE_RATIO: number = 0;
  * 当前焦点是竖版视频时，新的候选帖子必须**占据屏幕的 50% 以上**才能顶掉它 —— 不然就会出现
  * "刚往上滑一点点、长视频还没看完就被换掉"。当前焦点已经滚出可见集合时不设这道门槛。
  */
-const FOCUS_SWITCH_COVER: number = 0.5;
+/**
+ * 聚焦判据的四个比例（都以**可视区高度**为基准，这样和媒体高度无关、设备无关）。
+ *
+ * 见 `refreshFocus` 头部那段说明。四者是"进入 / 抢夺 / 两个滞回带"：
+ *   · 进入：没有焦点时，最佳候选的可见高度至少占可视区这么多（0.25 屏）；
+ *   · 抢夺：想顶掉当前焦点，自己至少得占这么多（0.50 屏）——防止"刚滑一点就换"；
+ *   · 主滞回：比当前多露出这么多才允许顶掉（0.10 屏）；
+ *   · 平局带：两者可见高度差在这个带内（0.10 屏）时，用"中心更近"或"完整度更高"裁决。
+ *
+ * 调参口诀：觉得"换得太勤"就把前三个调大；觉得"该换不换"就把主滞回调小。
+ */
+const FOCUS_MIN_ENTER_RATIO: number = 0.25;
+const FOCUS_MIN_SWITCH_RATIO: number = 0.50;
+const FOCUS_MARGIN_RATIO: number = 0.10;
+/** 平局时"中心更近"要领先多少（同样是可视区高的比例）。 */
+const FOCUS_MARGIN_CENTER_RATIO: number = 0.08;
 /**
  * 滚动中重算焦点的**最小间隔**（毫秒）：见 `refreshFocusThrottled`。
  *
@@ -141,19 +156,10 @@ const FOCUS_SWITCH_COVER: number = 0.5;
  * （`getRectangleById`），按帧跑纯属浪费；而人眼在长视频滚动这个尺度上分辨不出 120ms 的差。
  */
 const FOCUS_SCROLL_THROTTLE_MS: number = 120;
-/**
- * **成为焦点所需的最低占屏比例**。
- *
- * 真机日志抓到的病根：上一条帖子滚出视口、被 `syncFromRange` 从可见集合里删掉之后，候选集合
- * 可能只剩一条 —— 而循环里"第一个可测的候选"总是会被选中（`best < 0` 那条），哪怕它**占屏是
- * 0.000**（整条几乎都在屏幕外）：
- *
- *   focus DePDkCOP4nG -> DeOjiZdTP0S keys=1 focusKey=DeOjiZdTP0S video=y hold=-/- cover=0.000
- *
- * 焦点就这么让给了一条根本没在屏幕上的帖子，正在播的视频随之停掉。所以加一道下限：
- * 占屏不到这个比例的候选**没有资格**成为焦点；此时若还有原焦点就保持不动。
- */
-const FOCUS_MIN_COVER: number = 0.1;
+/** 滚动中"位移多少才算值得重算焦点"（vp）；不到这个量几何几乎没变，见 refreshFocusThrottled。 */
+const FOCUS_MIN_MOVE_VP: number = 8;
+/** 焦点重算的心跳（毫秒）：慢速微调攒不够位移时，也必须至少这么久收敛一次。 */
+const FOCUS_HEARTBEAT_MS: number = 320;
 /** 叠字行组件的 id 前缀（见 overlayRowId）。 */
 const OVERLAY_ROW_ID_PREFIX: string = 'overlayRow-';
 /** 滚动时叠字行位置的重测间隔（毫秒）。 */
@@ -331,6 +337,33 @@ class GeomEntry {
     this.bottom = bottom;
     this.at = at;
     this.source = source;
+  }
+}
+
+/**
+ * 聚焦判据的一个候选（见 refreshFocus 的三把尺子）。
+ *
+ * · `visPx`  ：这块媒体在可视区里露出的像素（主尺子 = 占了屏幕多大一块）
+ * · `full`   ：`visPx / min(媒体高, 可视区高)`，0..1（副尺子 = 被看全了没有）
+ * · `centPx` ：媒体中心离可视区中心的距离（第三把尺子，用来打破高度相同的平局）
+ */
+class FocusCand {
+  readonly index: number;
+  readonly key: string;
+  readonly visPx: number;
+  readonly full: number;
+  readonly centPx: number;
+  /** 这块媒体最多能被看到多少 px（= min(媒体高, 可视区高)），只用于日志/诊断。 */
+  readonly capPx: number;
+
+  constructor(index: number, key: string, visPx: number, full: number, centPx: number,
+              capPx: number) {
+    this.index = index;
+    this.key = key;
+    this.visPx = visPx;
+    this.full = full;
+    this.centPx = centPx;
+    this.capPx = capPx;
   }
 }
 
@@ -947,11 +980,12 @@ export struct FeedList {
    * 只在"焦点量不到"（卡片被回收/重建）的那一轮用得上：那时若它上一轮就已经看不见了，
    * 就不该再靠"它是当前焦点"继续占着焦点（否则屏幕外的视频会接着播）。
    */
-  private focusVisiblePx: number = -1;
   /** 最近量到的媒体几何（key → 几何 + 时间戳），见 mediaSpan / knownGeom。 */
   private geomCache: Map<string, GeomEntry> = new Map<string, GeomEntry>();
   /** 这一轮里有几条是靠几何记忆顶上的（诊断用：>0 说明卡片正在被回收）。 */
   private geomHits: number = 0;
+  /** 上一次重算焦点时的滚动位置（px）与时刻：位移/心跳闸门用（见 refreshFocusThrottled）。 */
+  private lastFocusY: number = 0;
   /**
    * 当前在屏幕上的帖子：key → 列表索引。
    *
@@ -1622,15 +1656,11 @@ export struct FeedList {
   /**
    * 重算「哪条帖子被聚焦」，再据此决定播不播。
    *
-   * 聚焦规则（任意时刻**只有一个**帖子被聚焦）：
-   *   1) 兜底就是「比较卡片中心点和屏幕中心点」，取卡片中心离屏幕中心最近的那条。
-   *   2) **优先**：竖版（9:16 这类，宽高比 <= TALL_MEDIA_MAX_ASPECT）的**视频**帖子，
-   *      如果**整条帖子完全显示在屏幕里**（卡片上下都落在列表可视区内），它先赢得焦点。
-   *      竖视频很高，一屏常常塞不下整条；能把整条完整看完的那条，比半截的更该播。
-   *      满足这个条件的有多条时，同样取离屏幕中心最近的。
-   *   3) 位置一个都量不到时（首帧还没布局）退回「索引最小者胜」，也就是列表最上面那条。
+   * **一套公式，不分媒体类型**（详细推导见下面「焦点判据」那段）：
+   * 每个候选量三把尺子 —— 可见像素 `visPx`（主）、完整度 `full`（副）、离中心距离 `centPx`（第三），
+   * 然后按「进入 / 释放 / 抢占 / 保持」四种情形做决定，默认**保持**（滞回，不抖）。
    *
-   * 最后：**只有被聚焦的帖子是视频才播**。焦点在图片帖上时一律不播。
+   * 任意时刻**只有一个**帖子被聚焦；而且**只有被聚焦的帖子是视频才播**（图片帖一律不播）。
    */
   private refreshFocus(): void {
     // 先筛掉过期条目：下标越界、或该位置已经不是同一条（列表换过内容）。
@@ -1655,167 +1685,159 @@ export struct FeedList {
         this.posts.length, this.visiblePosts.size);
     }
 
+    /*
+     * ================= 焦点判据：一套公式，不分媒体类型 =================
+     *
+     * 每轮只回答一个问题：**哪条媒体的可见面积最大**。三把尺子，按优先级：
+     *   ① `visPx`  —— 这块媒体在可视区里露出多少 px（"占了屏幕多大一块"）；
+     *   ② `full`   —— `visPx / min(媒体高, 可视区高)`，这条媒体被看全了没有（0..1）；
+     *   ③ `centPx` —— 媒体中心离可视区中心多远（px）。
+     *
+     * 为什么不再用"可见 px / 屏幕高"（旧判据）：那个分母对**短媒体**天生不公平 ——
+     * 一张 0.3 屏高的短视频哪怕完整显示也永远到不了 0.5，于是往回滑时焦点回不去
+     * （旧代码只好加了一条"只挡往下、不挡往上"的方向特例）。换成三把尺子后，
+     * "完整显示的那条更该播"由 ② 自动表达，方向特例就不再需要。
+     *
+     * 决策只有四种，且**默认保持**（滞回，避免边界抖动）：
+     *   进入  没有焦点          → 最佳候选可见 >= 可视区高 * 0.25
+     *   释放  当前焦点可见 == 0 → 交给最佳候选（真的滚出屏幕了）
+     *   抢占  最佳可见 >= 当前 + 可视区高 * 0.10，且自身 >= 0.50
+     *         或 两者可见接近（差 < 0.10）且（中心更近 0.08 或 完整度高 0.25）
+     *   其余  → 保持当前焦点
+     */
     const viewport: CardSpan = this.viewportSpan();
+    const Hv: number = viewport.measurable
+      ? Math.max(viewport.bottom - viewport.top, 1)
+      : Math.max(this.screenBottom, 1);
+    const vTop: number = viewport.measurable ? viewport.top : 0;
+    const vBottom: number = viewport.measurable ? viewport.bottom : Hv;
+    const vCenter: number = (vTop + vBottom) / 2;
+    const minEnter: number = Hv * FOCUS_MIN_ENTER_RATIO;
+    const minSwitch: number = Hv * FOCUS_MIN_SWITCH_RATIO;
+    const marginPx: number = Hv * FOCUS_MARGIN_RATIO;
+    const marginCenter: number = Hv * FOCUS_MARGIN_CENTER_RATIO;
+    this.geomHits = 0;
+    const cands: Array<FocusCand> = [];
     /*
-     * **焦点 = 在屏幕里占得最多的那条**（需求："按照帖子在屏幕中占据的比例更多来判断聚焦在哪个帖子"）。
+     * 候选集合 = 可见集合 ∪ {当前焦点}。
      *
-     * 原来是"竖版视频 + 整条完全显示在屏幕里"优先 —— 那条判据的副作用就是用户报的：
-     * 媒体一碰到标题栏（不再"完全显示"）就立刻失去焦点、视频停掉，而且此时屏幕上明明还有
-     * 大半条帖子在看。
-     * 现在按**可见高度占屏幕高度的比例**取最大者；比例几乎一样时，才用"竖版视频且完整可见"
-     * 那条老偏好和"离屏幕中心更近"来分胜负。
+     * 为什么要把当前焦点并进来：滚动中 `syncFromRange` 会把它从 `visiblePosts` 里删掉
+     * （可见区间已经不含它），但它的卡片可能还在屏幕上、只是"这一轮没进候选"。不并进来的话
+     * 它就成了 `curCand === null`，容易被误判成"滚出屏幕"而清掉焦点（真机日志里就是
+     * `enter-reject(0<626)`，正在播的视频凭空停掉）。
      */
-    const screenHeight: number = this.screenBottom > 0 ? this.screenBottom : 1;
-    /*
-     * 当前焦点这一轮**量不到**的情况要单独记一笔。
-     *
-     * 真机现象（用户报的）：**上一条帖子滚出 List 视口、卡片被回收之后**，视频就停了、焦点也
-     * 换到了下一条。原因是那条卡片的 `cardSpan` 一时量不到（正在被回收/重建），焦点循环里
-     * `!span.measurable` 直接把它跳过 —— 于是"当前焦点"根本没参与比较，最优候选自然变成了
-     * 别人。所以这里：只要它**还在可见集合里**，就别因为"量不到"把焦点让出去。
-     */
-    const holdIndex: number = this.focusIndexOf(this.focusKey);
-    const holdInSet: boolean = holdIndex >= 0 && indexes.indexOf(holdIndex) >= 0;
-    let holdUnmeasured: boolean = false;
-    /** 当前焦点这一轮量到的**可见高度**（px，>0 = 还在屏幕上）；量不到保持 -1。 */
-    let holdVisiblePx: number = -1;
-    let best: number = -1;
-    let bestCover: number = -1;
-    let bestDistance: number = -1;
-    let bestPreferred: boolean = false;
-    let bestIsCurrent: boolean = false;
-    let measuredAny: boolean = false;
-    for (let i: number = 0; i < keys.length; i++) {
-      const index: number = indexes[i];
-      const span: CardSpan = this.cardSpan(index);
+    const scanIndexes: Array<number> = [];
+    for (let i: number = 0; i < indexes.length; i++) {
+      scanIndexes.push(indexes[i]);
+    }
+    const curIndex: number = this.focusIndexOf(this.focusKey);
+    if (curIndex >= 0 && scanIndexes.indexOf(curIndex) < 0) {
+      scanIndexes.push(curIndex);
+    }
+    for (let i: number = 0; i < scanIndexes.length; i++) {
+      const index: number = scanIndexes[i];
+      // **媒体矩形**（不是卡片）：卡片还含表头/正文/动作区，见 mediaSpan。
+      const span: CardSpan = this.mediaSpan(index);
       if (!span.measurable) {
-        if (index === holdIndex) {
-          holdUnmeasured = true;
-        }
         continue;
       }
-      measuredAny = true;
-      const distance: number = Math.abs(span.center() - this.screenCenterY);
-      // 可见那一段（帖子与可视区相交的部分）占屏幕高度的比例。
-      const top: number = Math.max(span.top, viewport.measurable ? viewport.top : span.top);
-      const bottom: number = Math.min(span.bottom,
-        viewport.measurable ? viewport.bottom : span.bottom);
-      const visible: number = bottom > top ? (bottom - top) : 0;
-      if (index === holdIndex) {
-        // 当前焦点这一轮量到了：记下它到底还有多少在屏幕上（见下面"滚出屏幕就别占着焦点"）。
-        holdVisiblePx = visible;
+      const top: number = Math.max(span.top, vTop);
+      const bottom: number = Math.min(span.bottom, vBottom);
+      const visPx: number = bottom > top ? (bottom - top) : 0;
+      const height: number = Math.max(span.bottom - span.top, 1);
+      const capPx: number = Math.min(height, Hv);
+      const full: number = visPx / capPx;
+      const centPx: number = Math.abs(span.center() - vCenter);
+      const key: string = (index >= 0 && index < this.posts.length)
+        ? FeedMapper.keyOf(this.posts[index]) : '';
+      cands.push(new FocusCand(index, key, visPx, full, centPx, capPx));
+    }
+    // 排序：可见面积降序 → 完整度降序 → 离中心升序（字典序的三把尺子）。
+    cands.sort((a: FocusCand, b: FocusCand): number => {
+      if (Math.abs(a.visPx - b.visPx) > 0.5) {
+        return b.visPx - a.visPx;
       }
-      const cover: number = visible / screenHeight;
-      const preferred: boolean = this.isTallVideoFullyVisible(this.posts[index], span, viewport);
-      /*
-       * **正在聚焦的那条优先保住**（这条是"碰到标题栏就换焦点"的真正解药）。
-       *
-       * 长视频卡片常常**比可视区还高**：相邻两条各自都盖满可视区时，两条的"占屏比例"几乎完全
-       * 相等 —— 原来这种平局交给"竖版视频且完整可见"去裁决，而当前这条一往上碰到标题栏就不再
-       * "完整可见"、下一条还没碰到，于是下一条赢，焦点就跳走了（用户报的正是这个）。
-       * 现在平局时先看"是不是当前正在聚焦的那条"，是就保持不动；两条都不是当前焦点时，
-       * 才轮到旧偏好（完整可见的竖版视频）和离屏幕中心的距离。
-       */
-      const isCurrent: boolean = this.focusKey.length > 0
-        && FeedMapper.keyOf(this.posts[index]) === this.focusKey;
-      const betterCover: boolean = cover > bestCover + 0.0001;
-      const sameCover: boolean = best >= 0 && Math.abs(cover - bestCover) <= 0.0001;
-      const betterTie: boolean = sameCover
-        && ((preferred && !bestPreferred)
-          || (preferred === bestPreferred && (bestDistance < 0 || distance < bestDistance)));
-      if (best < 0 || betterCover || betterTie) {
-        best = index;
-        bestCover = cover;
-        bestDistance = distance;
-        bestPreferred = preferred;
-        bestIsCurrent = isCurrent;
+      if (Math.abs(a.full - b.full) > 0.01) {
+        return b.full - a.full;
+      }
+      return a.centPx - b.centPx;
+    });
+    const curCandIndex: number = curIndex;
+    let curCand: FocusCand | null = null;
+    for (let i: number = 0; i < cands.length; i++) {
+      if (cands[i].index === curCandIndex) {
+        curCand = cands[i];
+        break;
       }
     }
-
-    /*
-     * **占屏不到下限的候选不算数**（见 FOCUS_MIN_COVER 里那段真机日志）。
-     * 这时如果本来就有一条焦点，就保持不动 —— 别把正在播的视频停掉。
-     */
-    let focusIndex: number = (best >= 0 && bestCover >= FOCUS_MIN_COVER) ? best : -1;
-    if (best >= 0 && bestCover < FOCUS_MIN_COVER) {
-      // 这条日志是"下限闸门真的生效了"的凭据（日志里能看到它，就说明跑的是这一版）。
-      hilog.info(DOMAIN, TAG, 'focus reject best=%{public}d cover=%{public}s keep=%{public}s',
-        best, bestCover.toFixed(3), this.focusKey.length > 0 ? this.focusKey : '(none)');
-    }
-    if (focusIndex < 0 && this.focusKey.length > 0) {
-      const keep: number = this.focusIndexOf(this.focusKey);
-      if (keep >= 0) {
-        focusIndex = keep;
+    const candCount: number = cands.length;
+    const best: FocusCand | null = candCount > 0 ? cands[0] : null;
+    const bestVis: number = best === null ? 0 : best.visPx;
+    let focusIndex: number = curIndex;
+    let focusWhy: string = 'keep';
+    if (best === null) {
+      // 一条都量不到（首帧还没布局）：保持原焦点，别把正在播的停掉。
+      focusWhy = 'nogeom';
+    } else if (curIndex < 0) {
+      // 本来就没有焦点（或那条已经不在列表里）：够门槛就进入。
+      if (best.visPx >= minEnter) {
+        focusIndex = best.index;
+        focusWhy = `enter(${Math.round(best.visPx)})`;
       } else {
-        hilog.info(DOMAIN, TAG, 'focus keep lost key=%{public}s posts=%{public}d',
-          this.focusKey, this.posts.length);
+        focusIndex = -1;
+        focusWhy = `enter-reject(${Math.round(best.visPx)}<${Math.round(minEnter)})`;
+      }
+    } else if (curCand === null) {
+      /*
+       * 当前焦点这一轮**量不到**（卡片正在被回收/重建，几何记忆也过期了）：
+       * 这时候我们并不知道它还在不在屏幕上，所以**不主动收回焦点** ——
+       * 只有当别的候选已经明确占住半屏以上（minSwitch）才让位。
+       */
+      if (best.index !== curIndex && best.visPx >= minSwitch) {
+        focusIndex = best.index;
+        focusWhy = `unmeasured->${Math.round(best.visPx)}`;
+      } else {
+        focusIndex = curIndex;
+        focusWhy = 'unmeasured-keep';
+      }
+    } else if (curCand.visPx <= 0) {
+      // 当前焦点**真的**滚出屏幕了（几何记忆也没能把它留住）：立刻让位。
+      if (best.index !== curCand.index && best.visPx >= minEnter) {
+        focusIndex = best.index;
+        focusWhy = 'offscreen->next';
+      } else {
+        focusIndex = curCand.index;
+        focusWhy = 'offscreen-keep';
+      }
+    } else if (best.index !== curCand.index) {
+      const dominant: boolean = best.visPx >= curCand.visPx + marginPx && best.visPx >= minSwitch;
+      const near: boolean = Math.abs(best.visPx - curCand.visPx) < marginPx;
+      const tieBetter: boolean = near && best.visPx >= minSwitch
+        && (best.centPx <= curCand.centPx - marginCenter || best.full >= curCand.full + 0.25);
+      if (dominant) {
+        focusIndex = best.index;
+        focusWhy = `dominant(${Math.round(best.visPx)}>${Math.round(curCand.visPx)}+${Math.round(marginPx)})`;
+      } else if (tieBetter) {
+        focusIndex = best.index;
+        focusWhy = `tie(${Math.round(best.visPx)}/${Math.round(curCand.visPx)})`;
       }
     }
-    /*
-     * **长视频的粘滞，只挡"往下一条"**（需求："长视频超出屏幕 50% 才聚焦下一条帖子"）。
-     *
-     * 关键是**区分方向**：只有候选在当前焦点**下面**（= 用户继续往下翻）时才要求它占到半个屏幕；
-     * 候选在上面（= 用户往回滑）时不该有这道门槛。
-     *
-     * 真机踩到的反例：第 1 条是**短**视频、第 2 条是长视频 —— 从第 2 条往回滑，第 1 条已经
-     * 完整显示在屏幕上了，可它的占屏比例天生就小（短视频 ≈ 0.3），永远到不了 0.5，
-     * 于是焦点被这道门槛一直挡着回不去。往回滑时就该"谁占得多谁说了算"。
-     */
-    if (focusIndex !== -1 && this.focusKey.length > 0) {
-      const currentIndex: number = this.focusIndexOf(this.focusKey);
-      if (currentIndex >= 0 && focusIndex !== currentIndex) {
-        const currentSpan: CardSpan = this.cardSpan(currentIndex);
-        const currentPost: MediaPost = this.posts[currentIndex];
-        const tallVideo: boolean = this.isInlineVideo(currentPost)
-          && currentPost.aspectRatio() <= TALL_MEDIA_MAX_ASPECT;
-        const forward: boolean = best > currentIndex;
-        /*
-         * **焦点已经滚出屏幕时，不再"粘"着它**（用户报的："连续两条长比例视频上滑，
-         * 第一条消失在屏幕后依然聚焦播放"）。
-         *
-         * 这道粘滞/保持的规则本来是为了防"刚往上滑一点点就被换掉"，前提是**焦点还在屏幕上**。
-         * 一旦它已经整条离开可视区，继续占着焦点就只剩坏处：那条视频在屏幕外接着播。
-         * 判据用**量出来的可见高度**（holdVisiblePx，px）：== 0 就是"一点都看不见了"。
-         * 量不到（-1）时不适用这条 —— 那种情况交给下面 holdUnmeasured 那条按老规则处理。
-         */
-        const offScreen: boolean = holdVisiblePx === 0;
-        if (tallVideo && forward && bestCover < FOCUS_SWITCH_COVER && !offScreen) {
-          focusIndex = currentIndex;
-        }
-      }
-    }
-    /*
-     * 当前焦点这一轮量不到、但**还在可见集合里**：只要新的最优候选没到"占屏过半"的门槛，
-     * 就继续保持原焦点（见上面 holdUnmeasured 的说明）。这一条专治"上一条滚出视口后视频就停"。
-     */
-    if (holdUnmeasured && holdInSet && bestCover < FOCUS_SWITCH_COVER
-      && this.focusVisiblePx !== 0) {
-      focusIndex = holdIndex;
-    }
-    /*
-     * 记住这一轮"当前焦点还看得见多少"（见上面 offScreen 那条）：
-     * 下一轮它万一量不到（卡片正在被回收/重建），这条记录就是"最后已知它在不在屏幕上"，
-     * 用来决定还要不要继续保住它 —— == 0（上一轮就已经看不见）时不再保。
-     */
-    if (holdVisiblePx >= 0) {
-      this.focusVisiblePx = holdVisiblePx;
-    }
-    if (!measuredAny) {
-      let smallest: number = -1;
-      for (let i: number = 0; i < keys.length; i++) {
-        if (smallest < 0 || indexes[i] < smallest) {
-          smallest = indexes[i];
-        }
-      }
-      focusIndex = smallest;
-    }
-
     const nextFocusKey: string = (focusIndex >= 0 && focusIndex < this.posts.length)
       ? FeedMapper.keyOf(this.posts[focusIndex])
       : '';
+    /*
+     * **焦点换人就打一行**（不管那条是不是视频）。
+     *
+     * 以前只打"播哪条变了"，于是"焦点在两条图片帖之间乱跳"这种情况日志里完全看不见 ——
+     * 排查几何判据时最需要的恰恰是它。带上三把尺子的原始数字：`vis/cap`（可见/容量）、
+     * `full`（完整度）、`cands`（这一轮候选数）、`geomHits`（靠几何记忆顶上的条数）。
+     */
     if (nextFocusKey !== this.focusKey) {
-      // 焦点换人：上一条的"最后可见高度"作废（见 focusVisiblePx 的说明）。
-      this.focusVisiblePx = -1;
+      hilog.info(DOMAIN, TAG, 'focusKey %{public}s -> %{public}s why=%{public}s vis=%{public}d/%{public}d full=%{public}s cands=%{public}d geomHits=%{public}d',
+        this.focusKey.length > 0 ? this.focusKey : '(none)',
+        nextFocusKey.length > 0 ? nextFocusKey : '(none)', focusWhy,
+        Math.round(bestVis), best === null ? 0 : Math.round(best.capPx),
+        best === null ? '-' : best.full.toFixed(2), candCount, this.geomHits);
     }
     this.focusKey = nextFocusKey;
 
@@ -1843,13 +1865,14 @@ export struct FeedList {
       const previous: string = this.activeKey;
       this.activeKey = nextKey;
       // 焦点换人（播哪条变了）是关键事件：出问题时靠它和 VideoSurface 的日志对时间线。
-      // 带上看得到的诊断信息：可见集合里有几条、焦点 key 是什么、这条是不是视频 ——
-      // 只打 "focus -> (none)" 是查不出原因的（曾经就是这样，视频播着播着停了，日志里只有一行 none）。
+      // `why` 会写清是哪条规则让它换的（dominant / tie / offscreen / enter）；
+      // `vis` 是最佳候选的可见像素，`cands` 是这一轮量到的候选数，
+      // `geomHits` 是靠几何记忆顶上的条数（>0 说明有卡片正在被回收/重建）。
       hilog.info(DOMAIN, TAG,
-        'focus %{public}s -> %{public}s keys=%{public}d focusKey=%{public}s video=%{public}s hold=%{public}s/%{public}s cover=%{public}s',
+        'focus %{public}s -> %{public}s why=%{public}s vis=%{public}d cands=%{public}d geomHits=%{public}d video=%{public}s focusKey=%{public}s',
         previous.length > 0 ? previous : '(none)', nextKey.length > 0 ? nextKey : '(none)',
-        keys.length, this.focusKey.length > 0 ? this.focusKey : '(none)', focusIsVideo ? 'y' : 'n',
-        holdUnmeasured ? 'unmeasured' : '-', holdInSet ? 'in-set' : '-', bestCover.toFixed(3));
+        focusWhy, Math.round(bestVis), candCount, this.geomHits, focusIsVideo ? 'y' : 'n',
+        this.focusKey.length > 0 ? this.focusKey : '(none)');
     }
     // 预加载下一条视频：不管焦点有没有变都要跟着更新（滚动时焦点这条没变，但下一条可能变了）。
     // （原先按网络类型开关过，实测会拖慢 feeds 的观感 —— 播放器的预下载缓冲已经收到 2 秒，
@@ -1879,26 +1902,6 @@ export struct FeedList {
       }
     }
     return '';
-  }
-
-  /**
-   * 是不是「竖版视频、而且整条帖子完全显示在屏幕里」。
-   *
-   * 用原始宽高比（aspectRatio）判断竖版，不是 mediaAspect —— 后者是被高度上限修正过的
-   * 显示比例，拿它判断会把本来很长的竖视频误判成不竖。
-   */
-  private isTallVideoFullyVisible(post: MediaPost, span: CardSpan, viewport: CardSpan): boolean {
-    if (!this.isInlineVideo(post)) {
-      return false;
-    }
-    if (post.aspectRatio() > TALL_MEDIA_MAX_ASPECT) {
-      return false;
-    }
-    if (!viewport.measurable) {
-      return false;
-    }
-    // 整条卡片上下都在可视区里，才算「完全显示在屏幕」。
-    return span.top >= viewport.top && span.bottom <= viewport.bottom;
   }
 
   /** 焦点 key 对应的下标；不在列表里（或 key 为空）时返回 -1。 */
@@ -2106,10 +2109,22 @@ export struct FeedList {
    */
   private refreshFocusThrottled(): void {
     const now: number = Date.now();
-    if (now - this.lastFocusMs < FOCUS_SCROLL_THROTTLE_MS) {
+    const elapsed: number = now - this.lastFocusMs;
+    if (elapsed < FOCUS_SCROLL_THROTTLE_MS) {
+      return;
+    }
+    /*
+     * **动了才重算**：一次重算要给可见的每条量一次媒体矩形（3~6 次 `getRectangleById`）。
+     * 位移不到 `FOCUS_MIN_MOVE_VP` 时几何几乎没变，结论也不会变。
+     * 但要留一个"心跳"（`FOCUS_HEARTBEAT_MS`）—— 慢速微调时位移攒不够，也不能一直不收敛。
+     */
+    const y: number = this.listScroller.currentOffset().yOffset;
+    const moved: number = Math.abs(y - this.lastFocusY);
+    if (moved < FOCUS_MIN_MOVE_VP && elapsed < FOCUS_HEARTBEAT_MS) {
       return;
     }
     this.lastFocusMs = now;
+    this.lastFocusY = y;
     this.refreshFocus();
   }
 
@@ -3432,6 +3447,15 @@ export struct FeedList {
           .onReachEnd((): void => {
             // 列表短于一屏时根本不会滚动，onScrollIndex 不一定触发，这里兜一次。
             this.askMore();
+          })
+          /*
+           * **滑停后权威重算一次焦点**（见 refreshFocus）。
+           *
+           * 滚动中的重算是节流 + 位移闸门的（可能比手指晚一拍），而"停下来那一刻"的位置
+           * 才是用户要看的 —— 这里无条件重算，保证最终状态不依赖上次采样的时机。
+           */
+          .onScrollStop((): void => {
+            this.refreshFocus();
           })
         }
         .width('100%')
