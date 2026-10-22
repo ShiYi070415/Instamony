@@ -205,12 +205,51 @@ export class DirectViewModel {
       PushCenter.noteUnread('direct', total);
       return;
     }
-    // 先记账（内部只在"变多"时才会 push 一条），再补一条"带内容"的通知把标题正文覆盖掉。
-    const before: number = PushCenter.lastUnread('direct');
-    PushCenter.noteUnread('direct', total);
-    if (PushCenter.lastUnread('direct') > before) {
-      PushCenter.notifyDirect(newest.title, newest.text, total - before);
+    /*
+     * 先记账拿到"这一轮涨了几条"，再发**一条**带内容的通知。
+     *
+     * 标题用 `username`（`@xxx` 那个，需求）：`title` 是显示名/群名，会重名、也占行宽。
+     * 正文用最新那条消息的文本；会话 id 一并带上，点通知以后能直达这条会话。
+     * （以前是 noteUnread 先发一条"你有 N 条新私信"、再被这条覆盖，等于响两次，现已合并成一次。）
+     */
+    const added: number = PushCenter.noteUnread('direct', total);
+    if (added > 0) {
+      const sender: string = newest.username.length > 0 ? newest.username : newest.title;
+      PushCenter.notifyDirect(sender, DirectViewModel.previewOf(newest), added, newest.id);
     }
+  }
+
+  /**
+   * 通知正文用的"消息内容"。
+   *
+   * 纯文本消息直接给文字；**没有文字**的（图片/视频/语音/赞）给一个方括号占位 ——
+   * 否则通知栏就是一条空正文，用户根本不知道对方发了什么（需求："内容需要显示消息内容"）。
+   */
+  private static previewOf(thread: DirectThread): string {
+    const text: string = thread.text.trim();
+    if (text.length > 0) {
+      return text;
+    }
+    const kind: string = thread.kind.toLowerCase();
+    if (kind.indexOf('raven') >= 0) {
+      return '[闪照]';
+    }
+    if (kind.indexOf('voice') >= 0 || kind.indexOf('audio') >= 0) {
+      return '[语音]';
+    }
+    if (kind.indexOf('clip') >= 0 || kind.indexOf('video') >= 0) {
+      return '[视频]';
+    }
+    if (kind.indexOf('media') >= 0 || kind.indexOf('photo') >= 0) {
+      return '[图片]';
+    }
+    if (kind.indexOf('like') >= 0 || kind.indexOf('reaction') >= 0) {
+      return '[回应了你的消息]';
+    }
+    if (kind.indexOf('placeholder') >= 0 || kind.indexOf('action_log') >= 0) {
+      return '[一条新消息]';
+    }
+    return '新消息';
   }
 
   /** 拉一次（refresh=true 时丢掉游标从头拉）。 */

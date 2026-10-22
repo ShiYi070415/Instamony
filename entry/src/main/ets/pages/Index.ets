@@ -3904,8 +3904,11 @@ struct Index {
         /*
          * **通知页也接上本地通知**（需求："把消息通知接入 push kit，包括通知页和私信"）：
          * 条数比上次多就弹一条系统通知（见 core/PushCenter；远端推送要 AGC 后台发）。
+         * 计数与"弹不弹"分工：`noteUnread` 只记账并返回涨了几条，发通知由 `notifyFeed` 负责
+         * （私信那边同理，但它是带"发信人 + 内容"的一条，见 DirectViewModel.noteNewUnread）。
          */
-        PushCenter.noteUnread('feed', fresh.length);
+        const feedAdded: number = PushCenter.noteUnread('feed', fresh.length);
+        PushCenter.notifyFeed(feedAdded);
       } else if (this.notifications.length === 0) {
         this.notificationsState = 'failed';
       }
