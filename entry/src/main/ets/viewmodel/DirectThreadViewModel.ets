@@ -174,6 +174,45 @@ export class DirectThreadViewModel {
     return this.view;
   }
 
+  /** 现在开着的是哪条会话（实时推送要靠它判断"这条消息是不是给当前这页的"）。 */
+  threadIdNow(): string {
+    return this.threadId;
+  }
+
+  /**
+   * **实时推来的一条新消息直接插进当前这一屏**（见 core/DirectRealtime）。
+   *
+   * 这是"零延迟"那一半：不请求、不缓存，推过来的就是最终结果。三条规矩：
+   *   · 首屏还没读出来（`view` 为空）时不插 —— 要么 `load()` 那发会把它带回来，
+   *     要么这一屏还是空的，硬插一条会变成"整个会话只有一条消息"的假象；
+   *   · 同 id 已经在屏上就忽略（补丁会重发，轮询也会把同一条带回来）；
+   *   · 插进去之后按时间重排一次并 `onView` 通知界面（最新一条变了下层会自动贴底，
+   *     见 DirectThreadPage 的 onView）。
+   *
+   * @returns 是否真的插进去了（调用方据此决定还要不要再刷新列表）。
+   */
+  applyIncoming(message: DirectMessage): boolean {
+    const view: DirectThreadView | null = this.view;
+    if (view === null || message.id.length === 0) {
+      return false;
+    }
+    for (let index: number = 0; index < view.messages.length; index++) {
+      if (view.messages[index].id === message.id) {
+        return false;
+      }
+    }
+    const messages: Array<DirectMessage> = view.messages.concat([message]);
+    messages.sort((a: DirectMessage, b: DirectMessage): number => a.tsMs - b.tsMs);
+    this.view = new DirectThreadView(view.id, view.title, view.withUsername, view.withAvatar,
+      view.withId, messages, view.hasOlder, view.oldestCursor, view.isGroup, view.withFullName);
+    // 刚有推送到达：别让轮询紧接着再发一发同样的请求（见 pollOnce 的 8 秒闸）。
+    this.lastLoadAtMs = Date.now();
+    this.onView(this.view);
+    hilog.info(DOMAIN, TAG, 'live append id=%{public}d msgs=%{public}d mine=%{public}s',
+      message.id.length, messages.length, `${message.mine}`);
+    return true;
+  }
+
   pendingNow(): Array<DirectMessage> {
     return this.pending;
   }

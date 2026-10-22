@@ -943,6 +943,33 @@ export class DirectMapper {
   }
 
   /**
+   * **一条 `items[]` 条目 → `DirectMessage`**（实时补丁用；REST 那两处内联映射保持原样）。
+   *
+   * 移植自 `threadFromJson` 里那段循环，差别只有两点：
+   *   · `item_id` 拿不到就直接放弃（实时补丁里这条 id 可能只出现在 path 里，调用方会先补进去）；
+   *   · `timestamp` 缺省时用"现在"而不是 0 —— 推过来的新消息没有时间戳时，排到最下面才对。
+   *
+   * 返回 null 表示"这条不该画成气泡"（系统条目：已读回执、加人、时间戳…都没有文字也没有画面）。
+   */
+  static messageFromItem(item: Record<string, Object>, ownId: string): DirectMessage | null {
+    const id: string = JsonRead.strOf(item, 'item_id');
+    if (id.length === 0) {
+      return null;
+    }
+    const kind: string = JsonRead.strOf(item, 'item_type');
+    const text: string = JsonRead.strOf(item, 'text');
+    const mediaUrl: string = DirectMapper.mediaUrlOf(item);
+    if (text.length === 0 && mediaUrl.length === 0) {
+      return null;
+    }
+    const userId: string = JsonRead.strOf(item, 'user_id');
+    const micros: number = JsonRead.numOf(item, 'timestamp');
+    return new DirectMessage(id, userId, ownId.length > 0 && userId === ownId,
+      micros > 0 ? Math.round(micros / 1000) : Date.now(), kind, text, mediaUrl,
+      DirectMapper.hasVideoMedia(item));
+  }
+
+  /**
    * 一个用户节点的头像（REST 那条路的几种形状依次试；都没有给空串）。
    *
    * 顺序：`profile_pic_url` → `hd_profile_pic_url_info.url` → `profile_pic_url_info.url`

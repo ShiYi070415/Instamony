@@ -145,6 +145,8 @@ import { MqttProbe } from '../core/mobileapi/MqttProbe';
 import { NetProbe } from '../core/mobileapi/NetProbe';
 // 实时通道（iris / MQTToT）：原生 TLS 直连，见 core/mobileapi/MobileRealtime 的文件头。
 import { IrisState, MobileRealtime, RealtimeEvent } from '../core/mobileapi/MobileRealtime';
+// 实时私信补丁 → 「某条会话多了条消息」（见 onRealtimeMessage）。
+import { DirectRealtime, RealtimeMessage } from '../core/DirectRealtime';
 import { MobileDirect } from '../core/mobileapi/MobileDirect';
 import { MainThreadWatchdog } from '../core/MainThreadWatchdog';
 import { PROFILE_TAB_POSTS, PROFILE_TAB_REELS, PROFILE_TAB_TAGGED, ProfileViewModel } from '../viewmodel/ProfileViewModel';
@@ -2644,6 +2646,19 @@ struct Index {
     MobileRealtime.onEvent((event: RealtimeEvent): void => {
       this.onRealtimeEvent(event);
     });
+    /*
+     * **实时私信的直接落地**（见 core/DirectRealtime）：补丁解析成"某条会话多了条消息"，
+     * 当前开着的那条会话直接插入，其余情况才去刷新收件箱。这样"新消息"是**推过来的**，
+     * 不需要任何本地缓存，也不需要先知道列表里有什么。
+     */
+    DirectRealtime.onMessage((incoming: RealtimeMessage): void => {
+      this.onRealtimeMessage(incoming);
+    });
+    DirectRealtime.onThreadChange((): void => {
+      this.scheduleDirectInboxRefresh();
+    });
+    // 解析自检（只打一行日志，不派发）：真实补丁要等别人发消息才有，先验证形状解析没问题。
+    DirectRealtime.selfTest();
     const up: boolean = await MobileRealtime.start();
     hilog.info(DOMAIN, TAG, 'realtime up=%{public}s %{public}s', `${up}`, MobileRealtime.status());
     if (!up) {
@@ -2671,15 +2686,11 @@ struct Index {
   }
 
   /**
-   * 实时事件派发（只处理两类，其余全部只记日志）。
+   * 实时事件派发：回执（135）自己处理，**私信补丁（146/149/88）交给 core/DirectRealtime**。
    *
-   *   · topic 135 = `iris_subscribe` 的回执：`succeeded:false` 时多半是
-   *     "Resnapshot for app upgrade"（app 版本和快照对不上）→ 重拉收件箱再订阅一次；
-   *   · topic 146 / 149 = 私信/收件箱的增量补丁 → 让收件箱**静默刷新**一次
-   *     （3 秒节流，避免一波补丁连发时打爆接口）。
-   *
-   * 补丁本身（`/direct_v2/threads/<id>/items/<id>` 那些 path）暂时不逐条解析 ——
-   * 收件箱静默刷新拿到的就是同样一份结果，而且不用自己拼服务端状态。
+   * 以前这里对补丁只做一件事：让收件箱静默刷新一次 —— 那等于"知道有新消息了，再去下一趟网络"。
+   * 现在补丁会被解析成真正的消息：当前开着的会话**直接插一条**（零延迟），
+   * 其余情况（别的会话、已读/改名这类非消息补丁）才落到 `scheduleDirectInboxRefresh`。
    */
   private onRealtimeEvent(event: RealtimeEvent): void {
     hilog.info(DOMAIN, TAG, 'realtime event topic=%{public}s len=%{public}d',
@@ -2695,26 +2706,47 @@ struct Index {
       }
       return;
     }
-    if (event.topic === '146' || event.topic === '149' || event.topic === '88') {
-      /*
-       * **正在看某条会话时不抢那一发的名额**（需求："加快进入会话获取消息的速度"）。
-       *
-       * 收件箱刷新是 30KB 起步的一发，而全局闸门只允许 2 发同时在飞 —— 用户在私信列表里
-       * 点开会话的那一刻，如果恰好被一次推送触发的收件箱刷新占着名额，会话那一发就得排队
-       * （真机实测：点开瞬间 send 比 recv 晚 1 秒多）。会话页自己有轮询，收件箱晚几十秒
-       * 刷新完全没影响。
-       */
-      if (this.topPage === DIRECT_THREAD_PAGE) {
+    DirectRealtime.handle(event);
+  }
+
+  /**
+   * 一条**实时推来的私信消息**。
+   *
+   * 当前正开着这条会话 → 直接插进那一屏（`applyIncoming`，不请求、不缓存）；
+   * 否则 → 让收件箱刷新（列表里那条会话的预览/未读要跟着变）。
+   */
+  private onRealtimeMessage(incoming: RealtimeMessage): void {
+    const onThisThread: boolean = this.topPage === DIRECT_THREAD_PAGE
+      && this.directThreadVm.threadIdNow() === incoming.threadId;
+    if (onThisThread) {
+      const applied: boolean = this.directThreadVm.applyIncoming(incoming.message);
+      hilog.info(DOMAIN, TAG, 'realtime message on open thread applied=%{public}s %{public}s',
+        `${applied}`, DirectRealtime.describe());
+      if (applied) {
         return;
       }
-      const now: number = Date.now();
-      if (now - this.realtimeInboxAt < 3000) {
-        return;
-      }
-      this.realtimeInboxAt = now;
-      this.directVm.refreshQuietly().catch((): void => {
-      });
     }
+    this.scheduleDirectInboxRefresh();
+  }
+
+  /**
+   * 收件箱静默刷新（3 秒节流）。
+   *
+   * **正在看某条会话时不抢那一发的名额**（需求："加快进入会话获取消息的速度"）：
+   * 收件箱刷新是 30KB 起步的一发，而全局闸门只允许 2 发同时在飞 —— 用户在会话里时，
+   * 那一发会把"再点开别的会话"顶到后面去。会话页自己有轮询，列表晚几十秒刷新没影响。
+   */
+  private scheduleDirectInboxRefresh(): void {
+    if (this.topPage === DIRECT_THREAD_PAGE) {
+      return;
+    }
+    const now: number = Date.now();
+    if (now - this.realtimeInboxAt < 3000) {
+      return;
+    }
+    this.realtimeInboxAt = now;
+    this.directVm.refreshQuietly().catch((): void => {
+    });
   }
 
   /**
