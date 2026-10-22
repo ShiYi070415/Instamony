@@ -195,10 +195,12 @@ export class NativeEngage {
   }
 
   /**
-   * 转发 / 取消转发。
+   * 转发 / 取消转发 —— 走移动端私有接口（`media/create_note/v2/` + `notes/delete_note/`，
+   * 见 MobileEngage.setReposted 的说明：IG 的 repost 在服务端就是一条带媒体的 note）。
    *
-   * 这条动作（CreateMediaRepostMutation + note_id）在移动端私有接口里**没有对应端点**，
-   * 所以如实返回"不支持"，由调用方走网页驱动那条路（见 pages/Index.repostPost）。
+   * 以前这里回 `mobile-unsupported`、由调用方退回"让隐藏网页点它自己的按钮"那条老路：
+   * 网页一按需挂载，点转发就会把整页 IG 拉起来（还得现读 lsd / fb_dtsg 那套指纹）。
+   * 现在两条腿都在移动端，**不再需要网页**；失败如实回 detail，由调用方回滚界面并提示。
    */
   static async setReposted(mediaId: string, repost: boolean,
                            shortcode: string = ''): Promise<EngageResult> {
@@ -206,8 +208,19 @@ export class NativeEngage {
     if (id.length === 0) {
       return new EngageResult(false, repost, 'no-media-id');
     }
-    hilog.info(DOMAIN, TAG, 'repost not available on mobile api id=%{public}d', id.length);
-    return new EngageResult(false, repost, 'mobile-unsupported');
+    let ok: boolean = false;
+    try {
+      ok = await MobileEngage.setReposted(mediaId.trim().length > 0 ? mediaId : id, shortcode, repost);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'repost threw: %{public}s', (error as Error).message);
+      ok = false;
+    }
+    hilog.info(DOMAIN, TAG, 'repost mobile id=%{public}d on=%{public}s ok=%{public}s detail=%{public}s',
+      id.length, `${repost}`, ok ? 'y' : 'n', MobileEngage.lastRepostDetail());
+    if (ok) {
+      return new EngageResult(true, repost, 'mobile');
+    }
+    return new EngageResult(false, repost, `mobile-failed:${MobileEngage.lastRepostDetail()}`);
   }
 
   /**

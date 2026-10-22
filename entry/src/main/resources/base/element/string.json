@@ -138,7 +138,7 @@
     },
     {
       "name": "repost_unsupported",
-      "value": "网页版没有转发入口，已为你打开帖子页。"
+      "value": "这条内容不支持转发（IG 未对该账号开放）。"
     },
     {
       "name": "repost_done",

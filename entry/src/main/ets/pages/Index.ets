@@ -50,7 +50,6 @@ import {
   likePostScript,  OWN_PROFILE_SCRIPT,
   PAGE_STATE_SCRIPT,
   PROBE_WATCH_ON_SCRIPT,
-  repostPostScript,
   saveOnPostPageScript,
   TIMELINE_PROBE_SCRIPT
 } from '../bridge/WebScripts';
@@ -100,7 +99,7 @@ import { PlatformCap } from '../core/PlatformCap';
 import { SettingsPanel } from '../components/SettingsPanel';
 import { AppTab } from '../model/AppTab';
 import { DeepLink, DeepLinkIntent, DeepLinkRoute } from '../core/DeepLink';
-import { CommentItem, CommentsPayload, LikePayload, RepostPayload, SavePayload } from '../model/Comment';
+import { CommentItem, CommentsPayload, LikePayload, SavePayload } from '../model/Comment';
 import { FeedMapper } from '../model/FeedMapper';
 import { FeedStatus } from '../model/FeedStatus';
 import { MediaPost } from '../model/MediaPost';
@@ -4531,15 +4530,15 @@ struct Index {
   /**
    * 转发 / 取消转发。
    *
-   * 两条路（和点赞完全同一套）：
-   *   ① **HTTP 直发**（core/NativeEngage）：模板回放那条 GraphQL 变更。取消转发要用
-   *      "转发那次响应里的 note_id"（见 NativeEngage/EngageState），拿不到（比如 App 重启过）
-   *      就不猜，直接走 ②。
-   *   ② 网页驱动（老路径）：让隐藏网页去点它自己的转发入口，点完顺手把模板抓下来（自举）。
+   * **只走移动端私有接口**（`media/create_note/v2/` / `notes/delete_note/`，见
+   * core/mobileapi/MobileEngage.setReposted）—— IG 的 repost 在服务端就是一条带媒体的 note。
+   *
+   * 以前这里失败会退回"网页驱动"：把隐藏网页导航到帖子页、点它自己的转发按钮、再读回状态。
+   * 那条路要求网页常驻/现挂，用户看到的就是"点转发跳网页"（而且还得现读 lsd / fb_dtsg
+   * 那套指纹）。现在**不再跳网页**：失败就回滚图标 + 如实提示一句。
    *
    * 本地状态是本机自己记的（接口里没有这个字段，见 FeedViewModel.repostedKeys）：
-   * 点下去先乐观翻转，图标立刻给反馈，再用真实结果校正；网页的文案压根不翻
-   * （读不出方向）时保留这次乐观结果 —— 绝不拿一个猜出来的方向把用户刚做的操作弹回去。
+   * 点下去先乐观翻转，图标立刻给反馈，成功就留着，失败再滚回去。
    */
   private async repostPost(post: MediaPost): Promise<void> {
     const current: MediaPost = this.currentPost(post);
@@ -4552,7 +4551,7 @@ struct Index {
     // 先翻转，点下去立刻有反馈（对勾出现 / 消失）；下面再用真实结果校正。
     this.setRepostedEverywhere(key, !before);
     try {
-      // ① HTTP 直发（短码一并带上，理由同 likePost）。
+      // 短码一并带上：个人页/收藏那几段可能只有短码，没有它换不出真 pk（同 likePost）。
       const native: EngageResult = await NativeEngage.setReposted(current.id, !before, current.shortcode);
       if (native.ok) {
         this.setRepostedEverywhere(key, !before);
@@ -4560,45 +4559,10 @@ struct Index {
           ? $r('app.string.repost_done') : $r('app.string.unrepost_done'));
         return;
       }
-      hilog.info(DOMAIN, TAG, 'native repost failed (%{public}s) → web', native.detail);
-      let state: string = 'error';
-      let labelBefore: string = '-';
-      let labelAfter: string = '-';
-      try {
-        const raw: string = await this.bridge.runBridge(repostPostScript(current.shortcode), LIKE_TIMEOUT_MS);
-        const payload: RepostPayload = JSON.parse(raw) as RepostPayload;
-        state = payload.state;
-        labelBefore = payload.label ?? '-';
-        labelAfter = payload.labelAfter ?? '-';
-        hilog.info(DOMAIN, TAG,
-          'repost state=%{public}s via=%{public}s label=%{public}s->%{public}s cnt=%{public}d cands=%{public}s toast=%{public}s seen=%{public}s',
-          state, payload.via ?? '-', labelBefore, labelAfter, payload.cnt ?? -1,
-          payload.cands ?? '-', payload.toast ?? '-', payload.seen ?? '-');
-      } catch (error) {
-        state = 'error';
-      }
-      // 读到了网页翻转后的真状态：按它落定，并说明这一步做了什么。
-      if (state === 'reposted' || state === 'unreposted') {
-        this.setRepostedEverywhere(key, state === 'reposted');
-        this.setLocalStatus(state === 'reposted'
-          ? $r('app.string.repost_done')
-          : $r('app.string.unrepost_done'));
-        return;
-      }
-      // 点到了、但网页的文案没翻（有的版本两个方向共用一套文案，DOM 里读不出方向）：
-      // 保留上面那次乐观翻转的结果，别用猜出来的方向把用户刚做的操作弹回去。
-      if (state === 'assumed') {
-        hilog.info(DOMAIN, TAG, 'repost assumed label=%{public}s->%{public}s keep=%{public}s',
-          labelBefore, labelAfter, before ? 'off' : 'on');
-        this.setLocalStatus(before ? $r('app.string.unrepost_done') : $r('app.string.repost_done'));
-        return;
-      }
-      // 没转发入口：回滚乐观状态、不装作转发过了，退回打开帖子页并把原因说清楚。
+      hilog.info(DOMAIN, TAG, 'native repost failed (%{public}s)', native.detail);
+      // 没成功：把图标滚回去，并把原因说清楚（不再打开网页兜底）。
       this.setRepostedEverywhere(key, before);
-      this.setLocalStatus(state === 'not-found'
-        ? $r('app.string.engage_not_rendered')
-        : $r('app.string.repost_unsupported'));
-      this.openPost(current);
+      this.setLocalStatus($r('app.string.repost_unsupported'));
     } finally {
       this.repostingKeys.delete(key);
     }
