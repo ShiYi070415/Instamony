@@ -206,18 +206,27 @@ export class NativeMediaInfo {
     return NativeMediaInfo.detail;
   }
 
-  /** 纯数字 id？（这条端点只认数字 pk，短码 / `profile-<code>` 占位串都不行） */
-  private static numeric(raw: string): boolean {
-    if (raw.length === 0) {
-      return false;
+  /**
+   * 可用的数字 pk（用不了给空串）：这条端点只认数字，短码 / `profile-<code>` 占位串都不行。
+   *
+   * 但 `"<媒体pk>_<作者pk>"` 这种**规范形状要认**：移动端接口给的媒体 `id` 就是它
+   * （真机日志里 `id not numeric, skipped: …_6752`），取 `_` 前面那段正好是端点要的 pk
+   * （instagrapi 的 `media_pk` 也是 `id.split('_')[0]`）。
+   */
+  private static pkOf(raw: string): string {
+    const text: string = (raw ?? '').trim();
+    if (text.length === 0) {
+      return '';
     }
-    for (let index: number = 0; index < raw.length; index++) {
-      const ch: string = raw.charAt(index);
+    const cut: number = text.indexOf('_');
+    const id: string = cut > 0 ? text.substring(0, cut) : text;
+    for (let index: number = 0; index < id.length; index++) {
+      const ch: string = id.charAt(index);
       if (ch < '0' || ch > '9') {
-        return false;
+        return '';
       }
     }
-    return true;
+    return id;
   }
 
   /**
@@ -245,8 +254,8 @@ export class NativeMediaInfo {
    * 原因见 MediaDetail 的说明。
    */
   static async detailFor(mediaId: string, shortcode: string = ''): Promise<MediaDetail | null> {
-    let id: string = mediaId.trim();
-    if (!NativeMediaInfo.numeric(id) && shortcode.trim().length > 0) {
+    let id: string = NativeMediaInfo.pkOf(mediaId);
+    if (id.length === 0 && shortcode.trim().length > 0) {
       // 短码 → 真 pk（个人页 / 视频分页那种"只有短码"的条目走这里）。
       id = await MobileEngage.mediaPkFor(shortcode);
     }

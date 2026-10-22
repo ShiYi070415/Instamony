@@ -239,16 +239,29 @@ export class MobileEngage {
     return ok;
   }
 
-  /** 只接受纯数字 id（IG 的 pk；带指数/前缀的合成 id 一律拒绝，见 NativeSearch 的浮点坑）。 */
+  /**
+   * 只接受 IG 的数字 pk；`<媒体pk>_<作者pk>` 这种**规范形状取 `_` 前面那段**。
+   *
+   * 为什么必须认后一种：移动端接口给的媒体 `id` 就是这个形状 —— 真机日志里
+   * `id not numeric, skipped: 3999089584633758181_6752`，而 REST 的
+   * `media/{pk}/like/` 要的正是 `_` 前面那 19 位（instagrapi 的 `media_pk`
+   * 也是同一个取法：`id.split('_')[0]`）。以前一律拒绝，于是信息流里的点赞会静默回退到
+   * "让隐藏网页去点"那条老路，还先白打一发 `oembed/`（换 id 也换不出来：
+   * 那条端点对部分帖子根本不回 `media_id`）。
+   *
+   * 其余非数字（`profile-<code>` 这类占位串、短码）照旧拒绝，交给 shortcode 那条路去换。
+   */
   private static numericId(raw: string): string {
-    const id: string = (raw ?? '').trim();
-    if (id.length === 0) {
+    const text: string = (raw ?? '').trim();
+    if (text.length === 0) {
       return '';
     }
+    const cut: number = text.indexOf('_');
+    const id: string = cut > 0 ? text.substring(0, cut) : text;
     for (let index: number = 0; index < id.length; index++) {
       const ch: string = id.charAt(index);
       if (ch < '0' || ch > '9') {
-        hilog.warn(DOMAIN, TAG, 'id not numeric, skipped: %{public}s', id.substring(0, 24));
+        hilog.warn(DOMAIN, TAG, 'id not numeric, skipped: %{public}s', text.substring(0, 24));
         return '';
       }
     }
