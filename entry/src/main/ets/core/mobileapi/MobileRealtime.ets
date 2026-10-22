@@ -39,6 +39,12 @@ const PING_EVERY_MS: number = 12000;
 const PING_TIMEOUT_MS: number = 8000;
 /** TLS 连接超时。 */
 const CONNECT_TIMEOUT_MS: number = 10000;
+/**
+ * "解压+派发"超过这个毫秒数就当"占住主线程了"，打 warn（见 decodeAndDispatch）。
+ *
+ * 一帧 16ms；这条工作已经挪到独立的一拍里，超过 8ms 就该查是不是补丁特别大。
+ */
+const DECODE_SLOW_MS: number = 8;
 /** 重连退避（毫秒，按次数取，取完停在最后一个）。 */
 const BACKOFF_MS: Array<number> = [2000, 5000, 15000, 60000];
 
@@ -315,17 +321,48 @@ export class MobileRealtime {
       }
     }
     const raw: Uint8Array = info.body === null ? new Uint8Array(0) : info.body;
-    const inflated: Uint8Array = Inflate.tryDecompress(raw);
-    const text: string = textOf(inflated);
-    MobileRealtime.eventCount++;
-    hilog.info(DOMAIN, TAG, 'event #%{public}d topic=%{public}s raw=%{public}d size=%{public}d text=%{public}s',
-      MobileRealtime.eventCount, info.topic, raw.length, inflated.length,
-      text.substring(0, 160));
-    const event: RealtimeEvent = new RealtimeEvent(info.topic, text);
-    for (let index: number = 0; index < MobileRealtime.handlers.length; index++) {
-      try {
-        MobileRealtime.handlers[index](event);
-      } catch (error) {
+    const topic: string = info.topic;
+    /*
+     * **解压 + 派发挪到下一拍**（需求："不要占据主线程"）。
+     *
+     * 收包回调是 socket 的读线程切回主线程的那一下，这时候做 zlib 解压（纯 TS 实现，见
+     * core/mobileapi/Inflate）和 JSON 补丁解析，会把这一帧的其它渲染/手势往后推。
+     * 挪到下一拍只是晚一个 tick（16ms 级），换来的是**绝不占住收包这一帧**。
+     * 耗时也记一行（`inflate+dispatch ms=`）：真变重了日志里立刻能看到。
+     */
+    setTimeout((): void => {
+      MobileRealtime.decodeAndDispatch(topic, raw);
+    }, 0);
+  }
+
+  /** 解压一条 PUBLISH 的载荷并派发给订阅者（见 onPacket 里为什么单独一步）。 */
+  private static decodeAndDispatch(topic: string, raw: Uint8Array): void {
+    const started: number = Date.now();
+    try {
+      const inflated: Uint8Array = Inflate.tryDecompress(raw);
+      const text: string = textOf(inflated);
+      MobileRealtime.eventCount++;
+      hilog.info(DOMAIN, TAG, 'event #%{public}d topic=%{public}s raw=%{public}d size=%{public}d text=%{public}s',
+        MobileRealtime.eventCount, topic, raw.length, inflated.length,
+        text.substring(0, 160));
+      const event: RealtimeEvent = new RealtimeEvent(topic, text);
+      for (let index: number = 0; index < MobileRealtime.handlers.length; index++) {
+        try {
+          MobileRealtime.handlers[index](event);
+        } catch (error) {
+        }
+      }
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'decode failed topic=%{public}s raw=%{public}d: %{public}s',
+        topic, raw.length, (error as Error).message ?? '-');
+    } finally {
+      const cost: number = Date.now() - started;
+      if (cost >= DECODE_SLOW_MS) {
+        hilog.warn(DOMAIN, TAG, 'inflate+dispatch slow ms=%{public}d raw=%{public}d',
+          cost, raw.length);
+      } else {
+        hilog.debug(DOMAIN, TAG, 'inflate+dispatch ms=%{public}d raw=%{public}d',
+          cost, raw.length);
       }
     }
   }

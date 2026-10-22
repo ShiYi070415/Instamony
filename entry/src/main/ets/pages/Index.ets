@@ -227,6 +227,14 @@ const NOTIFY_ROUTE_MAX_TRIES: number = 15;
  */
 const NOTIFY_ROUTE_WAIT_TRIES: number = 4;
 /**
+ * 实时通道的启动时刻（毫秒，从 `Index.aboutToAppear` 起算）。
+ *
+ * 以前只有一个 12000（等预热跑完）。现在冷启动就试：首帧过去就够，
+ * 因为连接/收包全是异步的（见 startRealtime 的说明）。
+ * 第二次是补发：极早期 `MobileSession` 可能还没恢复出可用的 cookie。
+ */
+const REALTIME_START_DELAYS_MS: Array<number> = [900, 3000];
+/**
  * 帖子页每轮最多补几条视频地址（见 Index.loadPostPageVideos）。
  *
  * 每条都要发一次 `/api/v1/media/{id}/info/`（几百毫秒），又不能并发猛打（会被 IG 限流），
@@ -2083,22 +2091,21 @@ struct Index {
         PushCenter.requestPermissionNow(abilityContext);
       }, 4000);
       /*
-       * **实时私信通道（原生 MQTToT）**。
+       * **实时私信通道（原生 MQTToT）**：冷启动就连，不再等 12 秒。
        *
-       * 这里原来挂的是 `MobileMqttWs`（把 WebSocket 塞进隐藏 WebView 里跑）—— 那是
-       * `TLSSocket` 收不到数据时的权宜之计。2026-10-23 真机定位到根因并修好了：
-       * **`on('message')` 必须在 `connect()` 之后注册**，之前注册的事件全被丢掉
-       * （连公共 broker 都 recv=0）。现在原生直连就能握手、订阅、收包，见
-       * core/mobileapi/MobileRealtime。
+       * 历史：这里原来挂的是 `MobileMqttWs`（把 WebSocket 塞进隐藏 WebView 里跑）——
+       * 那是 `TLSSocket` 收不到数据时的权宜之计。2026-10-23 真机定位到根因并修好了：
+       * **`on('message')` 必须在 `connect()` 之后注册**，之前注册的事件全被丢掉。
        *
-       * 等 12 秒是为了让启动那波预热（feed / reels / 快拍）先过去，不和它们抢带宽；
-       * 连接本身是一条常驻 TLS，心跳 12 秒一次（约 2 字节/次）。
+       * 为什么可以很早就连（需求："冷启动时就连接实时通道，但不要占据主线程"）：
+       *   · 连接/收包全是异步回调（`TLSSocket.connect/send` 返回 Promise），帧内同步活
+       *     只有拼一个几百字节的 CONNECT 包；
+       *   · 它是一条**独立的 TLS**，不和启动那波 HTTP 预热（feed / reels / 快拍）抢名额；
+       *   · 收包后的解压/派发已经挪到下一拍执行（见 MobileRealtime.onPacket），
+       *     并且会打一行 `inflate+dispatch ms=…` —— 真占住主线程的话日志里会直接看到。
+       * 心跳 12 秒一次（约 2 字节/次）。
        */
-      setTimeout((): void => {
-        this.startRealtime().catch((error: Error): void => {
-          hilog.warn(DOMAIN, TAG, 'realtime start rejected: %{public}s', error.message);
-        });
-      }, 12000);
+      this.scheduleRealtimeStart();
       /*
        * **「你的快拍」头像先用落盘快照画出来**（用户报的"你的快拍头像加载很慢"）。
        *
@@ -2653,6 +2660,8 @@ struct Index {
 
   /** 实时通道是否已经起来过（重入保护）。 */
   private realtimeStarted: boolean = false;
+  /** 事件处理器挂过了没有（重试时不能重复挂，否则一条消息会派发多次）。 */
+  private realtimeHooked: boolean = false;
   /** 上一次因为实时事件刷新收件箱的时刻（毫秒；节流用）。 */
   private realtimeInboxAt: number = 0;
   /** 订阅被要求"重新快照"之后的重试次数（防循环）。 */
@@ -2671,29 +2680,67 @@ struct Index {
     if (this.realtimeStarted) {
       return;
     }
-    this.realtimeStarted = true;
-    MobileRealtime.onEvent((event: RealtimeEvent): void => {
-      this.onRealtimeEvent(event);
-    });
     /*
-     * **实时私信的直接落地**（见 core/DirectRealtime）：补丁解析成"某条会话多了条消息"，
-     * 当前开着的那条会话直接插入，其余情况才去刷新收件箱。这样"新消息"是**推过来的**，
-     * 不需要任何本地缓存，也不需要先知道列表里有什么。
+     * **事件处理器只挂一次**：`MobileRealtime.onEvent` 是往数组里 push，
+     * 重试时再挂一遍就会一条消息派发多次（通知会重复弹）。
      */
-    DirectRealtime.onMessage((incoming: RealtimeMessage): void => {
-      this.onRealtimeMessage(incoming);
-    });
-    DirectRealtime.onThreadChange((): void => {
-      this.scheduleDirectInboxRefresh();
-    });
-    // 解析自检（只打一行日志，不派发）：真实补丁要等别人发消息才有，先验证形状解析没问题。
-    DirectRealtime.selfTest();
+    if (!this.realtimeHooked) {
+      this.realtimeHooked = true;
+      MobileRealtime.onEvent((event: RealtimeEvent): void => {
+        this.onRealtimeEvent(event);
+      });
+      /*
+       * **实时私信的直接落地**（见 core/DirectRealtime）：补丁解析成"某条会话多了条消息"，
+       * 当前开着的那条会话直接插入，其余情况才去刷新收件箱。这样"新消息"是**推过来的**，
+       * 不需要任何本地缓存，也不需要先知道列表里有什么。
+       */
+      DirectRealtime.onMessage((incoming: RealtimeMessage): void => {
+        this.onRealtimeMessage(incoming);
+      });
+      DirectRealtime.onThreadChange((): void => {
+        this.scheduleDirectInboxRefresh();
+      });
+      // 解析自检（只打一行日志，不派发）：真实补丁要等别人发消息才有，先验证形状解析没问题。
+      DirectRealtime.selfTest();
+    }
+    /*
+     * **连接本身是异步的**（`TLSSocket.connect` / `send` 全返回 Promise），
+     * 调用它不会占住主线程；帧内唯一的同步活是拼 CONNECT 包（几百字节），可以忽略。
+     * 所以冷启动就可以连，不用等 12 秒 —— 见 scheduleRealtimeStart。
+     */
     const up: boolean = await MobileRealtime.start();
     hilog.info(DOMAIN, TAG, 'realtime up=%{public}s %{public}s', `${up}`, MobileRealtime.status());
     if (!up) {
+      // 没连上：`MobileRealtime` 自己会退避重连；这里再把按钮留给 scheduleRealtimeStart 补一发。
       return;
     }
+    this.realtimeStarted = true;
     await this.syncRealtimeSubscription();
+  }
+
+  /**
+   * 冷启动就把实时通道连上（**不占主线程**）。
+   *
+   * 以前是"等 12 秒再连"：那时候要避让启动那波预热（feed / reels / 快拍）。
+   * 但实时通道是**独立的一条 TLS**，和那些 HTTP 请求不抢名额，唯一共享的是主线程，
+   * 而连接/收包全是异步回调 —— 早连只会让"第一条私信"更早推过来。
+   *
+   * 两次尝试的原因：极早期 `MobileSession` 可能还没恢复出可用的 cookie，
+   * 那时 `start()` 会返回 false；2.5 秒后再补一发，之后交给它自己的退避重连。
+   */
+  private scheduleRealtimeStart(): void {
+    const delays: Array<number> = REALTIME_START_DELAYS_MS;
+    for (let index: number = 0; index < delays.length; index++) {
+      setTimeout((): void => {
+        if (this.realtimeStarted) {
+          return;
+        }
+        hilog.info(DOMAIN, TAG, 'realtime start attempt delay=%{public}dms', delays[index]);
+        this.startRealtime().catch((error: Error): void => {
+          hilog.warn(DOMAIN, TAG, 'realtime start rejected: %{public}s', error.message);
+        });
+      }, delays[index]);
+    }
   }
 
   /**
@@ -4692,14 +4739,24 @@ struct Index {
       return;
     }
     const inDirectTab: boolean = this.selectedTab === AppTab.Direct;
-    // 已经到了（会话页在栈顶、**而且底栏就停在私信页**）：清掉，收工。
-    if (this.topPage === DIRECT_THREAD_PAGE
-      && this.directThreadVm.threadIdNow() === threadId) {
+    /*
+     * **"已经在里面了吗"不能只看 `topPage`。**
+     *
+     * `topPage` 由 NavDestination 的 onShown/onHidden 维护，而**切底栏、被别的页面盖住时
+     * 它不一定跟着变**。真机日志里就撞到过：用户其实停在私信**列表**上，`topPage` 还是
+     * `directThread`、底栏也正好在私信页 → 我们判定"已经在会话里了"，于是**什么都不做**
+     * —— 这就是用户报的"每次第一条通知点击都会没反应"。
+     *
+     * 现在直接用 Nav 栈的真实栈顶（`getAllPathName`）来判，栈顶不是会话页就一定重新进。
+     */
+    const top: string = this.topDestinationName();
+    const onThreadPage: boolean = top === DIRECT_THREAD_PAGE
+      && this.directThreadVm.threadIdNow() === threadId;
+    if (onThreadPage) {
       if (!inDirectTab) {
         /*
-         * 真机上见过这一幕：会话页还在 Nav 栈上（`topPage` 也是它），但用户/初始化
-         * 把底栏切回了首页 —— 这时"我在会话里"是假象，屏幕上是首页。
-         * 先把底栏切回私信页，下一拍复查时才算真的进去了。
+         * 会话页在栈顶，但底栏被切回了首页（那就看不到它）：先把底栏切回去，
+         * 下一拍复查时才算真的进去了。
          */
         this.selectTab(AppTab.Direct);
       } else {
@@ -4714,8 +4771,8 @@ struct Index {
     } else {
       this.notifyRouteRunning = true;
       try {
-        if (this.topPage === DIRECT_THREAD_PAGE) {
-          // 人已经在别的会话页上：先退出去，下一拍再 push（不叠一层同样的页面）。
+        if (top === DIRECT_THREAD_PAGE) {
+          // 栈顶是**另一条**会话：先退出去，下一拍再 push（不叠一层同样的页面）。
           this.navStack.pop();
         } else {
           this.selectTab(AppTab.Direct);
@@ -4755,6 +4812,21 @@ struct Index {
     setTimeout((): void => {
       this.consumeNotifyRoute();
     }, NOTIFY_ROUTE_RETRY_MS);
+  }
+
+  /**
+   * Nav 栈**真实**的栈顶目标名（拿不到给空串）。
+   *
+   * 为什么要它：`topPage` 是 NavDestination 的 onShown/onHidden 维护的"我记得谁在最上面"，
+   * 切底栏、被浮层盖住这些情况下**不一定同步**。判断"当前是不是停在某个页面"要用栈本身。
+   */
+  private topDestinationName(): string {
+    try {
+      const names: Array<string> = this.navStack.getAllPathName();
+      return names.length > 0 ? names[names.length - 1] : '';
+    } catch (error) {
+      return '';
+    }
   }
 
   /**
