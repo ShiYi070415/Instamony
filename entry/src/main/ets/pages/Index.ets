@@ -2264,6 +2264,12 @@ struct Index {
         || blocked === 'feedback_required' || blocked === 'two_factor_required') {
         hilog.warn(DOMAIN, TAG, 'feed auto-retry stopped: %{public}s', blocked);
         this.feedRetryLeft = 0;
+        /*
+         * 顺便把原因说给用户听：以前这里只是"停手"，界面停在"加载失败"，用户不知道该干什么。
+         * 这两种状态都只能人去处理（重新登录 / 把 IG 的提示点掉），代码再试没用。
+         */
+        this.setLocalStatus($r('app.string.status_session_expired'));
+        this.refreshChallengeState();
         return;
       }
       this.feedRetryLeft--;

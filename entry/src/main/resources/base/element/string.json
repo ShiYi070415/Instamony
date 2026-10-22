@@ -125,6 +125,10 @@
       "value": "需要先登录"
     },
     {
+      "name": "status_session_expired",
+      "value": "登录状态已失效：请在设定里退出后重新登录一次。"
+    },
+    {
       "name": "status_page_not_ready",
       "value": "页面还没准备好"
     },
