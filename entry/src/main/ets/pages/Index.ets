@@ -136,7 +136,6 @@ import { StoryCache } from '../core/StoryCache';
 import { AccountChange, AccountScope } from '../core/AccountScope';
 import { StoryDiag } from '../core/StoryDiag';
 import { DirectCache } from '../core/DirectCache';
-import { DirectPrefetch } from '../core/DirectPrefetch';
 import { PosterCache } from '../core/PosterCache';
 // 首页探索流第一页的落盘缓存（冷启动先画它，见 loadHomeRecommendedCached）。
 import { CachedRecommendedPage, FeedCache } from '../core/FeedCache';
@@ -3022,8 +3021,7 @@ struct Index {
     NativeStories.forgetTray();
     // 「你的快拍」那一项的头像同样属于"这个人"：换人之后先把旧头像抹掉，等新头部回来再填。
     this.selfAvatarUrl = '';
-    // 私信预取队列 + 快照缓存（落盘那份已由 AccountScope 搬到备份位）。
-    DirectPrefetch.cancel();
+    // 私信会话快照缓存（落盘那份已由 AccountScope 搬到备份位；后台预取已按需求移除）。
     DirectCache.clear();
     // 设备侧会话材料（claim / rur / mid / authorization）：设备身份留着，会话材料作废。
     MobileSession.getInstance().clearSession();

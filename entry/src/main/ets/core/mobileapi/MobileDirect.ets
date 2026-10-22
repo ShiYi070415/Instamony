@@ -273,7 +273,10 @@ export class MobileDirect {
    *                 普通 JSON.parse 会把它舍入成 30 位错 id —— 见 DirectMapper 的说明）
    * @param olderCursor 取更老那批的游标（空串 = 最新那批）
    * @param priority 排队优先级（默认 WARM；后台预取传 `ApiThrottle.idle()`）
-   * @param limit 要几条（默认 20 = "一页"；预取只要 5，见 DirectPrefetch）
+   * @param limit 要几条（默认 20 = "一页"）
+   *
+   * 注：会话消息的**后台预取已按需求移除**（见 DirectCache 的说明），现在只有
+   * "点开某条会话"这一条路会真的拉消息 —— 所以这里默认就是"用户要看的那一页"。
    */
   static async thread(threadId: string, olderCursor: string = '',
                       priority: number = ApiThrottle.warm(),

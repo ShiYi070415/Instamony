@@ -153,12 +153,15 @@ export class DirectThreadViewModel {
     this.fallbackUsername = username;
     this.view = null;
     /*
-     * **先用预取的文本快照把这一屏铺上**（用户："点进去覆盖并触发刷新获取一页历史消息"）。
+     * **先用上次的文本快照把这一屏铺上**（用户："点进去覆盖并触发刷新获取一页历史消息"）。
      *
      * 为什么放在这里（而不是等 `load()`）：`open()` 是点开的那一刻，页面第一帧就用这份数据画 ——
-     * 预取读回来的 5 条文本立刻就位（媒体位置画占位），随后 `load()` 那一发刷新再补齐媒体、
+     * 上次留下的那几条文本立刻就位（媒体位置画占位），随后 `load()` 那一发刷新再补齐媒体、
      * 并在"没有新消息"时**保持画面不跳**（见 DirectCache.mergeMedia）。
      * 快照里不存头像（见 DirectCache 文件头），所以头像用收件箱那一行带过来的。
+     *
+     * 注意：会话消息的**后台预取已经按需求移除**（core/DirectPrefetch.ets 整个删掉了），
+     * 所以这里读到的只可能是"以前自己点开过、写回缓存"的那一份 —— 不会再有"列表替用户预取"。
      */
     const cached: DirectThreadView | null = DirectCache.viewOf(threadId, avatar);
     if (cached !== null) {
@@ -246,7 +249,7 @@ export class DirectThreadViewModel {
         await NativeDirect.thread(this.threadId, '', this.fallbackUserId);
       if (view === null) {
         this.diag = NativeDirect.lastDetail();
-        // 网络那一发没成：**手里有快照就继续用**（总比把预取好的内容换成"读取失败"强）。
+        // 网络那一发没成：**手里有快照就继续用**（总比把上次的文本换成"读取失败"强）。
         if (this.view !== null && this.view.messages.length > 0) {
           hilog.info(DOMAIN, TAG, 'load failed but cache shown id=%{public}s why=%{public}s',
             this.threadId, this.diag);
@@ -263,7 +266,7 @@ export class DirectThreadViewModel {
        *   · 没变 → 画面**保持快照的样子**（不跳），只把这一页里同 id 消息的媒体地址填进去
        *     （占位换成真图/封面）；这就是"没有新消息时以快照为准"。
        *   · 变了 → 直接显示新读到的那一页（新消息必须在场）。
-       * 无论哪一支，都把这一页**写回快照**（下一轮预取/下次点开就有更新的文本了）。
+       * 无论哪一支，都把这一页**写回快照**（下次点开同一条会话就有更新的文本可先铺）。
        */
       const cached: DirectThreadView | null = DirectCache.viewOf(this.threadId, this.fallbackAvatar);
       let shown: DirectThreadView = view;
