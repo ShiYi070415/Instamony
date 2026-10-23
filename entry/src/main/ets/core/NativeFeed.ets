@@ -244,7 +244,7 @@ export class NativeFeed {
      * 于是每一次进首页/下拉刷新都白花 4~10 秒，这正是用户说的"帖子刷新很慢"。
      * 记住这个状态（默认 10 分钟）之后，这段时间直接跳过这一发，刷新立刻出内容。
      */
-    if (Date.now() - NativeFeed.caughtUpAt() < NativeFeed.CAUGHT_UP_TTL_MS
+    if (Date.now() - NativeFeed.caughtUpAt() < NativeFeed.caughtUpTtl()
       && NativeFeed.caughtUpAt() > 0) {
       hilog.info(DOMAIN, TAG, 'feed timeline skipped: caught up %{public}dms ago (not asked)',
         Date.now() - NativeFeed.caughtUpAt());
@@ -265,24 +265,6 @@ export class NativeFeed {
       }
     }
     if (viaMobile !== null) {
-      /*
-       * **首屏 200、体也不小，但解析出 0 条媒体 → 记成"关注流已看完"**。
-       *
-       * 真机抓到过：`timeline ok cursor=0 bytes=680787 keys=[feed_items,items,…]` 之后
-       * `feed mobile failed`、`native first fetched n=0` —— 响应体里只有占位/推荐条目，
-       * 一条关注帖都没有（这个账号的关注流就是薄的）。不记这个状态的话，**每次进首页/
-       * 下拉刷新都要再白打一发 2~6 秒、几百 KB 的请求**，而回答不会变。
-       *
-       * 判据里的"体够大"是防呆：真出错（403/形状变了）时体通常很小或 detail 不是 ok，
-       * 那种情况**不能**记成"已看完"（否则 30 分钟都不再问）。
-       */
-      const detail: string = MobileFeedTimeline.detail();
-      if (cursor.length === 0 && viaMobile.items.length === 0 && detail.startsWith('ok bytes=')) {
-        NativeFeed.markCaughtUp();
-        hilog.info(DOMAIN, TAG,
-          'feed timeline parsed 0 media (%{public}s) → mark caught up for %{public}dmin',
-          detail, Math.round(NativeFeed.CAUGHT_UP_TTL_MS / 60000));
-      }
       // 换号之后回来的那一页属于上一个人：不许写进 memo（见 clearCache 的说明）。
       if (cursor.length > 0 && NativeFeed.epoch === epoch) {
         NativeFeed.rememberPage(cursor, viaMobile);
@@ -309,11 +291,21 @@ export class NativeFeed {
    * 同时**落盘**（见 core/FeedCache.saveCaughtUp）：不落盘的话每次冷启动又要先白等
    * 4~10 秒才退回推荐源。
    */
-  static markCaughtUp(): void {
+  static markCaughtUp(ttlMs: number = 0): void {
     const now: number = Date.now();
     NativeFeed.caughtUpMs = now;
     NativeFeed.caughtUpLoaded = true;
+    // `0` = 用默认 TTL（字段初始化不能引用后面声明的常量，所以默认值在运行时定）。
+    NativeFeed.caughtUpTtlMs = ttlMs > 0 ? ttlMs : NativeFeed.CAUGHT_UP_TTL_MS;
     FeedCache.saveCaughtUp(now);
+  }
+
+  /** 这一轮"已看完"记多久（见 markCaughtUp 的参数；0 = 默认 30 分钟）。 */
+  private static caughtUpTtlMs: number = 0;
+
+  /** 实际生效的 TTL（毫秒）。 */
+  private static caughtUpTtl(): number {
+    return NativeFeed.caughtUpTtlMs > 0 ? NativeFeed.caughtUpTtlMs : NativeFeed.CAUGHT_UP_TTL_MS;
   }
 
   /** "关注流已看完"的时刻（0 = 没记过；首次调用时从落盘读回来）。 */
@@ -335,7 +327,7 @@ export class NativeFeed {
    */
   static timelineCaughtUp(): boolean {
     const at: number = NativeFeed.caughtUpAt();
-    return at > 0 && Date.now() - at < NativeFeed.CAUGHT_UP_TTL_MS;
+    return at > 0 && Date.now() - at < NativeFeed.caughtUpTtl();
   }
 
   private static caughtUpMs: number = 0;
@@ -390,17 +382,51 @@ export class NativeFeed {
     if (parsed === null) {
       /*
        * **明确是"关注流已看完"**（这一页只有 `end_of_feed_demarcator` 占位，没有媒体行）时
-       * 记一笔，之后 10 分钟不再白问（见 fetchPage 的跳过逻辑）。
+       * 记一笔，之后一段时间不再白问（见 fetchPage 的跳过逻辑）。
        * 网络错误/形状不明（rows=0 但没有占位）不记 —— 那种要照常重试。
        */
       if (NativeTimelineParser.isCaughtUp(page.body)) {
         NativeFeed.markCaughtUp();
         hilog.info(DOMAIN, TAG, 'feed timeline says caught up → skip it for a while');
+        return null;
+      }
+      /*
+       * **解析不出东西、但服务端明明给了完整一页**（真机：`bytes=680787`、键全在、0 条媒体）。
+       *
+       * 这种形状与"关注流薄到没有帖"在实践中是同一件事，但它也**可能是解析层被新形状打穿**。
+       * 所以记一个**短 TTL（10 分钟）**：真的坏了，10 分钟后自动重试；真没帖，10 分钟省下
+       * 两三发 2~6 秒、几百 KB 的空请求。日志带上字节数，便于事后判断是哪一种。
+       */
+      if (cursor.length === 0 && page.body.length > 100000) {
+        NativeFeed.markCaughtUp(600000);
+        hilog.warn(DOMAIN, TAG,
+          'feed first page unparsable but big (bytes=%{public}d) → skip timeline for 10min',
+          page.body.length);
       }
       return null;
     }
     hilog.info(DOMAIN, TAG, 'feed via mobile n=%{public}d more=%{public}s cursor=%{public}d ms=%{public}d',
       parsed.items.length, `${parsed.hasNext}`, parsed.nextCursor.length, page.ms);
+    /*
+     * **首屏 200、体很大、但一条媒体都没有 → 记成"关注流已看完"**（真机实测过的形态：
+     * `timeline ok bytes=680787 keys=[feed_items,items,…]`，解析出 0 条，首页只能靠探索流）。
+     *
+     * 两种判据任一成立就记：
+     *   · `isCaughtUp`：整页就是那个 `end_of_feed_demarcator` 占位（最明确的信号）；
+     *   · **体够大但 0 条媒体**：说明服务端确实给了内容、只是没有关注帖（占位+推荐混合的形状），
+     *     这种也必须记，否则每次进首页/下拉刷新都要再白等 2~6 秒打一发注定 0 条的请求。
+     * 体太小（出错/形状变了）**不记** —— 那种要照常重试。
+     */
+    if (parsed.items.length === 0 && cursor.length === 0) {
+      const placeholder: boolean = NativeTimelineParser.isCaughtUp(page.body);
+      const big: boolean = page.body.length > 100000;
+      if (placeholder || big) {
+        NativeFeed.markCaughtUp();
+        hilog.info(DOMAIN, TAG,
+          'feed first page 0 media (placeholder=%{public}s bytes=%{public}d) → caught up for %{public}dmin',
+          `${placeholder}`, page.body.length, Math.round(NativeFeed.CAUGHT_UP_TTL_MS / 60000));
+      }
+    }
     return new NativeFeedPage(parsed.items, parsed.nextCursor, parsed.hasNext, page.ms);
   }
 
