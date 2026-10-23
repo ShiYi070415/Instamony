@@ -65,6 +65,8 @@ export class InstagramCookieJar {
    * 所以这里只用来合并同一阵发起的读。
    */
   private static pending: Promise<InstagramCookieSnapshot> | null = null;
+  /** 作废代数：每次 `invalidate()` +1，用来丢弃"作废之前发起、作废之后才回来"的读（见 inspect）。 */
+  private static generation: number = 0;
   private static cached: InstagramCookieSnapshot | null = null;
   private static cachedAt: number = 0;
   private static readonly CACHE_TTL_MS: number = 1500;
@@ -104,22 +106,43 @@ export class InstagramCookieJar {
     if (inflight !== null) {
       return inflight;
     }
+    const gen: number = InstagramCookieJar.generation;
     const task: Promise<InstagramCookieSnapshot> = InstagramCookieJar.readSnapshot();
     InstagramCookieJar.pending = task;
     try {
       const snapshot: InstagramCookieSnapshot = await task;
-      InstagramCookieJar.cached = snapshot;
-      InstagramCookieJar.cachedAt = Date.now();
+      /*
+       * **只有"发起这一读之后没被作废过"才写缓存**（见 invalidate）。
+       *
+       * 换账号/退出登录恰好撞上这一读在飞时：那一读读到的是**上一个账号**的 Cookie，
+       * 写进缓存就会让接下来 1.5 秒里所有 `inspect()` 都返回旧账号（真机表现是
+       * "换号后第一屏还是上一个人的内容 / 退出登录后仍认为已登录"）。
+       */
+      if (gen === InstagramCookieJar.generation) {
+        InstagramCookieJar.cached = snapshot;
+        InstagramCookieJar.cachedAt = Date.now();
+      }
       return snapshot;
     } finally {
-      InstagramCookieJar.pending = null;
+      // 只清"自己那一张"：期间被 invalidate 之后可能有新的一读顶上来。
+      if (InstagramCookieJar.pending === task) {
+        InstagramCookieJar.pending = null;
+      }
     }
   }
 
-  /** 作废读罐缓存（登录/退出/落盘前后调，见 save / clear）。 */
+  /**
+   * 作废读罐缓存（登录/退出/换号/落盘前后调，见 save / clear）。
+   *
+   * **两样都要作废**：已完成的缓存值，以及**正在飞的那一读**。
+   * 上一版只清了缓存值：飞着的那一读回来照样把旧 Cookie 写进缓存，而且后面 1.5 秒里
+   * 所有调用都会搭上它（`pending` 还挂着）—— 换号瞬间读到上一个人的会话正是这么来的。
+   */
   static invalidate(): void {
     InstagramCookieJar.cached = null;
     InstagramCookieJar.cachedAt = 0;
+    InstagramCookieJar.pending = null;
+    InstagramCookieJar.generation++;
   }
 
   private static async readSnapshot(): Promise<InstagramCookieSnapshot> {

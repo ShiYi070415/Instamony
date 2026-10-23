@@ -8079,6 +8079,8 @@ struct Index {
     AccountBook.forget(userId);
     // 缓存分区（活跃位 + 备份位）一起删：退出登录不该把这个人留在盘上。
     AccountScope.purgeAccount(`u${userId}`);
+    // 头部快照是按账号 id 存的（不是分区键），要单独删，否则昵称/头像/简介还留在盘上。
+    AppSettings.dropProfileHeader(userId);
     if (this.currentAccountId() === userId) {
       this.selfUsername = '';
       this.selfAvatarUrl = '';

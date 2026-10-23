@@ -503,12 +503,17 @@ export class MobileRequest {
       headers);
   }
 
-  /** 响应体里有没有"被限流"的判据（与 core/ApiThrottle.looksLimited 同一套判据）。 */
+  /**
+   * 响应体里有没有"被限流"的判据。
+   *
+   * **判据只有一份**：`core/ApiThrottle.looksLimited`（那边写明了为什么不能只看
+   * `"rate limit"` 字面）。这里以前是另一套更松的实现 —— 只要文本里出现 `rate limit`
+   * 就算，于是整页 HTML / 无关文案都会把这一发判成 `rate_limit`，调用方接着给这个家族
+   * 打上 12 分钟冷却（真机日志里 reels 预热就是这么被误伤的：响应其实是一份别的东西）。
+   * 现在直接委托，避免两处判据再次走偏。
+   */
   static looksLimited(text: string): boolean {
-    if (text.length === 0) {
-      return false;
-    }
-    return text.toLowerCase().indexOf('rate limit') >= 0 || text.indexOf('1675004') >= 0;
+    return ApiThrottle.looksLimited(text);
   }
 
   /**

@@ -98,7 +98,13 @@ const PRIORITY_INTERACTIVE: number = 0;
 const PRIORITY_WARM: number = 1;
 /** 空闲优先级：诊断、自检、后台补缓存 —— 排最后，别抢用户的请求。 */
 const PRIORITY_IDLE: number = 2;
-
+/**
+ * 排队**防饿死**的时长（毫秒，见 effective）。
+ *
+ * 等超过它就把这一发提到 `warm` 档（**绝不超过交互档**）：低优先级（`idle` 的预取/封面回填）
+ * 不会因为队列里一直有 warm 请求而永远轮不到。
+ */
+const PACE_STARVE_MS: number = 15000;
 /**
  * 写操作之间的人速间隔（毫秒）：3 秒 + 0~3 秒随机。
  *
@@ -112,10 +118,15 @@ const WRITE_GAP_JITTER_MS: number = 3000;
 class PaceWaiter {
   readonly priority: number;
   readonly resolve: () => void;
+  /**
+   * 它是什么时候开始排队的（见 pump 里的**老化**：等太久要提权，否则低优先级会饿死）。
+   */
+  readonly atMs: number;
 
   constructor(priority: number, resolve: () => void) {
     this.priority = priority;
     this.resolve = resolve;
+    this.atMs = Date.now();
   }
 }
 
@@ -237,7 +248,8 @@ export class ApiThrottle {
     while (ApiThrottle.waiters.length > 0) {
       let best: number = 0;
       for (let index: number = 1; index < ApiThrottle.waiters.length; index++) {
-        if (ApiThrottle.waiters[index].priority < ApiThrottle.waiters[best].priority) {
+        if (ApiThrottle.effective(ApiThrottle.waiters[index])
+          < ApiThrottle.effective(ApiThrottle.waiters[best])) {
           best = index;
         }
       }
@@ -259,6 +271,27 @@ export class ApiThrottle {
       ApiThrottle.waiters.splice(best, 1);
       ApiThrottle.startOne(next);
     }
+  }
+
+  /**
+   * 排队中的请求的**有效优先级**（越小越先发）。
+   *
+   * ## 为什么要有"老化"
+   * `pump()` 原来是**严格按优先级**挑的：只要队列里一直有 warm 请求，`idle`（预取、封面回填、
+   * 预加载下一页……）就永远轮不到 —— 真机上表现是"预取一直没跑，滑到底才开始抓"。
+   *
+   * ## 为什么只提一档、而且封顶在 warm
+   * 真机实测的队列长这样：`waiting=5~6 inflight=2/2`，排在后面的请求等 7~10 秒是常态。
+   * 如果让它按等待时间一路提权到交互档，就会出现**用户刚点的一下排在十几秒前的预取后面** ——
+   * 那是拿"交互快"去换"预取不被饿死"，不划算。所以：等够 `PACE_STARVE_MS` 只把它提到
+   * `warm` 那一档（保底能排上），`interactive` / `urgent`（用户当场在等的）永远在它前面。
+   */
+  private static effective(one: PaceWaiter): number {
+    const waited: number = Date.now() - one.atMs;
+    if (waited < PACE_STARVE_MS) {
+      return one.priority;
+    }
+    return Math.min(one.priority, PRIORITY_WARM);
   }
 
   /**

@@ -15,6 +15,8 @@
 import { preferences } from '@kit.ArkData';
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+// `direct_sync` 这类"只属于某个账号"的键要过账号分区（见 saveDirectSync）。
+import { AccountScope } from './AccountScope';
 
 const DOMAIN = 0xFF00;
 const TAG = 'InstarmonySettings';
@@ -397,12 +399,52 @@ export class AppSettings {
     if (seqId <= 0 || snapshotAtMs <= 0) {
       return;
     }
-    AppSettings.write('direct_sync', `${seqId}|${snapshotAtMs}`);
+    /*
+     * **按账号分区**（见 core/AccountScope.slot）。
+     *
+     * 这个键存的是"实时通道订阅到哪了"（seq_id + 快照时刻），它**只对一个账号有意义**。
+     * 原来是一个全局裸键：换号之后冷启动拿上一个人的位点去订阅，对端会把**另一个人**的
+     * 差量补过来（真机上表现为"换号后私信列表里冒出不属于这个账号的会话"，
+     * 以及 seq 对不上导致订阅一直不生效）。
+     */
+    AppSettings.write(AccountScope.slot('direct_sync'), `${seqId}|${snapshotAtMs}`);
   }
 
   /** 上次存下的同步位点（`seqId <= 0` = 没有）。 */
   static loadDirectSync(): Array<number> {
-    const raw: string = AppSettings.readString('direct_sync', '');
+    const raw: string = AppSettings.readString(AccountScope.slot('direct_sync'), '');
+    const legacy: string = AppSettings.readString('direct_sync', '');
+    if (raw.length > 0) {
+      /*
+       * 分区键已经有了：那条裸键就是"分区之前某个账号"的遗留，**没有任何人会再读它**
+       * （读的都是 `direct_sync@u…`），留着只是把一个人的同步进度躺在盘上 —— 删掉。
+       */
+      if (legacy.length > 0) {
+        AppSettings.dropKey('direct_sync');
+        hilog.info(DOMAIN, TAG, 'dropped legacy direct_sync (superseded by %{public}s)',
+          AccountScope.slot('direct_sync'));
+      }
+      return AppSettings.parseSyncPoint(raw);
+    }
+    /*
+     * 没有分区键时才去看那条裸键：它属于"改分区之前那个账号"，有可能就是现在这个人
+     * （升级后第一次启动）。
+     *
+     * **读到就当场迁移**：写成分区键、再把裸键删掉。留着的话它会被**下一个**账号
+     * 在"自己还没有位点"时读到 —— 那正是"换号后拿上一个人的位点去订阅"的老毛病。
+     */
+    const point: Array<number> = AppSettings.parseSyncPoint(legacy);
+    if (point.length >= 2 && AccountScope.current().length > 0) {
+      AppSettings.saveDirectSync(point[0], point[1]);
+      AppSettings.dropKey('direct_sync');
+      hilog.info(DOMAIN, TAG, 'migrated legacy direct_sync → %{public}s',
+        AccountScope.slot('direct_sync'));
+    }
+    return point;
+  }
+
+  /** `seq|snapshot` → 两个数（读不懂给空数组，见 loadDirectSync）。 */
+  private static parseSyncPoint(raw: string): Array<number> {
     if (raw.length === 0) {
       return [];
     }
@@ -416,6 +458,44 @@ export class AppSettings {
       return [];
     }
     return [seq, snapshot];
+  }
+
+  /**
+   * 删掉某个账号的头部快照（退出登录 / 把这个账号从本机删掉时调，见 pages/Index.forgetAccountLocally）。
+   *
+   * 这个键是按账号 id 分开的（`profile_header_<uid>`），换号**读不到别人的**，
+   * 但"退出登录"的要求是"必须清除所有相关信息"：留着就是一份别人的昵称/头像/简介躺在盘上。
+   */
+  static dropProfileHeader(uid: string): void {
+    if (uid.length === 0) {
+      return;
+    }
+    if (AppSettings.dropKey(`profile_header_${uid}`)) {
+      hilog.info(DOMAIN, TAG, 'dropped profile header for %{public}s', uid);
+    }
+  }
+
+  /**
+   * 删一个键（存在才删、删除后落盘）；返回是否真删了。
+   *
+   * 给"属于上一个人但按账号 id 单独存"的键用（见 dropProfileHeader / loadDirectSync 的迁移）。
+   */
+  private static dropKey(key: string): boolean {
+    try {
+      const store: preferences.Preferences | null = AppSettings.store;
+      if (store === null) {
+        return false;
+      }
+      if (`${store.getSync(key, '')}`.length === 0) {
+        return false;
+      }
+      store.deleteSync(key);
+      store.flushSync();
+      return true;
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'drop %{public}s failed: %{public}s', key, (error as Error).message);
+      return false;
+    }
   }
 
   private static readString(key: string, fallback: string): string {
