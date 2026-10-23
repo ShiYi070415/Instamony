@@ -9,6 +9,8 @@
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
+// 加载闸门（代数 + 在飞 + 排队，见 core/LoadGate 的文件头）。
+import { LoadGate } from '../core/LoadGate';
 import { NativeDirect } from '../core/NativeDirect';
 // 新私信的本地通知（见 core/PushCenter）。
 import { PushCenter } from '../core/PushCenter';
@@ -32,8 +34,8 @@ export class DirectViewModel {
     this.endCursor = '';
     this.more = false;
     this.busy = false;
-    // 排队中的刷新也要作废：它属于上一个账号。
-    this.pendingLoad = false;
+    // 在飞/排队的都作废：它们属于上一个账号（见 core/LoadGate）。
+    this.gate.invalidate();
     this.loadedAtMs = 0;
     this.diag = '-';
     this.notifiedTs = new Map<string, number>();
@@ -42,13 +44,18 @@ export class DirectViewModel {
   private threads: Array<DirectThread> = [];
   private endCursor: string = '';
   private more: boolean = false;
+  /**
+   * 界面用的"忙"（骨架屏/转圈）。
+   *
+   * **它不是闸门**：真正的"能不能开始一轮"由 `gate` 决定（见 load / requestMore）。
+   * 保留这个字段是因为轮询（refreshQuietly）与页面都要读它，而且它跟 `onBusy` 一一对应。
+   */
   private busy: boolean = false;
   /**
-   * 有一发"刷新"在飞的时候又来了刷新请求（见 load 的 busy 分支）。
-   *
-   * 只排一次：排队期间再来几下也只补跑一轮（连点下拉不该变成连发）。
+   * 加载闸门（见 core/LoadGate）：忙时**排队而不是丢弃**，并且带代数 ——
+   * 换账号之后那一轮的结果一律丢弃（上一版换号瞬间回来的收件箱会写进新账号的列表）。
    */
-  private pendingLoad: boolean = false;
+  private readonly gate: LoadGate = new LoadGate(true);
   /**
    * 每条会话"上次为它弹过通知"的那条消息的时间戳（会话 id → tsMs）。
    *
@@ -392,18 +399,18 @@ export class DirectViewModel {
 
   /** 拉一次（refresh=true 时丢掉游标从头拉）。 */
   async load(refresh: boolean): Promise<void> {
-    if (this.busy) {
-      /*
-       * **下拉刷新不能被"正在飞的那一发"静默吞掉**（用户报："下拉没反应"）。
-       *
-       * 原来这里只有一句 `return`：那一发可能是后台预热、也可能是轮询触发的增量
-       * （`requestMore`），它回来的是**旧游标那一页**，用户的刷新请求却已经消失 ——
-       * 界面停在旧列表上，转圈也早收了。现在记下来，本轮结束后补跑一次真刷新。
-       */
-      if (refresh) {
-        this.pendingLoad = true;
-        hilog.info(DOMAIN, TAG, 'load(refresh) queued behind in-flight round');
-      }
+    /*
+     * **只有"用户主动的刷新"才排队**（`begin(refresh)`）。
+     *
+     * 背景预热 / 页面挂载时的那次 `load(false)` 在忙的时候照旧丢掉 —— 在飞的那一发
+     * 回来就会把列表铺上，再补跑一次等于白打一发 700KB 的收件箱请求。
+     * 而 `refresh=true`（下拉刷新）**不能丢**：那一发可能是旧游标的增量，用户要的新数据
+     * 谁也没去取。补跑只补一次（见 LoadGate.settle）。
+     */
+    const ticket: number = this.gate.begin(refresh);
+    if (ticket < 0) {
+      hilog.info(DOMAIN, TAG, 'load(refresh=%{public}s) queued=%{public}s (%{public}s)',
+        `${refresh}`, `${this.gate.hasQueued()}`, this.gate.describe());
       return;
     }
     if (refresh) {
@@ -414,6 +421,11 @@ export class DirectViewModel {
     this.onBusy(true);
     try {
       const page: DirectInboxPage | null = await this.fetchInbox('');
+      // 换账号/重置过：这一份是上一个人的收件箱，一个字都不能写（见 LoadGate.stale）。
+      if (this.gate.stale(ticket)) {
+        hilog.info(DOMAIN, TAG, 'load dropped: account switched (%{public}s)', this.gate.describe());
+        return;
+      }
       if (page === null) {
         this.onStatus('读取失败：' + this.diag);
         return;
@@ -440,9 +452,9 @@ export class DirectViewModel {
     } finally {
       this.busy = false;
       this.onBusy(false);
-      // 排队的那次刷新在这里补跑（见上面 busy 分支）。
-      if (this.pendingLoad) {
-        this.pendingLoad = false;
+      // 排队的那次刷新在这里补跑（见上面 begin 的说明）。
+      if (this.gate.settle(ticket)) {
+        hilog.info(DOMAIN, TAG, 'load rerun queued refresh');
         this.load(true);
       }
     }
@@ -450,13 +462,22 @@ export class DirectViewModel {
 
   /** 触底翻页：只改游标拉一页，不导航。 */
   async requestMore(): Promise<void> {
-    if (this.busy || !this.more || this.endCursor.length === 0) {
+    if (!this.more || this.endCursor.length === 0) {
+      return;
+    }
+    // 翻页是"用户滑到底了"，排队优先级跟刷新一致（忙时舍掉这一次即可，不排队）。
+    const ticket: number = this.gate.begin(false);
+    if (ticket < 0) {
+      hilog.info(DOMAIN, TAG, 'requestMore skipped: busy (%{public}s)', this.gate.describe());
       return;
     }
     this.busy = true;
     this.onBusy(true);
     try {
       const page: DirectInboxPage | null = await NativeDirect.inboxRest(this.endCursor);
+      if (this.gate.stale(ticket)) {
+        return;
+      }
       if (page === null || page.threads.length === 0) {
         this.more = false;
         this.onThreads(this.threads, this.more);
@@ -466,10 +487,12 @@ export class DirectViewModel {
       this.endCursor = page.endCursor;
       this.more = page.hasMore && page.endCursor.length > 0;
       this.onThreads(this.threads, this.more);
-
     } finally {
       this.busy = false;
       this.onBusy(false);
+      if (this.gate.settle(ticket)) {
+        this.load(true);
+      }
     }
   }
 

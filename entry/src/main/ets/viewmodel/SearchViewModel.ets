@@ -15,6 +15,8 @@
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
+// 加载闸门（见 core/LoadGate；推荐首屏用它防重入，异常路径也不会卡死）。
+import { LoadGate } from '../core/LoadGate';
 import { SearchPost, SearchUser } from '../model/Search';
 import { NativeSearch, SearchPostPage } from '../core/NativeSearch';
 import { CachedSearchPage, SearchCache } from '../core/SearchCache';
@@ -54,8 +56,14 @@ export class SearchViewModel {
   private opened: boolean = false;
   /** 推荐的取数状态：推荐流是"进页面就拉"，别和用户搜索抢状态行。 */
   private recommendLoaded: boolean = false;
-  /** 推荐首屏**正在拉**（防重入，见 loadRecommended）。 */
-  private recommendBusy: boolean = false;
+  /**
+   * 推荐首屏的**加载闸门**（见 core/LoadGate）。
+   *
+   * `queueWhenBusy=false`：这是个幂等入口（`open()` 与 `retryRecommend()` 都会调），
+   * 忙的时候**忽略**就好，不需要排队补跑 —— 但要保证异常路径也复位（上一版没有
+   * try/finally，一次异常就让 `recommendBusy` 永久 true，搜索页再也不加载）。
+   */
+  private readonly recommendGate: LoadGate = new LoadGate(false);
   /** 试过读推荐第一页的落盘缓存了没有（一轮进程只读一次，见 hydrateFromCache）。 */
   private cacheTried: boolean = false;
   /** 正在"把网格补满一屏"（见 fillGrid：避免两处同时连拉）。 */
@@ -213,17 +221,17 @@ export class SearchViewModel {
    * 两下撞在一起就是两条几百 KB 的重查询。
    */
   private async loadRecommended(): Promise<void> {
-    if (this.recommendBusy) {
-      return;
-    }
     if (this.recommendLoaded || this.query.length > 0) {
       return;
     }
-    this.recommendBusy = true;
+    const ticket: number = this.recommendGate.begin(false);
+    if (ticket < 0) {
+      return;
+    }
     /*
      * **必须 try/finally**：`loadRecommendedOnce` 里面是网络往返，任何一处抛异常
-     * （解析出错、被上层 cancel、NativeSearch 内部 throw）都会让 `recommendBusy` 永久留在
-     * true —— 之后 `retryRecommend()`（切到搜索页、点"再试一次"）全部在第一行被挡掉，
+     * （解析出错、被上层 cancel、NativeSearch 内部 throw）都会让闸门永久留在"忙"，
+     * 之后 `retryRecommend()`（切到搜索页、点"再试一次"）全部被挡掉，
      * 表现就是"搜索页永远空着，除非重启 App"。
      */
     try {
@@ -232,7 +240,7 @@ export class SearchViewModel {
       hilog.warn(DOMAIN, TAG, 'recommend threw: %{public}s', (error as Error).message);
       this.onStatus('推荐读取出错');
     } finally {
-      this.recommendBusy = false;
+      this.recommendGate.settle(ticket);
     }
   }
 
@@ -585,7 +593,7 @@ export class SearchViewModel {
     // 取数闸门全部复位：下次进搜索页 = 第一次进（重新吃缓存 + 重新拉推荐）。
     this.opened = false;
     this.recommendLoaded = false;
-    this.recommendBusy = false;
+    this.recommendGate.invalidate();
     this.cacheTried = false;
     this.gridFilling = false;
     this.prefetched = [];
