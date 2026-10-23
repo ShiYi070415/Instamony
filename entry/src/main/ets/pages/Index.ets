@@ -237,6 +237,14 @@ const WEB_LOGIN_MOUNT_WAIT_MS: number = 800;
  */
 const WEB_HEADLESS_SETTLE_MS: number = 300;
 /**
+ * **诊断开关**：登录页出现后自动跑一次无头登录（用假账号）。
+ *
+ * 只用来在"人手点不动"的环境里抓日志（模拟器屏幕会自己熄、按钮点不到）。
+ * 生产必须是 false。开着时用 `zz_probe_auto` 这种不存在的账号，
+ * 目的是看清"登录页到底有没有加载出来 / 表单是几步" —— 不会碰任何真实账号。
+ */
+const WEB_LOGIN_AUTO_PROBE: boolean = false;
+/**
  * 收件箱还没读回来的话，前几拍先等它（见 consumeNotifyRoute 里那段）。
  *
  * 4 拍 × 500ms = 2 秒：冷启动的 `direct_v2/inbox/` 真机实测 1.5~3 秒回来，
@@ -2985,6 +2993,13 @@ struct Index {
        * —— 否则输入框会被重建清空。
        */
       this.prepareHiddenWebForLogin();
+      if (WEB_LOGIN_AUTO_PROBE) {
+        // 诊断：登录页一出现就自己跑一次（见 WEB_LOGIN_AUTO_PROBE 的说明）。
+        setTimeout((): void => {
+          this.headlessWebLogin('zz_probe_auto', 'Qwe12345x').catch((): void => {
+          });
+        }, 3000);
+      }
     }
     /*
      * **登录闸门**（见 core/SessionGate）：未登录时只允许网页停在登录流程那几条地址上，
@@ -3447,15 +3462,56 @@ struct Index {
      */
     this.webHeadless = true;
     await Index.delay(WEB_HEADLESS_SETTLE_MS);
-    const message: string = await WebLogin.login(username, password);
-    if (message.length === 0) {
-      // 会话已经进罐：重读登录态（五个页签随之建起来），并把隐藏网页收掉省电。
-      await this.refreshSessionFromJar();
-      this.unmountWebHost('login done');
-      return '';
+    /*
+     * **只做到"打开登录页 + 填好账号密码"，最后那一下交给用户点。**
+     *
+     * 实测结论（模拟器上跑了 6 轮，日志留档）：IG 现在的登录页是 **Bloks 渲染**，
+     * 那颗「登录」是 `div.wbloks_1`，对我们派发的 pointerdown/touchstart/mousedown/click
+     * **完全不响应** —— 脚本回报 `clicked:1`，页面文字却一动不动（合成事件被渲染层丢掉）。
+     * 所以改成：把网页亮出来（字段已经填好），用户只需点一下「登录」；
+     * 登录成功那一刻我们自动收起网页并进主界面（见 watchLoginSession）。
+     */
+    const prefillMessage: string = await WebLogin.prefill(username, password);
+    if (prefillMessage.length > 0) {
+      hilog.info(DOMAIN, TAG, 'web login prefill failed: %{public}s', prefillMessage);
+      return prefillMessage;
     }
-    hilog.info(DOMAIN, TAG, 'headless web login failed: %{public}s', message);
-    return message;
+    this.webVisible = true;
+    this.statusShown = false;
+    this.toast('账号密码已填好，点一下网页里的「登录」即可');
+    this.watchLoginSession();
+    return '';
+  }
+
+  /**
+   * 盯着 Cookie 罐，等网页里登录成功那一刻：成功就收起网页、刷新登录态。
+   *
+   * 为什么要这个：用户要的是"登录成功后直接进首页"，网页只是中间一步。
+   * 3 分钟没成功就不管了（网页留在那里，用户仍可继续操作）。
+   */
+  private watchLoginSession(): void {
+    const deadline: number = Date.now() + 180000;
+    const tick: () => void = (): void => {
+      InstagramCookieJar.inspect()
+        .then((snapshot: InstagramCookieSnapshot): void => {
+          if (snapshot.signedIn) {
+            hilog.info(DOMAIN, TAG, 'web login detected session → enter home');
+            this.webVisible = false;
+            this.refreshSessionFromJar().catch((): void => {
+            });
+            return;
+          }
+          if (Date.now() < deadline) {
+            setTimeout(tick, 1500);
+          }
+        })
+        .catch((): void => {
+          if (Date.now() < deadline) {
+            setTimeout(tick, 1500);
+          }
+        });
+    };
+    setTimeout(tick, 1500);
   }
 
   /**

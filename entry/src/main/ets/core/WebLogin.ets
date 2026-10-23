@@ -52,8 +52,17 @@ const FORM_PROBE_JS: string =
   + 'var u=document.querySelector(\'input[name="username"]\')||document.querySelector(\'#username\');'
   + 'var p=document.querySelector(\'input[name="password"]\')||document.querySelector(\'#password\');'
   + 'var inputs=document.querySelectorAll("input").length;'
+  // 顺便把"登录按钮候选"找出来（tag/class/尺寸），以及视口尺寸 —— 这两样决定了点不点得动。
+  + 'var cand="";'
+  + 'try{var els=document.querySelectorAll(\'div,span,a,button,[role="button"],input[type="submit"]\');'
+  + 'for(var i=0;i<els.length&&cand.split("|").length<4;i++){var el=els[i];'
+  + 'var tx=(el.innerText||el.value||"").trim();if(!tx||tx.length>8){continue;}'
+  + 'if(!/登录|登入|log\\s*in/i.test(tx)){continue;}'
+  + 'var r=el.getBoundingClientRect();'
+  + 'cand=cand+el.tagName+"."+String(el.className||"").slice(0,14)+"@"+Math.round(r.width)+"x"+Math.round(r.height)+"|";}}catch(e){}'
   + 'return JSON.stringify({r:document.readyState,h:location.href.slice(0,140),'
   + 't:(document.title||"").slice(0,40),u:u?1:0,p:p?1:0,n:inputs,'
+  + 'w:(window.innerWidth||0),hh:(window.innerHeight||0),btn:cand,'
   + 'len:(document.body?document.body.innerText.length:0)});'
   + '}catch(e){return JSON.stringify({r:"err",m:String(e).slice(0,80)});}})()';
 
@@ -103,6 +112,36 @@ export class WebLogin {
    * 把最关键的三四个字段附在错误后面，用户截个图就能定位 —— 比让他捞 hilog 现实得多。
    */
   private static lastProbe: string = '';
+
+  /**
+   * **只填不点**：把账号密码填进隐藏网页的登录表单，返回空串表示填好了。
+   *
+   * 为什么只填不点：实测（模拟器 + 日志）IG 现在的登录页是 **Bloks 渲染**，
+   * 那颗"登录"是 `div.wbloks_1`，对我们派发的 pointer/touch/mouse/click **全都不响应**
+   * （`clicked:1` 但页面文字一动不动 —— 合成事件被这类渲染层按 isTrusted 丢掉）。
+   * 所以最后一步只能由真人点一下；能自动化的是"打开登录页 + 填好账号密码"。
+   */
+  static async prefill(username: string, password: string): Promise<string> {
+    const user: string = username.trim();
+    if (user.length === 0 || password.length === 0) {
+      return '请输入账号和密码';
+    }
+    const bridge: InstagramPageBridge = InstagramPageBridge.getInstance();
+    if (!bridge.isAttached()) {
+      return '网页还没准备好，请再点一次登录';
+    }
+    bridge.loadUrl(LOGIN_URL);
+    const state: PageState = await WebLogin.waitForForm(bridge);
+    if (!state.usable()) {
+      return `登录页没能加载出来${WebLogin.lastProbe}`;
+    }
+    const applied: string = await bridge.runScript(WebLogin.submitAllScript(user, password));
+    hilog.info(DOMAIN, TAG, 'prefill → %{public}s', applied);
+    if (applied.indexOf('"set":0') >= 0) {
+      return `没能把账号密码填进登录框${WebLogin.lastProbe}`;
+    }
+    return '';
+  }
 
   /** 正在跑（界面据此显示进度、禁用按钮）。 */
   static isRunning(): boolean {
@@ -160,10 +199,26 @@ export class WebLogin {
           return `登录页没出现密码框（可能被要求在网页里验证）${WebLogin.lastProbe}`;
         }
       }
-      const submitted: string = await bridge.runScript(WebLogin.fillScript(user, password));
-      hilog.info(DOMAIN, TAG, 'submit script → %{public}s', submitted);
-      if (submitted.indexOf('submitted') < 0 && submitted.indexOf('formsubmit') < 0) {
-        return '没找到登录按钮，请在网页里登录一次';
+      /*
+       * **填值 + 点提交必须在同一次 JS 里完成**（这一段是"点了没反应"的对策）。
+       *
+       * 实测现场（很关键）：先用一次 `runJavaScript` 填值，再用另一次点按钮时，
+       * 点的那一次里 `document.querySelectorAll("div").length` 竟然是 **0** ——
+       * 也就是"填值派发的 input 事件让 React 重渲染/换页，两次调用之间 DOM 已经不是原来那个了"。
+       * 分开做永远点不到（日志里就是 `nobutton: divs=0`）。
+       *
+       * 所以合成一发：找输入框 → 写值 → 找按钮 → 派发 pointer/touch/mouse/click → 回报 JSON。
+       * 一次执行，中间不给页面换掉的机会。
+       */
+      const applied: string = await bridge.runScript(WebLogin.submitAllScript(user, password));
+      hilog.info(DOMAIN, TAG, 'fill+submit → %{public}s', applied);
+      if (applied.indexOf('"set":0') >= 0) {
+        return `没能把账号密码填进登录框${WebLogin.lastProbe}`;
+      }
+      if (applied.indexOf('"clicked":0') >= 0) {
+        // 按钮没点到：补一次"密码框回车"（同样是一发原子脚本）。
+        const enterLog: string = await bridge.runScript(WebLogin.onSubmitJs('enter'));
+        hilog.info(DOMAIN, TAG, 'enter fallback → %{public}s', enterLog);
       }
       const outcome: string = await WebLogin.waitForSession(bridge);
       return outcome;
@@ -173,6 +228,158 @@ export class WebLogin {
     } finally {
       WebLogin.running = false;
     }
+  }
+
+  /**
+   * 依次试三种提交方式，并用"页面文字有没有变"来判断哪一种真的生效。
+   *
+   * @returns `方法名:changed` / `nochange`
+   */
+  private static async submitAndVerify(bridge: InstagramPageBridge, before: string): Promise<string> {
+    const attempts: Array<string> = [
+      WebLogin.onSubmitJs('click'),
+      WebLogin.onSubmitJs('enter'),
+      WebLogin.onSubmitJs('form')
+    ];
+    const names: Array<string> = ['click', 'enter', 'form'];
+    for (let index: number = 0; index < attempts.length; index++) {
+      const detail: string = await bridge.runScript(attempts[index]);
+      hilog.info(DOMAIN, TAG, 'submit %{public}s → %{public}s', names[index], detail);
+      // 给它 2.5 秒：IG 登录表单点下去会立刻切到"正在登录"或报错，文字必变。
+      await WebLogin.sleep(2500);
+      const after: string = await WebLogin.pageText(bridge);
+      if (after !== before && after.length > 0) {
+        return `${names[index]}:changed`;
+      }
+    }
+    return 'nochange';
+  }
+
+  /**
+   * 一种提交方式的脚本。
+   *
+   * @param mode `click` = 派发 MouseEvent 点按钮；`enter` = 密码框按回车；
+   *             `form` = 表单 requestSubmit()
+   */
+  private static onSubmitJs(mode: string): string {
+    const head: string = '(function(){try{';
+    if (mode === 'enter') {
+      return head
+        + 'var p=document.querySelector(\'input[name="password"]\')||document.querySelector(\'#password\');'
+        + 'if(!p){return "nopass";}'
+        + 'p.focus();'
+        + 'function key(type){p.dispatchEvent(new KeyboardEvent(type,{key:"Enter",code:"Enter",'
+        + 'keyCode:13,which:13,bubbles:true,cancelable:true}));}'
+        + 'key("keydown");key("keypress");key("keyup");'
+        + 'return "enter";'
+        + '}catch(e){return "error:"+String(e).slice(0,80);}})()';
+    }
+    if (mode === 'form') {
+      return head
+        + 'var f=document.querySelector("form");'
+        + 'if(!f){return "noform";}'
+        + 'if(f.requestSubmit){f.requestSubmit();return "requestSubmit";}'
+        + 'f.submit();return "formsubmit";'
+        + '}catch(e){return "error:"+String(e).slice(0,80);}})()';
+    }
+    /*
+     * **按文字找可点元素**（实测：IG 移动登录页既没有 `<form>`，也没有 `<button>`，
+     * 那个"登录"是个普通 div —— 只查 button/submit 就只会回 nobutton）。
+     * 取 innerText 与按钮文案匹配、且**文字最短**（= 最深的那个）的元素，
+     * 然后沿它的祖先链各派发一遍鼠标事件（React 的合成事件可能挂在任意一层）。
+     */
+    return head
+      // 文案先去掉所有空白/零宽字符再比：IG 的按钮文字里常带换行与 \u200b，锚定正则会被它坑掉。
+      + 'var V="v3";var NAMES=["登录","登入","下一步","继续","login","log in","next","continue"];'
+      + 'var els=document.querySelectorAll(\'div,span,a,button,[role="button"]\');'
+      + 'var hit=null,bestLen=999;'
+      + 'for(var i=0;i<els.length;i++){var el=els[i];'
+      + 'var t=(el.innerText||"").replace(/[\\s\\u200b]+/g,"");'
+      + 'if(!t||t.length>12){continue;}'
+      + 'if(NAMES.indexOf(t.toLowerCase())<0){continue;}'
+      + 'var r=el.getBoundingClientRect();if(r.width<4||r.height<4){continue;}'
+      + 'if(t.length<bestLen){hit=el;bestLen=t.length;}}'
+      // 兜底：IG 新版登录按钮是 `div.wbloks_1`（Bloks 渲染的可点区块），文案可能被拆到子节点里。
+      // 取"最后一个高 40~56 的 wbloks_1"，通常就是表单底部那颗主按钮。
+      + 'if(!hit){var ws=document.querySelectorAll(\'div[class*="wbloks"]\');'
+      + 'for(var j=ws.length-1;j>=0;j--){var w=ws[j];var rr=w.getBoundingClientRect();'
+      + 'if(rr.height>=40&&rr.height<=60&&rr.width>60){hit=w;break;}}}'
+      + 'if(!hit){return "nobutton:"+V+" divs="+document.querySelectorAll("div").length'
+      + '+" wb="+document.querySelectorAll(\'div[class*="wbloks"]\').length;}'
+      // 这座页面是移动端 Bloks 渲染的：**可能只认 touch / pointer 事件**（鼠标事件被忽略）。
+      // 所以把鼠标、指针、触摸三条都派发一遍（含祖先链，React 合成事件可能挂在任意一层）。
+      + 'var r0=hit.getBoundingClientRect();var cx=r0.left+r0.width/2,cy=r0.top+r0.height/2;'
+      + 'function fire(e,type){try{'
+      + 'if(type.indexOf("touch")===0){'
+      + 'var tch=new Touch({identifier:1,target:e,clientX:cx,clientY:cy,pageX:cx,pageY:cy});'
+      + 'e.dispatchEvent(new TouchEvent(type,{bubbles:true,cancelable:true,'
+      + 'touches:type==="touchend"?[]:[tch],targetTouches:type==="touchend"?[]:[tch],'
+      + 'changedTouches:[tch]}));'
+      + '}else if(type.indexOf("pointer")===0){'
+      + 'e.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,'
+      + 'pointerId:1,pointerType:"touch",isPrimary:true,clientX:cx,clientY:cy,button:0,buttons:1}));'
+      + '}else{'
+      + 'e.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,composed:true,view:window,'
+      + 'clientX:cx,clientY:cy,button:0}));}'
+      + '}catch(err){}}'
+      + 'var chain=[];var n=hit;for(var k=0;k<3&&n;k++){chain.push(n);n=n.parentElement;}'
+      + 'var seq=["pointerdown","touchstart","mousedown","pointerup","touchend","mouseup","click"];'
+      + 'for(var c=0;c<chain.length;c++){var e=chain[c];'
+      + 'for(var s=0;s<seq.length;s++){fire(e,seq[s]);}}'
+      + 'try{hit.click();}catch(e2){}'
+      + 'return "clicked:"+hit.tagName+"."+String(hit.className||"").slice(0,12)+"@"+Math.round(r0.width)+"x"+Math.round(r0.height)+":"+hit.innerText.trim().replace(/\\s+/g,"").slice(0,10);'
+      + '}catch(e){return "error:"+String(e).slice(0,80);}})()';
+  }
+
+  /**
+   * **原子版**：填值 + 点提交，一次 JS 内完成（理由见 login 里那段说明）。
+   *
+   * @returns JSON：`{"set":1,"u":13,"p":9,"clicked":1,"btn":"DIV.wbloks_1@334x44"}`
+   */
+  private static submitAllScript(user: string, password: string): string {
+    return '(function(){try{'
+      + 'var U=' + JSON.stringify(user) + ',P=' + JSON.stringify(password) + ';'
+      + 'function setv(el,v){var d=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,"value");'
+      + 'd.set.call(el,v);el.dispatchEvent(new Event("input",{bubbles:true}));'
+      + 'el.dispatchEvent(new Event("change",{bubbles:true}));}'
+      + 'var u=document.querySelector(\'input[name="username"]\')||document.querySelector(\'#username\');'
+      + 'var p=document.querySelector(\'input[name="password"]\')||document.querySelector(\'#password\');'
+      + 'if(!u||!p){return JSON.stringify({set:0,why:"noinput"});}'
+      + 'u.focus();setv(u,U);p.focus();setv(p,P);'
+      + 'var ok=(u.value.length>0&&p.value.length>0)?1:0;'
+      // —— 找按钮：先按文案（去空白/零宽字符），再退回 wbloks 区块 ——
+      + 'var NAMES=["登录","登入","下一步","继续","login","log in","next","continue"];'
+      + 'var els=document.querySelectorAll(\'div,span,a,button,[role="button"]\');'
+      + 'var hit=null,best=999;'
+      + 'for(var i=0;i<els.length;i++){var el=els[i];'
+      + 'var t=(el.innerText||"").replace(/[\\s\\u200b]+/g,"");'
+      + 'if(!t||t.length>12){continue;}'
+      + 'if(NAMES.indexOf(t.toLowerCase())<0){continue;}'
+      + 'var rc=el.getBoundingClientRect();if(rc.width<4||rc.height<4){continue;}'
+      + 'if(t.length<best){hit=el;best=t.length;}}'
+      + 'if(!hit){var ws=document.querySelectorAll(\'div[class*="wbloks"]\');'
+      + 'for(var j=ws.length-1;j>=0;j--){var w=ws[j];var rr=w.getBoundingClientRect();'
+      + 'if(rr.height>=40&&rr.height<=60&&rr.width>60){hit=w;break;}}}'
+      // —— 派发事件（移动端 Bloks 页面：pointer / touch / mouse / click 全发一遍）——
+      + 'var clicked=0,descr="none";'
+      + 'if(hit){var r0=hit.getBoundingClientRect();var cx=r0.left+r0.width/2,cy=r0.top+r0.height/2;'
+      + 'descr=hit.tagName+"."+String(hit.className||"").slice(0,12)+"@"+Math.round(r0.width)+"x"+Math.round(r0.height);'
+      + 'function fire(e,type){try{'
+      + 'if(type.indexOf("touch")===0){'
+      + 'var tch=new Touch({identifier:1,target:e,clientX:cx,clientY:cy,pageX:cx,pageY:cy});'
+      + 'e.dispatchEvent(new TouchEvent(type,{bubbles:true,cancelable:true,composed:true,touches:[tch],'
+      + 'targetTouches:[tch],changedTouches:[tch]}));'
+      + '}else if(type.indexOf("pointer")===0){'
+      + 'e.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,composed:true,pointerId:1,'
+      + 'pointerType:"touch",isPrimary:true,clientX:cx,clientY:cy,button:0,buttons:1}));'
+      + '}else{e.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,composed:true,view:window,'
+      + 'clientX:cx,clientY:cy,button:0}));}}catch(err){}}'
+      + 'var chain=[];var n=hit;for(var k=0;k<3&&n;k++){chain.push(n);n=n.parentElement;}'
+      + 'var seq=["pointerdown","touchstart","mousedown","pointerup","touchend","mouseup","click"];'
+      + 'for(var c=0;c<chain.length;c++){for(var s=0;s<seq.length;s++){fire(chain[c],seq[s]);}}'
+      + 'try{hit.click();}catch(e2){}clicked=1;}'
+      + 'return JSON.stringify({set:ok,u:u.value.length,p:p.value.length,clicked:clicked,btn:descr});'
+      + '}catch(e){return JSON.stringify({set:0,why:"err:"+String(e).slice(0,80)});}})()';
   }
 
   /** 填**只填用户名**（两步登录页的第一步）。 */
@@ -241,8 +448,16 @@ export class WebLogin {
             tick, `${bridge.isAttached()}`);
         }
       } else {
-        last = new PageState(raw, raw.indexOf('"u":1') >= 0, raw.indexOf('"p":1') >= 0,
-          WebLogin.fieldOf(raw, 'r'));
+        /*
+         * **必须先"归一化"再判**（真机日志把这一点摆得很清楚）：
+         * `runJavaScript` 会把我们 `JSON.stringify` 出来的字符串**再序列化一次**，
+         * 于是拿到的是 `"{\"r\":\"complete\",…}"` —— 里面的引号是被转义的。
+         * 直接 `indexOf('"u":1')` 永远匹配不到，于是"表单明明在，却一直等到超时"
+         * （正是用户看到的"登录页没能加载出来"）。
+         */
+        const text: string = WebLogin.normalizeProbe(raw);
+        last = new PageState(text, text.indexOf('"u":1') >= 0, text.indexOf('"p":1') >= 0,
+          WebLogin.fieldOf(text, 'r'));
         if (tick % 3 === 0) {
           hilog.info(DOMAIN, TAG, 'probe %{public}s', raw);
         }
@@ -283,6 +498,22 @@ export class WebLogin {
       + `${title.length > 0 ? ` title=${title}` : ''}`;
   }
 
+  /**
+   * 把探测结果"归一化"成一份普通 JSON 文本。
+   *
+   * `runJavaScript` 的返回有两层：JS 里 `JSON.stringify` 过一次，桥接又把它当字符串
+   * 序列化一次 —— 拿到的是 `"{\"r\":\"complete\",…}"`。这里剥掉外层引号并还原转义，
+   * 后面所有 `indexOf('"u":1')` / 取值才成立（否则永远匹配不到，见 waitForState 的说明）。
+   */
+  private static normalizeProbe(raw: string): string {
+    let text: string = raw.trim();
+    if (text.length >= 2 && text.charAt(0) === '"' && text.charAt(text.length - 1) === '"') {
+      text = text.substring(1, text.length - 1);
+    }
+    text = text.split('\\"').join('"');
+    text = text.split('\\\\').join('\\');
+    return text;
+  }
   /** 从 `{"k":"v",…}` 里取一个字段（探测结果是我们自己拼的 JSON，够用即可）。 */
   private static fieldOf(raw: string, key: string): string {
     const needle: string = `"${key}":`;
@@ -327,20 +558,41 @@ export class WebLogin {
       + 'var p=document.querySelector(\'input[name="password"]\')||document.querySelector(\'#password\');'
       + 'if(!u||!p){return "noform";}'
       + 'u.focus();setv(u,U);p.focus();setv(p,P);'
-      + 'var btns=Array.prototype.slice.call(document.querySelectorAll(\'button,div[role="button"]\'));'
-      + 'var hit=null;'
-      + 'for(var i=0;i<btns.length;i++){var b=btns[i];var t=(b.innerText||"").trim();'
-      + 'if(b.type==="submit"||/^(log\\s*in|登录|登入)$/i.test(t)){hit=b;break;}}'
-      + 'if(hit){hit.click();return "submitted";}'
-      + 'var f=u.closest("form");if(f){if(f.requestSubmit){f.requestSubmit();}else{f.submit();}return "formsubmit";}'
-      + 'return "nobutton";'
-      + '}catch(e){return "error:"+String(e).slice(0,120);}})()';
+      // 读回核对：值真的写进去了吗（React 受控组件可能把值吃掉）。
+      + 'return JSON.stringify({set:(u.value.length>0&&p.value.length>0)?1:0,u:u.value.length,p:p.value.length});'
+      + '}catch(e){return JSON.stringify({set:0,m:String(e).slice(0,80)});}})()';
+  }
+
+  /** 读页面上的一段可见文字（诊断用：登录失败时 IG 会写一句原因，我们需要看原文）。 */
+  private static async pageText(bridge: InstagramPageBridge): Promise<string> {
+    const js: string = '(function(){try{var t=(document.body?document.body.innerText:"")'
+      + '.replace(/\\s+/g," ").trim();return t.slice(0,220);}catch(e){return "";}})()';
+    const raw: string = await bridge.runScript(js);
+    const text: string = WebLogin.normalizeProbe(raw);
+    return text.length >= 2 && text.charAt(0) === '"'
+      ? text.substring(1, text.length - 1).split('\\"').join('"') : text;
   }
 
   /** 等会话落地：Cookie 罐里出现 sessionid + ds_user_id 就算成功。 */
   private static async waitForSession(bridge: InstagramPageBridge): Promise<string> {
     const deadline: number = Date.now() + SESSION_WAIT_MS;
+    let textTicks: number = 0;
     while (Date.now() < deadline) {
+      /*
+       * 每约 5 秒把页面上的文字抓一段进日志（最多 6 次）。
+       *
+       * 为什么需要：登录失败时 IG 会在页面上写一句原因，而那句话是**动态**的
+       * （"密码不对" / "无法登录" / "稍后再试" / "需要验证"…）。只按猜的几组关键词匹配
+       * 会漏，日志里有原文才能真正对上。
+       */
+      if (textTicks < 6 && (textTicks === 0 || Date.now() + SESSION_WAIT_MS - deadline
+        > 5000 * textTicks)) {
+        const page: string = await WebLogin.pageText(bridge);
+        if (page.length > 0) {
+          hilog.info(DOMAIN, TAG, 'page text[%{public}d] %{public}s', textTicks, page);
+        }
+        textTicks++;
+      }
       let snapshot: InstagramCookieSnapshot | null = null;
       try {
         snapshot = await InstagramCookieJar.inspect();
