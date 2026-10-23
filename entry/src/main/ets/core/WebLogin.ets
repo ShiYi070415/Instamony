@@ -66,6 +66,14 @@ class PageSignal {
 
 export class WebLogin {
   private static running: boolean = false;
+  /**
+   * 最近一次表单探测的结果（诊断用）。
+   *
+   * 为什么把它带进**界面文案**：无头登录失败时用户看到的只有一句"加载不出来"，
+   * 而"到底卡在哪"（页面没起来 / 重定向了 / JS 没执行）全在探测结果里。
+   * 把最关键的三四个字段附在错误后面，用户截个图就能定位 —— 比让他捞 hilog 现实得多。
+   */
+  private static lastProbe: string = '';
 
   /** 正在跑（界面据此显示进度、禁用按钮）。 */
   static isRunning(): boolean {
@@ -105,7 +113,8 @@ export class WebLogin {
         formReady = await WebLogin.waitForForm(bridge);
       }
       if (!formReady) {
-        return '登录页没能加载出来（检查网络后重试）';
+        // 把诊断摘要带进界面文案（见 lastProbe 的说明）。
+        return `登录页没能加载出来（检查网络后重试）${WebLogin.lastProbe}`;
       }
       const submitted: string = await bridge.runScript(WebLogin.fillScript(user, password));
       hilog.info(DOMAIN, TAG, 'submit script → %{public}s', submitted);
@@ -132,6 +141,8 @@ export class WebLogin {
     const deadline: number = Date.now() + FORM_WAIT_MS;
     let tick: number = 0;
     let lastState: string = '';
+    let sawAnything: boolean = false;
+    WebLogin.lastProbe = '';
     while (Date.now() < deadline) {
       const raw: string = await bridge.runScript(FORM_PROBE_JS);
       if (raw.trim().length === 0) {
@@ -142,6 +153,7 @@ export class WebLogin {
         }
       } else {
         lastState = raw;
+        sawAnything = true;
         if (tick % 3 === 0) {
           hilog.info(DOMAIN, TAG, 'probe %{public}s', raw);
         }
@@ -152,9 +164,58 @@ export class WebLogin {
       tick++;
       await WebLogin.sleep(POLL_MS);
     }
+    // 诊断摘要：一会儿要拼到界面文案里（见 lastProbe）。
+    WebLogin.lastProbe = `\n[诊断] ${sawAnything ? WebLogin.probeSummary(lastState)
+      : `JS 无返回 (attached=${bridge.isAttached()})`}`;
     hilog.warn(DOMAIN, TAG, 'form not found in %{public}dms, last=%{public}s',
       FORM_WAIT_MS, lastState.length > 0 ? lastState : '(none)');
     return false;
+  }
+
+  /**
+   * 把探测 JSON 压成一行给人看的东西（只留关键几项）。
+   *
+   * 例：`ready=complete form=0 inputs=3 text=812 url=/accounts/login/`
+   */
+  private static probeSummary(raw: string): string {
+    const ready: string = WebLogin.fieldOf(raw, 'r');
+    const form: string = WebLogin.fieldOf(raw, 'f');
+    const inputs: string = WebLogin.fieldOf(raw, 'n');
+    const len: string = WebLogin.fieldOf(raw, 'len');
+    const href: string = WebLogin.fieldOf(raw, 'h');
+    const title: string = WebLogin.fieldOf(raw, 't');
+    const path: string = href.indexOf('instagram.com') >= 0
+      ? href.substring(href.indexOf('instagram.com') + 'instagram.com'.length) : href;
+    return `ready=${ready.length > 0 ? ready : '?'} form=${form.length > 0 ? form : '?'}`
+      + ` inputs=${inputs.length > 0 ? inputs : '?'} text=${len.length > 0 ? len : '?'}`
+      + ` url=${path.length > 0 ? path : '?'}`
+      + `${title.length > 0 ? ` title=${title}` : ''}`;
+  }
+
+  /** 从 `{"k":"v",…}` 里取一个字段（探测结果是我们自己拼的 JSON，够用即可）。 */
+  private static fieldOf(raw: string, key: string): string {
+    const needle: string = `"${key}":`;
+    const at: number = raw.indexOf(needle);
+    if (at < 0) {
+      return '';
+    }
+    let cursor: number = at + needle.length;
+    if (cursor >= raw.length) {
+      return '';
+    }
+    if (raw.charAt(cursor) === '"') {
+      const close: number = raw.indexOf('"', cursor + 1);
+      return close > cursor ? raw.substring(cursor + 1, close) : '';
+    }
+    let end: number = cursor;
+    while (end < raw.length) {
+      const ch: string = raw.charAt(end);
+      if (ch === ',' || ch === '}') {
+        break;
+      }
+      end++;
+    }
+    return raw.substring(cursor, end).trim();
   }
 
   /**

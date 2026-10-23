@@ -3411,6 +3411,16 @@ struct Index {
     // 直接给登录页地址：这条地址本身永远被闸门放行，不必再过 noteStartUrl（它可能落成首页）。
     this.webStartUrl = AppConfig.INSTAGRAM_LOGIN_URL;
     this.webVisible = false;
+    /*
+     * **登录页一出现就开"最低可见度"模式**（需求："把 webview 能见度调到最低，像以前那样"）。
+     *
+     * 为什么不等到点登录那一刻：宿主是登录页出现时才挂的，挂上这一下引擎就开始加载页面；
+     * 若这时还是 `Visibility.Hidden`，chromium 会按 INVISIBLE 节流 ——
+     * 实测就卡在这里（界面报「登录页没能加载出来」）。
+     * 现在从挂载的第一帧起就是"可见但 0.01 透明"：用户看不到它，页面却能正常跑；
+     * 登录成功（或不登录了）时 `unmountWebHost` 立刻把它收掉，热与耗电只发生在登录页这一屏。
+     */
+    this.webHeadless = true;
     this.mountWebHost();
   }
 
@@ -3431,18 +3441,13 @@ struct Index {
       await Index.delay(WEB_LOGIN_MOUNT_WAIT_MS);
     }
     /*
-     * **进入无头模式**：宿主在用户眼里仍然"不存在"，但引擎按正常节奏跑。
-     * 之前是 `Visibility.Hidden` 挂着它 —— chromium 会把它标成 INVISIBLE_THROTTLED，
-     * 于是 IG 登录页渲染/脚本都跑不动，界面停在「登录页没能加载出来」（用户实测）。
+     * **无头模式从挂载那一刻就开着**（见 prepareHiddenWebForLogin）：这里只补等一小会儿，
+     * 让引擎把页面真正跑起来。不再在结束处复位 —— 复位成 `Visibility.Hidden` 会让页面瞬间
+     * 被节流（失败后重试就没法继续用了）；真正的回收交给 `unmountWebHost`。
      */
     this.webHeadless = true;
     await Index.delay(WEB_HEADLESS_SETTLE_MS);
-    let message: string = '';
-    try {
-      message = await WebLogin.login(username, password);
-    } finally {
-      this.webHeadless = false;
-    }
+    const message: string = await WebLogin.login(username, password);
     if (message.length === 0) {
       // 会话已经进罐：重读登录态（五个页签随之建起来），并把隐藏网页收掉省电。
       await this.refreshSessionFromJar();
@@ -3468,6 +3473,8 @@ struct Index {
     hilog.info(DOMAIN, TAG, 'unmount web host (idle) why=%{public}s', why);
     this.webHostMounted = false;
     this.bridgeReady = false;
+    // 宿主要被摘掉了：无头模式跟着复位（否则下次挂载会带着旧状态进来）。
+    this.webHeadless = false;
     // 控制器随即和组件解绑：之后的导航请求由 PageBridge 先攒着（见 markDetached）。
     this.bridge.markDetached();
   }
