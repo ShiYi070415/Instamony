@@ -93,6 +93,44 @@ export class NativeFeed {
   private static warmTask: Promise<void> | null = null;
 
   /**
+   * **正在飞的翻页请求**（游标 → Promise）：同一个游标只发一发。
+   *
+   * 为什么要它：`prefetchNativePage` 与触底翻页、缓存补页都可能同时要"同一个游标"，
+   * 全局闸门那边两发就是两发（真机冷启动实测：15 秒里 `feed/timeline/` 被打了 4 发、
+   * 每发 ~350KB，而且回的是**同一页**）。这里按游标合并，第二发直接搭第一发的车。
+   */
+  private static inflightPages: Map<string, Promise<NativeFeedPage | null>> =
+    new Map<string, Promise<NativeFeedPage | null>>();
+  /**
+   * **刚拿回来的翻页结果**（游标 → 页），只活 `PAGE_MEMO_MS`。
+   *
+   * 翻页是"只追加"的语义：同一个游标在几秒内重复要，服务端回的一定是同一页 ——
+   * 与其再排一次闸门、再解析一次 350KB，不如直接给回上一次那份。
+   * 只对**非空游标**生效：第一页（刷新）永远要真的去问，不能拿旧的糊弄用户。
+   */
+  private static memoPages: Map<string, NativeFeedPage> = new Map<string, NativeFeedPage>();
+  /** 每个 memo 是什么时候放进去的（毫秒）。 */
+  private static memoAtMs: Map<string, number> = new Map<string, number>();
+  /** memo 的有效期：够盖住"同一轮里连续几次要同一页"，又不会让用户看到过期内容。 */
+  private static readonly PAGE_MEMO_MS: number = 8000;
+  /** 作废代数（换账号时 +1）：作废之前发起、之后才回来的那一页不许写进 memo。 */
+  private static epoch: number = 0;
+
+  /**
+   * 清空翻页缓存（换账号/退出登录时调，见 pages/Index.forgetAccountMemory）。
+   *
+   * 不清的话：换号后第一分钟里翻页拿到的还是**上一个人**预取的那几页（同一个缓存键）。
+   */
+  static clearCache(): void {
+    NativeFeed.memoPages.clear();
+    NativeFeed.memoAtMs.clear();
+    NativeFeed.inflightPages.clear();
+    NativeFeed.warmPage = null;
+    NativeFeed.epoch++;
+    hilog.info(DOMAIN, TAG, 'feed page cache cleared (epoch %{public}d)', NativeFeed.epoch);
+  }
+
+  /**
    * app 启动时就发一发第一页，结果留在内存里等页面来取（幂等，重复调用不会重复发）。
    *
    * 不 await、不抛：预热失败无所谓，页面那条路会照旧自己发一次。
@@ -176,6 +214,29 @@ export class NativeFeed {
       }
     }
     /*
+     * **同一个游标的翻页：合并 + 短缓存**（见 inflightPages / memoPages）。
+     *
+     * 三件事一起做，全是"不发多余请求"：
+     *   1. 8 秒内已经拿过这一页 → 直接给回，一发都不发；
+     *   2. 正在飞 → 搭车等它，不再排队（两发会占满闸门，反而更慢）；
+     *   3. 都没有 → 真发一发，结果存进两处。
+     */
+    if (cursor.length > 0) {
+      const memo: NativeFeedPage | undefined = NativeFeed.memoPages.get(cursor);
+      const at: number | undefined = NativeFeed.memoAtMs.get(cursor);
+      if (memo !== undefined && at !== undefined
+        && Date.now() - at <= NativeFeed.PAGE_MEMO_MS) {
+        hilog.info(DOMAIN, TAG, 'feed page memo hit cursor=%{public}dms age=%{public}dms',
+          cursor.length, Date.now() - at);
+        return memo;
+      }
+      const joined: Promise<NativeFeedPage | null> | undefined = NativeFeed.inflightPages.get(cursor);
+      if (joined !== undefined) {
+        hilog.info(DOMAIN, TAG, 'feed page joined inflight cursor=%{public}d', cursor.length);
+        return joined;
+      }
+    }
+    /*
      * **"关注的人看完了"就短暂别问了**（见 markCaughtUp 的说明）。
      *
      * 真机现场：那个状态的时间线响应是 230~380KB、耗时 3~6 秒，但 `feed_items` 里只有
@@ -189,12 +250,39 @@ export class NativeFeed {
         Date.now() - NativeFeed.caughtUpAt());
       return null;
     }
-    const viaMobile: NativeFeedPage | null = await NativeFeed.viaMobile(cursor);
+    const task: Promise<NativeFeedPage | null> = NativeFeed.viaMobile(cursor);
+    const epoch: number = NativeFeed.epoch;
+    if (cursor.length > 0) {
+      NativeFeed.inflightPages.set(cursor, task);
+    }
+    let viaMobile: NativeFeedPage | null = null;
+    try {
+      viaMobile = await task;
+    } finally {
+      // 只清"自己那一张"：期间可能已经被别的调用换掉了。
+      if (cursor.length > 0 && NativeFeed.inflightPages.get(cursor) === task) {
+        NativeFeed.inflightPages.delete(cursor);
+      }
+    }
     if (viaMobile !== null) {
+      // 换号之后回来的那一页属于上一个人：不许写进 memo（见 clearCache 的说明）。
+      if (cursor.length > 0 && NativeFeed.epoch === epoch) {
+        NativeFeed.rememberPage(cursor, viaMobile);
+      }
       return viaMobile;
     }
     hilog.warn(DOMAIN, TAG, 'feed mobile failed (%{public}s)', MobileFeedTimeline.detail());
     return null;
+  }
+
+  /** 把一页记进短缓存（顺手控制条数，别让内存里的旧页越攒越多）。 */
+  private static rememberPage(cursor: string, page: NativeFeedPage): void {
+    if (NativeFeed.memoPages.size >= 8) {
+      NativeFeed.memoPages.clear();
+      NativeFeed.memoAtMs.clear();
+    }
+    NativeFeed.memoPages.set(cursor, page);
+    NativeFeed.memoAtMs.set(cursor, Date.now());
   }
 
   /**

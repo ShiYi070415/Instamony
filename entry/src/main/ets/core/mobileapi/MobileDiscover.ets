@@ -84,6 +84,40 @@ export class MobileDiscover {
   private static sessionId: string = '';
   /** 上次探索流给的 `rank_token`（翻页与搜索帖子都要回传）。 */
   private static rankToken: string = '';
+  /**
+   * 正在飞的探索流请求（`游标 → Promise`，见 explore）：同一游标只发一发。
+   *
+   * 首页推荐段、Reels 探索流、搜索推荐网格都要这条接口，冷启动时它们几乎同时要第一页。
+   */
+  private static inflightPages: Map<string, Promise<MobileMediaPage | null>> =
+    new Map<string, Promise<MobileMediaPage | null>>();
+  /** 刚拿回来的探索页（`游标 → 页`，只活 `EXPLORE_MEMO_MS`）。 */
+  private static memoPages: Map<string, MobileMediaPage> = new Map<string, MobileMediaPage>();
+  private static memoAtMs: Map<string, number> = new Map<string, number>();
+  /**
+   * 探索页缓存的存活时间（毫秒）。
+   *
+   * 20 秒：够让"首页/Reels/搜索三处几乎同时要第一页"共用一发，又短到不会让用户
+   * 看到明显过期内容（下拉刷新那条路会绕过缓存重新要）。
+   */
+  private static readonly EXPLORE_MEMO_MS: number = 20000;
+  /**
+   * 作废代数（换账号时 +1）：作废之前发起、之后才回来的那一发**不许写进缓存**。
+   *
+   * 不这么做的话，换号瞬间在飞的那一发（上一个人的探索流）会被存进 memo，
+   * 接下来 20 秒里新账号的首页/搜索都会读到别人的内容。
+   */
+  private static epoch: number = 0;
+
+  /** 清空探索流缓存（换账号/退出登录时调，见 pages/Index.forgetAccountMemory）。 */
+  static clearCache(): void {
+    MobileDiscover.memoPages.clear();
+    MobileDiscover.memoAtMs.clear();
+    MobileDiscover.inflightPages.clear();
+    MobileDiscover.rankToken = '';
+    MobileDiscover.epoch++;
+    hilog.info(DOMAIN, TAG, 'explore cache cleared (epoch %{public}d)', MobileDiscover.epoch);
+  }
 
   static rankTokenNow(): string {
     return MobileDiscover.rankToken;
@@ -100,6 +134,64 @@ export class MobileDiscover {
    */
   static async explore(cursor: string = '', priority: number = ApiThrottle.warm(),
                       family: string = ApiThrottle.MOBILE): Promise<MobileMediaPage | null> {
+    /*
+     * **同一个探索游标只发一发**（单飞 + 短缓存，见 inflightPages / memoPages）。
+     *
+     * 真机冷启动现场：`discover/topical_explore/` 在 20 秒里被打了 **5 发、约 5MB**
+     * —— 因为有三条互不知情的路都在用它，而且要的往往是**同一页**：
+     *   · 首页「为你推荐」那一段（`FeedViewModel` → `NativeSearch.recommendedPage`）；
+     *   · Reels 探索流（`NativeReels.viaExplore`）；
+     *   · 搜索页推荐网格（`SearchViewModel` → 同一条 `recommendedPage`）。
+     * 每一发 1MB 起、还要在全局闸门排队（并发只有 2），等于首屏在跟它抢通道。
+     * 合并之后：同时在飞 → 后来者搭车；刚拿回来过（`EXPLORE_MEMO_MS` 内）→ 直接给回那份。
+     *
+     * 只合并**同一游标**：不同游标是不同的页，不能混用。
+     */
+    const key: string = `explore|${cursor}`;
+    const memo: MobileMediaPage | undefined = MobileDiscover.memoPages.get(key);
+    const memoAt: number | undefined = MobileDiscover.memoAtMs.get(key);
+    if (memo !== undefined && memoAt !== undefined
+      && Date.now() - memoAt <= MobileDiscover.EXPLORE_MEMO_MS) {
+      hilog.info(DOMAIN, TAG, 'explore memo hit cursor=%{public}d age=%{public}dms',
+        cursor.length, Date.now() - memoAt);
+      return memo;
+    }
+    const joined: Promise<MobileMediaPage | null> | undefined =
+      MobileDiscover.inflightPages.get(key);
+    if (joined !== undefined) {
+      hilog.info(DOMAIN, TAG, 'explore joined inflight cursor=%{public}d', cursor.length);
+      return joined;
+    }
+    const task: Promise<MobileMediaPage | null> =
+      MobileDiscover.exploreOnce(cursor, priority, family);
+    const epoch: number = MobileDiscover.epoch;
+    MobileDiscover.inflightPages.set(key, task);
+    try {
+      const page: MobileMediaPage | null = await task;
+      if (page !== null && MobileDiscover.epoch === epoch) {
+        MobileDiscover.remember(key, page);
+      }
+      return page;
+    } finally {
+      if (MobileDiscover.inflightPages.get(key) === task) {
+        MobileDiscover.inflightPages.delete(key);
+      }
+    }
+  }
+
+  /** 记一页（顺手控制条数，别让内存里攒一堆旧页）。 */
+  private static remember(key: string, page: MobileMediaPage): void {
+    if (MobileDiscover.memoPages.size >= 6) {
+      MobileDiscover.memoPages.clear();
+      MobileDiscover.memoAtMs.clear();
+    }
+    MobileDiscover.memoPages.set(key, page);
+    MobileDiscover.memoAtMs.set(key, Date.now());
+  }
+
+  /** 真正发这一发探索请求（合并/缓存见 explore）。 */
+  private static async exploreOnce(cursor: string, priority: number,
+                                   family: string): Promise<MobileMediaPage | null> {
     const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
     if (identity === null) {
       hilog.info(DOMAIN, TAG, 'explore skipped: no session');

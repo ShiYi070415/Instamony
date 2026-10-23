@@ -149,6 +149,10 @@ import { NativeStories } from '../core/NativeStories';
 import { NativeSearch, SearchPostPage } from '../core/NativeSearch';
 // 账号安全验证（challenge_required）的台账：界面据此给「去验证」入口。
 import { MobileChallenge } from '../core/mobileapi/MobileChallenge';
+// 换号时要清掉探索流的页级短缓存（见 forgetAccountMemory）。
+import { MobileDiscover } from '../core/mobileapi/MobileDiscover';
+// 换号时要清掉首页翻页的页级短缓存（同上）。
+import { NativeFeed } from '../core/NativeFeed';
 import { StoryCache } from '../core/StoryCache';
 import { AccountChange, AccountScope } from '../core/AccountScope';
 import { StoryDiag } from '../core/StoryDiag';
@@ -3541,6 +3545,13 @@ struct Index {
     PosterCache.clear();
     MediaPrefetch.clearCache();
     Translator.clear();
+    /*
+     * **进程内的"页级"短缓存也要清**：首页翻页 memo（`NativeFeed`）与探索流 memo
+     * （`MobileDiscover`）都是按游标存的、**不带账号**，换号后不清就会把上一个人的
+     * 帖子/推荐页当成"刚拿到的"直接铺出来（它们各自还有作废代数兜底，见两处 clearCache）。
+     */
+    NativeFeed.clearCache();
+    MobileDiscover.clearCache();
     // 网页的 **HTTP 缓存**里可能存着上一个人的页面（HTML / JS / 图片）：一起清掉。
     try {
       this.bridge.controller.removeCache(true);

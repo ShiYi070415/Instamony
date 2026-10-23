@@ -853,6 +853,19 @@ export class FeedViewModel {
         hilog.info(DOMAIN, TAG, 'explore prefetch empty → end of stream');
         return;
       }
+      /*
+       * **游标没前进就别再补**（与 prefetchNativePage 同一条判据）。
+       *
+       * 真机冷启动里探索流也出现过"同一个游标连要两遍"（两次 `home recommended n=12
+       * cursor=252`）。服务端把同一个游标回给我们时，再补也只是同一页。
+       */
+      if (page.cursor.length === 0 || page.cursor === cursor) {
+        this.exploreHasMore = false;
+        this.exploreEndAtMs = Date.now();
+        hilog.warn(DOMAIN, TAG, 'explore prefetch stop: no progress cursor=%{public}d next=%{public}d',
+          cursor.length, page.cursor.length);
+        return;
+      }
       this.exploreQueue.push(page);
       hilog.info(DOMAIN, TAG, 'explore prefetch ready n=%{public}d queued=%{public}d',
         page.posts.length, this.exploreQueue.length);
@@ -1527,6 +1540,25 @@ export class FeedViewModel {
       if (page === null) {
         return;
       }
+      /*
+       * **游标没前进 = 这条链不必再补**（真机实测的浪费：15 秒里 `feed/timeline/` 4 发、
+       * 每发 ~350KB，回的都是同一页，`next_max_id` 仍是 104）。
+       *
+       * 两种表现都要停：
+       *   · 服务端把**同一个游标**又回了一遍（分页参数没生效）；
+       *   · 回的仍是**已经全在手上**的那一页（去重后一条新的都没有）。
+       * 停法不是永久关闭，而是置 `nativeHasMore = false` 并记一次卡住时刻 —— 用户下拉刷新
+       * 会把这条链重新打开（见 refresh），所以不会像以前那样"永远翻不动"。
+       */
+      if (page.nextCursor === cursor || !this.hasUnseenNativeItems(page)) {
+        this.nativeHasMore = false;
+        this.pagingStuck = true;
+        this.lastRestartMs = Date.now();
+        hilog.warn(DOMAIN, TAG,
+          'native prefetch stop: no progress cursor=%{public}d next=%{public}d n=%{public}d',
+          cursor.length, page.nextCursor.length, page.items.length);
+        return;
+      }
       this.nativeQueue.push(page);
       // 服务端这一页的 has_next_page 就是整条链的最新判断。
       this.nativeHasMore = page.hasMore;
@@ -1537,6 +1569,32 @@ export class FeedViewModel {
     }).catch((): void => {
       this.nativeFetching = false;
     });
+  }
+
+  /**
+   * 这一页里有没有**手上还没有的**帖子（见 prefetchNativePage 的"游标没前进"那条）。
+   *
+   * 只跟 `following` 比（这一页就是关注流那一链），不碰探索流那段。
+   */
+  private hasUnseenNativeItems(page: NativeFeedPage): boolean {
+    if (page.items.length === 0) {
+      return false;
+    }
+    for (let index: number = 0; index < page.items.length; index++) {
+      const item: FeedItemDto = page.items[index];
+      const key: string = item.shortcode.length > 0 ? item.shortcode : item.id;
+      let known: boolean = false;
+      for (let at: number = 0; at < this.following.length; at++) {
+        if (FeedMapper.keyOf(this.following[at]) === key) {
+          known = true;
+          break;
+        }
+      }
+      if (!known) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** 取走缓存里最前面的那一页（先进先出，取走即出队，避免同一页铺两遍）。 */
