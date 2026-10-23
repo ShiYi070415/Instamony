@@ -213,30 +213,48 @@ export class WebLogin {
       if (!state.usable()) {
         return `登录页没能加载出来${WebLogin.lastProbe}`;
       }
-      const started: string = await bridge.runScript(WebLogin.ajaxStartScript(user, password));
-      hilog.info(DOMAIN, TAG, 'web ajax start → %{public}s', started);
-      if (started.indexOf('started') < 0) {
-        return `没能在网页里发出登录请求（${started.slice(0, 60)}）`;
-      }
-      const deadline: number = Date.now() + 15000;
-      while (Date.now() < deadline) {
-        await WebLogin.sleep(600);
-        const raw: string = WebLogin.normalizeProbe(await bridge.runScript(WebLogin.AJAX_RESULT_JS));
-        if (raw.indexOf('"done":1') < 0) {
+      /*
+       * **三种表单体变体依次试**：这个端点的字段这几年换过几版，只试一种很容易被
+       * "明明密码对却回 authenticated:false"误导。每种都把响应体记进日志，便于定位。
+       */
+      let lastBody: string = '';
+      let lastStatus: string = '';
+      for (let variant: number = 0; variant < 3; variant++) {
+        const started: string =
+          await bridge.runScript(WebLogin.ajaxStartScript(user, password, variant));
+        if (started.indexOf('started') < 0) {
+          hilog.warn(DOMAIN, TAG, 'ajax variant %{public}d not sent: %{public}s', variant, started);
           continue;
         }
-        const body: string = WebLogin.fieldOf(raw, 'body');
-        const status: string = WebLogin.fieldOf(raw, 'status');
-        hilog.info(DOMAIN, TAG, 'web ajax → status=%{public}s body=%{public}s', status,
-          body.length > 200 ? `${body.substring(0, 200)}…` : body);
-        if (body.indexOf('"authenticated":true') >= 0
-          || body.indexOf('"authenticated": true') >= 0) {
-          // 服务端已认证：会话 cookie 应该已经落罐，交给上层确认。
-          return '';
+        const deadline: number = Date.now() + 15000;
+        let answered: boolean = false;
+        while (Date.now() < deadline) {
+          await WebLogin.sleep(600);
+          const raw: string = WebLogin.normalizeProbe(await bridge.runScript(WebLogin.AJAX_RESULT_JS));
+          if (raw.indexOf('"done":1') < 0) {
+            continue;
+          }
+          answered = true;
+          lastBody = WebLogin.fieldOf(raw, 'body');
+          lastStatus = WebLogin.fieldOf(raw, 'status');
+          hilog.info(DOMAIN, TAG, 'web ajax v%{public}d status=%{public}s body=%{public}s',
+            variant, lastStatus,
+            lastBody.length > 220 ? `${lastBody.substring(0, 220)}…` : lastBody);
+          if (lastBody.indexOf('"authenticated":true') >= 0
+            || lastBody.indexOf('"authenticated": true') >= 0) {
+            // 服务端已认证：会话 cookie 应该已经落罐，交给上层确认。
+            return '';
+          }
+          break;
         }
-        return WebLogin.ajaxFailure(body, status);
+        if (!answered) {
+          hilog.warn(DOMAIN, TAG, 'ajax v%{public}d timeout', variant);
+        }
       }
-      return '网页里的登录请求超时（15 秒没有回应）';
+      if (lastBody.length === 0) {
+        return '网页里的登录请求没有回应（三次都没回）';
+      }
+      return WebLogin.ajaxFailure(lastBody, lastStatus);
     } finally {
       WebLogin.busy = false;
     }
@@ -276,24 +294,42 @@ export class WebLogin {
   }
 
   /** 在页面里发起一次网页登录 XHR（见 loginByWebAjax）。 */
-  private static ajaxStartScript(user: string, password: string): string {
+  private static ajaxStartScript(user: string, password: string, variant: number): string {
+    /*
+     * 三种表单体变体（网页端这几年换过几版字段，一次试完再报错才有意义）：
+     *   0 = 现在的网页 App 那套（queryParams / optIntoOneTap / trustedDeviceRecords）；
+     *   1 = 最简（username + enc_password + queryParams）；
+     *   2 = 补上移动端那几样（jazoest / adid / guid / device_id / _csrftoken），
+     *       以防这个端点走的是同一套后端校验。
+     */
     return '(function(){try{'
       + 'var U=' + JSON.stringify(user) + ',P=' + JSON.stringify(password) + ';'
+      + 'var V=' + variant + ';'
       + 'window.__igwb={done:0,status:0,body:""};'
       + 'var m=document.cookie.match(/csrftoken=([^;]+)/);var csrf=m?m[1]:"";'
       + 'var ts=Math.floor(Date.now()/1000);'
       // 浏览器端密码封装：`#PWD_INSTAGRAM_BROWSER:0:<ts>:<明文>`（网页 App 自己就是这么发的）
       + 'var enc="#PWD_INSTAGRAM_BROWSER:0:"+ts+":"+P;'
       + 'var body="username="+encodeURIComponent(U)'
-      + '+"&enc_password="+encodeURIComponent(enc)'
-      + '+"&queryParams=%7B%7D&optIntoOneTap=false&stopDeletionNonce="'
-      + '+"&trustedDeviceRecords=%7B%7D";'
+      + '+"&enc_password="+encodeURIComponent(enc);'
+      + 'if(V===0){body+="&queryParams=%7B%7D&optIntoOneTap=false&stopDeletionNonce="'
+      + '+"&trustedDeviceRecords=%7B%7D";}'
+      + 'if(V===1){body+="&queryParams=%7B%7D&optIntoOneTap=false";}'
+      + 'if(V===2){var guid=(window.crypto&&crypto.randomUUID)?crypto.randomUUID()'
+      + ':"xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g,function(c){'
+      + 'var r=Math.random()*16|0,v=c==="x"?r:(r&0x3|0x8);return v.toString(16);});'
+      + 'var jz=0;for(var i=0;i<guid.length;i++){jz+=guid.charCodeAt(i);}'
+      + 'body+="&queryParams=%7B%7D&optIntoOneTap=false"'
+      + '+"&jazoest=2"+jz+"&guid="+guid+"&device_id="+guid+"&adid="+guid'
+      + '+"&_csrftoken="+encodeURIComponent(csrf)+"&login_attempt_count=0";}'
       + 'fetch("/api/v1/web/accounts/login/ajax/",{method:"POST",credentials:"include",'
       + 'headers:{"Content-Type":"application/x-www-form-urlencoded","X-CSRFToken":csrf,'
-      + '"X-Requested-With":"XMLHttpRequest","X-Instagram-AJAX":"1"},body:body})'
+      + '"X-Requested-With":"XMLHttpRequest","X-Instagram-AJAX":"1",'
+      // 网页 App 的 App ID（和移动端那个 567067343352427 不是同一个）
+      + '"X-IG-App-ID":"936619743392459"},body:body})'
       + '.then(function(r){return r.text().then(function(t){'
-      + 'window.__igwb={done:1,status:r.status,body:(t||"").slice(0,400)};});})'
-      + '.catch(function(e){window.__igwb={done:1,status:-1,body:String(e).slice(0,120)};});'
+      + 'window.__igwb={done:1,status:r.status,body:(t||"").slice(0,400),v:V};});})'
+      + '.catch(function(e){window.__igwb={done:1,status:-1,body:String(e).slice(0,120),v:V};});'
       + 'return "started";'
       + '}catch(e){return "error:"+String(e).slice(0,100);}})()';
   }
