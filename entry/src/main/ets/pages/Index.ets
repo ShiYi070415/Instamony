@@ -151,6 +151,8 @@ import { NativeSearch, SearchPostPage } from '../core/NativeSearch';
 import { MobileChallenge } from '../core/mobileapi/MobileChallenge';
 // 换账号时"按人的进程内缓存"由它一处清（见 core/AccountCaches）。
 import { AccountCaches } from '../core/AccountCaches';
+// 账号动作里"与 UI 无关"的那一半（记住当前账号 / 从本机删掉账号）。
+import { AccountActionService } from '../core/AccountActionService';
 // 换账号/退出登录的"会话清理事务"（停实时通道 → 清台账 → 归零限流 → 清缓存 → 作废会话材料）。
 import { SessionService } from '../core/SessionService';
 // 时间线翻页参数探针（诊断开关 TIMELINE_PAGE_PROBE，见 core/mobileapi/TimelineProbe）。
@@ -8007,23 +8009,14 @@ struct Index {
    * 自己另存一份等于制造第二套真相。
    */
   private async rememberAccount(): Promise<void> {
-    try {
-      // 这一发要紧盯罐里现在的值：先把 1.5 秒的读缓存作废（见 CACHE_TTL_MS）。
-      InstagramCookieJar.invalidate();
-      const snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
-      const session: AccountEntry = AccountBook.sessionOf(snapshot.cookie);
-      if (!session.usable()) {
-        hilog.info(DOMAIN, TAG, 'account book: no session to remember');
-        return;
-      }
-      AccountBook.saveSession(session.userId, session.sessionId, session.csrf);
-      AccountBook.saveProfile(session.userId, this.selfUsername, this.selfAvatarUrl);
-      this.refreshOtherAccounts();
-      hilog.info(DOMAIN, TAG, 'account book: remembered %{public}s (%{public}s)',
-        session.userId, AccountBook.describe());
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'remember account failed: %{public}s', (error as Error).message);
+    // 落盘那半边在 core/AccountActionService（Cookie 罐 → 花名册），这里只管界面回调。
+    const ok: boolean = await AccountActionService.rememberCurrent(this.selfUsername,
+      this.selfAvatarUrl);
+    if (!ok) {
+      hilog.info(DOMAIN, TAG, 'account book: no session to remember');
+      return;
     }
+    this.refreshOtherAccounts();
   }
 
   /**
@@ -8121,18 +8114,13 @@ struct Index {
     if (userId.length === 0) {
       return;
     }
-    AccountBook.forget(userId);
-    // 缓存分区（活跃位 + 备份位）一起删：退出登录不该把这个人留在盘上。
-    AccountScope.purgeAccount(`u${userId}`);
-    // 头部快照是按账号 id 存的（不是分区键），要单独删，否则昵称/头像/简介还留在盘上。
-    AppSettings.dropProfileHeader(userId);
+    // 三处落盘清理（花名册 / 缓存分区 / 头部快照）都在 core/AccountActionService。
+    AccountActionService.forgetAccount(userId);
     if (this.currentAccountId() === userId) {
       this.selfUsername = '';
       this.selfAvatarUrl = '';
     }
     this.refreshOtherAccounts();
-    hilog.info(DOMAIN, TAG, 'forgot account %{public}s locally (%{public}s)',
-      userId, AccountBook.describe());
   }
 
   /**
