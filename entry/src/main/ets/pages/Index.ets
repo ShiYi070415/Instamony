@@ -3503,15 +3503,16 @@ struct Index {
       hilog.info(DOMAIN, TAG, 'web login prefill failed: %{public}s', prefillMessage);
       return ajaxMessage.length > 0 ? ajaxMessage : prefillMessage;
     }
-    this.webVisible = true;
-    this.statusShown = false;
-    this.toast('账号密码已填好，点一下网页里的「登录」即可');
-    this.watchLoginSession();
     /*
-     * 返回"网页已打开"标记（不是空串）：空串在调用方那里表示**已经登录成功**，
-     * 会被当成成功去清状态；这里只是"网页开着、等你点那一下"，两者必须分开。
+     * **不再把网页亮出来**（需求：点登录不要重构登录页）。
+     *
+     * 以前这里会 `webVisible = true`：根 Stack 一换，`LoginPage` 整个重建 ——
+     * 用户看到的"账号密码被清空"就是这么来的。现在点登录只做无头请求，
+     * 失败就把原因留在登录页上（同一次页面，输入一个都不丢）；
+     * 想手动登录的用户仍可点登录页上那颗「网页登录」（那是显式操作）。
      */
-    return WEB_LOGIN_OPENED;
+    this.watchLoginSession();
+    return ajaxMessage.length > 0 ? ajaxMessage : '登录没有成功，请稍后重试或用「网页登录」';
   }
 
   /**

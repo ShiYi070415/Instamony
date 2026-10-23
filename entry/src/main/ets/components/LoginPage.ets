@@ -25,7 +25,6 @@
 
 import { MaterialLabelButton, SurfaceModifier } from './MaterialSurface';
 import {
-  AppSettings,
   MATERIAL_THICKNESS_ULTRA_THIN,
   SETTING_MATERIAL_THICKNESS
 } from '../core/AppSettings';
@@ -69,30 +68,15 @@ export struct LoginPage {
   /** 材质厚度：跟随设置页那一档（@StorageLink 与其它页面同源）。 */
   @StorageLink(SETTING_MATERIAL_THICKNESS) materialThickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
 
-  /**
-   * 账号与密码放在 AppStorage 里，而不是普通 `@State`。
+  /*
+   * 账号 / 密码就是普通 `@State`。
    *
-   * 原因（实测）：点了登录之后，Index 会把**隐藏网页宿主**挂上（无头网页登录要用引擎），
-   * 那一层是根 Stack 的新子节点，LoginPage 会跟着重建一次 —— 普通 @State 会丢，
-   * 用户看到"刚输的账号密码没了"（截图里就是这样）。@StorageLink 让输入跨重建存活。
+   * 上一版用 `@StorageLink` 是为了"点登录后页面被重建、输入不丢"——那是**治标**：
+   * 根因是点登录会把隐藏网页亮出来（`webVisible = true`），根 Stack 一换，登录页就重建了。
+   * 现在点登录**不再显示网页**（无头登录），页面不会重建，`@State` 就够了。
    */
-  @StorageLink('login_username') username: string = '';
-  @StorageLink('login_password') password: string = '';
-
-  /**
-   * 进页面就把**上次用过的账号**填好（只填账号，不碰密码）。
-   *
-   * 优先级：AppStorage 里已有的（同一次运行里输入过）> 落盘里的（上次运行）。
-   * 这样"点登录后账号留着"在重启之后也成立。
-   */
-  aboutToAppear(): void {
-    if (this.username.length === 0) {
-      const saved: string = AppSettings.loadLoginUsername();
-      if (saved.length > 0) {
-        this.username = saved;
-      }
-    }
-  }
+  @State private username: string = '';
+  @State private password: string = '';
   @State private code: string = '';
   /**
    * 走"sessionid 登录"（instagrapi 的 `login_by_sessionid`）。
@@ -438,18 +422,13 @@ export struct LoginPage {
     this.error = '';
     this.busy = true;
     /*
-     * **点下去就清密码、账号留着**（需求：只清密码输入框里的内容）。
+     * **点下去就清密码、账号留着**（需求：只清密码框里的内容）。
      *
-     * 先把密码抄进局部变量再清空，之后的重试不用重输账号；
-     * 用户名走 `@StorageLink`，登录页被重建（打开网页会重建一次）也不会丢。
+     * 点登录不再显示网页（无头登录），所以登录页不会被重建 —— 普通 `@State` 足够，
+     * 账号在本次运行里一直留着（重启后不保留，需求明确不需要 StorageLink 那套）。
      */
     const typed: string = this.password;
     this.password = '';
-    /*
-     * 账号**落盘记住**（只记用户名，不记密码）：重启 App、登录页重建都不会丢。
-     * 需求："点登录后只清密码，账号留着"。
-     */
-    AppSettings.saveLoginUsername(this.username.trim());
     this.onWebLogin(this.username, typed)
       .then((message: string): void => {
         this.busy = false;
