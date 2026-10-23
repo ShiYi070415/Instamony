@@ -31,6 +31,37 @@ const MQTT_APP_ID: number = 567067343352427;
 /** 握手要订阅的 topic 号（instagrapi 的 `REALTIME_SUBSCRIBE_TOPICS`）。 */
 const SUBSCRIBE_TOPICS: Array<number> = [88, 135, 149, 150, 133, 146];
 
+/**
+ * 组 CONNECT 需要的**纯数据身份**（可序列化，能跨线程传）。
+ *
+ * 为什么单独抽一个：实时通道要搬到 **Worker 线程**去跑（见 workers/RealtimeWorker）——
+ * `MobileIdentity` 带方法（`userAgent()`）和嵌套对象（`app`），`postMessage` 过不去。
+ * 这里只留握手用到的 6 个值，主线程 `identityOf()` 转一次即可。
+ */
+export class MqttIdentity {
+  readonly phoneId: string;
+  readonly userId: string;
+  readonly userAgent: string;
+  readonly appVersion: string;
+  readonly locale: string;
+  readonly sessionId: string;
+
+  constructor(phoneId: string, userId: string, userAgent: string, appVersion: string,
+              locale: string, sessionId: string) {
+    this.phoneId = phoneId;
+    this.userId = userId;
+    this.userAgent = userAgent;
+    this.appVersion = appVersion;
+    this.locale = locale;
+    this.sessionId = sessionId;
+  }
+
+  /** 够不够组包（缺 sessionid / userId 就没法握手）。 */
+  complete(): boolean {
+    return this.phoneId.length > 0 && this.userId.length > 0 && this.sessionId.length > 0;
+  }
+}
+
 // ---- Thrift 类型号（instagrapi 的 `ThriftTypes`） ----
 const THRIFT_STOP: number = 0x00;
 const THRIFT_TRUE: number = 0x01;
@@ -178,8 +209,7 @@ class ThriftWriter {
     }
   }
 
-  /** `list<i32>`（CONNECT 里的 `subscribeTopics`）。 */
-  writeIntList(field: number, values: Array<number>): void {
+  /** `list<i32>`（CONNECT 里的 `subscribeTopics`）。 */  writeIntList(field: number, values: Array<number>): void {
     this.writeField(field, THRIFT_LIST);
     if (values.length < 0x0F) {
       this.bytes.push((values.length << 4) | THRIFT_INT_32);
@@ -235,6 +265,38 @@ export class MqttPacketInfo {
 
 export class MobileMqtt {
 
+  /** 把带方法的 `MobileIdentity` 拍平成可序列化的 `MqttIdentity`（主线程做，Worker 里用）。 */
+  static identityOf(identity: MobileIdentity): MqttIdentity {
+    return new MqttIdentity(identity.phoneId, identity.userId, identity.userAgent(),
+      identity.app.appVersion, identity.locale, identity.sessionId);
+  }
+
+  /**
+   * zlib 封装（deflate 的 **stored 块**）。
+   *
+   * 为什么可以"不压缩"：MQTToT 只要求载荷是合法 zlib 流，对端能 inflate 就行；
+   * stored 块是 deflate 标准的一部分（`01` 类型 + 长度 + 原样字节 + Adler-32）。
+   * 出站的东西都很小（几百字节），这样写省掉一整个压缩器的移植。
+   * Worker 线程发订阅/指令时也用它（所以是 public）。
+   */
+  static zlibStored(bytes: Uint8Array): Uint8Array {
+    const out: Array<number> = [0x78, 0x01];
+    out.push(0x01);
+    const len: number = bytes.length;
+    out.push(len & 0xFF, (len >> 8) & 0xFF);
+    out.push((~len) & 0xFF, ((~len) >> 8) & 0xFF);
+    for (let index: number = 0; index < len; index++) {
+      out.push(bytes[index]);
+    }
+    const bytesForAdler: Array<number> = [];
+    for (let index: number = 0; index < len; index++) {
+      bytesForAdler.push(bytes[index]);
+    }
+    const adler: number = adler32(bytesForAdler);
+    out.push((adler >>> 24) & 0xFF, (adler >>> 16) & 0xFF, (adler >>> 8) & 0xFF, adler & 0xFF);
+    return new Uint8Array(out);
+  }
+
   /**
    * 组一条 MQTToT CONNECT 报文（instagrapi 的 `write_connect_packet` + `build_connection`）。
    *
@@ -242,14 +304,14 @@ export class MobileMqtt {
    * **zlib(Thrift 结构)**。Thrift 那部分字段照抄 instagrapi 的 descriptors
    * （clientIdentifier=1 / clientInfo=4 / password=5 / appSpecificInfo=10）。
    */
-  static buildConnect(identity: MobileIdentity, keepAlive: number): Uint8Array {
+  static buildConnect(identity: MqttIdentity, keepAlive: number): Uint8Array {
     const writer: ThriftWriter = new ThriftWriter();
     // 1: clientIdentifier —— instagrapi 取的是 phone_id 的**前 20 个字符**。
     writer.writeString(1, identity.phoneId.length > 20 ? identity.phoneId.substring(0, 20) : identity.phoneId);
     // 4: clientInfo（子结构）
     writer.pushStruct(4);
     writer.writeInt(1, Number(identity.userId), 64);
-    writer.writeString(2, identity.userAgent());
+    writer.writeString(2, identity.userAgent);
     writer.writeInt(3, 183, 64);           // clientCapabilities
     writer.writeInt(4, 0, 64);             // endpointCapabilities
     writer.writeInt(5, 1, 32);             // publishFormat
@@ -306,12 +368,12 @@ export class MobileMqtt {
   }
 
   /** `appSpecificInfo`（instagrapi 的 `build_connection` 里那一份，键序也照抄）。 */
-  private static writeAppSpecificInfo(writer: ThriftWriter, identity: MobileIdentity): void {
+  private static writeAppSpecificInfo(writer: ThriftWriter, identity: MqttIdentity): void {
     const everclear: string = '{"inapp_notification_subscribe_comment":"17899377895239777",'
       + '"inapp_notification_subscribe_comment_mention_and_reply":"17899377895239777",'
       + '"video_call_participant_state_delivery":"17977239895057311",'
       + '"presence_subscribe":"17846944882223835"}';
-    const userAgent: string = identity.userAgent();
+    const userAgent: string = identity.userAgent;
     const keys: Array<string> = [
       'app_version',
       'X-IG-Capabilities',
@@ -324,7 +386,7 @@ export class MobileMqtt {
       'auth_cache_enabled'
     ];
     const values: Array<string> = [
-      identity.app.appVersion,
+      identity.appVersion,
       IG_CAPABILITIES,
       everclear,
       userAgent,

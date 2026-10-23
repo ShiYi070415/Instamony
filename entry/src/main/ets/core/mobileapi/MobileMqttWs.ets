@@ -124,7 +124,7 @@ export class MobileMqttWs {
       hilog.info(DOMAIN, TAG, 'skip: no mobile session');
       return;
     }
-    const packet: Uint8Array = MobileMqtt.buildConnect(identity, KEEP_ALIVE_S);
+    const packet: Uint8Array = MobileMqtt.buildConnect(MobileMqtt.identityOf(identity), KEEP_ALIVE_S);
     const b64: string = MobileMqttWs.encode(packet);
     hilog.info(DOMAIN, TAG, 'connect packet len=%{public}d b64=%{public}d user=%{public}s',
       packet.length, b64.length, identity.userId);

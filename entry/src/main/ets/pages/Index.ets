@@ -105,6 +105,8 @@ import { NotifyRoute } from '../core/NotifyRoute';
 import { WebLogin, WEB_LOGIN_NEEDS_CODE, WEB_LOGIN_NEEDS_WEB } from '../core/WebLogin';
 // 多账号：本机登录过的账号花名册（见 core/AccountBook）。
 import { AccountBook, AccountEntry } from '../core/AccountBook';
+// 实时通道的 Worker 版门面（见 core/mobileapi/RealtimeWorkerClient 的文件头）。
+import { RealtimeFrame, RealtimeWorkerClient } from '../core/mobileapi/RealtimeWorkerClient';
 // 「我的」标题栏那颗账号下拉按钮（多账号切换的入口）。
 import {
   ACCOUNT_MENU_OPEN,
@@ -154,7 +156,7 @@ import { PosterCache } from '../core/PosterCache';
 // 首页探索流第一页的落盘缓存（冷启动先画它，见 loadHomeRecommendedCached）。
 import { CachedRecommendedPage, FeedCache } from '../core/FeedCache';
 import { Translator } from '../core/Translator';
-import { MobileSession } from '../core/mobileapi/MobileSession';
+import { MobileSession, MobileIdentity } from '../core/mobileapi/MobileSession';
 import { MobileProbe } from '../core/mobileapi/MobileProbe';
 import { MqttProbe } from '../core/mobileapi/MqttProbe';
 import { NetProbe } from '../core/mobileapi/NetProbe';
@@ -274,6 +276,16 @@ const WEB_LOGIN_AUTO_PROBE: boolean = false;
  * "status_code":"200",…}`），所以现在关掉，只有需要再测时打开。
  */
 const MQTT_WRITE_SELF_TEST: boolean = false;
+/**
+ * **实时通道跑在哪条线程**（见 core/mobileapi/RealtimeWorkerClient）。
+ *
+ * true  = MQTToT 整个搬到 Worker（连接 / 心跳 / 拆帧 / inflate / JSON 解析都在那边），
+ *         主线程只收"解压好的帧"；Worker 起不来会自动退回主线程那版。
+ * false = 老的主线程版（core/mobileapi/MobileRealtime）。
+ *
+ * 现在开着，用来在真机上对比两版的帧时序与 CPU 占用。
+ */
+const USE_REALTIME_WORKER: boolean = true;
 /**
  * 收件箱还没读回来的话，前几拍先等它（见 consumeNotifyRoute 里那段）。
  *
@@ -2802,6 +2814,28 @@ struct Index {
       DirectRealtime.selfTest();
     }
     /*
+     * **实时通道的两种跑法**（见 core/mobileapi/RealtimeWorkerClient 的文件头）：
+     *   · `USE_REALTIME_WORKER` = true：整套 MQTToT 搬到 **Worker 线程**（连接/心跳/拆帧/inflate/解析
+     *     都在那边），主线程只收"解压好的帧"；
+     *   · false：还是旧的主线程版（core/mobileapi/MobileRealtime）。
+     * Worker 起不来就退回旧版 —— 用户不该因为一次架构调整收不到私信。
+     */
+    if (USE_REALTIME_WORKER) {
+      const client: RealtimeWorkerClient = RealtimeWorkerClient.getInstance();
+      client.onFrame((frame: RealtimeFrame): void => {
+        this.onWorkerFrame(frame);
+      });
+      const workerUp: boolean = await client.start();
+      hilog.info(DOMAIN, TAG, 'realtime(worker) up=%{public}s %{public}s',
+        `${workerUp}`, client.status());
+      if (workerUp) {
+        this.realtimeStarted = true;
+        await this.syncRealtimeSubscription();
+        return;
+      }
+      hilog.warn(DOMAIN, TAG, 'worker realtime failed → fallback to main-thread realtime');
+    }
+    /*
      * **连接本身是异步的**（`TLSSocket.connect` / `send` 全返回 Promise），
      * 调用它不会占住主线程；帧内唯一的同步活是拼 CONNECT 包（几百字节），可以忽略。
      * 所以冷启动就可以连，不用等 12 秒 —— 见 scheduleRealtimeStart。
@@ -2815,6 +2849,28 @@ struct Index {
     this.realtimeStarted = true;
     await this.syncRealtimeSubscription();
     this.runMqttWriteSelfTest();
+  }
+
+  /**
+   * **Worker 线程送来的实时帧**（见 core/mobileapi/RealtimeWorkerClient）。
+   *
+   * 这一版先只落日志（架构验证阶段）：确认 Worker 里 TLS/CONNECT/心跳/拆帧/inflate 全对，
+   * 帧时序和主线程那版一致。验证通过后在这里接 `DirectRealtime.consume(...)`，
+   * 把私信派发也换到这条链路上。
+   */
+  private onWorkerFrame(frame: RealtimeFrame): void {
+    const preview: string = frame.text.length > 120
+      ? `${frame.text.substring(0, 120)}…` : frame.text;
+    hilog.info(DOMAIN, TAG, 'worker frame #%{public}d topic=%{public}s size=%{public}d %{public}s',
+      frame.seq, frame.topic, frame.size, preview);
+    /*
+     * **直接喂给原来的派发链路**（见 onRealtimeEvent）：回执（135）与私信补丁（146/149/88）
+     * 的处理逻辑一模一样 —— 换线程只是换了"谁去解压"，业务侧不需要知道这件事。
+     */
+    if (frame.topic === '135' || frame.topic === '146'
+      || frame.topic === '149' || frame.topic === '88') {
+      this.onRealtimeEvent(new RealtimeEvent(frame.topic, frame.text));
+    }
   }
 
   /**
@@ -2895,7 +2951,7 @@ struct Index {
     if (MobileDirect.syncSeqId > 0) {
       hilog.info(DOMAIN, TAG, 'realtime subscribe now seq=%{public}d snapshot=%{public}d',
         MobileDirect.syncSeqId, MobileDirect.syncSnapshotAtMs);
-      await MobileRealtime.subscribeDirect(
+      await this.subscribeDirectOnChannel(
         new IrisState(MobileDirect.syncSeqId, MobileDirect.syncSnapshotAtMs));
     }
     /*
@@ -2909,11 +2965,40 @@ struct Index {
     }
     await MobileDirect.inbox('');
     if (MobileDirect.syncSeqId > 0) {
-      await MobileRealtime.subscribeDirect(
+      await this.subscribeDirectOnChannel(
         new IrisState(MobileDirect.syncSeqId, MobileDirect.syncSnapshotAtMs));
       return;
     }
     hilog.info(DOMAIN, TAG, 'realtime subscribe skipped: 收件箱没给 seq_id');
+  }
+
+  /**
+   * iris 订阅（topic 134）**按当前跑法发**：Worker 那条链路走 Worker，老路走主线程那版。
+   *
+   * 为什么要分开：订阅帧必须从**持有 socket 的那条线程**发出去 —— Worker 模式下主线程没有 socket
+   * （真机日志里 `sent=false` 就是这么来的）。报文（JSON）两边完全一样。
+   */
+  private async subscribeDirectOnChannel(state: IrisState): Promise<boolean> {
+    if (USE_REALTIME_WORKER) {
+      const client: RealtimeWorkerClient = RealtimeWorkerClient.getInstance();
+      if (client.isUp()) {
+        const identity: string = await this.realtimeAppVersion();
+        const body: string = `{"seq_id":${state.seqId},`
+          + `"snapshot_at_ms":${state.snapshotAtMs},`
+          + `"snapshot_app_version":${JSON.stringify(identity)}}`;
+        const ok: boolean = client.publish('134', body);
+        hilog.info(DOMAIN, TAG, 'realtime subscribe(worker) seq=%{public}d sent=%{public}s',
+          state.seqId, `${ok}`);
+        return ok;
+      }
+    }
+    return MobileRealtime.subscribeDirect(state);
+  }
+
+  /** 当前 app 版本号（iris 订阅要报"这个快照是哪个版本抓的"）。 */
+  private async realtimeAppVersion(): Promise<string> {
+    const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
+    return identity === null ? '' : identity.app.appVersion;
   }
 
   /**

@@ -181,7 +181,7 @@ export class MobileRealtime {
         MobileRealtime.onClosed('error');
       });
       MobileRealtime.buffer = [];
-      const packet: Uint8Array = MobileMqtt.buildConnect(identity, KEEP_ALIVE_S);
+      const packet: Uint8Array = MobileMqtt.buildConnect(MobileMqtt.identityOf(identity), KEEP_ALIVE_S);
       await ref.send(packet.buffer as ArrayBuffer);
       hilog.info(DOMAIN, TAG, 'connect sent len=%{public}d user=%{public}s',
         packet.length, identity.userId);

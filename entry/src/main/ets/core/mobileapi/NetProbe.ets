@@ -99,7 +99,7 @@ export class NetProbe {
     const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
     if (identity !== null && identity.isComplete()) {
       step(await NetProbe.mqttOverWs(WS_FB_URL, '⑦ws-fb',
-        MobileMqtt.buildConnect(identity, 20)));
+        MobileMqtt.buildConnect(MobileMqtt.identityOf(identity), 20)));
     }
   }
 
@@ -183,7 +183,7 @@ export class NetProbe {
       result.error = 'no session';
       return result;
     }
-    const packet: Uint8Array = MobileMqtt.buildConnect(identity, 20);
+    const packet: Uint8Array = MobileMqtt.buildConnect(MobileMqtt.identityOf(identity), 20);
     let tcp: socket.TCPSocket | null = null;
     try {
       const ref: socket.TCPSocket = socket.constructTCPSocketInstance();

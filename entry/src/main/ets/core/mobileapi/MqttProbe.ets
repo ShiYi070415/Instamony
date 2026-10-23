@@ -109,7 +109,7 @@ export class MqttProbe {
         hilog.info(DOMAIN, TAG, 'probe skipped: no mobile session');
         return;
       }
-      const mqttot: Uint8Array = MobileMqtt.buildConnect(identity, KEEP_ALIVE_S);
+      const mqttot: Uint8Array = MobileMqtt.buildConnect(MobileMqtt.identityOf(identity), KEEP_ALIVE_S);
       hilog.info(DOMAIN, TAG, 'probe start mqttot len=%{public}d user=%{public}s',
         mqttot.length, identity.userId);
 
