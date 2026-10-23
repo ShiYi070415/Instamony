@@ -40,16 +40,45 @@ const SESSION_WAIT_MS: number = 45000;
 /** 轮询间隔（毫秒）。 */
 const POLL_MS: number = 700;
 
-/** 判定"登录页的表单已经在了"，同时把页面状态一起带回来（诊断用）。 */
+/**
+ * 探测登录页现在长什么样（诊断 + 决策都靠它）。
+ *
+ * 返回的 `u` / `p` 分别是"有用户名框" / "有密码框" —— **两者不一定同时出现**：
+ * IG 的移动网页版常常是两步（先用户名 → 下一步 → 密码），把"两个都在"当成就绪条件
+ * 就会一直等到超时（用户遇到的"加载失败"有一半是这个原因）。
+ */
 const FORM_PROBE_JS: string =
   '(function(){try{'
   + 'var u=document.querySelector(\'input[name="username"]\')||document.querySelector(\'#username\');'
   + 'var p=document.querySelector(\'input[name="password"]\')||document.querySelector(\'#password\');'
   + 'var inputs=document.querySelectorAll("input").length;'
-  + 'return JSON.stringify({r:document.readyState,h:location.href.slice(0,120),'
-  + 't:(document.title||"").slice(0,40),f:(u&&p)?1:0,n:inputs,'
+  + 'return JSON.stringify({r:document.readyState,h:location.href.slice(0,140),'
+  + 't:(document.title||"").slice(0,40),u:u?1:0,p:p?1:0,n:inputs,'
   + 'len:(document.body?document.body.innerText.length:0)});'
   + '}catch(e){return JSON.stringify({r:"err",m:String(e).slice(0,80)});}})()';
+
+/**
+ * 一次探测的结果。
+ *
+ * `usable()` = 页面上至少有一个可填的输入框（用户名或密码），也就是"登录页真的到了"。
+ */
+class PageState {
+  readonly raw: string;
+  readonly hasUser: boolean;
+  readonly hasPassword: boolean;
+  readonly ready: string;
+
+  constructor(raw: string, hasUser: boolean, hasPassword: boolean, ready: string) {
+    this.raw = raw;
+    this.hasUser = hasUser;
+    this.hasPassword = hasPassword;
+    this.ready = ready;
+  }
+
+  usable(): boolean {
+    return this.hasUser || this.hasPassword;
+  }
+}
 
 /** 页面上一眼能看出来的错误/验证线索（顺序即优先级）。 */
 class PageSignal {
@@ -101,33 +130,79 @@ export class WebLogin {
       }
       hilog.info(DOMAIN, TAG, 'headless login start user=%{public}d', user.length);
       bridge.loadUrl(LOGIN_URL);
-      let formReady: boolean = await WebLogin.waitForForm(bridge);
-      if (!formReady && bridge.isAttached()) {
+      let state: PageState = await WebLogin.waitForForm(bridge);
+      if (!state.usable() && bridge.isAttached()) {
         /*
-         * **再来一次导航**：第一次 `loadUrl` 很可能撞上"控制器刚绑上、页面还没开始导航"
-         * （无头模式下宿主的 `src` 也是登录页，但引擎恢复渲染后那一次可能被丢掉）。
-         * 重发一次是安全的（等同用户刷新登录页），代价是多等一个 FORM_WAIT 周期。
+         * **再来一次导航**：第一次 `loadUrl` 很可能撞上"控制器刚挂上、页面还没开始导航"。
+         * 重发一次是安全的（等同刷新登录页）。
          */
         hilog.warn(DOMAIN, TAG, 'form missing → navigate login page again');
         bridge.loadUrl(LOGIN_URL);
-        formReady = await WebLogin.waitForForm(bridge);
+        state = await WebLogin.waitForForm(bridge);
       }
-      if (!formReady) {
+      if (!state.usable()) {
         // 把诊断摘要带进界面文案（见 lastProbe 的说明）。
-        return `登录页没能加载出来（检查网络后重试）${WebLogin.lastProbe}`;
+        return `登录页没能加载出来（也可点下方「网页登录」手动完成）${WebLogin.lastProbe}`;
+      }
+      /*
+       * **两步登录页**（IG 移动网页版常见形态）：先只给用户名框，点「下一步/继续」
+       * 才出现密码框。以前只认"用户名+密码同时在"的形态，遇到这一种就会一直等到超时，
+       * 报"加载不出来"。现在两种形态都走：
+       *   ① 只有用户名 → 填用户名 → 点下一步 → 等密码框；
+       *   ② 用户名+密码都在 → 直接一起填。
+       */
+      if (state.hasUser && !state.hasPassword) {
+        hilog.info(DOMAIN, TAG, 'two-step login page detected → fill username first');
+        await bridge.runScript(WebLogin.fillUserScript(user));
+        await bridge.runScript(WebLogin.clickNextScript());
+        state = await WebLogin.waitForPassword(bridge);
+        if (!state.hasPassword) {
+          return `登录页没出现密码框（可能被要求在网页里验证）${WebLogin.lastProbe}`;
+        }
       }
       const submitted: string = await bridge.runScript(WebLogin.fillScript(user, password));
       hilog.info(DOMAIN, TAG, 'submit script → %{public}s', submitted);
       if (submitted.indexOf('submitted') < 0 && submitted.indexOf('formsubmit') < 0) {
         return '没找到登录按钮，请在网页里登录一次';
       }
-      return await WebLogin.waitForSession(bridge);
+      const outcome: string = await WebLogin.waitForSession(bridge);
+      return outcome;
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'headless login threw: %{public}s', (error as Error).message);
       return `登录出错：${(error as Error).message}`;
     } finally {
       WebLogin.running = false;
     }
+  }
+
+  /** 填**只填用户名**（两步登录页的第一步）。 */
+  private static fillUserScript(user: string): string {
+    return '(function(){try{'
+      + 'var U=' + JSON.stringify(user) + ';'
+      + 'function setv(el,v){var d=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,"value");'
+      + 'd.set.call(el,v);el.dispatchEvent(new Event("input",{bubbles:true}));'
+      + 'el.dispatchEvent(new Event("change",{bubbles:true}));}'
+      + 'var u=document.querySelector(\'input[name="username"]\')||document.querySelector(\'#username\');'
+      + 'if(!u){return "nouser";}'
+      + 'u.focus();setv(u,U);return "filled";'
+      + '}catch(e){return "error:"+String(e).slice(0,120);}})()';
+  }
+
+  /**
+   * 点「下一步 / 继续 / Next / Log in」那一颗。
+   *
+   * 两步登录页的按钮文案随语言变，所以按文案正则匹配一遍（英文 + 中文），
+   * 匹配不到再退回 `type=submit` / 表单 `requestSubmit()`。
+   */
+  private static clickNextScript(): string {
+    return '(function(){try{'
+      + 'var btns=Array.prototype.slice.call(document.querySelectorAll(\'button,div[role="button"]\'));'
+      + 'for(var i=0;i<btns.length;i++){var b=btns[i];var t=(b.innerText||"").trim();'
+      + 'if(/^(next|continue|log\\s*in|下一步|继续|登录|登入)$/i.test(t)){b.click();return "clicked:"+t;}}'
+      + 'for(var j=0;j<btns.length;j++){if(btns[j].type==="submit"){btns[j].click();return "clicked:submit";}}'
+      + 'var f=document.querySelector("form");if(f&&f.requestSubmit){f.requestSubmit();return "formsubmit";}'
+      + 'return "nobutton";'
+      + '}catch(e){return "error:"+String(e).slice(0,80);}})()';
   }
 
   /**
@@ -137,11 +212,25 @@ export class WebLogin {
    * 页面没加载、加载到了别的页、还是 JS 根本没执行，全看不出来（用户只看到一句
    * "登录页没能加载出来"）。现在每 3 拍打一行 `readyState / url / title / inputs / 文本长度`。
    */
-  private static async waitForForm(bridge: InstagramPageBridge): Promise<boolean> {
-    const deadline: number = Date.now() + FORM_WAIT_MS;
+  private static async waitForForm(bridge: InstagramPageBridge): Promise<PageState> {
+    return await WebLogin.waitForState(bridge, FORM_WAIT_MS, false);
+  }
+
+  /** 等**密码框**出现（两步登录页点了「下一步」之后）。 */
+  private static async waitForPassword(bridge: InstagramPageBridge): Promise<PageState> {
+    return await WebLogin.waitForState(bridge, FORM_WAIT_MS, true);
+  }
+
+  /**
+   * 轮询页面状态，直到满足条件或超时。
+   *
+   * @param needPassword true = 要等密码框；false = 只要页面上有可填的输入框就算就绪
+   */
+  private static async waitForState(bridge: InstagramPageBridge, timeoutMs: number,
+                                    needPassword: boolean): Promise<PageState> {
+    const deadline: number = Date.now() + timeoutMs;
     let tick: number = 0;
-    let lastState: string = '';
-    let sawAnything: boolean = false;
+    let last: PageState = new PageState('', false, false, '');
     WebLogin.lastProbe = '';
     while (Date.now() < deadline) {
       const raw: string = await bridge.runScript(FORM_PROBE_JS);
@@ -152,41 +241,43 @@ export class WebLogin {
             tick, `${bridge.isAttached()}`);
         }
       } else {
-        lastState = raw;
-        sawAnything = true;
+        last = new PageState(raw, raw.indexOf('"u":1') >= 0, raw.indexOf('"p":1') >= 0,
+          WebLogin.fieldOf(raw, 'r'));
         if (tick % 3 === 0) {
           hilog.info(DOMAIN, TAG, 'probe %{public}s', raw);
         }
-        if (raw.indexOf('"f":1') >= 0) {
-          return true;
+        const ok: boolean = needPassword ? last.hasPassword : last.usable();
+        if (ok) {
+          return last;
         }
       }
       tick++;
       await WebLogin.sleep(POLL_MS);
     }
     // 诊断摘要：一会儿要拼到界面文案里（见 lastProbe）。
-    WebLogin.lastProbe = `\n[诊断] ${sawAnything ? WebLogin.probeSummary(lastState)
+    WebLogin.lastProbe = `\n[诊断] ${last.raw.length > 0 ? WebLogin.probeSummary(last.raw)
       : `JS 无返回 (attached=${bridge.isAttached()})`}`;
     hilog.warn(DOMAIN, TAG, 'form not found in %{public}dms, last=%{public}s',
-      FORM_WAIT_MS, lastState.length > 0 ? lastState : '(none)');
-    return false;
+      timeoutMs, last.raw.length > 0 ? last.raw : '(none)');
+    return last;
   }
 
   /**
    * 把探测 JSON 压成一行给人看的东西（只留关键几项）。
    *
-   * 例：`ready=complete form=0 inputs=3 text=812 url=/accounts/login/`
+   * 例：`ready=complete 用户名框=1 密码框=0 inputs=1 text=812 url=/accounts/login/`
    */
   private static probeSummary(raw: string): string {
     const ready: string = WebLogin.fieldOf(raw, 'r');
-    const form: string = WebLogin.fieldOf(raw, 'f');
+    const hasUser: string = WebLogin.fieldOf(raw, 'u');
+    const hasPassword: string = WebLogin.fieldOf(raw, 'p');
     const inputs: string = WebLogin.fieldOf(raw, 'n');
     const len: string = WebLogin.fieldOf(raw, 'len');
     const href: string = WebLogin.fieldOf(raw, 'h');
     const title: string = WebLogin.fieldOf(raw, 't');
     const path: string = href.indexOf('instagram.com') >= 0
       ? href.substring(href.indexOf('instagram.com') + 'instagram.com'.length) : href;
-    return `ready=${ready.length > 0 ? ready : '?'} form=${form.length > 0 ? form : '?'}`
+    return `ready=${ready.length > 0 ? ready : '?'} 用户名框=${hasUser} 密码框=${hasPassword}`
       + ` inputs=${inputs.length > 0 ? inputs : '?'} text=${len.length > 0 ? len : '?'}`
       + ` url=${path.length > 0 ? path : '?'}`
       + `${title.length > 0 ? ` title=${title}` : ''}`;
