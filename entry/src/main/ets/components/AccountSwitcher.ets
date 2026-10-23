@@ -25,11 +25,20 @@
 import { FALLBACK_BLUR, FALLBACK_SURFACE, SurfaceModifier } from './MaterialSurface';
 import { MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS } from '../core/AppSettings';
 import { AccountEntry } from '../core/AccountBook';
+import { curves } from '@kit.ArkUI';
 
 /** 按钮/选单读的三份数据（由 pages/Index 写，见文件头）。 */
 export const ACCOUNT_TITLE_NAME: string = 'account_title_name';
 export const ACCOUNT_TITLE_AVATAR: string = 'account_title_avatar';
 export const ACCOUNT_OTHERS: string = 'account_others';
+/**
+ * 选单开没开（只给箭头做旋转用）。
+ *
+ * 选单本身是 Index 那一层的浮层（见下面 AccountMenu 的文件头），但"按钮上的小箭头"
+ * 要跟着翻转 —— 而这颗按钮住在 HDS 标题栏里、不随 Index 的状态重画（见文件头），
+ * 所以开关状态也走 AppStorage 传下来。
+ */
+export const ACCOUNT_MENU_OPEN: string = 'account_menu_open';
 
 /** 胶囊高度：**和标题栏里 menus 那几颗按钮一致**（需求）。材质层的 "the" 高度就是 40，见 MaterialSurface 的 MATERIAL_BUTTON_SIZE。 */
 const CHIP_H: number = 40;
@@ -73,6 +82,8 @@ export struct AccountSwitcher {
   @StorageLink(ACCOUNT_TITLE_AVATAR) avatarUrl: string = '';
   /** 材质厚薄（跟设定页联动）。 */
   @StorageProp(SETTING_MATERIAL_THICKNESS) materialThickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
+  /** 选单开着没（决定箭头朝哪边）。 */
+  @StorageProp(ACCOUNT_MENU_OPEN) menuOpen: boolean = false;
   /** 点了按钮：由 pages/Index 把选单浮层打开（浮层得在页面那一层，见文件头）。 */
   onToggle: () => void = (): void => {
   };
@@ -93,6 +104,13 @@ export struct AccountSwitcher {
         SymbolGlyph($r('sys.symbol.chevron_down'))
           .fontSize(12)
           .fontColor([$r('sys.color.font_secondary')])
+          /*
+           * 展开时箭头翻转 180°（需求："下拉按钮画一下弹出收起动画"）。
+           * 用隐式动画：`@StorageProp` 一变这个组件就重画，rotate 的变化按弹簧曲线补间 ——
+           * 和选单那一下弹出（Index 里 animateTo 的 springMotion）是同一个手感。
+           */
+          .rotate({ angle: this.menuOpen ? 180 : 0 })
+          .animation({ duration: 300, curve: curves.springMotion(0.5, 0.62) })
       }
       .padding({ left: 6, right: 12 })
     }
@@ -272,5 +290,18 @@ export struct AccountMenu {
     .onClick((): void => {
       this.onClose();
     })
+    /*
+     * **弹出 / 收起的弹性动画**（需求："下拉按钮画一下弹出收起动画，要有弹性动画"）。
+     *
+     * 做法：整块浮层（遮罩 + 卡片）跟着 `if (accountMenuOpen)` 插入/移除，
+     * 由 pages/Index 的 `animateTo(springMotion)` 包住那次状态变化 —— 曲线是阻尼比 < 1 的
+     * 弹簧（`curves.springMotion(0.5, 0.62)`），落定时会有一点过冲，就是"弹"的手感。
+     * 形变：从**顶部中心**（按钮正下方）缩放 0.86 → 1 + 淡入，再叠一点点向上位移，
+     * 看起来像从按钮下沿滑出来；收起时反向。
+     */
+    .transition(TransitionEffect.opacity(0)
+      .combine(TransitionEffect.scale({ x: 0.86, y: 0.86, centerX: '50%', centerY: '0%' }))
+      .combine(TransitionEffect.translate({ y: -10 }))
+      .animation({ duration: 300, curve: curves.springMotion(0.5, 0.62) }))
   }
 }

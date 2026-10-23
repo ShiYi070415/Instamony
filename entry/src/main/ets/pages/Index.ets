@@ -107,6 +107,7 @@ import { WebLogin, WEB_LOGIN_NEEDS_CODE, WEB_LOGIN_NEEDS_WEB } from '../core/Web
 import { AccountBook, AccountEntry } from '../core/AccountBook';
 // 「我的」标题栏那颗账号下拉按钮（多账号切换的入口）。
 import {
+  ACCOUNT_MENU_OPEN,
   ACCOUNT_OTHERS,
   ACCOUNT_TITLE_AVATAR,
   ACCOUNT_TITLE_NAME,
@@ -2104,6 +2105,8 @@ struct Index {
      * 等处再写进来。
      */
     this.refreshOtherAccounts();
+    // 选单默认收起（箭头也跟着朝下）：见 openAccountMenu / AccountSwitcher 里的箭头动画。
+    AppStorage.setOrCreate(ACCOUNT_MENU_OPEN, false);
     /*
      * **启动时自己判一次登录态**（不再依赖网页宿主）。
      *
@@ -7557,7 +7560,7 @@ struct Index {
 
       AccountSwitcher({
         onToggle: (): void => {
-          this.accountMenuOpen = true;
+          this.openAccountMenu();
         }
       })
     }
@@ -7715,6 +7718,31 @@ struct Index {
     this.selfUsername = entry.username;
     this.selfAvatarUrl = entry.avatarUrl;
     this.refreshOtherAccounts();
+  }
+
+  /**
+   * 打开账号选单（**带弹性动画**，需求）：状态变化包在 `animateTo` 里，
+   * 曲线用阻尼比 < 1 的弹簧（落定时有一点过冲），浮层的 transition 见 components/AccountSwitcher。
+   */
+  private openAccountMenu(): void {
+    AppStorage.setOrCreate(ACCOUNT_MENU_OPEN, true);
+    this.getUIContext().animateTo({
+      duration: 300,
+      curve: curves.springMotion(0.5, 0.62)
+    }, (): void => {
+      this.accountMenuOpen = true;
+    });
+  }
+
+  /** 收起账号选单：反向那一下快一点（EaseIn），不然"关"也会显得拖泥带水。 */
+  private closeAccountMenu(): void {
+    AppStorage.setOrCreate(ACCOUNT_MENU_OPEN, false);
+    this.getUIContext().animateTo({
+      duration: 200,
+      curve: Curve.EaseIn
+    }, (): void => {
+      this.accountMenuOpen = false;
+    });
   }
 
   /**
@@ -10686,15 +10714,15 @@ struct Index {
       if (this.accountMenuOpen) {
         AccountMenu({
           onPick: (userId: string): void => {
-            this.accountMenuOpen = false;
+            this.closeAccountMenu();
             this.switchAccount(userId);
           },
           onAdd: (): void => {
-            this.accountMenuOpen = false;
+            this.closeAccountMenu();
             this.addAccount();
           },
           onClose: (): void => {
-            this.accountMenuOpen = false;
+            this.closeAccountMenu();
           }
         })
           .zIndex(80)
