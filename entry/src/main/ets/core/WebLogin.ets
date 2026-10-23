@@ -40,12 +40,16 @@ const SESSION_WAIT_MS: number = 45000;
 /** 轮询间隔（毫秒）。 */
 const POLL_MS: number = 700;
 
-/** 判定"登录页的表单已经在了"。 */
-const FORM_READY_JS: string =
-  '(function(){try{var u=document.querySelector(\'input[name="username"]\')'
-  + '||document.querySelector(\'#username\');'
+/** 判定"登录页的表单已经在了"，同时把页面状态一起带回来（诊断用）。 */
+const FORM_PROBE_JS: string =
+  '(function(){try{'
+  + 'var u=document.querySelector(\'input[name="username"]\')||document.querySelector(\'#username\');'
   + 'var p=document.querySelector(\'input[name="password"]\')||document.querySelector(\'#password\');'
-  + 'return (u&&p)?\'1\':\'0\';}catch(e){return \'0\';}})()';
+  + 'var inputs=document.querySelectorAll("input").length;'
+  + 'return JSON.stringify({r:document.readyState,h:location.href.slice(0,120),'
+  + 't:(document.title||"").slice(0,40),f:(u&&p)?1:0,n:inputs,'
+  + 'len:(document.body?document.body.innerText.length:0)});'
+  + '}catch(e){return JSON.stringify({r:"err",m:String(e).slice(0,80)});}})()';
 
 /** 页面上一眼能看出来的错误/验证线索（顺序即优先级）。 */
 class PageSignal {
@@ -89,7 +93,17 @@ export class WebLogin {
       }
       hilog.info(DOMAIN, TAG, 'headless login start user=%{public}d', user.length);
       bridge.loadUrl(LOGIN_URL);
-      const formReady: boolean = await WebLogin.waitForForm(bridge);
+      let formReady: boolean = await WebLogin.waitForForm(bridge);
+      if (!formReady && bridge.isAttached()) {
+        /*
+         * **再来一次导航**：第一次 `loadUrl` 很可能撞上"控制器刚绑上、页面还没开始导航"
+         * （无头模式下宿主的 `src` 也是登录页，但引擎恢复渲染后那一次可能被丢掉）。
+         * 重发一次是安全的（等同用户刷新登录页），代价是多等一个 FORM_WAIT 周期。
+         */
+        hilog.warn(DOMAIN, TAG, 'form missing → navigate login page again');
+        bridge.loadUrl(LOGIN_URL);
+        formReady = await WebLogin.waitForForm(bridge);
+      }
       if (!formReady) {
         return '登录页没能加载出来（检查网络后重试）';
       }
@@ -107,16 +121,39 @@ export class WebLogin {
     }
   }
 
-  /** 等登录表单出现（React 页面是异步渲染的）。 */
+  /**
+   * 等登录表单出现，并把**页面现在长什么样**记进日志。
+   *
+   * 诊断为什么重要：上一版只回 '0'/'1'，于是"表单没出现"到底是
+   * 页面没加载、加载到了别的页、还是 JS 根本没执行，全看不出来（用户只看到一句
+   * "登录页没能加载出来"）。现在每 3 拍打一行 `readyState / url / title / inputs / 文本长度`。
+   */
   private static async waitForForm(bridge: InstagramPageBridge): Promise<boolean> {
     const deadline: number = Date.now() + FORM_WAIT_MS;
+    let tick: number = 0;
+    let lastState: string = '';
     while (Date.now() < deadline) {
-      const state: string = await bridge.runScript(FORM_READY_JS);
-      if (state.trim() === '1') {
-        return true;
+      const raw: string = await bridge.runScript(FORM_PROBE_JS);
+      if (raw.trim().length === 0) {
+        // 空串 = runJavaScript 拿不到结果（控制器没绑 / 页面还没起来）。
+        if (tick % 3 === 0) {
+          hilog.warn(DOMAIN, TAG, 'probe empty (tick=%{public}d) attached=%{public}s',
+            tick, `${bridge.isAttached()}`);
+        }
+      } else {
+        lastState = raw;
+        if (tick % 3 === 0) {
+          hilog.info(DOMAIN, TAG, 'probe %{public}s', raw);
+        }
+        if (raw.indexOf('"f":1') >= 0) {
+          return true;
+        }
       }
+      tick++;
       await WebLogin.sleep(POLL_MS);
     }
+    hilog.warn(DOMAIN, TAG, 'form not found in %{public}dms, last=%{public}s',
+      FORM_WAIT_MS, lastState.length > 0 ? lastState : '(none)');
     return false;
   }
 

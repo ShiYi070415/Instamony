@@ -20,10 +20,25 @@ const TAG: string = 'InstagramWebHost';
 const DOMAIN: number = 0xFF00;
 /** 页面加载完成后延迟再核对一次：Instagram 的会话 Cookie 有时晚于 onPageEnd 落罐。 */
 const SESSION_RECHECK_MS: number = 1200;
+/**
+ * 用户看不见、但引擎要正常跑时的不透明度（见 `headless`）。
+ *
+ * 为什么不用 0：不可见的组件在 ArkWeb 里会进 "INVISIBLE_THROTTLED"（渲染被节流），
+ * 而"无头网页登录"恰恰需要 IG 登录页按正常节奏跑起来（React 渲染 / 事件 / 提交）。
+ * 0.01 在屏幕上看不出来，但引擎照常出帧。
+ */
+const HEADLESS_OPACITY: number = 0.01;
 
 @Component
 export struct InstagramWebHost {
   @Prop @Watch('onVisibleChanged') visible: boolean = false;
+  /**
+   * **无头模式**：用户看不见它，但要它正常跑（见 core/WebLogin 与 build 里那段说明）。
+   *
+   * 与 `visible=false` 的区别：`visible=false` 是 `Visibility.Hidden`（不出帧、渲染被节流），
+   * 无头登录那十几秒必须让引擎按正常节奏跑 IG 的登录页，所以退回"透明可见 + 不吃触摸"。
+   */
+  @Prop headless: boolean = false;
   /**
    * 现在是不是已登录（`Index.applySession` 传进来）。
    *
@@ -193,6 +208,10 @@ export struct InstagramWebHost {
     }
   }
 
+  /** 这一刻要不要真的"画"它（见 headless 与 build 里那段说明）。 */
+  private isPainted(): boolean {
+    return this.visible || this.headless;
+  }
   build() {
     Web({
       src: this.startUrl,
@@ -201,7 +220,7 @@ export struct InstagramWebHost {
     })
       .width('100%')
       .height('100%')
-      .opacity(this.visible ? 1 : 0.01)
+      .opacity(this.visible ? 1 : HEADLESS_OPACITY)
       /*
        * **隐藏时不进绘制树**（这是"手机发烫"的真正止血点）。
        *
@@ -211,8 +230,14 @@ export struct InstagramWebHost {
        * （只停"可以安全暂停"的动画，合成与 vsync 还在）。
        * `Visibility.Hidden` 让它在布局里仍占位（不会引起页面重排），但**不参与绘制** ——
        * 引擎不再出帧；JS / 桥接 / 隐藏导航都照常（我们只用它取数，不需要它显示）。
+       *
+       * **例外：无头网页登录**（`headless`，见 core/WebLogin）。那一小段时间要真的驱动
+       * IG 的登录页（填表、点提交），而 Hidden 的组件在 chromium 里是
+       * "INVISIBLE_THROTTLED"（渲染被节流，`runJavaScript` 也可能拿不到结果）。
+       * 那十几秒里退回"可见但透明 + 不吃触摸 + 压在最底层"：
+       * 用户看不见它（还盖着登录页），但引擎按正常节奏跑 —— 登录完成立刻恢复 Hidden。
        */
-      .visibility(this.visible ? Visibility.Visible : Visibility.Hidden)
+      .visibility(this.isPainted() ? Visibility.Visible : Visibility.Hidden)
       .zIndex(this.visible ? 20 : 0)
       .hitTestBehavior(this.visible ? HitTestMode.Default : HitTestMode.None)
       .javaScriptAccess(true)

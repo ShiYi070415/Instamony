@@ -230,6 +230,13 @@ const NOTIFY_ROUTE_MAX_TRIES: number = 15;
  */
 const WEB_LOGIN_MOUNT_WAIT_MS: number = 800;
 /**
+ * 切到"无头模式"之后再等多久动手（毫秒）。
+ *
+ * 从 `Visibility.Hidden` 变成"透明可见"会让引擎重新恢复渲染，页面那侧要一两帧才真正开始跑；
+ * 300ms 是给这个过程留的余量（宁可慢一点，也别在页面还没能动时发 JS）。
+ */
+const WEB_HEADLESS_SETTLE_MS: number = 300;
+/**
  * 收件箱还没读回来的话，前几拍先等它（见 consumeNotifyRoute 里那段）。
  *
  * 4 拍 × 500ms = 2 秒：冷启动的 `direct_v2/inbox/` 真机实测 1.5~3 秒回来，
@@ -901,6 +908,12 @@ struct Index {
   @State sessionChecked: boolean = false;
   @State bridgeReady: boolean = false;
   @State webVisible: boolean = false;
+  /**
+   * **无头网页登录**进行中（见 headlessWebLogin / core/WebLogin）：宿主不给用户看，
+   * 但不是 `Visibility.Hidden` —— 那会让引擎节流、IG 登录页跑不起来；
+   * 改成「透明可见」（见 InstagramWebHost 的 headless）。
+   */
+  @State webHeadless: boolean = false;
   /**
    * 隐藏网页宿主**有没有挂载**（= build() 里有没有那颗 `InstagramWebHost`）。
    *
@@ -3395,7 +3408,8 @@ struct Index {
       return;
     }
     hilog.info(DOMAIN, TAG, 'prepare hidden web host for headless login');
-    this.noteStartUrl(AppConfig.INSTAGRAM_LOGIN_URL);
+    // 直接给登录页地址：这条地址本身永远被闸门放行，不必再过 noteStartUrl（它可能落成首页）。
+    this.webStartUrl = AppConfig.INSTAGRAM_LOGIN_URL;
     this.webVisible = false;
     this.mountWebHost();
   }
@@ -3416,7 +3430,19 @@ struct Index {
       // 引擎初始化 + 控制器绑定是异步的（`onControllerAttached` 之后才能 runJavaScript）。
       await Index.delay(WEB_LOGIN_MOUNT_WAIT_MS);
     }
-    const message: string = await WebLogin.login(username, password);
+    /*
+     * **进入无头模式**：宿主在用户眼里仍然"不存在"，但引擎按正常节奏跑。
+     * 之前是 `Visibility.Hidden` 挂着它 —— chromium 会把它标成 INVISIBLE_THROTTLED，
+     * 于是 IG 登录页渲染/脚本都跑不动，界面停在「登录页没能加载出来」（用户实测）。
+     */
+    this.webHeadless = true;
+    await Index.delay(WEB_HEADLESS_SETTLE_MS);
+    let message: string = '';
+    try {
+      message = await WebLogin.login(username, password);
+    } finally {
+      this.webHeadless = false;
+    }
     if (message.length === 0) {
       // 会话已经进罐：重读登录态（五个页签随之建起来），并把隐藏网页收掉省电。
       await this.refreshSessionFromJar();
@@ -10043,6 +10069,8 @@ struct Index {
       if (this.webHostMounted) {
         InstagramWebHost({
           visible: this.webVisible,
+          // 无头网页登录期间：用户看不见它，但引擎要真的跑（见 InstagramWebHost 的 headless）。
+          headless: this.webHeadless,
           signedIn: this.signedIn,
           // 这一次挂载该从哪条地址起步（见 webStartUrl / noteStartUrl）。
           startUrl: this.webStartUrl,
