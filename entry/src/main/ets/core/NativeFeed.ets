@@ -84,6 +84,13 @@ export class NativeFeed {
    */
   private static warmPage: NativeFeedPage | null = null;
   private static warming: boolean = false;
+  /**
+   * 预热那次请求本身（在飞的时候非空）。
+   *
+   * 用处：页面在预热未完成时来要第一页，就 `await` 它然后取结果 —— **不再发第二发**。
+   * 真机实测：冷启动 `feed/timeline/` 会连着打两发一样的请求（各 ~300KB / 3 秒）。
+   */
+  private static warmTask: Promise<void> | null = null;
 
   /**
    * app 启动时就发一发第一页，结果留在内存里等页面来取（幂等，重复调用不会重复发）。
@@ -96,8 +103,15 @@ export class NativeFeed {
     }
     NativeFeed.warming = true;
     const started: number = Date.now();
-    NativeFeed.fetchPage(first, '').then((page: NativeFeedPage | null): void => {
+    /*
+     * **把这次预热存成"在飞的 Promise"**（见 fetchPage 的开头）：
+     * 页面往往在预热还没回来时就来要第一页，以前会**再发一发一模一样的请求** ——
+     * 真机日志（冷启动）里 `feed/timeline/` 连着两发、各 ~300KB / 3 秒，
+     * 白等一次网络 + 白解析一次 300KB。存下来之后页面直接搭这趟车。
+     */
+    NativeFeed.warmTask = NativeFeed.fetchPage(first, '').then((page: NativeFeedPage | null): void => {
       NativeFeed.warming = false;
+      NativeFeed.warmTask = null;
       if (page === null) {
         hilog.info(DOMAIN, TAG, 'warmStart miss after %{public}dms', Date.now() - started);
         return;
@@ -107,6 +121,7 @@ export class NativeFeed {
         page.items.length, page.ms, Date.now() - started);
     }).catch((): void => {
       NativeFeed.warming = false;
+      NativeFeed.warmTask = null;
     });
   }
 
@@ -141,6 +156,25 @@ export class NativeFeed {
    * 失败一律返回 null（无会话 / 非 200 / 形状变了 / 解析不出条目）。
    */
   static async fetchPage(first: number, cursor: string): Promise<NativeFeedPage | null> {
+    /*
+     * **预热那一发还在飞 → 搭车，不再发第二发**（冷启动最常见的一次浪费，见 warmTask）。
+     *
+     * 只在"要第一页"时这么干；翻页（cursor 非空）各页本来就不同，不能合并。
+     */
+    if (cursor.length === 0 && NativeFeed.warmTask !== null) {
+      const waited: number = Date.now();
+      try {
+        await NativeFeed.warmTask;
+      } catch (error) {
+        // 预热失败：往下自己发一发（下面才是真正的请求）。
+      }
+      const warm: NativeFeedPage | null = NativeFeed.takeWarm(NativeFeed.REUSE_WARM_MS);
+      if (warm !== null) {
+        hilog.info(DOMAIN, TAG, 'feed page reused warm result (waited %{public}dms)',
+          Date.now() - waited);
+        return warm;
+      }
+    }
     /*
      * **"关注的人看完了"就短暂别问了**（见 markCaughtUp 的说明）。
      *
@@ -209,6 +243,13 @@ export class NativeFeed {
    * 关注了新的人之后，最多 30 分钟（或换账号 / 重装）就会重新问一次。
    */
   private static readonly CAUGHT_UP_TTL_MS: number = 1800000;
+  /**
+   * 搭"预热那发"的车时，允许复用的新鲜度（毫秒）。
+   *
+   * 15 秒：冷启动那一刻预热刚回来，一定比这新；超过说明中间隔了很久（app 被挂起过），
+   * 那就别用旧数据，自己重发。
+   */
+  private static readonly REUSE_WARM_MS: number = 15000;
 
   /**
    * 移动端那一发（拿不到给 null）。
