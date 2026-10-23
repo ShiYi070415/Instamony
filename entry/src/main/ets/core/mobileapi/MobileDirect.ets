@@ -32,6 +32,7 @@ import { uuid4 } from './MobileSign';
 import { DirectInboxPage, DirectMapper, DirectThread, DirectThreadView } from '../../model/Direct';
 import { InboxParseResult } from '../../workers/InboxParseModels';
 import { parseInboxTask } from '../../workers/InboxParseTask';
+import { parseThreadTask } from '../../workers/ThreadParseTask';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'MobileDirect';
@@ -350,7 +351,24 @@ export class MobileDirect {
       hilog.warn(DOMAIN, TAG, 'thread failed id=%{public}s %{public}s', id, result.summary());
       return null;
     }
-    const view: DirectThreadView | null = DirectMapper.threadFromJson(result.body, identity.userId);
+    /*
+     * **解析丢进 TaskPool**（见 workers/ThreadParseTask）：这是"点开会话时你在等的那一发"，
+     * 主线程上少做几十~上百 KB 的解析，转场就不会卡在数据上。
+     * 线程池不可用/异常时退回本线程解析 —— 功能不能少。
+     */
+    let view: DirectThreadView | null = null;
+    try {
+      view = await taskpool.execute(parseThreadTask, result.body,
+        identity.userId) as DirectThreadView | null;
+      if (view !== null) {
+        hilog.info(DOMAIN, TAG, 'thread parsed in taskpool msgs=%{public}d',
+          view.messages.length);
+      }
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'thread taskpool failed: %{public}s → main thread',
+        (error as Error).message);
+      view = DirectMapper.threadFromJson(result.body, identity.userId);
+    }
     if (view === null) {
       hilog.warn(DOMAIN, TAG, 'thread parse failed id=%{public}s bytes=%{public}d',
         id, result.bytes);
