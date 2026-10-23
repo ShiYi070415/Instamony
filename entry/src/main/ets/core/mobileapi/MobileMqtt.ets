@@ -259,7 +259,14 @@ export class MobileMqtt {
     writer.writeBool(9, true);             // isInitiallyForeground
     writer.writeInt(10, 1, 32);            // networkType = wifi
     writer.writeInt(11, 0, 32);            // networkSubtype
-    writer.writeInt(12, Date.now() & 0xFFFFFFFF, 64); // clientMqttSessionId
+    /*
+     * 12: clientMqttSessionId —— **不能写 `Date.now() & 0xFFFFFFFF`**：
+     * JS 的 `&` 走的是**有符号 int32**，10 位量级的时间戳取低 32 位后约一半概率是**负数**，
+     * 再按 i64 编出去就变成一个负的 session id。
+     * 参考实现里 instagrapi 是 Python 的 `int(time.time()*1000) & 0xFFFFFFFF`（恒非负），
+     * instagram4j 直接写完整毫秒值 —— 两者都落在非负区间。所以这里用取模，效果同 Python 那行。
+     */
+    writer.writeInt(12, Date.now() % 4294967296, 64); // clientMqttSessionId
     writer.writeIntList(14, SUBSCRIBE_TOPICS);
     writer.writeString(15, 'cookie_auth'); // clientType
     writer.writeInt(16, MQTT_APP_ID, 64);
