@@ -32,6 +32,8 @@ export class DirectViewModel {
     this.endCursor = '';
     this.more = false;
     this.busy = false;
+    // 排队中的刷新也要作废：它属于上一个账号。
+    this.pendingLoad = false;
     this.loadedAtMs = 0;
     this.diag = '-';
     this.notifiedTs = new Map<string, number>();
@@ -41,6 +43,12 @@ export class DirectViewModel {
   private endCursor: string = '';
   private more: boolean = false;
   private busy: boolean = false;
+  /**
+   * 有一发"刷新"在飞的时候又来了刷新请求（见 load 的 busy 分支）。
+   *
+   * 只排一次：排队期间再来几下也只补跑一轮（连点下拉不该变成连发）。
+   */
+  private pendingLoad: boolean = false;
   /**
    * 每条会话"上次为它弹过通知"的那条消息的时间戳（会话 id → tsMs）。
    *
@@ -385,6 +393,17 @@ export class DirectViewModel {
   /** 拉一次（refresh=true 时丢掉游标从头拉）。 */
   async load(refresh: boolean): Promise<void> {
     if (this.busy) {
+      /*
+       * **下拉刷新不能被"正在飞的那一发"静默吞掉**（用户报："下拉没反应"）。
+       *
+       * 原来这里只有一句 `return`：那一发可能是后台预热、也可能是轮询触发的增量
+       * （`requestMore`），它回来的是**旧游标那一页**，用户的刷新请求却已经消失 ——
+       * 界面停在旧列表上，转圈也早收了。现在记下来，本轮结束后补跑一次真刷新。
+       */
+      if (refresh) {
+        this.pendingLoad = true;
+        hilog.info(DOMAIN, TAG, 'load(refresh) queued behind in-flight round');
+      }
       return;
     }
     if (refresh) {
@@ -421,6 +440,11 @@ export class DirectViewModel {
     } finally {
       this.busy = false;
       this.onBusy(false);
+      // 排队的那次刷新在这里补跑（见上面 busy 分支）。
+      if (this.pendingLoad) {
+        this.pendingLoad = false;
+        this.load(true);
+      }
     }
   }
 

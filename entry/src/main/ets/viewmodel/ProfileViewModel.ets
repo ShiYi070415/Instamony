@@ -321,6 +321,46 @@ export class ProfileViewModel {
 
   onHeader: (header: ProfileHeader) => void = (header: ProfileHeader): void => {
   };
+  /**
+   * 头部资料的**第二拨订阅方**（见 addHeaderListener）。
+   *
+   * 为什么必须多播：这个视图模型是长驻的，而订阅它的有两拨 ——
+   *   · `pages/Index`（要它来填当前账号的头像/用户名、写进花名册、刷新多账号选单）；
+   *   · `components/ProfilePage`（页面里那份头部 UI）。
+   * 上一版只有一个**回调槽**，ProfilePage 一挂载就把它整个覆盖掉：从那以后头部资料回来，
+   * Index 那一边再也收不到 —— 账号按钮、花名册、多账号选单就停在"未命名账号 + 没头像"
+   * （用户报的正是这个，而且"重进 App 可能好、多刷几次又坏"，因为它取决于哪一方最后挂载）。
+   * 现在 `onHeader` 保留给 Index（单槽，够用），ProfilePage 走这里注册，两拨各收一份。
+   */
+  private headerListeners: Array<(header: ProfileHeader) => void> = [];
+
+  /** 注册一个头部资料订阅者（ProfilePage 用；页面销毁时要移除，见 removeHeaderListener）。 */
+  addHeaderListener(listener: (header: ProfileHeader) => void): void {
+    if (this.headerListeners.indexOf(listener) < 0) {
+      this.headerListeners.push(listener);
+    }
+  }
+
+  /** 移除订阅（只移除注册过的那个函数对象，别把别人的也清了）。 */
+  removeHeaderListener(listener: (header: ProfileHeader) => void): void {
+    const at: number = this.headerListeners.indexOf(listener);
+    if (at >= 0) {
+      this.headerListeners.splice(at, 1);
+    }
+  }
+
+  /** 头部资料到齐：单槽 + 多播一起发（所有调用点都走这里）。 */
+  private emitHeader(header: ProfileHeader): void {
+    this.onHeader(header);
+    for (let index: number = 0; index < this.headerListeners.length; index++) {
+      try {
+        this.headerListeners[index](header);
+      } catch (error) {
+        // 一个订阅方抛异常不能把另一个也带走（以前单槽覆盖时这个问题被掩盖了）。
+        hilog.warn(DOMAIN, TAG, 'header listener threw: %{public}s', (error as Error).message);
+      }
+    }
+  }
   onPosts: (posts: Array<ProfilePost>, hasMore: boolean) => void =
     (posts: Array<ProfilePost>, hasMore: boolean): void => {
     };
@@ -1358,7 +1398,7 @@ export class ProfileViewModel {
     this.headerFromSnapshot = true;
     hilog.info(DOMAIN, TAG, 'header snapshot @%{public}s posts=%{public}d',
       snap.username, snap.posts);
-    this.onHeader(snap);
+    this.emitHeader(snap);
   }
 
   /**
@@ -1433,7 +1473,7 @@ export class ProfileViewModel {
       }
       this.header = now.withMusic(music);
       hilog.info(DOMAIN, TAG, 'music: header updated title=%{public}s', music.title);
-      this.onHeader(this.header);
+      this.emitHeader(this.header);
     }).catch((): void => {
     });
   }
@@ -1467,7 +1507,7 @@ export class ProfileViewModel {
       hilog.info(DOMAIN, TAG, 'follow state corrected @%{public}s → %{public}s',
         header.username, `${known}`);
       this.header = now.withFollowedByViewer(known);
-      this.onHeader(this.header);
+      this.emitHeader(this.header);
     }).catch((): void => {
     });
   }
@@ -1558,7 +1598,7 @@ export class ProfileViewModel {
       this.fillMusicFromWeb(native);
       hilog.info(DOMAIN, TAG, 'header ok @%{public}s posts=%{public}d',
         native.username, native.posts);
-      this.onHeader(native);
+      this.emitHeader(native);
       /*
        * **别人主页的关注状态要以 `show_many` 为准**（用户报的"用户主页的关注状态没有正确显示"）：
        * 头部那个 `friendship_status` 有时缺、有时是旧值，于是界面上"明明关注了却显示关注"。

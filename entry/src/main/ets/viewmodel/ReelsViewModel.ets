@@ -97,6 +97,18 @@ export class ReelsViewModel implements ReelStreamVm {
     this.shown.clear();
     this.nativeQueue = [];
     this.nativeCursor = '';
+    /*
+     * **原生那条链剩下的状态也要清**（否则换账号后"还剩下一个人的 Reels"）。
+     *
+     * `nativeHasMore` 是上一个人的游标还有没有下一页、`nativeFetching` 可能是真的在飞
+     * （那一发回来会把上一个人的页塞进 `nativeQueue`）、`lastFillWasAuthor` 决定下一发
+     * 往哪条源补、`active` 是上一个人看到第几条（新账号直接跳到那个位置就是"莫名从中间开始"）。
+     */
+    this.nativeHasMore = false;
+    this.nativeFetching = false;
+    this.lastFillWasAuthor = false;
+    this.active = 0;
+    this.diag = '-';
   }
 
   private reels: Array<Reel> = [];

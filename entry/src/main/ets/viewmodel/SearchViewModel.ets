@@ -220,8 +220,20 @@ export class SearchViewModel {
       return;
     }
     this.recommendBusy = true;
-    await this.loadRecommendedOnce();
-    this.recommendBusy = false;
+    /*
+     * **必须 try/finally**：`loadRecommendedOnce` 里面是网络往返，任何一处抛异常
+     * （解析出错、被上层 cancel、NativeSearch 内部 throw）都会让 `recommendBusy` 永久留在
+     * true —— 之后 `retryRecommend()`（切到搜索页、点"再试一次"）全部在第一行被挡掉，
+     * 表现就是"搜索页永远空着，除非重启 App"。
+     */
+    try {
+      await this.loadRecommendedOnce();
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'recommend threw: %{public}s', (error as Error).message);
+      this.onStatus('推荐读取出错');
+    } finally {
+      this.recommendBusy = false;
+    }
   }
 
   /**

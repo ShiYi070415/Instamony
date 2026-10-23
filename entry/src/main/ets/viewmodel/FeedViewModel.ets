@@ -407,6 +407,23 @@ export class FeedViewModel {
     this.pending = false;
     this.wantFirstPage = false;
     this.followingDry = false;
+    /*
+     * **原生分页那条链的状态也必须一起清**（换账号后它记的是上一个人的游标/预取队列）。
+     *
+     * 上一版只清了网页那条路的游标：换号后第一次上滑，`nativeQueue` 里还是**上一个人**
+     * 预取好的那几页 → 新账号的信息流里混进旧账号的帖子（"换号后还能刷到上一个人的内容"）；
+     * `nativeCursor` 是旧游标 → 接着往上翻会重复/报错；`pagingStuck` / `lastRestartMs`
+     * 还会让新账号一上来就被"卡住了"的冷却挡住。
+     */
+    this.nativeCursor = '';
+    this.nativeHasMore = false;
+    this.nativeQueue = [];
+    this.nativeFetching = false;
+    this.pagingStuck = false;
+    this.lastRestartMs = 0;
+    // 首屏缓存标记同样作废：新账号的第一页不该被当成"缓存那页的更新版"去整体替换。
+    this.fromCache = false;
+    this.cacheTried = false;
     // 换账号后两段内容都是上一个人的，一起作废（见 mode 与 following/explore 的说明）。
     this.mode = 'feed';
     this.following = [];

@@ -778,6 +778,8 @@ export struct ProfilePage {
   }
 
   aboutToDisappear(): void {
+    // 先注销视图模型上的头部订阅（否则重建一次就多一个监听者，且旧页面的 @State 还会被写）。
+    this.vm.removeHeaderListener(this.onHeaderArrived);
     this.releaseAudio();
   }
 
@@ -804,12 +806,16 @@ export struct ProfilePage {
     this.pendingOuter = this.vm.outerNow();
     hilog.info(DOMAIN, TAG, 'PF enter tab=%{public}d inner=%{public}d outer=%{public}d',
       this.tab, this.pendingOffset, this.pendingOuter);
-    this.vm.onHeader = (header: ProfileHeader): void => {
-      this.header = header;
-      // 头部到了：关注状态也一起校准（见 syncFromVm）。
-      this.following = FollowState.resolve(
-        this.vm.targetId(), FollowState.resolveName(header.username, header.followedByViewer));
-    };
+    /*
+     * **注册而不是覆盖**（见 ProfileViewModel.addHeaderListener）。
+     *
+     * 这一行原先是 `this.vm.onHeader = …`：视图模型是长驻的、只有这一个回调槽，
+     * 页面一挂载就把 `pages/Index` 那个订阅整个顶掉 —— 之后头部资料回来，Index 再也收不到，
+     * 于是当前账号的头像/用户名不会写进花名册、多账号选单停在"未命名账号"。
+     * 现在用注册/注销，两拨订阅各收一份；销毁时移除，重建也不会越积越多。
+     */
+    this.vm.addHeaderListener(this.onHeaderArrived);
+    this.header = this.vm.headerNow();
     this.vm.onPosts = (posts: Array<ProfilePost>, hasMore: boolean): void => {
       this.posts = posts;
       // 行数据源也要换：LazyForEach 只认数据源，不认这个 @State（@State 只用来判断"空不空"）。
@@ -887,6 +893,20 @@ export struct ProfilePage {
     }
     return text;
   }
+
+  /**
+   * 头部资料到了（注册给视图模型的多播，见 aboutToAppear 里那段说明）。
+   *
+   * 做成**字段上的箭头函数**而不是就地写的闭包：注销时要按函数对象找回同一个引用
+   * （见 removeHeaderListener），所以在整个页面生命周期里必须是同一个实例。
+   */
+  private readonly onHeaderArrived: (header: ProfileHeader) => void =
+    (header: ProfileHeader): void => {
+      this.header = header;
+      // 头部到了：关注状态也一起校准（见 syncFromVm）。
+      this.following = FollowState.resolve(
+        this.vm.targetId(), FollowState.resolveName(header.username, header.followedByViewer));
+    };
 
   private syncFromVm(): void {
     const header: ProfileHeader | null = this.vm.headerNow();

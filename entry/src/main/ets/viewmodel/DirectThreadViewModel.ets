@@ -102,6 +102,17 @@ const LOAD_OLDER_RETRY_GAP_MS: number = 30000;
 export class DirectThreadViewModel {
   /** 当前会话 id（空 = 还没选会话）。 */
   private threadId: string = '';
+  /**
+   * **会话代数**：每换一次会话 / 每次 reset 都 +1（见 stale 相关判断）。
+   *
+   * 为什么要它：这个视图模型是全 App 共用的**一份实例**，而"读一条会话"是一个网络往返
+   * （真机 200ms~3s）。用户在 A 的消息还在飞的时候点进 B，A 那一发回来时
+   * `this.threadId` 已经是 B 了 —— 上一版直接 `this.view = view`，于是
+   * **A 的消息被画进 B 的会话里**（用户报的"记录对不上对方账号"）。
+   * 光比 threadId 也不够：来回切回同一条会话（A→B→A）时 id 又对上了，
+   * 但那一发读的是"上一轮的 A"，还得靠代数把它作废。
+   */
+  private generation: number = 0;
   /** 收件箱里那一行的标题（读消息之前先拿它当标题，读到了再用真名覆盖）。 */
   private fallbackTitle: string = '';
   /** 清空自己（退出登录 / 换账号时调）：会话内容与待发消息一起丢掉。 */
@@ -113,7 +124,13 @@ export class DirectThreadViewModel {
     this.failedSends = new Map<string, FailedSend>();
     this.pendingThread = new Map<string, string>();
     this.busy = false;
+    this.busyFor = '';
     this.threadId = '';
+    // 在飞的那几发（首屏 / 翻页 / 轮询）全部作废，见 generation 的说明。
+    this.generation++;
+    this.seenSentFor = '';
+    this.lastLoadAtMs = 0;
+    this.stuckUntilMs = 0;
     this.onView(null);
     this.onPending(this.pending);
   }
@@ -125,6 +142,8 @@ export class DirectThreadViewModel {
   onSeen: (threadId: string) => void = (threadId: string): void => {
   };
   private busy: boolean = false;
+  /** 现在这一发是给哪条会话读的（见 load 里的 busyFor 判断）。 */
+  private busyFor: string = '';
   /** 本地乐观气泡的序号（拼临时 id 用，保证同一毫秒连发也不撞）。 */
   private sendSeq: number = 0;
   /** 待发队列（见 QueuedSend）：**不是"忙就丢掉"**，是一条条排队发出去。 */
@@ -219,6 +238,11 @@ export class DirectThreadViewModel {
       }
     }
     this.threadId = threadId;
+    // 换了会话：之前所有在飞的请求（首屏/翻页/轮询/发送后的刷新）一律作废。
+    this.generation++;
+    this.seenSentFor = '';
+    this.stuckUntilMs = 0;
+    this.lastLoadAtMs = 0;
     this.fallbackTitle = title;
     this.fallbackAvatar = avatar;
     this.fallbackGroup = isGroup;
@@ -366,14 +390,35 @@ export class DirectThreadViewModel {
    * 队列最前面（见 core/ApiThrottle）。以前用默认的 warm，第一屏经常要等两三秒才出来。
    */
   async load(): Promise<void> {
-    if (this.busy || this.threadId.length === 0) {
+    if (this.threadId.length === 0) {
+      return;
+    }
+    /*
+     * **只在"同一会话已经在读"时才挡**（见 busyFor）。
+     *
+     * 上一版是 `if (this.busy) return`：A 的首屏还在飞时用户点进 B，B 这一发被挡掉，
+     * 而 A 那一发回来又会被判成过期丢掉 —— 结果 B 一直空着、没有任何重试入口。
+     */
+    if (this.busy && this.busyFor === this.threadId) {
       return;
     }
     this.busy = true;
+    this.busyFor = this.threadId;
     this.onBusy(true);
+    /*
+     * 这一发是**给这条会话**读的：把 id 与代数都先记下来，回来时核对（见 generation）。
+     * 记录顺序反了就是 A 的消息落进 B —— 这正是这一批修的那个 P0。
+     */
+    const wantThread: string = this.threadId;
+    const wantGen: number = this.generation;
     try {
-      const view: DirectThreadView | null = await NativeDirect.thread(this.threadId, '',
+      const view: DirectThreadView | null = await NativeDirect.thread(wantThread, '',
         this.fallbackUserId, ApiThrottle.urgent());
+      if (this.isStale(wantGen, wantThread)) {
+        hilog.info(DOMAIN, TAG, 'load dropped: thread switched (want %{public}d chars now %{public}d)',
+          wantThread.length, this.threadId.length);
+        return;
+      }
       if (view === null) {
         this.diag = NativeDirect.lastDetail();
         // 没有本地快照兜底了（需求：去掉文本快照缓存）：失败就如实说，页面留着空态可重试。
@@ -406,9 +451,23 @@ export class DirectThreadViewModel {
       hilog.warn(DOMAIN, TAG, 'load threw: %{public}s', (error as Error).message);
       this.onStatus('加载出错');
     } finally {
-      this.busy = false;
-      this.onBusy(false);
+      // 只有"这一发还是当前那一发"才收 busy：换会话后新那一发可能正在跑。
+      if (this.busyFor === wantThread) {
+        this.busy = false;
+        this.busyFor = '';
+        this.onBusy(false);
+      }
     }
+  }
+
+  /**
+   * 这一发回来时，会话还开着吗（见 generation / threadId 的说明）。
+   *
+   * 两个条件都要看：id 变了 = 换了别人；代数变了 = 期间被 reset / 重新 open 过
+   * （A→B→A 时 id 又对上了，但读的是上一轮的 A，同样作废）。
+   */
+  private isStale(gen: number, threadId: string): boolean {
+    return gen !== this.generation || threadId !== this.threadId;
   }
 
   /**
@@ -629,12 +688,19 @@ export class DirectThreadViewModel {
     if (this.threadId.length === 0) {
       return;
     }
+    // 这一发只为"刚发出消息的那条会话"读；回来时核对（见 generation）。
+    const wantThread: string = this.threadId;
+    const wantGen: number = this.generation;
     let fresh: DirectThreadView | null = null;
     try {
-      fresh = await NativeDirect.thread(this.threadId, '', this.fallbackUserId,
+      fresh = await NativeDirect.thread(wantThread, '', this.fallbackUserId,
         ApiThrottle.interactive());
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'refreshAfterSend threw: %{public}s', (error as Error).message);
+      return;
+    }
+    if (this.isStale(wantGen, wantThread)) {
+      hilog.info(DOMAIN, TAG, 'refreshAfterSend dropped: thread switched');
       return;
     }
     if (fresh === null) {
@@ -658,6 +724,18 @@ export class DirectThreadViewModel {
    */
   private mergeFresh(fresh: DirectThreadView): number {
     const view: DirectThreadView | null = this.view;
+    /*
+     * **不是同一条会话就一律不并**（最后一道闸，见 generation）。
+     *
+     * 前面几处（load / refreshAfterSend / pollOnce）都已经核对过，这里再挡一次是因为
+     * 合并函数本身是"按 id 追加"的语义：一旦混进别的会话的消息，界面就是
+     * "在一个人的对话里看到另一个人的话"，而且**再也清不掉**（只能退出重进）。
+     */
+    if (view !== null && view.id.length > 0 && fresh.id.length > 0 && fresh.id !== view.id) {
+      hilog.warn(DOMAIN, TAG, 'mergeFresh rejected: view=%{public}d fresh=%{public}d',
+        view.id.length, fresh.id.length);
+      return 0;
+    }
     // 还没有首屏（理论上不会）：那就当首屏用。
     if (view === null) {
       this.view = fresh;
@@ -783,14 +861,23 @@ export class DirectThreadViewModel {
       return;
     }
     this.busy = true;
+    this.busyFor = this.threadId;
     this.onBusy(true);
+    // 游标与目标会话都在**发请求前**取好：这一发回来时 this.view 可能已经换人了（见 generation）。
+    const wantThread: string = this.threadId;
+    const wantGen: number = this.generation;
+    const cursor: string = this.view.oldestCursor;
     try {
       const older: DirectThreadView | null =
-        await NativeDirect.thread(this.threadId, this.view.oldestCursor, this.fallbackUserId);
+        await NativeDirect.thread(wantThread, cursor, this.fallbackUserId);
+      if (this.isStale(wantGen, wantThread) || this.view === null) {
+        hilog.info(DOMAIN, TAG, 'loadOlder dropped: thread switched');
+        return;
+      }
       if (older === null) {
         // 翻页请求失败也要留痕：没有这行日志时，"没触发"和"请求了但被拒"分不清。
         hilog.warn(DOMAIN, TAG, 'loadOlder failed detail=%{public}s cursor=%{public}d',
-          NativeDirect.lastDetail(), this.view.oldestCursor.length);
+          NativeDirect.lastDetail(), cursor.length);
         this.onStatus('读取失败：' + NativeDirect.lastDetail());
         return;
       }
@@ -838,8 +925,12 @@ export class DirectThreadViewModel {
         this.view.isGroup, this.view.withFullName);
       this.onView(this.view);
     } finally {
-      this.busy = false;
-      this.onBusy(false);
+      // 同 load：换会话后新那一发已经在跑时，别把它的 busy 收掉（见 load 的 busyFor 说明）。
+      if (this.busyFor === wantThread) {
+        this.busy = false;
+        this.busyFor = '';
+        this.onBusy(false);
+      }
     }
   }
 
@@ -980,9 +1071,17 @@ export class DirectThreadViewModel {
       return;
     }
     this.polling = true;
-    NativeDirect.thread(this.threadId, '', this.fallbackUserId)
+    // 轮询也是"给这条会话读的"：回来先核对（见 generation）。
+    const wantThread: string = this.threadId;
+    const wantGen: number = this.generation;
+    NativeDirect.thread(wantThread, '', this.fallbackUserId)
       .then((fresh: DirectThreadView | null): void => {
       this.polling = false;
+      if (this.isStale(wantGen, wantThread)) {
+        // 会话已经换人了：这份是别人那一屏，丢掉（不并、不回调、不动 lastLoadAtMs）。
+        hilog.info(DOMAIN, TAG, 'poll dropped: thread switched');
+        return;
+      }
       if (fresh === null || this.view === null) {
         return;
       }

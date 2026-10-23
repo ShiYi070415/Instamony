@@ -511,10 +511,32 @@ export class ApiThrottle {
     return minutes > 0 ? minutes : 1;
   }
 
-  /** 手动解禁（下拉刷新这种用户主动的动作可以试一次）。 */
+  /**
+   * 手动解禁（下拉刷新、换账号这种用户主动的动作可以试一次）。
+   *
+   * **换账号必须把所有闸门一起归零**（这是本函数的第二个用途，见 core/AccountScope）：
+   * 上一个人的冷却/熔断/写间隔记的都是**那个账号**的状态，带过来就会让新账号
+   * 一上来就"被限流 45 分钟"或者"发消息要等 8 秒"。
+   *
+   * 上一版只清了 `until`（家族冷却），`suspendUntil` 那条整账号熔断还挂着 ——
+   * 换号后所有可选流量**继续被挡 45 分钟**，界面表现正是"换个账号什么都刷不出来"。
+   */
   static clear(family: string = ''): void {
     if (family.length === 0) {
       ApiThrottle.until.clear();
+      ApiThrottle.suspendUntil = 0;
+      ApiThrottle.suspendReason = '';
+      ApiThrottle.lastWriteAt = 0;
+      // 队里等着的请求不能就这么悬着：全部放行（它们各自那一发照样受 MAX_IN_FLIGHT 限制）。
+      const waiting: Array<PaceWaiter> = ApiThrottle.waiters;
+      ApiThrottle.waiters = [];
+      for (let index: number = 0; index < waiting.length; index++) {
+        waiting[index].resolve();
+      }
+      // 间隔从"现在"重新开始算，别让上一个人最后那一发的时刻压着新账号。
+      ApiThrottle.lastStartAt = 0;
+      hilog.info(DOMAIN, TAG, 'throttle cleared (all gates) waiting=%{public}d',
+        waiting.length);
       return;
     }
     ApiThrottle.until.delete(family);
