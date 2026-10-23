@@ -437,7 +437,14 @@ export class DirectThreadViewModel {
        * 界面一次都不会画出重复。
        */
       this.dropConfirmedPending();
-      this.onStatus(view.messages.length > 0 ? '已加载' : '');
+      /*
+       * 空态要**说清楚是哪一种空**。
+       *
+       * 真机抓到过一类会话：`thread ok msgs=0 raw=21`，21 条条目全是 `placeholder`
+       * （IG 那边这条对话已经没有可显示的内容了，见 MobileDirect.itemTypeHistogram）。
+       * 这时候不写状态行，用户看到的就是一整片空白 —— 分不清"没消息"还是"没读出来"。
+       */
+      this.onStatus(view.messages.length > 0 ? '已加载' : '这个会话没有可显示的消息');
       /*
        * **进会话就算看过了**：照 instagrapi 的 `direct_send_seen` 把这条会话标成已读
        * （`direct_v2/threads/{id}/items/{最新消息id}/seen/`，见 MobileDirect.markSeen）。

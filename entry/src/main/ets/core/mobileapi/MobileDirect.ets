@@ -385,6 +385,11 @@ export class MobileDirect {
       + ' older=%{public}s with=%{public}s',
       id, view.messages.length, MobileDirect.rawItemCount(result.body),
       `${view.hasOlder}`, view.withUsername);
+    // 解析出 0 条但服务端明明给了条目：把类型统计打出来（见 itemTypeHistogram）。
+    if (view.messages.length === 0 && MobileDirect.rawItemCount(result.body) > 0) {
+      hilog.warn(DOMAIN, TAG, 'thread parsed 0 items: %{public}s',
+        MobileDirect.itemTypeHistogram(result.body));
+    }
     MobileDirect.logIdCandidates(id, result.body);
     return view;
   }
@@ -427,6 +432,55 @@ export class MobileDirect {
   }
 
   /** `thread.items` 的原始条数（拿不到给 -1，用来区分"服务端没给"与"解析丢了"）。 */
+  /**
+   * 把这一发 `items[]` 的**条目类型**统计成一行（诊断用：解析出 0 条时打出）。
+   *
+   * 为什么需要：有一类会话 200、`raw` 二三十条，解析出来却是 0 —— 那些条目既没有 `text`
+   * 也没有可用的媒体 URL（`reel_share` / `voice_media` / `like` / 系统条目…）。
+   * 没有这一行就只能猜"是我们全丢了还是服务端给的就不是消息"。
+   * 只在"解析出 0 条"这条路上调用，正常路径一次都不跑。
+   */
+  private static itemTypeHistogram(body: string): string {
+    try {
+      const parsed: Record<string, Object> = JSON.parse(body) as Record<string, Object>;
+      const thread: Object | undefined = parsed['thread'];
+      if (thread === undefined || thread === null || Array.isArray(thread)) {
+        return '-';
+      }
+      const items: Object | undefined = (thread as Record<string, Object>)['items'];
+      if (items === undefined || items === null || !Array.isArray(items)) {
+        return '-';
+      }
+      const counts: Map<string, number> = new Map<string, number>();
+      const raw: Array<Object> = items as Array<Object>;
+      for (let index: number = 0; index < raw.length; index++) {
+        const one: Object = raw[index];
+        let type: string = '?';
+        if (one !== null && !Array.isArray(one)) {
+          const item: Record<string, Object> = one as Record<string, Object>;
+          const t: Object | undefined = item['item_type'];
+          if (typeof t === 'string') {
+            type = t as string;
+          }
+          // 没有 item_type 也要能看出"这到底是什么形状"：退到键名列表的头两个。
+          if (type === '?') {
+            const keys: Array<string> = Object.keys(item);
+            type = 'keys:' + keys.slice(0, 2).join(',');
+          }
+        }
+        const seen: number | undefined = counts.get(type);
+        counts.set(type, seen === undefined ? 1 : seen + 1);
+      }
+      let out: string = '';
+      counts.forEach((n: number, type: string): void => {
+        out += (out.length > 0 ? ' ' : '') + type + '=' + n;
+      });
+      return out.length > 0 ? out : '-';
+    } catch (error) {
+      return 'parse-failed';
+    }
+  }
+
   private static rawItemCount(body: string): number {
     try {
       const parsed: Record<string, Object> = JSON.parse(body) as Record<string, Object>;
