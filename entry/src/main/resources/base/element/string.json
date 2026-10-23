@@ -33,6 +33,10 @@
       "value": "我已登录，重新检查"
     },
     {
+      "name": "login_recheck_short",
+      "value": "重新检查"
+    },
+    {
       "name": "login_register",
       "value": "注册新账号"
     },

@@ -257,7 +257,9 @@ export struct LoginPage {
             })
               .layoutWeight(1)
             MaterialLabelButton({
-              labelRes: $r('app.string.login_recheck'),
+              // 这里是"半宽"按钮，用短标签：`我已登录，重新检查` 在这种宽度下会被截断
+              // （模拟器实测："我已登录，重新检"）。语义不只靠字面，上面那段提示里写清楚了。
+              labelRes: $r('app.string.login_recheck_short'),
               fullWidth: true,
               fontSize: 15,
               onTap: (): void => {
