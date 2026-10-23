@@ -2147,41 +2147,51 @@ export struct FeedList {
    */
   @Builder
   hintRow() {
-    Row({ space: 10 }) {
-      Image($r('app.media.star_ig'))
-        .width(HINT_STAR_SIZE)
-        .height(HINT_STAR_SIZE)
-        .objectFit(ImageFit.Contain)
-        .flexShrink(0)
-      /*
-       * 注意：**不能设 fillColor**（那会把 PNG 的渐变换成单色），也不用再套 Stack/遮罩。
-       */
+    /*
+     * ⚠️ 左右留白用**外层 padding**，不是给卡片加 margin。
+     *
+     * 卡片本身是 `width('100%')`；在 ArkUI 里 margin 是盒子**外面**的尺寸，
+     * 100% + 左右各 16 就溢出到父容器之外、被裁掉 —— 实测「为你推荐」看着是通栏的、
+     * 一点留白都没有。放进一个带 padding 的外层，宽度就是"父宽 - 32"。
+     */
+    Column() {
+      Row({ space: 10 }) {
+        Image($r('app.media.star_ig'))
+          .width(HINT_STAR_SIZE)
+          .height(HINT_STAR_SIZE)
+          .objectFit(ImageFit.Contain)
+          .flexShrink(0)
+        /*
+         * 注意：**不能设 fillColor**（那会把 PNG 的渐变换成单色），也不用再套 Stack/遮罩。
+         */
 
-      Column({ space: 3 }) {
-        Text($r('app.string.feed_recommended_title'))
-          .fontSize(14)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.primary_text'))
-          .width('100%')
-        Text($r('app.string.feed_recommended_hint'))
-          .fontSize(12)
-          .fontColor($r('app.color.secondary_text'))
-          .width('100%')
-          .maxLines(3)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Column({ space: 3 }) {
+          Text($r('app.string.feed_recommended_title'))
+            .fontSize(14)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.primary_text'))
+            .width('100%')
+          Text($r('app.string.feed_recommended_hint'))
+            .fontSize(12)
+            .fontColor($r('app.color.secondary_text'))
+            .width('100%')
+            .maxLines(3)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
       }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
+      .width('100%')
+      // 垂直居中（需求）：星星对着**整张卡片**居中，不是贴着第一行文字。
+      .alignItems(VerticalAlign.Center)
+      .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+      .backgroundColor($r('app.color.field_background'))
+      // 圆角再大一点（需求）：20 才有明显的"卡片"感（16 看着还是偏方）。
+      .borderRadius(20)
     }
     .width('100%')
-    // 垂直居中（需求）：星星对着**整张卡片**居中，不是贴着第一行文字。
-    .alignItems(VerticalAlign.Center)
-    .padding({ left: 14, right: 14, top: 12, bottom: 12 })
-    .backgroundColor($r('app.color.field_background'))
-    // 圆角再大一点（需求）：20 才有明显的"卡片"感（16 看着还是偏方）。
-    .borderRadius(20)
-    // 卡片左右留白：**左右各 16vp**（需求）。
-    .margin({ left: 16, right: 16, top: 10, bottom: 10 })
+    // 留白：**左右各 16vp**（需求），上下各 10vp（需求："平衡卡片顶部和底部的空隙"）。
+    .padding({ left: 16, right: 16, top: 10, bottom: 10 })
   }
 
   /**
