@@ -149,6 +149,8 @@ import { NativeStories } from '../core/NativeStories';
 import { NativeSearch, SearchPostPage } from '../core/NativeSearch';
 // 账号安全验证（challenge_required）的台账：界面据此给「去验证」入口。
 import { MobileChallenge } from '../core/mobileapi/MobileChallenge';
+// 时间线翻页参数探针（诊断开关 TIMELINE_PAGE_PROBE，见 core/mobileapi/TimelineProbe）。
+import { TimelineProbe } from '../core/mobileapi/TimelineProbe';
 // 换号时要清掉探索流的页级短缓存（见 forgetAccountMemory）。
 import { MobileDiscover } from '../core/mobileapi/MobileDiscover';
 // 换号时要清掉首页翻页的页级短缓存（同上）。
@@ -280,6 +282,14 @@ const WEB_LOGIN_AUTO_PROBE: boolean = false;
  * "status_code":"200",…}`），所以现在关掉，只有需要再测时打开。
  */
 const MQTT_WRITE_SELF_TEST: boolean = false;
+/**
+ * **诊断开关**：启动后跑一次"时间线翻页参数探针"（见 core/mobileapi/TimelineProbe）。
+ *
+ * 为什么要它：首页"关注"那一段只有 4 条、翻不出更多，而响应里 `more_available` 是 true ——
+ * 需要一次性把几组翻页参数各试一遍，看哪组服务端真的给第二页。结论出来就把这个开关关掉
+ * （它只是诊断，会多发 3~4 发请求）。
+ */
+const TIMELINE_PAGE_PROBE: boolean = false;
 /**
  * **实时通道跑在哪条线程**（见 core/mobileapi/RealtimeWorkerClient）。
  *
@@ -2561,6 +2571,13 @@ struct Index {
         this.viewModel.list().length, Date.now() - started);
       // ===== 阶段二：其余四个页面（不 await，别挡着首屏）=====
       this.warmOtherTabs();
+      /*
+       * 时间线翻页参数探针（一次性诊断：首页"关注"段翻不出更多，见 core/mobileapi/TimelineProbe）。
+       * 放在首屏之后、用 idle 优先级 —— 不抢名额、失败无所谓；跑完把开关关掉即可。
+       */
+      if (TIMELINE_PAGE_PROBE) {
+        TimelineProbe.run();
+      }
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'preload failed: %{public}s', (error as Error).message);
     }
