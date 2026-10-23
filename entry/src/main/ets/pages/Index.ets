@@ -102,7 +102,7 @@ import { DeepLink, DeepLinkIntent, DeepLinkRoute } from '../core/DeepLink';
 // 点私信通知要直接进那条会话（EntryAbility 把会话 id 交给它，见 consumeNotifyRoute）。
 import { NotifyRoute } from '../core/NotifyRoute';
 // 无头网页登录：账号密码在隐藏网页里完成（见 core/WebLogin）。
-import { WebLogin, WEB_LOGIN_OPENED } from '../core/WebLogin';
+import { WebLogin, WEB_LOGIN_NEEDS_CODE } from '../core/WebLogin';
 import { CommentItem, CommentsPayload, LikePayload, SavePayload } from '../model/Comment';
 import { FeedMapper } from '../model/FeedMapper';
 import { FeedStatus } from '../model/FeedStatus';
@@ -3502,6 +3502,17 @@ struct Index {
       hilog.info(DOMAIN, TAG, 'web login throttled → 不打开网页');
       return ajaxMessage;
     }
+    /*
+     * 2FA / 安全检查：**不要**当成失败、也不要弹网页，交给登录页弹半模态验证码面板
+     * （见 components/LoginPage 的 verifySheet）。这个标记表示"需要用户给一个验证码"。
+     *
+     * 放在 prefill / watchLoginSession **之前**：密码那一步已经过了，往网页里再填一遍
+     * 账号密码对 2FA 没有帮助，而面板一打开，验证码由 core 直接发出去。
+     */
+    if (ajaxMessage.indexOf('额外验证') >= 0 || ajaxMessage.indexOf('两步验证') >= 0) {
+      hilog.info(DOMAIN, TAG, 'web login needs 2fa code → half modal');
+      return WEB_LOGIN_NEEDS_CODE;
+    }
     const prefillMessage: string = await WebLogin.prefill(username, password);
     if (prefillMessage.length > 0) {
       hilog.info(DOMAIN, TAG, 'web login prefill failed: %{public}s', prefillMessage);
@@ -3517,6 +3528,25 @@ struct Index {
      */
     this.watchLoginSession();
     return ajaxMessage.length > 0 ? ajaxMessage : '登录没有成功，请稍后重试或用「网页登录」';
+  }
+
+  /**
+   * 半模态面板里提交的两步验证码（见 core/WebLogin.submitTwoFactorCode）。
+   *
+   * @returns 空串 = 通过并已进登录态；否则是给面板显示的原因
+   */
+  private async submitLoginCode(username: string, code: string): Promise<string> {
+    const message: string = await WebLogin.submitTwoFactorCode(username, code);
+    if (message.length > 0) {
+      return message;
+    }
+    const waited: string = await WebLogin.awaitSession();
+    if (waited.length > 0) {
+      return waited;
+    }
+    await this.refreshSessionFromJar();
+    this.unmountWebHost('login done');
+    return '';
   }
 
   /**
@@ -6515,6 +6545,14 @@ struct Index {
          */
         onWebLogin: (username: string, password: string): Promise<string> => {
           return this.headlessWebLogin(username, password);
+        },
+        /*
+         * **两步验证码 → 半模态面板里提交**（见 core/WebLogin.submitTwoFactorCode）。
+         * 账号密码那一步返回 WEB_LOGIN_NEEDS_CODE 时，登录页弹半模态面板收码，
+         * 收完回调到这里，仍由隐藏网页把码送出去 —— 页面结构不变。
+         */
+        onVerifyCode: (username: string, code: string): Promise<string> => {
+          return this.submitLoginCode(username, code);
         }
       })
     } else {

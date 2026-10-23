@@ -93,6 +93,22 @@
       "value": "网页登录"
     },
     {
+      "name": "login_verify_title",
+      "value": "两步验证"
+    },
+    {
+      "name": "login_verify_hint",
+      "value": "这个账号开启了额外验证。请输入 Instagram 发给你的 6 位验证码（短信 / 验证器 / 备用码）。"
+    },
+    {
+      "name": "login_verify_action",
+      "value": "验证并登录"
+    },
+    {
+      "name": "login_verify_cancel",
+      "value": "取消"
+    },
+    {
       "name": "login_label_session",
       "value": "sessionid"
     },

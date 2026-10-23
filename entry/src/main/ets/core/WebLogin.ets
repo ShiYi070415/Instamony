@@ -52,6 +52,14 @@ const LOGIN_THROTTLE_COOLDOWN_MS: number = 10 * 60000;
  * 空串表示**登录成功**；这个标记表示"还在等" —— 两者混用会让登录页误以为已经登好。
  */
 export const WEB_LOGIN_OPENED: string = '__web_login_opened__';
+/**
+ * "账号密码过了，但需要再走一步验证"（两步验证 / 安全检查）。
+ *
+ * 触发它的回包（真机日志原文）：
+ * `{"user":true,"authenticated":false,"showAccountRecoveryModal":true,"status":"ok"}`
+ * 登录页收到这个标记就弹"半模态验证码"面板（见 components/LoginPage 的 2FA sheet）。
+ */
+export const WEB_LOGIN_NEEDS_CODE: string = '__web_login_needs_code__';
 
 /**
  * 探测登录页现在长什么样（诊断 + 决策都靠它）。
@@ -305,6 +313,116 @@ export class WebLogin {
   }
 
   /**
+   * **提交两步验证码**（供登录页的半模态面板调用）。
+   *
+   * ## 为什么这里要"试几种"
+   * 网页端两步验证的端点/字段这些年换过几版，而且我们手上没有 `two_factor_identifier`
+   * （2FA 那次回包只有 `showAccountRecoveryModal`）。所以按最可能的几种形状依次试，
+   * 每一种都把 `status` + 响应体记日志 —— 命中 `"authenticated":true` 就算成功。
+   *
+   * @returns 空串 = 通过；否则是给用户看的原因
+   */
+  static async submitTwoFactorCode(username: string, code: string): Promise<string> {
+    const user: string = username.trim();
+    const value: string = code.replace(/[\s-]+/g, '');
+    if (value.length === 0) {
+      return '请输入验证码';
+    }
+    if (WebLogin.busy) {
+      return '正在验证中，请稍候';
+    }
+    const bridge: InstagramPageBridge = InstagramPageBridge.getInstance();
+    if (!await WebLogin.waitAttached(bridge)) {
+      return '网页还没准备好，请稍后重试';
+    }
+    WebLogin.busy = true;
+    try {
+      let lastBody: string = '';
+      let lastStatus: string = '';
+      for (let variant: number = 0; variant < 3; variant++) {
+        const started: string = await bridge.runScript(
+          WebLogin.twoFactorScript(user, value, variant));
+        if (started.indexOf('started') < 0) {
+          continue;
+        }
+        const deadline: number = Date.now() + 15000;
+        let answered: boolean = false;
+        while (Date.now() < deadline) {
+          await WebLogin.sleep(600);
+          const raw: string = WebLogin.normalizeProbe(await bridge.runScript(WebLogin.AJAX_RESULT_JS));
+          if (raw.indexOf('"done":1') < 0) {
+            continue;
+          }
+          answered = true;
+          lastBody = WebLogin.fieldOf(raw, 'body');
+          lastStatus = WebLogin.fieldOf(raw, 'status');
+          hilog.info(DOMAIN, TAG, '2fa v%{public}d status=%{public}s body=%{public}s',
+            variant, lastStatus, lastBody.length > 220 ? `${lastBody.substring(0, 220)}…` : lastBody);
+          if (lastBody.indexOf('"authenticated":true') >= 0
+            || lastBody.indexOf('"authenticated": true') >= 0) {
+            return '';
+          }
+          break;
+        }
+        if (!answered) {
+          hilog.warn(DOMAIN, TAG, '2fa v%{public}d timeout', variant);
+        }
+      }
+      if (lastBody.length === 0) {
+        return '验证请求没有回应，请稍后重试';
+      }
+      const lower: string = lastBody.toLowerCase();
+      if (lower.indexOf('code') >= 0 || lower.indexOf('invalid') >= 0
+        || lower.indexOf('incorrect') >= 0) {
+        return '验证码不对或已过期，请重新输入';
+      }
+      const reason: string = WebLogin.ajaxFailure(lastBody, lastStatus);
+      /*
+       * 面板正在收验证码：如果服务端只是又回了一次 `showAccountRecoveryModal`，
+       * 把"请输入验证码"原样回给面板会显得像没反应 —— 换成一句明确的重试提示。
+       */
+      if (reason.indexOf('额外验证') >= 0) {
+        return '验证码没有通过，请重新输入';
+      }
+      return reason;
+    } finally {
+      WebLogin.busy = false;
+    }
+  }
+
+  /**
+   * 三种两步验证提交形状（见 submitTwoFactorCode）。
+   *
+   * v0 `login/ajax/two_factor/` + username + verification_code + 空 identifier（最常见）
+   * v1 `login/ajax/` 再发一次，把 verification_code 塞进同一发
+   * v2 `login/two_factor/`（非 ajax 路径）+ two_factor_identifier 字段名变体
+   */
+  private static twoFactorScript(user: string, code: string, variant: number): string {
+    return '(function(){try{'
+      + 'var U=' + JSON.stringify(user) + ',C=' + JSON.stringify(code) + ',V=' + variant + ';'
+      + 'window.__igwb={done:0,status:0,body:""};'
+      + 'var m=document.cookie.match(/csrftoken=([^;]+)/);var csrf=m?m[1]:"";'
+      + 'var url="/api/v1/web/accounts/login/ajax/two_factor/";'
+      + 'var body="verification_code="+encodeURIComponent(C)'
+      + '+"&username="+encodeURIComponent(U)+"&queryParams=%7B%7D";'
+      + 'if(V===0){body+="&identifier=&two_factor_identifier=";}'
+      + 'if(V===1){url="/api/v1/web/accounts/login/ajax/";'
+      + 'body="username="+encodeURIComponent(U)+"&verification_code="+encodeURIComponent(C)'
+      + '+"&queryParams=%7B%7D";}'
+      + 'if(V===2){url="/api/v1/web/accounts/login/two_factor/";'
+      + 'body+="&device_id=&guid=&two_factor_identifier=";}'
+      + 'fetch(url,{method:"POST",credentials:"include",'
+      + 'headers:{"Content-Type":"application/x-www-form-urlencoded","X-CSRFToken":csrf,'
+      + '"X-Requested-With":"XMLHttpRequest","X-Instagram-AJAX":"1",'
+      + '"X-IG-App-ID":"936619743392459"},body:body})'
+      + '.then(function(r){return r.text().then(function(t){'
+      + 'window.__igwb={done:1,status:r.status,body:(t||"").slice(0,400),v:V};});})'
+      + '.catch(function(e){window.__igwb={done:1,status:-1,body:String(e).slice(0,120),v:V};});'
+      + 'return "started";'
+      + '}catch(e){return "error:"+String(e).slice(0,100);}})()';
+  }
+
+  /**
    * **等会话落罐**（`loginByWebAjax` 之后用）。
    *
    * 为什么单独开一个：ajax 成功后页面可能正在跳转，不该再去等"表单出现"。
@@ -363,7 +481,7 @@ export class WebLogin {
      * 以前这里没有匹配项，只能落到"登录没有成功（HTTP 200）"，等于什么都没说。
      */
     if (lower.indexOf('showaccountrecoverymodal":true') >= 0) {
-      return '这个账号需要额外验证（两步验证 / 安全检查）：请点下方「网页登录」输入一次验证码，之后本应用会自己保持登录';
+      return '这个账号需要额外验证（两步验证 / 安全检查），请输入验证码';
     }
     if (lower.indexOf('two_factor') >= 0) {
       return '这个账号开了两步验证，请用「网页登录」完成验证码';

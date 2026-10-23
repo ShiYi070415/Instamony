@@ -23,14 +23,14 @@
  *      按钮是沉浸光感（SurfaceModifier 挂在 Toggle 上），配色/圆角/间距沿用设置页那套。
  */
 
-import { MaterialLabelButton, SurfaceModifier } from './MaterialSurface';
+import { FALLBACK_BLUR, FALLBACK_SURFACE, MaterialLabelButton, SurfaceModifier } from './MaterialSurface';
 import {
   MATERIAL_THICKNESS_ULTRA_THIN,
   SETTING_MATERIAL_THICKNESS
 } from '../core/AppSettings';
 import { LoginOutcome, LoginStage, MobileLogin } from '../core/mobileapi/MobileLogin';
 // WEB_LOGIN_OPENED：网页已经打开、等用户点一下（不是成功，见 core/WebLogin）。
-import { WEB_LOGIN_OPENED } from '../core/WebLogin';
+import { WEB_LOGIN_NEEDS_CODE, WEB_LOGIN_OPENED } from '../core/WebLogin';
 
 const SIDE_VP: number = 28;
 const CARD_RADIUS: number = 28;
@@ -53,6 +53,15 @@ export struct LoginPage {
   /** **原生登录成功**（会话已写进 Cookie 罐）：页面据此切到主界面。 */
   onSignedIn: () => void = (): void => {
   };
+  /**
+   * 提交**两步验证码**（半模态面板里那个输入框）。
+   *
+   * @returns 空串 = 通过（会话已进罐）；否则是面板上显示的原因
+   */
+  onVerifyCode: (username: string, code: string) => Promise<string> =
+    (username: string, code: string): Promise<string> => {
+      return Promise.resolve('未接入验证码提交');
+    };
   /**
    * **把账号密码交给隐藏网页去登录**（见 core/WebLogin）。
    *
@@ -93,6 +102,11 @@ export struct LoginPage {
   @State private error: string = '';
   /** 安全验证的 `api_path`（下一步带上；空 = 只能去网页完成）。 */
   private challengePath: string = '';
+  /** 两步验证的半模态面板：开没开、里面的验证码、错误、忙。 */
+  @State private verifyOpen: boolean = false;
+  @State private verifyCode: string = '';
+  @State private verifyError: string = '';
+  @State private verifyBusy: boolean = false;
 
   /**
    * 一组"标题 + 输入框"：标题在上（灰小字），输入框在下。
@@ -182,6 +196,141 @@ export struct LoginPage {
         action();
       }
     })
+  }
+
+  /**
+   * **半模态两步验证面板**（需求：跳一个半模态沉浸光感组件做 2FA）。
+   *
+   * 组成：标题 + 一句说明 + 胶囊验证码输入框 + 错误 + 「验证」主按钮（沉浸光感材质）
+   * + 「取消」。面板本身用「玻璃底 + 背景模糊」那套（和 app 其它卡片一致），
+   * 主按钮是完整材质（SurfaceModifier 挂在 Toggle 上）。
+   */
+  @Builder
+  verifySheet() {
+    Column({ space: 14 }) {
+      Text($r('app.string.login_verify_title'))
+        .fontSize(20)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.primary_text'))
+        .width('100%')
+      Text($r('app.string.login_verify_hint'))
+        .fontSize(13)
+        .lineHeight(19)
+        .fontColor($r('app.color.secondary_text'))
+        .width('100%')
+      Stack({ alignContent: Alignment.Center }) {
+        // 材质底板（和登录页其它输入框同一套：胶囊 + 沉浸光感）
+        Toggle({ type: ToggleType.Button, isOn: false }) {
+          Text('')
+        }
+        .width('100%')
+        .height(FIELD_H)
+        .padding(0)
+        .borderRadius(FIELD_H / 2)
+        .backgroundColor(Color.Transparent)
+        .selectedColor(Color.Transparent)
+        .attributeModifier(new SurfaceModifier(this.materialThickness, false))
+        .hitTestBehavior(HitTestMode.None)
+        TextInput({ placeholder: $r('app.string.login_code_hint'), text: this.verifyCode })
+          .type(InputType.Number)
+          .height(FIELD_H)
+          .width('100%')
+          .padding({ left: 18, right: 18 })
+          .borderRadius(FIELD_H / 2)
+          .backgroundColor(Color.Transparent)
+          .fontSize(16)
+          .fontColor($r('app.color.primary_text'))
+          .placeholderColor($r('app.color.secondary_text'))
+          .caretColor($r('app.color.accent'))
+          .enabled(!this.verifyBusy)
+          .onChange((text: string): void => {
+            this.verifyCode = text;
+          })
+      }
+      .width('100%')
+      .height(FIELD_H)
+
+      if (this.verifyError.length > 0) {
+        Row({ space: 6 }) {
+          SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+            .fontSize(14)
+            .fontColor([$r('app.color.accent')])
+          Text(this.verifyError)
+            .fontSize(12)
+            .lineHeight(18)
+            .fontColor($r('app.color.accent'))
+            .layoutWeight(1)
+        }
+        .width('100%')
+      }
+
+      Toggle({ type: ToggleType.Button, isOn: false }) {
+        if (this.verifyBusy) {
+          LoadingProgress()
+            .width(20)
+            .height(20)
+            .color($r('app.color.on_accent'))
+        } else {
+          Text($r('app.string.login_verify_action'))
+            .fontSize(16)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.on_accent'))
+        }
+      }
+      .width('100%')
+      .height(BUTTON_H)
+      .padding(0)
+      .borderRadius(BUTTON_H / 2)
+      .attributeModifier(new SurfaceModifier(this.materialThickness, true))
+      .backgroundColor($r('app.color.accent'))
+      .enabled(!this.verifyBusy)
+      .onChange((): void => {
+        this.submitVerifyCode();
+      })
+
+      MaterialLabelButton({
+        labelRes: $r('app.string.login_verify_cancel'),
+        fullWidth: true,
+        fontSize: 15,
+        onTap: (): void => {
+          this.verifyOpen = false;
+          this.verifyError = '';
+        }
+      })
+    }
+    .width('100%')
+    .padding({ left: SIDE_VP, right: SIDE_VP, top: 10, bottom: 24 })
+    .backgroundColor(FALLBACK_SURFACE)
+    .backgroundBlurStyle(FALLBACK_BLUR)
+  }
+
+  /** 面板里点「验证」：交给 Index → core（见 onVerifyCode）。 */
+  private submitVerifyCode(): void {
+    if (this.verifyBusy) {
+      return;
+    }
+    if (this.verifyCode.trim().length === 0) {
+      this.verifyError = '请输入验证码';
+      return;
+    }
+    this.verifyError = '';
+    this.verifyBusy = true;
+    this.onVerifyCode(this.username, this.verifyCode)
+      .then((message: string): void => {
+        this.verifyBusy = false;
+        if (message.length === 0) {
+          this.verifyOpen = false;
+          this.verifyCode = '';
+          this.stage = LoginStage.Ok;
+          this.onSignedIn();
+          return;
+        }
+        this.verifyError = message;
+      })
+      .catch((error: Error): void => {
+        this.verifyBusy = false;
+        this.verifyError = `验证出错：${error.message}`;
+      });
   }
 
   /** 这一步要不要画「验证码」那一组（两步验证 / 验证码类安全验证）。 */
@@ -402,6 +551,21 @@ export struct LoginPage {
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.page_background'))
+    /*
+     * **两步验证的半模态面板**（需求："跳一个半模态沉浸光感组件做 2FA"）。
+     * `FIT_CONTENT` + 底部圆角，内容见 verifySheet；点登录时若 IG 回
+     * `showAccountRecoveryModal`，Index 会返回 `WEB_LOGIN_NEEDS_CODE`，这里就把面板打开。
+     */
+    .bindSheet(this.verifyOpen, this.verifySheet(), {
+      height: SheetSize.FIT_CONTENT,
+      dragBar: false,
+      showClose: false,
+      preferType: SheetType.BOTTOM,
+      backgroundColor: Color.Transparent,
+      onDisappear: (): void => {
+        this.verifyError = '';
+      }
+    })
   }
 
   /**
@@ -434,6 +598,13 @@ export struct LoginPage {
         this.busy = false;
         if (message === WEB_LOGIN_OPENED) {
           // 网页已打开、等用户在网页里点一下：不算成功，也不报错。
+          return;
+        }
+        if (message === WEB_LOGIN_NEEDS_CODE) {
+          // 账号密码过了，但 IG 要再走一步验证：弹半模态面板收验证码。
+          this.verifyCode = '';
+          this.verifyError = '';
+          this.verifyOpen = true;
           return;
         }
         if (message.length === 0) {
