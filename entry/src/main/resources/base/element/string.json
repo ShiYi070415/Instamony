@@ -109,6 +109,22 @@
       "value": "取消"
     },
     {
+      "name": "login_verify_web_title",
+      "value": "需要额外验证"
+    },
+    {
+      "name": "login_verify_web_hint",
+      "value": "这个账号这次要 Instagram 自己的验证流程（账号恢复 / 安全检查），在这里输验证码过不去。点下面这颗按钮到网页里完成一次，登录成功后本应用会自己保持登录。"
+    },
+    {
+      "name": "login_verify_web_action",
+      "value": "去网页完成验证"
+    },
+    {
+      "name": "login_saved_accounts",
+      "value": "已登录过的账号（点一下直接切回）"
+    },
+    {
       "name": "login_label_session",
       "value": "sessionid"
     },

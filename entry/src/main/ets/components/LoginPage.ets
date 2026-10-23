@@ -28,8 +28,12 @@ import {
   MATERIAL_THICKNESS_ULTRA_THIN,
   SETTING_MATERIAL_THICKNESS
 } from '../core/AppSettings';
-// WEB_LOGIN_NEEDS_CODE：账号密码过了、但 IG 要再走一步验证（见 core/WebLogin）。
-import { WEB_LOGIN_NEEDS_CODE } from '../core/WebLogin';
+// WEB_LOGIN_NEEDS_CODE / WEB_LOGIN_NEEDS_WEB：密码过了之后"还要再走一步"的两种情形
+// （能在这里输验证码 / 只能去网页里验），见 core/WebLogin。
+import { WEB_LOGIN_NEEDS_CODE, WEB_LOGIN_NEEDS_WEB } from '../core/WebLogin';
+// 本机登录过的账号（登录页那一栏"切回已有账号"用，见 core/AccountBook）。
+import { AccountEntry } from '../core/AccountBook';
+import { ACCOUNT_OTHERS } from './AccountSwitcher';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const DOMAIN: number = 0xFF00;
@@ -58,6 +62,20 @@ export struct LoginPage {
     (username: string, code: string): Promise<string> => {
       return Promise.resolve('未接入验证码提交');
     };
+  /**
+   * **这个账号只能去网页里验**（`showAccountRecoveryModal`，见 core/WebLogin 的
+   * `WEB_LOGIN_NEEDS_WEB`）：把网页亮出来，用户在 IG 页面上走完验证。
+   */
+  onWebVerify: () => void = (): void => {
+  };
+  /**
+   * **切回本机登录过的账号**（见 core/AccountBook）：登录页那一栏点某个账号，
+   * 会话直接从花名册种回 Cookie 罐，不用重新输密码。
+   */
+  onPickAccount: (userId: string) => void = (userId: string): void => {
+  };
+  /** 本机登录过的账号（空 = 不画那一栏）。 */
+  @StorageLink(ACCOUNT_OTHERS) savedAccounts: Array<AccountEntry> = [];
   /**
    * **把账号密码交给隐藏网页去登录**（见 core/WebLogin）。
    *
@@ -95,6 +113,8 @@ export struct LoginPage {
   @State private verifyCode: string = '';
   @State private verifyError: string = '';
   @State private verifyBusy: boolean = false;
+  /** 面板处于"只能去网页验"那一档（见 onWebVerify / WEB_LOGIN_NEEDS_WEB）。 */
+  @State private verifyWeb: boolean = false;
 
   /*
    * 诊断（临时）：登录页这一整个 struct 会不会被销毁重建。
@@ -191,47 +211,57 @@ export struct LoginPage {
   @Builder
   verifySheet() {
     Column({ space: 14 }) {
-      Text($r('app.string.login_verify_title'))
+      Text(this.verifyWeb ? $r('app.string.login_verify_web_title')
+        : $r('app.string.login_verify_title'))
         .fontSize(20)
         .fontWeight(FontWeight.Bold)
         .fontColor($r('app.color.primary_text'))
         .width('100%')
-      Text($r('app.string.login_verify_hint'))
+      Text(this.verifyWeb ? $r('app.string.login_verify_web_hint')
+        : $r('app.string.login_verify_hint'))
         .fontSize(13)
         .lineHeight(19)
         .fontColor($r('app.color.secondary_text'))
         .width('100%')
-      Stack({ alignContent: Alignment.Center }) {
-        // 材质底板（和登录页其它输入框同一套：胶囊 + 沉浸光感）
-        Toggle({ type: ToggleType.Button, isOn: false }) {
-          Text('')
+      /*
+       * 两种面板内容（同一层玻璃，不做第二个弹窗）：
+       *   · 默认：验证码输入框 + 「验证」（IG 给了 two_factor_identifier 时走这条）；
+       *   · verifyWeb：说明 + 「去网页完成验证」（只回 showAccountRecoveryModal 的账号走这条，
+       *     见 core/WebLogin 的 WEB_LOGIN_NEEDS_WEB —— 那种情况输验证码必然"无效参数"）。
+       */
+      if (!this.verifyWeb) {
+        Stack({ alignContent: Alignment.Center }) {
+          // 材质底板（和登录页其它输入框同一套：胶囊 + 沉浸光感）
+          Toggle({ type: ToggleType.Button, isOn: false }) {
+            Text('')
+          }
+          .width('100%')
+          .height(FIELD_H)
+          .padding(0)
+          .borderRadius(FIELD_H / 2)
+          .backgroundColor(Color.Transparent)
+          .selectedColor(Color.Transparent)
+          .attributeModifier(new SurfaceModifier(this.materialThickness, false))
+          .hitTestBehavior(HitTestMode.None)
+          TextInput({ placeholder: $r('app.string.login_code_hint'), text: this.verifyCode })
+            .type(InputType.Number)
+            .height(FIELD_H)
+            .width('100%')
+            .padding({ left: 18, right: 18 })
+            .borderRadius(FIELD_H / 2)
+            .backgroundColor(Color.Transparent)
+            .fontSize(16)
+            .fontColor($r('app.color.primary_text'))
+            .placeholderColor($r('app.color.secondary_text'))
+            .caretColor($r('app.color.accent'))
+            .enabled(!this.verifyBusy)
+            .onChange((text: string): void => {
+              this.verifyCode = text;
+            })
         }
         .width('100%')
         .height(FIELD_H)
-        .padding(0)
-        .borderRadius(FIELD_H / 2)
-        .backgroundColor(Color.Transparent)
-        .selectedColor(Color.Transparent)
-        .attributeModifier(new SurfaceModifier(this.materialThickness, false))
-        .hitTestBehavior(HitTestMode.None)
-        TextInput({ placeholder: $r('app.string.login_code_hint'), text: this.verifyCode })
-          .type(InputType.Number)
-          .height(FIELD_H)
-          .width('100%')
-          .padding({ left: 18, right: 18 })
-          .borderRadius(FIELD_H / 2)
-          .backgroundColor(Color.Transparent)
-          .fontSize(16)
-          .fontColor($r('app.color.primary_text'))
-          .placeholderColor($r('app.color.secondary_text'))
-          .caretColor($r('app.color.accent'))
-          .enabled(!this.verifyBusy)
-          .onChange((text: string): void => {
-            this.verifyCode = text;
-          })
       }
-      .width('100%')
-      .height(FIELD_H)
 
       if (this.verifyError.length > 0) {
         Row({ space: 6 }) {
@@ -254,7 +284,8 @@ export struct LoginPage {
             .height(20)
             .color($r('app.color.on_accent'))
         } else {
-          Text($r('app.string.login_verify_action'))
+          Text(this.verifyWeb ? $r('app.string.login_verify_web_action')
+            : $r('app.string.login_verify_action'))
             .fontSize(16)
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.on_accent'))
@@ -268,6 +299,12 @@ export struct LoginPage {
       .backgroundColor($r('app.color.accent'))
       .enabled(!this.verifyBusy)
       .onChange((): void => {
+        if (this.verifyWeb) {
+          // 去网页里完成 IG 自己的验证：收起面板，把网页亮出来。
+          this.verifyOpen = false;
+          this.onWebVerify();
+          return;
+        }
         this.submitVerifyCode();
       })
 
@@ -305,6 +342,12 @@ export struct LoginPage {
           this.verifyOpen = false;
           this.verifyCode = '';
           this.onSignedIn();
+          return;
+        }
+        // core 说"这个账号只能去网页验"（拿不到 two_factor_identifier）：面板切到那一档。
+        if (message === WEB_LOGIN_NEEDS_WEB) {
+          this.verifyWeb = true;
+          this.verifyError = '';
           return;
         }
         this.verifyError = message;
@@ -453,6 +496,53 @@ export struct LoginPage {
         .width('100%')
         .alignItems(HorizontalAlign.Start)
 
+        /*
+         * **本机登录过的账号**（多账号，见 core/AccountBook）：登录页也能一键切回去，
+         * 不必重新输密码 —— 否则「新增账号」等于"登出就回不来"。
+         * 没有记录时整块不画（新装用户看不到没用的东西）。
+         */
+        if (this.savedAccounts.length > 0) {
+          Column({ space: 8 }) {
+            Text($r('app.string.login_saved_accounts'))
+              .fontSize(11)
+              .fontColor($r('app.color.secondary_text'))
+              .width('100%')
+              .padding({ left: 6 })
+            ForEach(this.savedAccounts, (one: AccountEntry): void => {
+              Row({ space: 10 }) {
+                Image(one.avatarUrl.length > 0 ? one.avatarUrl : $r('app.media.startIcon'))
+                  .width(28)
+                  .height(28)
+                  .borderRadius(14)
+                  .objectFit(ImageFit.Cover)
+                  .draggable(false)
+                Text(one.username.length > 0 ? one.username : one.userId)
+                  .fontSize(14)
+                  .fontColor($r('app.color.primary_text'))
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .layoutWeight(1)
+                SymbolGlyph($r('sys.symbol.chevron_right'))
+                  .fontSize(12)
+                  .fontColor([$r('app.color.secondary_text')])
+              }
+              .width('100%')
+              .height(46)
+              .padding({ left: 12, right: 12 })
+              .borderRadius(23)
+              .backgroundColor(FALLBACK_SURFACE)
+              .backgroundBlurStyle(FALLBACK_BLUR)
+              .enabled(!this.busy)
+              .onClick((): void => {
+                this.onPickAccount(one.userId);
+              })
+            }, (one: AccountEntry): string => `saved-${one.userId}`)
+          }
+          .width('100%')
+          .alignItems(HorizontalAlign.Start)
+          .margin({ top: 4 })
+        }
+
         // ---- 按钮列：登录 / 注册新账号 ----
         Column({ space: 12 }) {
           this.mainButton(this.primaryLabel(), (): void => {
@@ -518,7 +608,7 @@ export struct LoginPage {
      * 点登录不再显示网页（无头登录），所以登录页不会被重建 —— 普通 `@State` 足够，
      * 账号在本次运行里一直留着（重启后不保留，需求明确不需要 StorageLink 那套）。
      *
-     * 注意：输入框必须 `$$` 双向绑定（见 username 那段注释），否则 `password = ''`
+     * 注意：输入框必须直连状态（见 username 那段注释），否则 `password = ''`
      * 引起的那次刷新会把两个框的文本一起覆盖成空快照 —— "账号也被清掉"的老毛病。
      */
     const typed: string = this.password;
@@ -533,6 +623,15 @@ export struct LoginPage {
           // 账号密码过了，但 IG 要再走一步验证：弹半模态面板收验证码。
           this.verifyCode = '';
           this.verifyError = '';
+          this.verifyWeb = false;
+          this.verifyOpen = true;
+          return;
+        }
+        if (message === WEB_LOGIN_NEEDS_WEB) {
+          // 同一个面板、另一档内容：这个账号要去网页里完成 IG 自己的验证。
+          this.verifyCode = '';
+          this.verifyError = '';
+          this.verifyWeb = true;
           this.verifyOpen = true;
           return;
         }

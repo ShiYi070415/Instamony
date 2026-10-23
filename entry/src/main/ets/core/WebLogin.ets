@@ -65,6 +65,19 @@ export const WEB_LOGIN_OPENED: string = '__web_login_opened__';
  * 登录页收到这个标记就弹"半模态验证码"面板（见 components/LoginPage 的 2FA sheet）。
  */
 export const WEB_LOGIN_NEEDS_CODE: string = '__web_login_needs_code__';
+/**
+ * "密码过了，但 IG 要的是**它自己的**验证流程"（`showAccountRecoveryModal`）。
+ *
+ * 和上面那个标记的区别（都是密码过了，但能不能在验证码面板里走完不一样）：
+ *   · `two_factor_required` 的回包**带 `two_factor_info.two_factor_identifier`** —— 面板里
+ *     输 6 位验证码就能过（见 submitTwoFactorCode）。
+ *   · `showAccountRecoveryModal` 的回包**什么都没有**（真机日志原文）：
+ *     `{"user":true,"authenticated":false,"showAccountRecoveryModal":true,"status":"ok"}`
+ *     —— 这是"账号恢复 / 额外安全检查"，IG 只肯在它自己的页面上走完。拿不到标识就发验证码，
+ *     服务端只会回 `{"message":"无效参数"}`（我们踩过：面板里怎么输都是这句）。
+ * 登录页收到这个标记就说明清楚，并给一颗「去网页完成验证」。
+ */
+export const WEB_LOGIN_NEEDS_WEB: string = '__web_login_needs_web__';
 
 /**
  * 探测登录页现在长什么样（诊断 + 决策都靠它）。
@@ -358,6 +371,16 @@ export class WebLogin {
    *
    * @returns 空串 = 通过；否则是给用户看的原因
    */
+  /**
+   * 手上有没有 `two_factor_identifier`（见 `captureTwoFactor` / `WEB_LOGIN_NEEDS_WEB`）。
+   *
+   * 用途：`headlessWebLogin` 拿到"需要再验一步"的回包时，据此决定是弹**验证码面板**
+   * 还是让用户去网页完成 —— 没有标识就发验证码只会得到 `无效参数`。
+   */
+  static hasTwoFactorIdentifier(): boolean {
+    return WebLogin.twoFactorIdentifier.length > 0;
+  }
+
   static async submitTwoFactorCode(username: string, code: string): Promise<string> {
     const value: string = code.replace(/[\s-]+/g, '');
     if (value.length === 0) {
@@ -370,11 +393,21 @@ export class WebLogin {
     if (!await WebLogin.waitAttached(bridge)) {
       return '网页还没准备好，请稍后重试';
     }
-    // 标识过期就当没有：宁可让 IG 回"无效参数"，也不要拿一个十分钟前的标识去撞。
+    // 标识过期就当没有（IG 一次登录流程只认很短的一段）。
     if (Date.now() - WebLogin.twoFactorAtMs > TWO_FACTOR_TTL_MS) {
       hilog.info(DOMAIN, TAG, '2fa identifier expired → drop');
       WebLogin.twoFactorIdentifier = '';
       WebLogin.twoFactorUser = '';
+    }
+    /*
+     * **没有标识就别发**（真机踩过两次）：
+     * `showAccountRecoveryModal` 那种回包不给 `two_factor_identifier`，硬发验证码
+     * 三发全是 `{"message":"无效参数"}` —— 用户看到的是"怎么输都不对"，
+     * 而且白白消耗 IG 的尝试次数（紧跟着就是 429）。
+     */
+    if (WebLogin.twoFactorIdentifier.length === 0) {
+      hilog.info(DOMAIN, TAG, '2fa submit without identifier → ask for web verification');
+      return WEB_LOGIN_NEEDS_WEB;
     }
     const user: string = WebLogin.twoFactorUser.length > 0
       ? WebLogin.twoFactorUser : username.trim();

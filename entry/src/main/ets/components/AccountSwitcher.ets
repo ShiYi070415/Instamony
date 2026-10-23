@@ -1,61 +1,50 @@
 /*
  * 「我的」标题栏那颗**账号下拉按钮**（多账号登录的入口）。
  *
- * ## 长什么样（需求原文）
- *   · 标题栏**置中**一颗按钮：左边当前账号的头像，右边账号名（例：`xingli_415`），末尾一个小箭头；
- *   · 点它弹出选单：**有其他账号**就逐个列出（头像 + 账号名），点一个切过去；
- *     没有其他账号就只显示一栏「新增账号」（头像位是加号图标）；
- *   · 整体要**沉浸光感**。
+ * ## 样式：照抄设定页那套下拉（需求："下拉按钮和选单用设置的那一套样式"）
+ * 设定页的「材质 / 材质等级 / 图片质量 / 视频质量」用的都是 `Select` + `SelectSurfaceModifier`
+ * （见 components/SettingsPanel 的 thicknessRow / materialRow）。这里一模一样：
+ *   · 按钮：`Select` + `new SelectSurfaceModifier(材质厚度)` —— 沉浸光感材质，低版本设备上
+ *     这个 modifier 会自动退化成「中性底 + 背景模糊」（见 MaterialSurface）；
+ *   · 菜单：`menuAlign(END, { dy })` 贴着按钮右缘往下弹；`selectedOptionBgColor` /
+ *     `selectedOptionFont` / `selectedOptionFontColor` 与设定页同一套（选中项低透明度底 +
+ *     粗体高对比字）；菜单自己的材质由 `SelectSurfaceModifier.menuSystemMaterial` 给。
  *
- * ## 沉浸光感怎么落
- *   · 按钮本体：`ToggleType.Button` + `SurfaceModifier`（和全 app 其它胶囊按钮同一套，
- *     见 components/MaterialSurface 的文件头：内容区里材质只有 Toggle/Slider/Select 与弹窗类生效）。
- *     它待的地方是 HDS 标题栏的 `stackBuilder`（标题那一块），实测材质在这里是生效的
- *     （Reels 那条分段按钮就在同一区域，见 pages/Index.shellTitleContent）。
- *   · 选单：**不自己铺底色**，交给系统 Menu 那一层材质（官方教材里 Menu 属于"弹窗类"，
- *     沉浸光感全页面生效）；我们只画内容，于是玻璃底下透出来的就是它背后的画面。
- *     这也顺带满足"避免材质嵌套"那条限制（见 ProfileSegmentBar.inTitleBar 的教训）。
+ * ## 内容（需求）
+ *   · 按钮上显示**当前账号名**（例：`xingli_415`）；
+ *   · 下拉里：**其他账号**逐个列出（`SelectOption.icon` 给头像地址，有就显示）；
+ *     **没有其他账号**时只有一栏「新增账号」（`symbolIcon` 用加号）。
+ *     最后一栏永远是「新增账号」——有其他账号时它排在最后，方便继续加号。
  *
- * ## 为什么头像用 `Image`
- * 头像是网络图（IG 的 CDN 地址）；没有地址时退回应用图标（`app.media.startIcon`），
- * 不为"加载失败"再单独造一张占位图。
- */
-
-import { SurfaceModifier } from './MaterialSurface';
-import { MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS } from '../core/AppSettings';
-import { AccountEntry } from '../core/AccountBook';
-
-/**
- * 这颗按钮读的三份数据走 **AppStorage**（而不是构造参数）。
- *
- * 为什么：它住在 HDS 标题栏的 `stackBuilder` 里 —— 那是**原生组件**回调我们一次 builder。
+ * ## 数据为什么走 AppStorage
+ * 这颗按钮住在 HDS 标题栏的 `stackBuilder` 里 —— 那是**原生组件**回调我们一次 builder。
  * 实测（2026-10-23）：账号名/头像是异步到手的（「我的」头部要 2~5 秒），届时 Index 的
  * `@State` 变了、`build` 也重跑了，但标题栏并不会重新回调那个 builder —— 表现就是
- * **按钮上有头像、没有名字**，而且一直不补。
- * 走 AppStorage + `@StorageLink` 之后，值一变按钮**自己**就重画，不依赖标题栏是否再回调。
+ * **按钮上一直没有名字**且不补。走 AppStorage + `@StorageLink` 之后，值一变按钮**自己**就重画。
  */
+
+import { SelectSurfaceModifier } from './MaterialSurface';
+import { MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS } from '../core/AppSettings';
+import { AccountEntry } from '../core/AccountBook';
+import { SymbolGlyphModifier } from '@kit.ArkUI';
+
+/** 按钮/菜单读的三份数据（由 pages/Index 写，见文件头）。 */
 export const ACCOUNT_TITLE_NAME: string = 'account_title_name';
 export const ACCOUNT_TITLE_AVATAR: string = 'account_title_avatar';
 export const ACCOUNT_OTHERS: string = 'account_others';
 
-/** 胶囊高度（比标题栏里其它胶囊矮一点，才不会把那一行顶满）。 */
-const CHIP_H: number = 36;
-/** 胶囊里的头像直径。 */
-const CHIP_AVATAR: number = 24;
-/** 选单里那一行的头像直径（比胶囊里大一点，方便一眼认出是谁）。 */
-const ROW_AVATAR: number = 32;
-/** 选单宽度。 */
-const MENU_W: number = 196;
-/** 选单里一行的高度。 */
-const ROW_H: number = 48;
+/** 菜单和按钮之间那一点纵向偏移（设定页是 6，这里照抄）。 */
+const MENU_OFFSET_Y: number = 6;
+/** 下拉菜单宽度（设定页没设，按账号名长度给个够用的固定值，菜单才不会被名字撑成一条）。 */
+const OPTION_WIDTH_VP: number = 196;
 
 @Component
 export struct AccountSwitcher {
-  /** 当前账号名（空 = 还没拿到，按钮只显示头像）。 */
+  /** 当前账号名（空 = 还没拿到）。 */
   @StorageLink(ACCOUNT_TITLE_NAME) username: string = '';
-  /** 当前账号头像地址（空 = 用应用图标）。 */
+  /** 当前账号头像地址（按钮上不用；留给"没有其他账号时"的头像兜底）。 */
   @StorageLink(ACCOUNT_TITLE_AVATAR) avatarUrl: string = '';
-  /** **其他**账号（已排除当前这个；空 = 只显示「新增账号」）。 */
+  /** **其他**账号（已排除当前这个；空 = 下拉里只有「新增账号」）。 */
   @StorageLink(ACCOUNT_OTHERS) accounts: Array<AccountEntry> = [];
   /** 材质厚薄（跟设定页联动）。 */
   @StorageProp(SETTING_MATERIAL_THICKNESS) materialThickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
@@ -66,109 +55,61 @@ export struct AccountSwitcher {
   onAdd: () => void = (): void => {
   };
 
-  /** 头像：有地址就画图，没有就用应用图标兜底。 */
-  @Builder
-  avatar(url: string, size: number) {
-    Image(url.length > 0 ? url : $r('app.media.startIcon'))
-      .width(size)
-      .height(size)
-      .borderRadius(size / 2)
-      .objectFit(ImageFit.Cover)
-      .draggable(false)
-      .border({ width: 0.5, color: $r('app.color.divider') })
-  }
-
-  /** 选单里的一行：头像 + 账号名。 */
-  @Builder
-  accountRow(entry: AccountEntry) {
-    Row({ space: 10 }) {
-      this.avatar(entry.avatarUrl, ROW_AVATAR)
-      Text(entry.username.length > 0 ? entry.username
-        : (entry.userId.length > 0 ? entry.userId : $r('app.string.account_unnamed')))
-        .fontSize(14)
-        .fontColor($r('sys.color.font_primary'))
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .layoutWeight(1)
-    }
-    .width('100%')
-    .height(ROW_H)
-    .padding({ left: 10, right: 12 })
-    .borderRadius(ROW_H / 2)
-    .onClick((): void => {
-      this.onSwitch(entry.userId);
-    })
-  }
-
-  /** 选单最后那一行「新增账号」：头像位是加号图标（需求）。 */
-  @Builder
-  addRow() {
-    Row({ space: 10 }) {
-      Stack({ alignContent: Alignment.Center }) {
-        SymbolGlyph($r('sys.symbol.plus'))
-          .fontSize(16)
-          .fontColor([$r('sys.color.font_primary')])
+  /**
+   * 下拉选项：其他账号（有头像就给 icon）+ 最后一栏「新增账号」。
+   *
+   * ⚠️ 每次都新建一个数组（不是缓存字段）：`@StorageLink` 的 accounts 一变就要重新算，
+   * 而 Select 只在 `build` 里取值 —— 放字段里就得自己管失效。
+   */
+  private options(): Array<SelectOption> {
+    const list: Array<SelectOption> = [];
+    for (let index: number = 0; index < this.accounts.length; index++) {
+      const one: AccountEntry = this.accounts[index];
+      const label: string = one.username.length > 0 ? one.username : one.userId;
+      if (one.avatarUrl.length > 0) {
+        list.push({ value: label, icon: one.avatarUrl });
+      } else {
+        list.push({ value: label });
       }
-      .width(ROW_AVATAR)
-      .height(ROW_AVATAR)
-      .borderRadius(ROW_AVATAR / 2)
-      .backgroundColor($r('app.color.field_background'))
-      Text($r('app.string.account_add'))
-        .fontSize(14)
-        .fontColor($r('sys.color.font_primary'))
-        .maxLines(1)
-        .layoutWeight(1)
     }
-    .width('100%')
-    .height(ROW_H)
-    .padding({ left: 10, right: 12 })
-    .borderRadius(ROW_H / 2)
-    .onClick((): void => {
-      this.onAdd();
-    })
+    // 「新增账号」：加号图标（需求）。
+    const add: SelectOption = {
+      value: $r('app.string.account_add'),
+      symbolIcon: new SymbolGlyphModifier($r('sys.symbol.plus'))
+    };
+    list.push(add);
+    return list;
   }
 
-  /** 选单内容（系统 Menu 承载，见文件头）。 */
-  @Builder
-  accountMenu() {
-    Column({ space: 2 }) {
-      ForEach(this.accounts, (one: AccountEntry): void => {
-        this.accountRow(one);
-      }, (one: AccountEntry): string => `acct-${one.userId}`)
-      this.addRow()
-    }
-    .width(MENU_W)
-    .padding(6)
+  /** 按钮收起时显示的字：当前账号名。 */
+  private buttonValue(): ResourceStr {
+    return this.username.length > 0 ? this.username : $r('app.string.account_add');
   }
 
   build() {
-    Toggle({ type: ToggleType.Button, isOn: false }) {
-      Row({ space: 8 }) {
-        this.avatar(this.avatarUrl, CHIP_AVATAR)
-        if (this.username.length > 0) {
-          Text(this.username)
-            .fontSize(14)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('sys.color.font_primary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .constraintSize({ maxWidth: 132 })
+    Select(this.options())
+      .value(this.buttonValue())
+      .font({ size: 15 })
+      .fontColor($r('app.color.primary_text'))
+      // 沉浸光感（按钮与菜单都靠它；低版本设备自动降级成纯色底）。
+      .attributeModifier(new SelectSurfaceModifier(this.materialThickness))
+      // 和设定页一致：菜单贴着按钮右缘往下弹（默认 START 会往右顶出屏幕）。
+      .menuAlign(MenuAlignType.END, { dx: 0, dy: MENU_OFFSET_Y })
+      // 选中项样式照抄设定页（颜色走明暗两套资源，浅色模式下也看得清）。
+      .selectedOptionBgColor($r('app.color.dropdown_selected_bg'))
+      .selectedOptionFont({ size: 15, weight: FontWeight.Bold })
+      .selectedOptionFontColor($r('app.color.dropdown_selected_text'))
+      .optionWidth(OPTION_WIDTH_VP)
+      .onSelect((index: number): void => {
+        if (index < 0) {
+          return;
         }
-        SymbolGlyph($r('sys.symbol.chevron_down'))
-          .fontSize(12)
-          .fontColor([$r('sys.color.font_secondary')])
-      }
-      .padding({ left: 6, right: 12 })
-    }
-    .height(CHIP_H)
-    .padding(0)
-    .borderRadius(CHIP_H / 2)
-    .backgroundColor(Color.Transparent)
-    // 选中态透明：否则点一下整颗变蓝（同 MaterialLabelButton）。
-    .selectedColor(Color.Transparent)
-    // 沉浸光感材质；低版本设备自动降级成「中性底 + 背景模糊」（见 SurfaceModifier）。
-    .attributeModifier(new SurfaceModifier(this.materialThickness, false))
-    // 点它弹选单：系统 Menu（弹窗类）自带那层材质，内容透明就透出它来。
-    .bindMenu(this.accountMenu(), { placement: Placement.Bottom })
+        if (index < this.accounts.length) {
+          this.onSwitch(this.accounts[index].userId);
+          return;
+        }
+        // 最后一栏 = 新增账号。
+        this.onAdd();
+      })
   }
 }

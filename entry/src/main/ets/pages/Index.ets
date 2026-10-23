@@ -102,7 +102,7 @@ import { DeepLink, DeepLinkIntent, DeepLinkRoute } from '../core/DeepLink';
 // 点私信通知要直接进那条会话（EntryAbility 把会话 id 交给它，见 consumeNotifyRoute）。
 import { NotifyRoute } from '../core/NotifyRoute';
 // 无头网页登录：账号密码在隐藏网页里完成（见 core/WebLogin）。
-import { WebLogin, WEB_LOGIN_NEEDS_CODE } from '../core/WebLogin';
+import { WebLogin, WEB_LOGIN_NEEDS_CODE, WEB_LOGIN_NEEDS_WEB } from '../core/WebLogin';
 // 多账号：本机登录过的账号花名册（见 core/AccountBook）。
 import { AccountBook, AccountEntry } from '../core/AccountBook';
 // 「我的」标题栏那颗账号下拉按钮（多账号切换的入口）。
@@ -3570,8 +3570,18 @@ struct Index {
      * 账号密码对 2FA 没有帮助，而面板一打开，验证码由 core 直接发出去。
      */
     if (ajaxMessage.indexOf('额外验证') >= 0 || ajaxMessage.indexOf('两步验证') >= 0) {
-      hilog.info(DOMAIN, TAG, 'web login needs 2fa code → half modal');
-      return WEB_LOGIN_NEEDS_CODE;
+      /*
+       * 两种"密码过了但还要再走一步"，分得清才不至于让人白输验证码：
+       *   · 回包带 `two_factor_info.two_factor_identifier` → 面板里输 6 位码就能过；
+       *   · 只回 `showAccountRecoveryModal`（没有标识）→ 那是 IG 自己的账号恢复/安全检查，
+       *     拿不到标识发验证码只会回"无效参数"（实测），只能去网页里走一次。
+       */
+      if (WebLogin.hasTwoFactorIdentifier()) {
+        hilog.info(DOMAIN, TAG, 'web login needs 2fa code → half modal');
+        return WEB_LOGIN_NEEDS_CODE;
+      }
+      hilog.info(DOMAIN, TAG, 'web login needs ig verification → offer web');
+      return WEB_LOGIN_NEEDS_WEB;
     }
     const prefillMessage: string = await WebLogin.prefill(username, password);
     if (prefillMessage.length > 0) {
@@ -6607,6 +6617,21 @@ struct Index {
          */
         onVerifyCode: (username: string, code: string): Promise<string> => {
           return this.submitLoginCode(username, code);
+        },
+        /*
+         * **面板判定"这个账号只能去网页里验"**（`showAccountRecoveryModal`，拿不到
+         * `two_factor_identifier`）：把隐藏网页亮出来并导航到 IG 登录页，用户在里面
+         * 走完验证即可 —— 走完那一刻 Cookie 罐里就有会话，`watchLoginSession` 会接手。
+         */
+        onWebVerify: (): void => {
+          this.openLoginWeb();
+        },
+        /*
+         * **登录页一键切回本机登录过的账号**（见 core/AccountBook）：
+         * 会话直接种回 Cookie 罐，不用重新输密码 —— 否则「新增账号」等于"登出就回不来"。
+         */
+        onPickAccount: (userId: string): void => {
+          this.switchAccount(userId);
         }
       })
     } else {
@@ -7471,14 +7496,34 @@ struct Index {
   }
 
   /**
-   * 「我的」标题栏那一行：**只有一颗账号下拉按钮，水平置中**（需求）。
+   * 「我的」标题栏那一行：**左边标题「我的」+ 正中账号下拉按钮**（需求）。
    *
-   * 两侧各放一个 `Blank()` 把它顶到正中间；标题文字不再画（需求要的就是按钮置中）。
+   * 为什么标题要自己画一份：这一档用了 `stackBuilder`，而 stackBuilder 会**顶掉** HDS 自己的
+   * mainTitle（给 `title.mainTitle` 也看不见，Reels 那里早就踩过）。想要"标题留着"，
+   * 只能按 HDS 的观感再画一遍 —— 字号/左边距沿用 Reels 那条标题的常量，两页看起来一致
+   * （见 reelsTitleSegment）。
+   *
+   * 布局：Stack 叠两层 —— 底层是"标题贴左"的一行，上层是居中的账号按钮；
+   * 按钮按 20vp？不，按标题栏内的最大宽度收窄（见 AccountSwitcher 的 Select 宽度），
+   * 「我的」两个字只有两个汉字，和居中的按钮不会打架。
    */
   @Builder
   profileTitleAccount() {
-    Row() {
-      Blank()
+    Stack({ alignContent: Alignment.Center }) {
+      Row() {
+        Text(this.pageTitle())
+          .fontSize(REELS_TITLE_SIZE)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.primary_text'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Blank()
+      }
+      .width('100%')
+      .height('100%')
+      .alignItems(VerticalAlign.Center)
+      .padding({ left: REELS_TITLE_LEFT_PAD_VP })
+
       AccountSwitcher({
         onSwitch: (userId: string): void => {
           this.switchAccount(userId);
@@ -7487,11 +7532,9 @@ struct Index {
           this.addAccount();
         }
       })
-      Blank()
     }
     .width('100%')
     .height('100%')
-    .alignItems(VerticalAlign.Center)
   }
 
   /**
