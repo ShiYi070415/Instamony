@@ -129,8 +129,24 @@ export class MobileIdentity {
     this.mid = mid.length > 0 ? mid : seed.mid;
     this.wwwClaim = seed.wwwClaim.length > 0 ? seed.wwwClaim : '0';
     this.igURur = seed.igURur.length > 0 ? seed.igURur : rurFromCookie;
-    this.authorization = seed.authorization.length > 0
-      ? seed.authorization : MobileIdentity.buildAuthorization(userId, sessionId);
+    /*
+     * **`Authorization` 必须由"当前这一对 (userId, sessionId)"现算**，不能沿用落盘那份。
+     *
+     * 这是换账号时最阴的一条不一致：`userId` / `sessionId` 是从 Cookie 罐现读的（新账号），
+     * 而 `seed.authorization` 是**上一次登录**（很可能是另一个人）留在盘上的 Bearer。
+     * 上一版是 `seed.authorization.length > 0 ? seed.authorization : build(...)` ——
+     * 于是请求同时带着
+     *   · `Cookie: sessionid=<新账号>; ds_user_id=<新账号>`
+     *   · `Authorization: Bearer IGT:2:<base64{ds_user_id:<旧账号>, sessionid:<旧账号>}>`
+     * 两个身份。IG 的表现要么按旧账号返回数据（"换号后看到的还是上一个人的东西"），
+     * 要么直接判成异常会话。所以这里一律按当前值重建，`seed` 里那份只当"有没有过会话"的痕迹。
+     */
+    const derived: string = MobileIdentity.buildAuthorization(userId, sessionId);
+    if (seed.authorization.length > 0 && seed.authorization !== derived) {
+      hilog.info(DOMAIN, TAG, 'authorization rebuilt for current session (stored=%{public}db)',
+        seed.authorization.length);
+    }
+    this.authorization = derived;
     // 设备档案：用**这台机器自己的**品牌/型号/分辨率/DPI（见 DeviceTruth）。
     // 只生成一次、终身不变 —— 轮换等于"同一账号天天换手机"，比不换更可疑。
     this.device = COHERENT_FINGERPRINT ? DeviceTruth.profile() : DeviceProfile.DEFAULT;
