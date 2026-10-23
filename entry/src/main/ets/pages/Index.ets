@@ -102,7 +102,7 @@ import { DeepLink, DeepLinkIntent, DeepLinkRoute } from '../core/DeepLink';
 // 点私信通知要直接进那条会话（EntryAbility 把会话 id 交给它，见 consumeNotifyRoute）。
 import { NotifyRoute } from '../core/NotifyRoute';
 // 无头网页登录：账号密码在隐藏网页里完成（见 core/WebLogin）。
-import { WebLogin } from '../core/WebLogin';
+import { WebLogin, WEB_LOGIN_OPENED } from '../core/WebLogin';
 import { CommentItem, CommentsPayload, LikePayload, SavePayload } from '../model/Comment';
 import { FeedMapper } from '../model/FeedMapper';
 import { FeedStatus } from '../model/FeedStatus';
@@ -3507,7 +3507,11 @@ struct Index {
     this.statusShown = false;
     this.toast('账号密码已填好，点一下网页里的「登录」即可');
     this.watchLoginSession();
-    return '';
+    /*
+     * 返回"网页已打开"标记（不是空串）：空串在调用方那里表示**已经登录成功**，
+     * 会被当成成功去清状态；这里只是"网页开着、等你点那一下"，两者必须分开。
+     */
+    return WEB_LOGIN_OPENED;
   }
 
   /**

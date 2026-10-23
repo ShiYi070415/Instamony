@@ -46,6 +46,12 @@ const POLL_MS: number = 700;
  * 又不至于让用户觉得"这功能废了"。冷却期内**一次请求都不发**（见 loginByWebAjax）。
  */
 const LOGIN_THROTTLE_COOLDOWN_MS: number = 10 * 60000;
+/**
+ * "网页已经打开、等用户在网页里点一下登录"这个中间状态（`pages/Index` 用它区分"成功"）。
+ *
+ * 空串表示**登录成功**；这个标记表示"还在等" —— 两者混用会让登录页误以为已经登好。
+ */
+export const WEB_LOGIN_OPENED: string = '__web_login_opened__';
 
 /**
  * 探测登录页现在长什么样（诊断 + 决策都靠它）。

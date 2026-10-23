@@ -29,6 +29,8 @@ import {
   SETTING_MATERIAL_THICKNESS
 } from '../core/AppSettings';
 import { LoginOutcome, LoginStage, MobileLogin } from '../core/mobileapi/MobileLogin';
+// WEB_LOGIN_OPENED：网页已经打开、等用户点一下（不是成功，见 core/WebLogin）。
+import { WEB_LOGIN_OPENED } from '../core/WebLogin';
 
 const SIDE_VP: number = 28;
 const CARD_RADIUS: number = 28;
@@ -419,12 +421,23 @@ export struct LoginPage {
     }
     this.error = '';
     this.busy = true;
-    this.onWebLogin(this.username, this.password)
+    /*
+     * **点下去就清密码、账号留着**（需求：只清密码输入框里的内容）。
+     *
+     * 先把密码抄进局部变量再清空，之后的重试不用重输账号；
+     * 用户名走 `@StorageLink`，登录页被重建（打开网页会重建一次）也不会丢。
+     */
+    const typed: string = this.password;
+    this.password = '';
+    this.onWebLogin(this.username, typed)
       .then((message: string): void => {
         this.busy = false;
+        if (message === WEB_LOGIN_OPENED) {
+          // 网页已打开、等用户在网页里点一下：不算成功，也不报错。
+          return;
+        }
         if (message.length === 0) {
-          // 密码不留在内存里；会话已进 Cookie 罐，Index 那边会重读登录态。
-          this.password = '';
+          // 真的登录成功了：会话已进 Cookie 罐，Index 那边会重读登录态。
           this.stage = LoginStage.Ok;
           this.onSignedIn();
           return;
