@@ -47,6 +47,11 @@ const POLL_MS: number = 700;
  */
 const LOGIN_THROTTLE_COOLDOWN_MS: number = 10 * 60000;
 /**
+ * 两步验证标识的有效期（毫秒）：超过这个时间，那个 `two_factor_identifier` 就不该再拿去用
+ * （IG 一次登录流程只认很短的一段，旧标识会回 `无效参数`）。
+ */
+const TWO_FACTOR_TTL_MS: number = 5 * 60000;
+/**
  * "网页已经打开、等用户在网页里点一下登录"这个中间状态（`pages/Index` 用它区分"成功"）。
  *
  * 空串表示**登录成功**；这个标记表示"还在等" —— 两者混用会让登录页误以为已经登好。
@@ -144,6 +149,23 @@ export class WebLogin {
    * 把最关键的三四个字段附在错误后面，用户截个图就能定位 —— 比让他捞 hilog 现实得多。
    */
   private static lastProbe: string = '';
+  /**
+   * **两步验证的上下文**（由 `captureTwoFactor` 从密码那一步的回包里抓下来）。
+   *
+   * 真机日志原文（`HTTP 400` —— 注意不是 200，所以以前按失败处理了）：
+   * `{"message":"","two_factor_required":true,"two_factor_info":{"pk":"…",
+   * "username":"…","totp_two_factor_on":true,"…","two_factor_identifier":"…"}}`
+   *
+   * 关键是 `two_factor_identifier`：提交验证码**必须**原样带回去，
+   * 否则 IG 回 `{"message":"无效参数","status":"fail"}` —— 用户看到的"4004"就是它
+   * （旧代码里 identifier 是空串，因为老回包只给 `showAccountRecoveryModal`，没有标识）。
+   */
+  private static twoFactorIdentifier: string = '';
+  private static twoFactorUser: string = '';
+  /** 这个账号支持的验证方式（日志/文案用）：验证器 / 短信 / WhatsApp。 */
+  private static twoFactorMethod: string = '';
+  /** 上面那组标识抓到的时间（见 TWO_FACTOR_TTL_MS）。 */
+  private static twoFactorAtMs: number = 0;
 
   /**
    * **只填不点**：把账号密码填进隐藏网页的登录表单，返回空串表示填好了。
@@ -287,7 +309,13 @@ export class WebLogin {
           lastStatus = WebLogin.fieldOf(raw, 'status');
           hilog.info(DOMAIN, TAG, 'web ajax v%{public}d status=%{public}s body=%{public}s',
             variant, lastStatus,
-            lastBody.length > 220 ? `${lastBody.substring(0, 220)}…` : lastBody);
+            lastBody.length > 700 ? `${lastBody.substring(0, 700)}…` : lastBody);
+          /*
+           * **抓两步验证上下文**（`two_factor_info` 里有 `two_factor_identifier`）。
+           * 放在"已认证"判断之前：需要 2FA 时这一发必然是 `authenticated:false`，
+           * 而后面提交验证码时必须带上这个标识，否则 IG 回 `无效参数`。
+           */
+          WebLogin.captureTwoFactor(lastBody, user);
           if (lastBody.indexOf('"authenticated":true') >= 0
             || lastBody.indexOf('"authenticated": true') >= 0) {
             // 服务端已认证：会话 cookie 应该已经落罐，交给上层确认。
@@ -315,15 +343,22 @@ export class WebLogin {
   /**
    * **提交两步验证码**（供登录页的半模态面板调用）。
    *
-   * ## 为什么这里要"试几种"
-   * 网页端两步验证的端点/字段这些年换过几版，而且我们手上没有 `two_factor_identifier`
-   * （2FA 那次回包只有 `showAccountRecoveryModal`）。所以按最可能的几种形状依次试，
-   * 每一种都把 `status` + 响应体记日志 —— 命中 `"authenticated":true` 就算成功。
+   * ## 形状从哪来
+   * 参照 instaloader 现在的实现（`instaloadercontext.two_factor_login`）：
+   * ```
+   * POST https://www.instagram.com/accounts/login/ajax/two_factor/
+   * data={'username': user, 'verificationCode': code, 'identifier': two_factor_id}
+   * ```
+   * 而 `two_factor_id` 来自密码那一步回包里的 `two_factor_info.two_factor_identifier`
+   * （见 `captureTwoFactor`）。注意是 **`verificationCode`（驼峰）**，不是 `verification_code`：
+   * 老代码用下划线 + 空 identifier，IG 直接回 `{"message":"无效参数"}`。
+   *
+   * 依次试三种形状（端点/字段这几年版本来回换，一次试完再报错才有意义），
+   * 命中"已认证"就返回空串，真正的判定交给上层 `awaitSession`（以 Cookie 罐为准）。
    *
    * @returns 空串 = 通过；否则是给用户看的原因
    */
   static async submitTwoFactorCode(username: string, code: string): Promise<string> {
-    const user: string = username.trim();
     const value: string = code.replace(/[\s-]+/g, '');
     if (value.length === 0) {
       return '请输入验证码';
@@ -335,14 +370,26 @@ export class WebLogin {
     if (!await WebLogin.waitAttached(bridge)) {
       return '网页还没准备好，请稍后重试';
     }
+    // 标识过期就当没有：宁可让 IG 回"无效参数"，也不要拿一个十分钟前的标识去撞。
+    if (Date.now() - WebLogin.twoFactorAtMs > TWO_FACTOR_TTL_MS) {
+      hilog.info(DOMAIN, TAG, '2fa identifier expired → drop');
+      WebLogin.twoFactorIdentifier = '';
+      WebLogin.twoFactorUser = '';
+    }
+    const user: string = WebLogin.twoFactorUser.length > 0
+      ? WebLogin.twoFactorUser : username.trim();
+    const id: string = WebLogin.twoFactorIdentifier;
+    hilog.info(DOMAIN, TAG, '2fa submit: user=%{public}s idLen=%{public}d method=%{public}s',
+      user, id.length, WebLogin.twoFactorMethod);
     WebLogin.busy = true;
     try {
       let lastBody: string = '';
       let lastStatus: string = '';
       for (let variant: number = 0; variant < 3; variant++) {
         const started: string = await bridge.runScript(
-          WebLogin.twoFactorScript(user, value, variant));
+          WebLogin.twoFactorScript(user, value, id, variant));
         if (started.indexOf('started') < 0) {
+          hilog.warn(DOMAIN, TAG, '2fa v%{public}d not sent: %{public}s', variant, started);
           continue;
         }
         const deadline: number = Date.now() + 15000;
@@ -357,10 +404,14 @@ export class WebLogin {
           lastBody = WebLogin.fieldOf(raw, 'body');
           lastStatus = WebLogin.fieldOf(raw, 'status');
           hilog.info(DOMAIN, TAG, '2fa v%{public}d status=%{public}s body=%{public}s',
-            variant, lastStatus, lastBody.length > 220 ? `${lastBody.substring(0, 220)}…` : lastBody);
-          if (lastBody.indexOf('"authenticated":true') >= 0
-            || lastBody.indexOf('"authenticated": true') >= 0) {
+            variant, lastStatus, lastBody.length > 300 ? `${lastBody.substring(0, 300)}…` : lastBody);
+          if (WebLogin.ajaxAccepted(lastBody, lastStatus)) {
+            hilog.info(DOMAIN, TAG, '2fa v%{public}d accepted → wait for session', variant);
             return '';
+          }
+          if (lastStatus === '429' || lastBody.indexOf('429') >= 0) {
+            WebLogin.throttleUntilMs = Date.now() + LOGIN_THROTTLE_COOLDOWN_MS;
+            return 'IG 正在限制验证尝试（429），请约 10 分钟后再试';
           }
           break;
         }
@@ -372,16 +423,19 @@ export class WebLogin {
         return '验证请求没有回应，请稍后重试';
       }
       const lower: string = lastBody.toLowerCase();
+      if (lastBody.indexOf('无效参数') >= 0 || lower.indexOf('invalid param') >= 0) {
+        return 'IG 没接受这次验证请求（参数无效），请改用「网页登录」完成验证码';
+      }
       if (lower.indexOf('code') >= 0 || lower.indexOf('invalid') >= 0
-        || lower.indexOf('incorrect') >= 0) {
+        || lower.indexOf('incorrect') >= 0 || lastBody.indexOf('过期') >= 0) {
         return '验证码不对或已过期，请重新输入';
       }
       const reason: string = WebLogin.ajaxFailure(lastBody, lastStatus);
       /*
-       * 面板正在收验证码：如果服务端只是又回了一次 `showAccountRecoveryModal`，
+       * 面板正在收验证码：如果服务端只是又回了一次"需要验证"，
        * 把"请输入验证码"原样回给面板会显得像没反应 —— 换成一句明确的重试提示。
        */
-      if (reason.indexOf('额外验证') >= 0) {
+      if (reason.indexOf('额外验证') >= 0 || reason.indexOf('两步验证') >= 0) {
         return '验证码没有通过，请重新输入';
       }
       return reason;
@@ -391,32 +445,104 @@ export class WebLogin {
   }
 
   /**
+   * 这个回包算不算"验过了"。
+   *
+   * 两步验证通过的回包是 `{"authenticated":true,"status":"ok",…}` 或 `{"status":"ok"}`；
+   * 而"还要再验一次"的回包带 `two_factor_required`（密码那一步就是它）。
+   */
+  private static ajaxAccepted(body: string, status: string): boolean {
+    const lower: string = body.toLowerCase();
+    if (lower.indexOf('"authenticated":true') >= 0
+      || lower.indexOf('"authenticated": true') >= 0) {
+      return true;
+    }
+    if (lower.indexOf('two_factor_required') >= 0) {
+      return false;
+    }
+    return status === '200' && (lower.indexOf('"status":"ok"') >= 0
+      || lower.indexOf('"status": "ok"') >= 0);
+  }
+
+  /**
+   * 把密码那一步回包里的两步验证上下文抓下来（见 `twoFactorIdentifier`）。
+   *
+   * 只对"需要再验一步"的回包生效：`two_factor_required` / `two_factor_info`。
+   */
+  private static captureTwoFactor(body: string, fallbackUser: string): void {
+    const lower: string = body.toLowerCase();
+    if (lower.indexOf('two_factor_required') < 0 && lower.indexOf('two_factor_info') < 0) {
+      return;
+    }
+    const id: string = WebLogin.jsonString(body, 'two_factor_identifier');
+    if (id.length > 0) {
+      WebLogin.twoFactorIdentifier = id;
+    }
+    const name: string = WebLogin.jsonString(body, 'username');
+    WebLogin.twoFactorUser = name.length > 0 ? name : fallbackUser;
+    WebLogin.twoFactorAtMs = Date.now();
+    if (WebLogin.jsonBool(body, 'totp_two_factor_on')) {
+      WebLogin.twoFactorMethod = '验证器';
+    } else if (WebLogin.jsonBool(body, 'sms_two_factor_on')) {
+      WebLogin.twoFactorMethod = '短信';
+    } else if (WebLogin.jsonBool(body, 'whatsapp_two_factor_on')) {
+      WebLogin.twoFactorMethod = 'WhatsApp';
+    } else {
+      WebLogin.twoFactorMethod = '未知';
+    }
+    hilog.info(DOMAIN, TAG,
+      '2fa pending: user=%{public}s id=%{public}s idLen=%{public}d method=%{public}s',
+      WebLogin.twoFactorUser,
+      id.length > 14 ? `${id.substring(0, 14)}…` : id, id.length, WebLogin.twoFactorMethod);
+  }
+
+  /** 从 JSON 文本里取一个字符串字段（不过 JSON.parse：回包可能被截断，正则可容错）。 */
+  private static jsonString(body: string, name: string): string {
+    const pattern: RegExp = new RegExp('"' + name + '"\\s*:\\s*"([^"]*)"');
+    const found: RegExpMatchArray | null = body.match(pattern);
+    return found !== null && found.length > 1 ? found[1] : '';
+  }
+
+  /** 从 JSON 文本里判断一个布尔字段是不是 true。 */
+  private static jsonBool(body: string, name: string): boolean {
+    const pattern: RegExp = new RegExp('"' + name + '"\\s*:\\s*true');
+    return pattern.test(body);
+  }
+
+  /**
    * 三种两步验证提交形状（见 submitTwoFactorCode）。
    *
-   * v0 `login/ajax/two_factor/` + username + verification_code + 空 identifier（最常见）
-   * v1 `login/ajax/` 再发一次，把 verification_code 塞进同一发
-   * v2 `login/two_factor/`（非 ajax 路径）+ two_factor_identifier 字段名变体
+   * v0 = instaloader 现行写法：`/accounts/login/ajax/two_factor/` +
+   *      `username` + `verificationCode` + `identifier`（驼峰，标识原样带回去）
+   * v1 = 2023 年那版网页 App 的写法：`/api/v1/web/accounts/login/ajax/two_factor/` +
+   *      `identifier` + `queryParams` + `trust_signal` + `verification_method` + `verificationCode`
+   * v2 = 字段名换回下划线的兜底（`two_factor_identifier` + `verification_code`）
    */
-  private static twoFactorScript(user: string, code: string, variant: number): string {
+  private static twoFactorScript(user: string, code: string, id: string,
+    variant: number): string {
     return '(function(){try{'
-      + 'var U=' + JSON.stringify(user) + ',C=' + JSON.stringify(code) + ',V=' + variant + ';'
+      + 'var U=' + JSON.stringify(user) + ',C=' + JSON.stringify(code)
+      + ',I=' + JSON.stringify(id) + ',V=' + variant + ';'
       + 'window.__igwb={done:0,status:0,body:""};'
       + 'var m=document.cookie.match(/csrftoken=([^;]+)/);var csrf=m?m[1]:"";'
-      + 'var url="/api/v1/web/accounts/login/ajax/two_factor/";'
-      + 'var body="verification_code="+encodeURIComponent(C)'
-      + '+"&username="+encodeURIComponent(U)+"&queryParams=%7B%7D";'
-      + 'if(V===0){body+="&identifier=&two_factor_identifier=";}'
-      + 'if(V===1){url="/api/v1/web/accounts/login/ajax/";'
-      + 'body="username="+encodeURIComponent(U)+"&verification_code="+encodeURIComponent(C)'
-      + '+"&queryParams=%7B%7D";}'
-      + 'if(V===2){url="/api/v1/web/accounts/login/two_factor/";'
-      + 'body+="&device_id=&guid=&two_factor_identifier=";}'
+      + 'var url="/accounts/login/ajax/two_factor/";'
+      + 'var body="username="+encodeURIComponent(U)'
+      + '+"&verificationCode="+encodeURIComponent(C)'
+      + '+"&identifier="+encodeURIComponent(I);'
+      + 'if(V===1){url="/api/v1/web/accounts/login/ajax/two_factor/";'
+      + 'body="identifier="+encodeURIComponent(I)'
+      + '+"&queryParams="+encodeURIComponent(\'{"next":"/"}\')'
+      + '+"&trust_signal=true&verification_method=1"'
+      + '+"&username="+encodeURIComponent(U)'
+      + '+"&verificationCode="+encodeURIComponent(C);}'
+      + 'if(V===2){body="username="+encodeURIComponent(U)'
+      + '+"&verification_code="+encodeURIComponent(C)'
+      + '+"&two_factor_identifier="+encodeURIComponent(I);}'
       + 'fetch(url,{method:"POST",credentials:"include",'
       + 'headers:{"Content-Type":"application/x-www-form-urlencoded","X-CSRFToken":csrf,'
       + '"X-Requested-With":"XMLHttpRequest","X-Instagram-AJAX":"1",'
       + '"X-IG-App-ID":"936619743392459"},body:body})'
       + '.then(function(r){return r.text().then(function(t){'
-      + 'window.__igwb={done:1,status:r.status,body:(t||"").slice(0,400),v:V};});})'
+      + 'window.__igwb={done:1,status:r.status,body:(t||"").slice(0,600),v:V};});})'
       + '.catch(function(e){window.__igwb={done:1,status:-1,body:String(e).slice(0,120),v:V};});'
       + 'return "started";'
       + '}catch(e){return "error:"+String(e).slice(0,100);}})()';
@@ -484,7 +610,7 @@ export class WebLogin {
       return '这个账号需要额外验证（两步验证 / 安全检查），请输入验证码';
     }
     if (lower.indexOf('two_factor') >= 0) {
-      return '这个账号开了两步验证，请用「网页登录」完成验证码';
+      return '这个账号开了两步验证，请输入验证码';
     }
     if (lower.indexOf('checkpoint') >= 0 || lower.indexOf('challenge') >= 0) {
       return 'Instagram 要求完成安全验证，请用「网页登录」完成';
