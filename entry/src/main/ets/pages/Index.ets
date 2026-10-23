@@ -103,6 +103,15 @@ import { DeepLink, DeepLinkIntent, DeepLinkRoute } from '../core/DeepLink';
 import { NotifyRoute } from '../core/NotifyRoute';
 // 无头网页登录：账号密码在隐藏网页里完成（见 core/WebLogin）。
 import { WebLogin, WEB_LOGIN_NEEDS_CODE } from '../core/WebLogin';
+// 多账号：本机登录过的账号花名册（见 core/AccountBook）。
+import { AccountBook, AccountEntry } from '../core/AccountBook';
+// 「我的」标题栏那颗账号下拉按钮（多账号切换的入口）。
+import {
+  ACCOUNT_OTHERS,
+  ACCOUNT_TITLE_AVATAR,
+  ACCOUNT_TITLE_NAME,
+  AccountSwitcher
+} from '../components/AccountSwitcher';
 import { CommentItem, CommentsPayload, LikePayload, SavePayload } from '../model/Comment';
 import { FeedMapper } from '../model/FeedMapper';
 import { FeedStatus } from '../model/FeedStatus';
@@ -2079,6 +2088,14 @@ struct Index {
     // 启动画面是系统那条启动窗口，应用里不自绘 —— 这里只是趁它显示的那几秒先取数据。
     this.preloadTabs();
     /*
+     * **标题栏那颗账号按钮的三份数据先建好键**（见 syncAccountTitle / AccountSwitcher）。
+     *
+     * 必须在建界面之前：`@StorageLink` 要求键已经存在，否则第一帧读到的会是这个字段的默认值。
+     * 值本身此刻多半还是空的（账号名/头像要等「我的」头部），之后会由 refreshOtherAccounts
+     * 等处再写进来。
+     */
+    this.refreshOtherAccounts();
+    /*
      * **启动时自己判一次登录态**（不再依赖网页宿主）。
      *
      * 以前 `signedIn` 是隐藏网页 `onPageReady` / 会话信号那条路喂出来的；现在网页宿主按需挂载
@@ -2152,6 +2169,14 @@ struct Index {
           hilog.info(DOMAIN, TAG, 'self avatar from snapshot len=%{public}d',
             snap.avatarUrl.length);
         }
+        /*
+         * **账号名也从快照先垫上**：标题栏那颗按钮要显示"头像 + 账号名"，
+         * 而真实头部要 2~5 秒才回来 —— 不垫的话按钮前几秒只有头像（用户会以为坏了）。
+         */
+        if (snap !== null && snap.username.length > 0 && this.selfUsername.length === 0) {
+          this.selfUsername = snap.username;
+        }
+        this.syncAccountTitle();
       }).catch((): void => {
       });
       // 「我的」四个分页：探针按钮跑完把四条接口的结构摘要落一份。
@@ -2171,6 +2196,16 @@ struct Index {
           hilog.info(DOMAIN, TAG, 'self avatar ready @%{public}s len=%{public}d',
             header.username, header.avatarUrl.length);
         }
+        // 标题栏那颗账号按钮上的名字就取这里（见 selfUsername 的说明）。
+        if (header.username.length > 0 && header.username !== this.selfUsername) {
+          this.selfUsername = header.username;
+        }
+        /*
+         * 顺手把这个账号的**账号名与头像**记进花名册（多账号选单里要显示它们）。
+         * 这是零额外请求的一步：「我的」头部本来就会拉，这里只是把它抄进账本。
+         */
+        AccountBook.saveProfile(this.currentAccountId(), header.username, header.avatarUrl);
+        this.refreshOtherAccounts();
       };
       /*
        * IG 的"推荐快拍"位大约一小时才发一轮（见 NativeStories.trayFromSuggestions 的说明），
@@ -3000,6 +3035,16 @@ struct Index {
           });
         }, 3000);
       }
+    } else {
+      /*
+       * 登录成功的事**不在这里处理**：这一块在 `AccountScope.adoptFrom` 之前执行，
+       * 此刻 `AccountScope.current()` 还是上一个人（或空），记花名册会把当前账号列进
+       * "其他账号"里（实测过：选单第一行就是自己）。所以改到账号判定之后，见下面。
+       */
+    }
+    // 未登录时"其他账号"的判据变了（当前账号为空）：重读一遍，选单才不会把当前账号列进去。
+    if (!signedIn) {
+      this.refreshOtherAccounts();
     }
     /*
      * **登录闸门**（见 core/SessionGate）：未登录时只允许网页停在登录流程那几条地址上，
@@ -3031,6 +3076,17 @@ struct Index {
         AccountScope.restoreAll(account.current);
       }
       this.forgetAccountMemory();
+    }
+    /*
+     * **登录成功就记进花名册**（多账号用，见 core/AccountBook）。
+     *
+     * 放在账号判定**之后**：此刻 `AccountScope.current()` 才是这个人，`others()` 才不会把
+     * 当前账号列进"其他账号"里（实测过：放前面的话选单第一行就是自己）。
+     * 覆盖三条路：登录成功、切回某个账号、网页里自己登进去 —— 只要罐里有会话就该有一份记录。
+     */
+    if (signedIn) {
+      this.rememberAccount().catch((): void => {
+      });
     }
     if (!changed) {
       return;
@@ -3223,6 +3279,10 @@ struct Index {
     NativeStories.forgetTray();
     // 「你的快拍」那一项的头像同样属于"这个人"：换人之后先把旧头像抹掉，等新头部回来再填。
     this.selfAvatarUrl = '';
+    // 标题栏按钮上的账号名同理（见 selfUsername）。
+    this.selfUsername = '';
+    // 花名册里"其他账号"的判据也跟着换人：重读一遍（当前账号变了）。
+    this.refreshOtherAccounts();
     // 设备侧会话材料（claim / rur / mid / authorization）：设备身份留着，会话材料作废。
     MobileSession.getInstance().clearSession();
     // "我是谁"那份缓存（`ds_user_id`）：不清的话换账号后"我的"页面会按上一个人的 id 取头部
@@ -7390,7 +7450,181 @@ struct Index {
         }
       };
     }
+    if (this.currentTab() === AppTab.Profile) {
+      /*
+       * 「我的」：标题栏**置中**放账号下拉按钮（需求：显示当前账号的头像与账号名，点开选单）。
+       *
+       * 为什么走 `stackBuilder`（而不是 bottomBuilder）：stack 区就是"标题那一块"，
+       * 高度和其它页的标题一致、不额外长高，而且**材质在这块是生效的**
+       * （同一区域 Reels 的分段按钮已经验过，见 reelsTitleSegment）。
+       * 标题文字由我们让位（mainTitle 留空），右边仍归 HDS 画菜单（设定那颗）。
+       */
+      return {
+        title: { mainTitle: '' },
+        menu: this.menus(),
+        stackBuilder: (): void => {
+          this.profileTitleAccount();
+        }
+      };
+    }
     return { title: { mainTitle: this.pageTitle() }, menu: this.menus() };
+  }
+
+  /**
+   * 「我的」标题栏那一行：**只有一颗账号下拉按钮，水平置中**（需求）。
+   *
+   * 两侧各放一个 `Blank()` 把它顶到正中间；标题文字不再画（需求要的就是按钮置中）。
+   */
+  @Builder
+  profileTitleAccount() {
+    Row() {
+      Blank()
+      AccountSwitcher({
+        onSwitch: (userId: string): void => {
+          this.switchAccount(userId);
+        },
+        onAdd: (): void => {
+          this.addAccount();
+        }
+      })
+      Blank()
+    }
+    .width('100%')
+    .height('100%')
+    .alignItems(VerticalAlign.Center)
+  }
+
+  /**
+   * 标题栏上显示的账号名（需求示例：`xingli_415`）。
+   *
+   * 取用顺序：「我的」头部那份（`profileVm.ownAccountName`，最准）→ 花名册里当前账号那条。
+   * 两者都还没有时给空串，按钮只显示头像（不显示占位文字，免得像别人的名字）。
+   */
+  private titleAccountName(): string {
+    if (this.selfUsername.length > 0) {
+      return this.selfUsername;
+    }
+    const own: string = this.profileVm.ownAccountName();
+    if (own.length > 0) {
+      return own;
+    }
+    const entry: AccountEntry | null = AccountBook.find(this.currentAccountId());
+    return entry === null ? '' : entry.username;
+  }
+
+  /**
+   * 当前账号的**数字 id**。
+   *
+   * ⚠️ `AccountScope.current()` 给的是分区槽位 `u<ds_user_id>`（见 AccountScope.accountOfCookie），
+   * 而花名册里存的是纯数字 id（`ds_user_id` 原值）。两边不归一，`others()` 就会把**自己**
+   * 也当成"其他账号"列进选单（实测过：选单第一行就是当前这个号）。
+   */
+  private currentAccountId(): string {
+    const slot: string = AccountScope.current();
+    return slot.length > 1 && slot.charAt(0) === 'u' ? slot.substring(1) : slot;
+  }
+
+  /**
+   * 把标题栏按钮要的三样东西写进 **AppStorage**（见 AccountSwitcher 文件头：那个 builder
+   * 不会因为本组件状态变化而重画，只能靠 `@StorageLink` 让按钮自己更新）。
+   *
+   * 在 `aboutToAppear` 里先建键，之后每次值变了都调一次。
+   */
+  private syncAccountTitle(): void {
+    AppStorage.setOrCreate(ACCOUNT_TITLE_NAME, this.titleAccountName());
+    AppStorage.setOrCreate(ACCOUNT_TITLE_AVATAR, this.selfAvatarUrl);
+    AppStorage.setOrCreate(ACCOUNT_OTHERS, this.otherAccounts);
+  }
+
+  /** 重新读一遍"其他账号"（花名册变了就调；见 rememberAccount / applySession）。 */
+  private refreshOtherAccounts(): void {
+    this.otherAccounts = AccountBook.others(this.currentAccountId());
+    this.syncAccountTitle();
+    hilog.info(DOMAIN, TAG, 'account book: current=%{public}s others=%{public}d',
+      this.currentAccountId().length > 0 ? this.currentAccountId() : '(none)',
+      this.otherAccounts.length);
+  }
+
+  /**
+   * **把当前账号记进花名册**（会话 + 账号名 + 头像）。
+   *
+   * 时机：登录成功之后（见 applySession）与**切换/新增账号之前**（保证切走以后还能回来）。
+   * 会话直接从 Cookie 罐抓：那是 App 唯一的会话来源（见 InstagramCookieJar 的文件头），
+   * 自己另存一份等于制造第二套真相。
+   */
+  private async rememberAccount(): Promise<void> {
+    try {
+      // 这一发要紧盯罐里现在的值：先把 1.5 秒的读缓存作废（见 CACHE_TTL_MS）。
+      InstagramCookieJar.invalidate();
+      const snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
+      const session: AccountEntry = AccountBook.sessionOf(snapshot.cookie);
+      if (!session.usable()) {
+        hilog.info(DOMAIN, TAG, 'account book: no session to remember');
+        return;
+      }
+      AccountBook.saveSession(session.userId, session.sessionId, session.csrf);
+      AccountBook.saveProfile(session.userId, this.selfUsername, this.selfAvatarUrl);
+      this.refreshOtherAccounts();
+      hilog.info(DOMAIN, TAG, 'account book: remembered %{public}s (%{public}s)',
+        session.userId, AccountBook.describe());
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'remember account failed: %{public}s', (error as Error).message);
+    }
+  }
+
+  /**
+   * **切换到另一个账号**（选单里点某个人）。
+   *
+   * 三步：① 先把当前账号记进花名册（否则切走就回不来）；
+   * ② 把目标账号的会话种回 Cookie 罐（`adoptSession`，和原生登录成功那条路同一个接口）；
+   * ③ 交给 `applySession` —— 它会按 Cookie 里的 `ds_user_id` 做账号分区（上一个人的活跃分区
+   *    搬去备份位、这个人的备份搬回来）、清内存、清导航栈、重新取数（信息流 / 五个页签）。
+   * 所以这里**不要**自己再去清缓存，重复清只会把刚恢复的备份又抹掉。
+   */
+  private async switchAccount(userId: string): Promise<void> {
+    const entry: AccountEntry | null = AccountBook.find(userId);
+    if (entry === null || !entry.usable()) {
+      this.toast($r('app.string.account_switch_failed'));
+      return;
+    }
+    if (userId === this.currentAccountId()) {
+      return;
+    }
+    hilog.info(DOMAIN, TAG, 'switch account → %{public}s (%{public}s)',
+      userId, entry.username.length > 0 ? entry.username : '(no name)');
+    await this.rememberAccount();
+    const adopted: boolean = await InstagramCookieJar.adoptSession(entry.sessionId, entry.userId,
+      entry.csrf);
+    if (!adopted) {
+      this.toast($r('app.string.account_switch_failed'));
+      return;
+    }
+    await InstagramCookieJar.save();
+    InstagramCookieJar.invalidate();
+    const snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
+    if (!snapshot.signedIn) {
+      this.toast($r('app.string.account_switch_failed'));
+      return;
+    }
+    // 走那条唯一的登录态出口：账号分区 + 清内存 + 清导航栈 + 重新取数都在里面。
+    // 先把头像/账号名换成花名册里那份，标题栏那颗按钮在 applySession 里就会读到新值。
+    this.selfAvatarUrl = entry.avatarUrl;
+    this.selfUsername = entry.username;
+    this.applySession(true, snapshot.cookie);
+    this.refreshOtherAccounts();
+  }
+
+  /**
+   * **新增账号**：先把当前账号记下来，再走一次"退出登录"（它会清罐、清内存、停在登录页）。
+   *
+   * 为什么复用 signOut 而不是另写一套：清的东西必须完全一样（会话 / 落盘分区 / 内存 / 诊断文件），
+   * 分开写必然漏一条（见 signOut 的注释）。花名册**不**受 signOut 影响（见 core/AccountBook）。
+   */
+  private async addAccount(): Promise<void> {
+    hilog.info(DOMAIN, TAG, 'add account → sign out then show login page');
+    await this.rememberAccount();
+    await this.signOut();
+    this.refreshOtherAccounts();
   }
 
   /**
@@ -7706,6 +7940,21 @@ struct Index {
    * 换账号时清空（见 forgetAccountMemory）。
    */
   @State private selfAvatarUrl: string = '';
+  /**
+   * **自己的账号名**（「我的」标题栏那颗按钮上显示的那串，例：`xingli_415`）。
+   *
+   * 为什么单独留一份状态：`profileVm.ownAccountName()` 不是可观察状态（视图模型内部字段），
+   * 直接放进 build 里读，名字到了界面也不会重画。这里在「我的」头部回调时抄一份
+   * （见 profileVm.onHeader），换账号时清空（见 forgetAccountMemory）。
+   */
+  @State private selfUsername: string = '';
+  /**
+   * **其他账号**（不含当前这个）：喂给「我的」标题栏那颗下拉按钮（见 AccountSwitcher）。
+   *
+   * 为什么只存"其他"：当前账号的头像/账号名是从 Cookie 罐与「我的」头部实时来的，
+   * 花名册里那份只是**切回来时**的兜底。列表为空时选单只显示「新增账号」（需求）。
+   */
+  @State private otherAccounts: Array<AccountEntry> = [];
   /**
    * 让托盘**重新拉一次**的信号（每 +1 一次；见 StoriesTray.reloadSignal）。
    *

@@ -361,6 +361,18 @@
       "value": "设定"
     },
     {
+      "name": "account_add",
+      "value": "新增账号"
+    },
+    {
+      "name": "account_unnamed",
+      "value": "未命名账号"
+    },
+    {
+      "name": "account_switch_failed",
+      "value": "切换账号失败，请重新登录这个账号"
+    },
+    {
       "name": "action_mute",
       "value": "静音"
     },

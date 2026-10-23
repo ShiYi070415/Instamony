@@ -34,6 +34,7 @@ import { PlatformCap } from '../core/PlatformCap';
 import { MobileSession } from '../core/mobileapi/MobileSession';
 import { MobileProbe } from '../core/mobileapi/MobileProbe';
 import { AccountScope } from '../core/AccountScope';
+import { AccountBook } from '../core/AccountBook';
 import { webview } from '@kit.ArkWeb';
 import { AppConfig } from '../config/AppConfig';
 import { DeepLink, DeepLinkIntent } from '../core/DeepLink';
@@ -128,6 +129,9 @@ export default class EntryAbility extends UIAbility {
     // 失败无所谓：预热只是"提前量"，页面那条路会照旧自己发一次。
     try {
       AccountScope.init(this.context);
+      // 多账号花名册（见 core/AccountBook）：「我的」标题栏那颗下拉按钮要列"其他账号"，
+      // 必须在页面构建之前就打开，否则第一帧永远是"只有新增账号"。
+      AccountBook.init(this.context);
       // 信息流第一页的落盘缓存（见 core/FeedCache）：冷启动时页面会先把它铺出来，
       // 再让网络那份整体替换 —— 用户一进 app 就有画面。这里只是同步打开那个 store。
       FeedCache.init(this.context);
