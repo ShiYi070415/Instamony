@@ -151,6 +151,8 @@ import { NativeSearch, SearchPostPage } from '../core/NativeSearch';
 import { MobileChallenge } from '../core/mobileapi/MobileChallenge';
 // 换账号时"按人的进程内缓存"由它一处清（见 core/AccountCaches）。
 import { AccountCaches } from '../core/AccountCaches';
+// 换账号/退出登录的"会话清理事务"（停实时通道 → 清台账 → 归零限流 → 清缓存 → 作废会话材料）。
+import { SessionService } from '../core/SessionService';
 // 时间线翻页参数探针（诊断开关 TIMELINE_PAGE_PROBE，见 core/mobileapi/TimelineProbe）。
 import { TimelineProbe } from '../core/mobileapi/TimelineProbe';
 // 换号时要清掉探索流的页级短缓存（见 forgetAccountMemory）。
@@ -3554,20 +3556,15 @@ struct Index {
    */
   private forgetAccountMemory(): void {
     /*
-     * **实时通道必须先下线**（审计 P0）：它拿的是**上一个账号的 sessionid**，不下线就会继续收
-     * 那个号的私信、并把帧派发到新账号的界面上（串号）。放在最前面 —— 后面的清理都假设
-     * "没有人在往里推数据"。`realtimeStarted` 一起复位，之后由 switchAccount / 登录成功那条路重新拉起。
+     * **不依赖 UI 状态的那几步交给 core/SessionService**（顺序在那里有注释，且只有一份）：
+     * 停实时通道 → 清验证台账 → 归零限流/熔断 → 清进程内按人缓存 → 作废会话材料。
+     * 页面这边只处理自己的 `@State` 与视图模型实例（下面）。
      */
-    RealtimeWorkerClient.getInstance().stop();
+    SessionService.forgetAccountSession();
     this.realtimeStarted = false;
-    DirectRealtime.clearAccount();
     // 通知 + 关注 / 收藏 / 互动覆盖表（按人抓的，见 forgetNotifications）。
     this.forgetNotifications();
-    // 账号安全验证的台账也属于"这个人"：换账号后必须清（见 MobileChallenge）。
-    MobileChallenge.clear();
     this.refreshChallengeState();
-    // 限流冷却按账号记：换人之后额度要重新算。
-    ApiThrottle.clear();
     // 各页面的列表与游标。
     this.viewModel.reset();
     this.reelsVm.reset();
@@ -3581,23 +3578,14 @@ struct Index {
     this.profileVm.reset();
     this.directVm.reset();
     this.directThreadVm.reset();
-    // 快拍：托盘队列（页面持有的那份）。
+    // 快拍：托盘队列（页面持有的那份；内容/隐藏表/托盘缓存由 SessionService → AccountCaches 清）。
     this.storyQueue = [];
-    /*
-     * 其余"按人生效的**进程内缓存**"统统交给 core/AccountCaches 一处清
-     * （快拍内容/隐藏表/托盘缓存、头像小图、预下载、译文、我是谁、页级 memo…）。
-     * 以前这十几行散在这个方法里，每加一个缓存就要回来补一行 —— 漏一个就是"上一个
-     * 人的东西还留在内存里"（换号后快拍托盘/Reels/搜索各残留过一轮）。
-     */
-    AccountCaches.clearProcessCaches();
     // 「你的快拍」那一项的头像同样属于"这个人"：换人之后先把旧头像抹掉，等新头部回来再填。
     this.selfAvatarUrl = '';
     // 标题栏按钮上的账号名同理（见 selfUsername）。
     this.selfUsername = '';
     // 花名册里"其他账号"的判据也跟着换人：重读一遍（当前账号变了）。
     this.refreshOtherAccounts();
-    // 设备侧会话材料（claim / rur / mid / authorization）：设备身份留着，会话材料作废。
-    MobileSession.getInstance().clearSession();
     // 网页的 **HTTP 缓存**里可能存着上一个人的页面（HTML / JS / 图片）：一起清掉。
     try {
       this.bridge.controller.removeCache(true);
