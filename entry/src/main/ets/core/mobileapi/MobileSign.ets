@@ -145,42 +145,6 @@ export function signedBody(data: string): string {
 }
 
 /**
- * 评论输入行为埋点（instagrapi 的 `gen_user_breadcrumb`）。
- *
- * 形状是 "base64(hmac) \n base64(明文) \n"，密钥 `iN4$aGr0m` 是 instagrapi 里的常量。
- * 只在"发评论"这条路上用得到；快拍 / 私信不需要，但既然要移植就一次移植对。
- *
- * @param size 输入长度（instagrapi 传的是文本字符数）
- */
-export function userBreadcrumb(size: number): string {
-  const dt: number = Date.now();
-  const timeElapsed: number = randomInt(500, 1500) + size * randomInt(500, 1500);
-  const changeCount: number = Math.max(1, Math.floor(size / randomInt(3, 5)));
-  const plain: string = `${size} ${timeElapsed} ${changeCount} ${dt}`;
-  const mac: Uint8Array = hmacSha256('iN4$aGr0m', plain);
-  const macB64: string = base64(mac, false);
-  const plainB64: string = base64(utf8(plain), false);
-  return `${macB64}\n${plainB64}\n`;
-}
-
-/**
- * `x-ig-www-claim` 的**对外形态**：`hmac.<base64url>`。
- *
- * 注意：真正的 claim 值由 IG 在响应头 `x-ig-set-www-claim` 里下发（见 MobileSession），
- * 这里只在拿不到时拼一个占位形态 —— instagrapi 的默认值也是字符串 `"0"`，
- * 也就是说**它同样不自己算这个值**。保留这个函数是为了让"claim 从哪来"这件事在代码里有名字。
- */
-export function wwwClaimOf(raw: string): string {
-  const clean: string = raw.trim();
-  if (clean.length === 0) {
-    return '0';
-  }
-  if (clean.startsWith('hmac.')) {
-    return clean;
-  }
-  return `hmac.${clean}`;
-}
-
 /** HMAC-SHA256（字节数组输入）。 */
 export function hmacSha256(key: string, message: string): Uint8Array {
   const keyBlob: cryptoFramework.DataBlob = { data: utf8(key) };
@@ -268,19 +232,5 @@ export function randomInt(min: number, max: number): number {
   } catch (error) {
     noteWeakRandom('randomInt', error as Error);
     return min + Math.floor(Math.random() * (max - min + 1));
-  }
-}
-
-/** `[min, max)` 区间内的浮点数（instagrapi 的 `random.uniform`）。 */
-export function randomFloat(min: number, max: number): number {
-  try {
-    const random: cryptoFramework.Random = cryptoFramework.createRandom();
-    const bytes: cryptoFramework.DataBlob = random.generateRandomSync(4);
-    const value: number = ((bytes.data[0] << 24) | (bytes.data[1] << 16)
-      | (bytes.data[2] << 8) | bytes.data[3]) >>> 0;
-    return min + (value / 4294967296) * (max - min);
-  } catch (error) {
-    noteWeakRandom('randomFloat', error as Error);
-    return min + Math.random() * (max - min);
   }
 }
