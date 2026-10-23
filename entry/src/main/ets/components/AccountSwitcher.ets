@@ -42,6 +42,8 @@ const ROW_AVATAR: number = 32;
 const MENU_W: number = 208;
 /** 选单里一行的高度。 */
 const ROW_H: number = 48;
+/** 选单的圆角（和评论面板那种卡片一个量级）。 */
+const MENU_RADIUS: number = 22;
 
 @Component
 export struct AccountSwitcher {
@@ -118,6 +120,8 @@ export struct AccountSwitcher {
     .padding({ left: 10, right: 12 })
     .borderRadius(ROW_H / 2)
     .onClick((): void => {
+      // 先收弹层再切：切换会重建整个页面，弹层留着会挂在不存在的分支上。
+      this.open = false;
       this.onSwitch(entry.userId);
     })
   }
@@ -146,6 +150,8 @@ export struct AccountSwitcher {
     .padding({ left: 10, right: 12 })
     .borderRadius(ROW_H / 2)
     .onClick((): void => {
+      // 新增账号 = 登出进登录页，弹层先收掉（见 accountRow 里的说明）。
+      this.open = false;
       this.onAdd();
     })
   }
@@ -153,20 +159,62 @@ export struct AccountSwitcher {
   /** 选单内容：当前账号 → 其他账号 → 新增账号（见文件头）。 */
   @Builder
   accountMenu() {
-    Column({ space: 2 }) {
-      this.currentRow()
-      ForEach(this.accounts, (one: AccountEntry): void => {
-        this.accountRow(one);
-      }, (one: AccountEntry): string => `acct-${one.userId}`)
-      Divider()
-        .strokeWidth(0.5)
-        .color($r('app.color.divider'))
-        .margin({ left: 12, right: 12, top: 2, bottom: 2 })
-      this.addRow()
+    /*
+     * 选单背景 = **评论面板那种沉浸光感材质**（需求）。
+     *
+     * 做法照抄 components/CommentsPanel 的背板：**一块透明的 `Toggle` 垫在最底下**，
+     * 材质挂在它身上（`SurfaceModifier`），`hitTestBehavior(None)` 让它不吃触摸，
+     * 内容画在上面 —— 内容区里材质只有 Toggle/Slider/Select 与弹窗类生效，所以只能这么垫。
+     * 外面套 Stack 并给死尺寸，是因为"100% 高"的 Toggle 自己撑不出高度。
+     */
+    Stack({ alignContent: Alignment.TopStart }) {
+      Toggle({ type: ToggleType.Button, isOn: false }) {
+        Text('')
+      }
+      .width('100%')
+      .height('100%')
+      .padding(0)
+      .borderRadius(MENU_RADIUS)
+      .backgroundColor(Color.Transparent)
+      .selectedColor(Color.Transparent)
+      .attributeModifier(new SurfaceModifier(this.materialThickness, false))
+      .hitTestBehavior(HitTestMode.None)
+
+      Column({ space: 2 }) {
+        this.currentRow()
+        ForEach(this.accounts, (one: AccountEntry): void => {
+          this.accountRow(one);
+        }, (one: AccountEntry): string => `acct-${one.userId}`)
+        Divider()
+          .strokeWidth(0.5)
+          .color($r('app.color.divider'))
+          .margin({ left: 12, right: 12, top: 2, bottom: 2 })
+        this.addRow()
+      }
+      .width('100%')
+      .padding(6)
     }
     .width(MENU_W)
-    .padding(6)
+    .height(this.menuHeight())
+    .borderRadius(MENU_RADIUS)
+    // 圆角裁一下：材质背板和内容都收进同一个圆角里。
+    .clip(true)
   }
+
+  /**
+   * 选单高度（vp）：内容自己撑不出高度，而背板要"100% 高"，所以这里按行数算出来。
+   *
+   * 行数 = 当前账号 1 + 其他账号 N + 新增账号 1；再加分隔线、行间距和上下内边距。
+   */
+  private menuHeight(): number {
+    const rows: number = 2 + this.accounts.length;
+    // 分隔线也算一项（Column 的 space 会作用在它两侧）。
+    const items: number = rows + 1;
+    return rows * ROW_H + (items - 1) * 2 + 6 + 12;
+  }
+
+  /** 选单开没开（bindPopup 要一个显式的布尔）。 */
+  @State private open: boolean = false;
 
   build() {
     Toggle({ type: ToggleType.Button, isOn: false }) {
@@ -195,7 +243,30 @@ export struct AccountSwitcher {
     .selectedColor(Color.Transparent)
     // 沉浸光感材质；低版本设备自动降级成「中性底 + 背景模糊」（见 SurfaceModifier）。
     .attributeModifier(new SurfaceModifier(this.materialThickness, false))
-    // 点它弹选单：系统 Menu（弹窗类）自带那层材质，内容透明就透出它来。
-    .bindMenu(this.accountMenu(), { placement: Placement.Bottom })
+    .onClick((): void => {
+      this.open = !this.open;
+    })
+    /*
+     * 弹层用 **bindPopup**（而不是 bindMenu）：菜单背景是系统画的，我们改不了；
+     * 而需求要的是"选单背景也用评论那种沉浸光感材质" —— 那就必须自己画背景，
+     * 所以把弹层背景设成透明，让选单里那块 Toggle 材质（见 accountMenu）透出来。
+     */
+    .bindPopup(this.open, {
+      // 箭头包一层：@Builder 直接按引用传给原生接口会丢 `this`（HDS 那边踩过）。
+      builder: (): void => {
+        this.accountMenu();
+      },
+      placement: Placement.Bottom,
+      // 背景、箭头、蒙层全交给我们自己：材质只该有一层（避免嵌套失效）。
+      popupColor: Color.Transparent,
+      enableArrow: false,
+      maskColor: Color.Transparent,
+      radius: MENU_RADIUS,
+      onStateChange: (event): void => {
+        if (!event.isVisible) {
+          this.open = false;
+        }
+      }
+    })
   }
 }
