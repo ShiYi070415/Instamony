@@ -3480,7 +3480,11 @@ struct Index {
     const ajaxMessage: string = await WebLogin.loginByWebAjax(username, password);
     if (ajaxMessage.length === 0) {
       hilog.info(DOMAIN, TAG, 'web ajax login accepted → wait for session');
-      const waited: string = await WebLogin.login(username, password);
+      /*
+       * ajax 已认证：**别再走"等表单 + 点提交"那一套**（页面此时可能正在跳转），
+       * 直接等会话落罐；`awaitSession` 会先 saveCookieAsync，再清缓存轮询。
+       */
+      const waited: string = await WebLogin.awaitSession();
       if (waited.length === 0) {
         await this.refreshSessionFromJar();
         this.unmountWebHost('login done');

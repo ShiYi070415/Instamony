@@ -305,6 +305,21 @@ export class WebLogin {
   }
 
   /**
+   * **等会话落罐**（`loginByWebAjax` 之后用）。
+   *
+   * 为什么单独开一个：ajax 成功后页面可能正在跳转，不该再去等"表单出现"。
+   * 这里先 `saveCookieAsync` 让服务端刚种下的 cookie 落盘，再轮询罐子。
+   */
+  static async awaitSession(): Promise<string> {
+    try {
+      await InstagramCookieJar.save();
+    } catch (error) {
+    }
+    const bridge: InstagramPageBridge = InstagramPageBridge.getInstance();
+    return await WebLogin.waitForSession(bridge);
+  }
+
+  /**
    * **等宿主绑定完成**（最多 `timeoutMs`）。
    *
    * 为什么要等：`attached` 在"Web 组件的控制器挂上 + 页面跑完一次加载"之后才置位。
@@ -341,6 +356,15 @@ export class WebLogin {
   /** 把网页 ajax 的失败原因翻译成一句中文（尽量用服务端原话）。 */
   private static ajaxFailure(body: string, status: string): string {
     const lower: string = body.toLowerCase();
+    /*
+     * **2FA / 安全检查的那一种回包**（真机日志原文，`HTTP 200`）：
+     * `{"user":true,"authenticated":false,"showAccountRecoveryModal":true,"status":"ok"}`
+     * —— 账号认出来了、密码也过了，只是 IG 要求再走一步验证。
+     * 以前这里没有匹配项，只能落到"登录没有成功（HTTP 200）"，等于什么都没说。
+     */
+    if (lower.indexOf('showaccountrecoverymodal":true') >= 0) {
+      return '这个账号需要额外验证（两步验证 / 安全检查）：请点下方「网页登录」输入一次验证码，之后本应用会自己保持登录';
+    }
     if (lower.indexOf('two_factor') >= 0) {
       return '这个账号开了两步验证，请用「网页登录」完成验证码';
     }
@@ -871,6 +895,12 @@ export class WebLogin {
       }
       let snapshot: InstagramCookieSnapshot | null = null;
       try {
+        /*
+         * **每次读罐先让缓存失效**：`InstagramCookieJar.inspect()` 有 1.5 秒短缓存，
+         * 而这里每 700ms 轮询一次 —— 不清缓存的话会一直看到"登录前那一份"，
+         * 明明已经登录成功却等到超时（`authenticated:true` 之后卡住就是这么来的）。
+         */
+        InstagramCookieJar.invalidate();
         snapshot = await InstagramCookieJar.inspect();
       } catch (error) {
         snapshot = null;
