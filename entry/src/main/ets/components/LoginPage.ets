@@ -19,11 +19,11 @@
  * 三条设计约束：
  *   1. **整页**：未登录时五个 tab 的内容层与底栏都不建（见 pages/Index），换账号不残留。
  *   2. **不保存密码**：密码只在这一次请求里用，成功后清空输入；落盘的只有会话 cookie。
- *   3. **风格与本 App 一致**：卡片 = 项目降级那套玻璃底（FALLBACK_SURFACE + FALLBACK_BLUR），
- *      主按钮 = 沉浸光感（SurfaceModifier 挂在 Toggle 上），配色/圆角/间距沿用设置页那套。
+ *   3. **风格与本 App 一致**：输入框是"材质底 + 透明输入框"叠出来的**椭圆胶囊**，
+ *      按钮是沉浸光感（SurfaceModifier 挂在 Toggle 上），配色/圆角/间距沿用设置页那套。
  */
 
-import { FALLBACK_BLUR, FALLBACK_SURFACE, MaterialLabelButton, SurfaceModifier } from './MaterialSurface';
+import { MaterialLabelButton, SurfaceModifier } from './MaterialSurface';
 import {
   MATERIAL_THICKNESS_ULTRA_THIN,
   SETTING_MATERIAL_THICKNESS
@@ -32,7 +32,6 @@ import { LoginOutcome, LoginStage, MobileLogin } from '../core/mobileapi/MobileL
 
 const SIDE_VP: number = 28;
 const CARD_RADIUS: number = 28;
-const FIELD_RADIUS: number = 14;
 const FIELD_H: number = 48;
 const BUTTON_H: number = 50;
 const BRAND_SIZE: number = 64;
@@ -65,7 +64,17 @@ export struct LoginPage {
   /** 安全验证的 `api_path`（下一步带上；空 = 只能去网页完成）。 */
   private challengePath: string = '';
 
-  /** 一组"标题 + 输入框"：标题在上（灰小字），输入框在下（玻璃底）。 */
+  /**
+   * 一组"标题 + 输入框"：标题在上（灰小字），输入框在下。
+   *
+   * 输入框是**椭圆胶囊 + 沉浸光感**（需求）。为什么做成两层 Stack 而不是给 TextInput 直接挂材质：
+   *   · 沉浸光感的材质接口（`systemMaterial` / `uiMaterial.ImmersiveMaterial`）只有
+   *     `Toggle / Slider / Select` 与弹窗类能写在内容区里（见 MaterialSurface 的文件头）；
+   *     `TextInput` 不在这个范围，直接挂不生效。
+   *   · 所以照 `CommentInputBar` 那套已验证的写法：**底层 Toggle 只画材质、不吃触摸**
+   *     （`hitTestBehavior(HitTestMode.None)`），输入框本体透明地压在它上面。
+   *   · 胶囊 = `borderRadius(FIELD_H / 2)`；文字用左右 18 的 padding 让开两端的圆角。
+   */
   @Builder
   labeledField(label: ResourceStr, hint: ResourceStr, value: string, isPassword: boolean,
                onEdit: (text: string) => void) {
@@ -75,23 +84,41 @@ export struct LoginPage {
         .fontColor($r('app.color.secondary_text'))
         .width('100%')
         .textAlign(TextAlign.Start)
-        .padding({ left: 4 })
-      TextInput({ placeholder: hint, text: value })
-        .type(isPassword ? InputType.Password : InputType.Normal)
-        .height(FIELD_H)
+        .padding({ left: 6 })
+      Stack({ alignContent: Alignment.Center }) {
+        // ① 材质底板：只画沉浸光感，不参与触摸（触摸要给上面的输入框）
+        Toggle({ type: ToggleType.Button, isOn: false }) {
+          Text('')
+        }
         .width('100%')
-        .padding({ left: 14, right: 14 })
-        .borderRadius(FIELD_RADIUS)
-        .backgroundColor(FALLBACK_SURFACE)
-        .backgroundBlurStyle(FALLBACK_BLUR)
-        .fontSize(15)
-        .fontColor($r('app.color.primary_text'))
-        .placeholderColor($r('app.color.secondary_text'))
-        .caretColor($r('app.color.accent'))
-        .enabled(!this.busy)
-        .onChange((text: string): void => {
-          onEdit(text);
-        })
+        .height(FIELD_H)
+        .padding(0)
+        .borderRadius(FIELD_H / 2)
+        .backgroundColor(Color.Transparent)
+        // 选中态透明：Toggle 默认选中色是主题强调色，不清掉整条会变蓝。
+        .selectedColor(Color.Transparent)
+        .attributeModifier(new SurfaceModifier(this.materialThickness, false))
+        .hitTestBehavior(HitTestMode.None)
+
+        // ② 输入框本体：透明底，压在材质上（胶囊同半径，文字两端留出圆角）
+        TextInput({ placeholder: hint, text: value })
+          .type(isPassword ? InputType.Password : InputType.Normal)
+          .height(FIELD_H)
+          .width('100%')
+          .padding({ left: 18, right: 18 })
+          .borderRadius(FIELD_H / 2)
+          .backgroundColor(Color.Transparent)
+          .fontSize(15)
+          .fontColor($r('app.color.primary_text'))
+          .placeholderColor($r('app.color.secondary_text'))
+          .caretColor($r('app.color.accent'))
+          .enabled(!this.busy)
+          .onChange((text: string): void => {
+            onEdit(text);
+          })
+      }
+      .width('100%')
+      .height(FIELD_H)
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
