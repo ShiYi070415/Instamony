@@ -30,7 +30,10 @@ import {
 } from '../core/AppSettings';
 // WEB_LOGIN_NEEDS_CODE：账号密码过了、但 IG 要再走一步验证（见 core/WebLogin）。
 import { WEB_LOGIN_NEEDS_CODE } from '../core/WebLogin';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 
+const DOMAIN: number = 0xFF00;
+const TAG: string = 'LoginPage';
 const SIDE_VP: number = 28;
 const CARD_RADIUS: number = 28;
 const FIELD_H: number = 48;
@@ -71,11 +74,17 @@ export struct LoginPage {
   @StorageLink(SETTING_MATERIAL_THICKNESS) materialThickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
 
   /*
-   * 账号 / 密码就是普通 `@State`。
+   * 账号 / 密码就是普通 `@State`（纯内存，不落盘 —— 需求明确不要"记住用户名"）。
    *
-   * 上一版用 `@StorageLink` 是为了"点登录后页面被重建、输入不丢"——那是**治标**：
-   * 根因是点登录会把隐藏网页亮出来（`webVisible = true`），根 Stack 一换，登录页就重建了。
-   * 现在点登录**不再显示网页**（无头登录），页面不会重建，`@State` 就够了。
+   * ⚠️ 但输入框**必须直连状态**：`text: this.username` + `onChange` 写回（官方推荐写法），
+   * 且**不能**再走"带参数的 @Builder（按值传参）+ `TextInput({ text: value })`"那套：
+   * `text` 是**构造参数**，按值传给 @Builder 之后它永远是建组件那一刻的快照。点登录时
+   * `busy` 翻转会让输入框的 `.enabled()` 更新、组件刷新，`text` 就被那个空快照覆盖 ——
+   * 表现正是用户报的"点登录，账号和密码一起被清空"（而 `this.username` 其实还在，
+   * 登录也照常用它）。
+   * 官方文档：TextInput 的 `text` "建议通过 onChange 将状态变量与文本实时绑定，避免组件
+   * 刷新时 TextInput 中的文本内容异常"（API 10 起支持 `$$`）；@Builder "按值传递参数时…
+   * 状态变量的改变不会引起 @Builder 函数内的 UI 刷新"。
    */
   @State private username: string = '';
   @State private password: string = '';
@@ -87,64 +96,59 @@ export struct LoginPage {
   @State private verifyError: string = '';
   @State private verifyBusy: boolean = false;
 
-  /**
-   * 一组"标题 + 输入框"：标题在上（灰小字），输入框在下。
+  /*
+   * 诊断（临时）：登录页这一整个 struct 会不会被销毁重建。
    *
-   * 输入框是**椭圆胶囊 + 沉浸光感**（需求）。为什么做成两层 Stack 而不是给 TextInput 直接挂材质：
+   * 用户报"点登录后账号密码一起被清空"。若这两个回调成对出现，说明状态真的丢了（实例重建）；
+   * 若只有下面 submit 那两行、没有这对回调，说明状态没丢 —— 是输入框把文本丢了（显示问题，
+   * 已按官方文档改成 `$$` 双向绑定）。定位完就可以把这三行日志删掉。
+   */
+  aboutToAppear(): void {
+    hilog.info(DOMAIN, TAG, 'DIAG login page appear');
+  }
+
+  aboutToDisappear(): void {
+    hilog.info(DOMAIN, TAG, 'DIAG login page disappear (state will be lost)');
+  }
+
+  /**
+   * 输入框的**材质底板**（椭圆胶囊 + 沉浸光感，只画不吃触摸）。
+   *
+   * 为什么做成"底板 + 透明输入框"两层，而不是给 TextInput 直接挂材质：
    *   · 沉浸光感的材质接口（`systemMaterial` / `uiMaterial.ImmersiveMaterial`）只有
    *     `Toggle / Slider / Select` 与弹窗类能写在内容区里（见 MaterialSurface 的文件头）；
    *     `TextInput` 不在这个范围，直接挂不生效。
    *   · 所以照 `CommentInputBar` 那套已验证的写法：**底层 Toggle 只画材质、不吃触摸**
    *     （`hitTestBehavior(HitTestMode.None)`），输入框本体透明地压在它上面。
    *   · 胶囊 = `borderRadius(FIELD_H / 2)`；文字用左右 18 的 padding 让开两端的圆角。
+   *
+   * 不带参数：带参数的 @Builder 是按值传参的（状态变了不会刷新），只能装"永远不变"的东西。
    */
   @Builder
-  labeledField(label: ResourceStr, hint: ResourceStr, value: string, isPassword: boolean,
-               onEdit: (text: string) => void) {
-    Column({ space: 6 }) {
-      Text(label)
-        .fontSize(LABEL_SIZE)
-        .fontColor($r('app.color.secondary_text'))
-        .width('100%')
-        .textAlign(TextAlign.Start)
-        .padding({ left: 6 })
-      Stack({ alignContent: Alignment.Center }) {
-        // ① 材质底板：只画沉浸光感，不参与触摸（触摸要给上面的输入框）
-        Toggle({ type: ToggleType.Button, isOn: false }) {
-          Text('')
-        }
-        .width('100%')
-        .height(FIELD_H)
-        .padding(0)
-        .borderRadius(FIELD_H / 2)
-        .backgroundColor(Color.Transparent)
-        // 选中态透明：Toggle 默认选中色是主题强调色，不清掉整条会变蓝。
-        .selectedColor(Color.Transparent)
-        .attributeModifier(new SurfaceModifier(this.materialThickness, false))
-        .hitTestBehavior(HitTestMode.None)
-
-        // ② 输入框本体：透明底，压在材质上（胶囊同半径，文字两端留出圆角）
-        TextInput({ placeholder: hint, text: value })
-          .type(isPassword ? InputType.Password : InputType.Normal)
-          .height(FIELD_H)
-          .width('100%')
-          .padding({ left: 18, right: 18 })
-          .borderRadius(FIELD_H / 2)
-          .backgroundColor(Color.Transparent)
-          .fontSize(15)
-          .fontColor($r('app.color.primary_text'))
-          .placeholderColor($r('app.color.secondary_text'))
-          .caretColor($r('app.color.accent'))
-          .enabled(!this.busy)
-          .onChange((text: string): void => {
-            onEdit(text);
-          })
-      }
-      .width('100%')
-      .height(FIELD_H)
+  fieldShell() {
+    Toggle({ type: ToggleType.Button, isOn: false }) {
+      Text('')
     }
     .width('100%')
-    .alignItems(HorizontalAlign.Start)
+    .height(FIELD_H)
+    .padding(0)
+    .borderRadius(FIELD_H / 2)
+    .backgroundColor(Color.Transparent)
+    // 选中态透明：Toggle 默认选中色是主题强调色，不清掉整条会变蓝。
+    .selectedColor(Color.Transparent)
+    .attributeModifier(new SurfaceModifier(this.materialThickness, false))
+    .hitTestBehavior(HitTestMode.None)
+  }
+
+  /** 输入框上方的标题（灰小字；标题是常量，不走状态，所以按值传参没问题）。 */
+  @Builder
+  fieldLabel(label: ResourceStr) {
+    Text(label)
+      .fontSize(LABEL_SIZE)
+      .fontColor($r('app.color.secondary_text'))
+      .width('100%')
+      .textAlign(TextAlign.Start)
+      .padding({ left: 6 })
   }
 
   /** 主按钮（沉浸光感承载在 Toggle 上，见 MaterialSurface 的文件头）。 */
@@ -368,18 +372,66 @@ export struct LoginPage {
           .fontColor($r('app.color.primary_text'))
           .margin({ top: 14, bottom: 22 })
 
-        // ---- 表单：标题 + 输入框 ----
+        // ---- 表单：标题 + 输入框（双向绑定，见 username 那段注释）----
         Column({ space: 14 }) {
-          this.labeledField($r('app.string.login_label_username'),
-            $r('app.string.login_username_hint'), this.username, false,
-            (text: string): void => {
-              this.username = text;
-            })
-          this.labeledField($r('app.string.login_label_password'),
-            $r('app.string.login_password_hint'), this.password, true,
-            (text: string): void => {
-              this.password = text;
-            })
+          Column({ space: 6 }) {
+            this.fieldLabel($r('app.string.login_label_username'))
+            Stack({ alignContent: Alignment.Center }) {
+              this.fieldShell()
+              TextInput({
+                placeholder: $r('app.string.login_username_hint'),
+                text: this.username
+              })
+                .type(InputType.Normal)
+                .height(FIELD_H)
+                .width('100%')
+                .padding({ left: 18, right: 18 })
+                .borderRadius(FIELD_H / 2)
+                .backgroundColor(Color.Transparent)
+                .fontSize(15)
+                .fontColor($r('app.color.primary_text'))
+                .placeholderColor($r('app.color.secondary_text'))
+                .caretColor($r('app.color.accent'))
+                .enabled(!this.busy)
+                .onChange((text: string): void => {
+                  this.username = text;
+                })
+            }
+            .width('100%')
+            .height(FIELD_H)
+          }
+          .width('100%')
+          .alignItems(HorizontalAlign.Start)
+
+          Column({ space: 6 }) {
+            this.fieldLabel($r('app.string.login_label_password'))
+            Stack({ alignContent: Alignment.Center }) {
+              this.fieldShell()
+              TextInput({
+                placeholder: $r('app.string.login_password_hint'),
+                text: this.password
+              })
+                .type(InputType.Password)
+                .height(FIELD_H)
+                .width('100%')
+                .padding({ left: 18, right: 18 })
+                .borderRadius(FIELD_H / 2)
+                .backgroundColor(Color.Transparent)
+                .fontSize(15)
+                .fontColor($r('app.color.primary_text'))
+                .placeholderColor($r('app.color.secondary_text'))
+                .caretColor($r('app.color.accent'))
+                .enabled(!this.busy)
+                .onChange((text: string): void => {
+                  this.password = text;
+                })
+            }
+            .width('100%')
+            .height(FIELD_H)
+          }
+          .width('100%')
+          .alignItems(HorizontalAlign.Start)
+
           if (this.error.length > 0) {
             this.errorRow()
           } else {
@@ -465,8 +517,14 @@ export struct LoginPage {
      *
      * 点登录不再显示网页（无头登录），所以登录页不会被重建 —— 普通 `@State` 足够，
      * 账号在本次运行里一直留着（重启后不保留，需求明确不需要 StorageLink 那套）。
+     *
+     * 注意：输入框必须 `$$` 双向绑定（见 username 那段注释），否则 `password = ''`
+     * 引起的那次刷新会把两个框的文本一起覆盖成空快照 —— "账号也被清掉"的老毛病。
      */
     const typed: string = this.password;
+    // 诊断（临时）：状态里此刻到底有没有字。配合上面的 appear/disappear 判"真丢"还是"没显示"。
+    hilog.info(DOMAIN, TAG, 'DIAG submit: user len=%{public}d pass len=%{public}d',
+      this.username.length, this.password.length);
     this.password = '';
     this.onWebLogin(this.username, typed)
       .then((message: string): void => {
