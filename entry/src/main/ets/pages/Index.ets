@@ -3242,6 +3242,15 @@ struct Index {
 
   private async signOut(): Promise<void> {
     /*
+     * **"退出登录"是真的把这个人踢掉**（用户报的："退出登录后下拉选单里已退出的账号还可以使用，
+     * 点击切换甚至 session 保留完整"）。
+     *
+     * 所以下面两条路最后都要调 `forgetAccountLocally(leaving)`：把它从花名册删掉（会话随之作废）、
+     * 缓存分区一起清。**注意顺序**：删除必须放在 `switchAccount` **之后** ——
+     * 那个方法一进去就 `rememberAccount()`（把当前账号的会话写回花名册），先删会被它写回来。
+     */
+    const leaving: string = this.currentAccountId();
+    /*
      * **还有别的账号：不是"退出"，而是"换人"**（需求："如果没有其他账号存在就回到登录页，
      * 如果有其他账号则切换到顺序第一个账号的主页"）。
      *
@@ -3251,7 +3260,7 @@ struct Index {
      * 切失败（那个账号的会话过期了）就继续走下面真正的退出流程，落到登录页 ——
      * 总不能因为一个失效的旧账号把用户卡在一个空壳上。
      */
-    const others: Array<AccountEntry> = AccountBook.others(this.currentAccountId());
+    const others: Array<AccountEntry> = AccountBook.others(leaving);
     if (others.length > 0) {
       hilog.info(DOMAIN, TAG, 'sign out → switch to first other account %{public}s (%{public}d total)',
         others[0].userId, others.length);
@@ -3261,6 +3270,8 @@ struct Index {
       }
       const switched: boolean = await this.switchAccount(others[0].userId);
       if (switched) {
+        // 切过去了：现在把"刚才那一位"从本机彻底删掉（会话 + 缓存分区）。
+        this.forgetAccountLocally(leaving);
         return;
       }
       hilog.warn(DOMAIN, TAG, 'sign out: switch to %{public}s failed → real sign out',
@@ -3271,16 +3282,12 @@ struct Index {
     // ① 会话：Cookie 罐 + 网页存储（见 InstagramCookieJar.clear 的说明）。
     await InstagramCookieJar.getInstance().clear();
     /*
-     * ② 落盘缓存：这个账号的**活跃分区搬去备份位**（信息流 / reels / 搜索 / 私信快照 / 请求模板）。
+     * ② 落盘缓存：**直接删**（不是搬去备份位）。
      *
-     * 用户要求："对登录过的用户数据进行分区，退出登录可以保存备份，但必须清除所有相关信息。"
-     * 搬完之后活跃位置全空 —— 界面与接口都看不到这个人的痕迹；备份留给这个人以后回来用，
-     * 而**别的账号永远读不到**（分区键里带账号，见 core/AccountScope）。
+     * 以前这里是 `stashAll`（搬去备份位留着以后回来用）。但"退出登录"在这个 App 里的语义已经变了
+     * （用户明确要求：退出之后这个账号不该还能用），留着备份等于把痕迹留在盘上 —— 直接 purge。
      */
-    const account: string = AccountScope.current();
-    if (account.length > 0) {
-      AccountScope.stashAll(account);
-    }
+    this.forgetAccountLocally(leaving);
     AccountScope.setAccount('');
     // ③ 内存里"按人"的东西全清。
     this.forgetAccountMemory();
@@ -3343,7 +3350,12 @@ struct Index {
     this.viewModel.reset();
     this.reelsVm.reset();
     this.reelsFollowVm.reset();
-    this.searchVm.clear();
+    /*
+     * 搜索页：**整份丢掉**（不只是清关键词）。
+     * `clear()` 是"回到推荐态、推荐流留着"，换账号时那样会把上一个人的推荐流留在网格里，
+     * 而且 `recommendLoaded` 还是 true，于是永远不重新拉 —— 用户报的就是这个。
+     */
+    this.searchVm.forgetAccount();
     this.profileVm.reset();
     this.directVm.reset();
     this.directThreadVm.reset();
@@ -7859,6 +7871,31 @@ struct Index {
     }, (): void => {
       this.accountMenuOpen = false;
     });
+  }
+
+  /**
+   * **把这个账号从本机彻底删掉**（花名册里的会话 + 落盘缓存分区）。
+   *
+   * 只给"退出登录"用（见 signOut）：花名册删掉之后它就**不会**再出现在账号选单里，
+   * 那串 sessionid 也随之丢失 —— 用户报的"退出登录后还能从选单切回去、session 还能用"
+   * 就是花名册里那份会话从来没删过。
+   *
+   * @param userId 纯数字 id（AccountScope 的槽位是 `u<id>`，这里负责拼）
+   */
+  private forgetAccountLocally(userId: string): void {
+    if (userId.length === 0) {
+      return;
+    }
+    AccountBook.forget(userId);
+    // 缓存分区（活跃位 + 备份位）一起删：退出登录不该把这个人留在盘上。
+    AccountScope.purgeAccount(`u${userId}`);
+    if (this.currentAccountId() === userId) {
+      this.selfUsername = '';
+      this.selfAvatarUrl = '';
+    }
+    this.refreshOtherAccounts();
+    hilog.info(DOMAIN, TAG, 'forgot account %{public}s locally (%{public}s)',
+      userId, AccountBook.describe());
   }
 
   /**

@@ -253,6 +253,48 @@ export class AccountScope {
     return `${base}#backup@${account.length > 0 ? account : ANON}`;
   }
 
+  /**
+   * **彻底删掉一个账号的分区**（活跃位 + 备份位一起清）。
+   *
+   * 什么时候用：用户主动「退出登录」把某个账号踢掉时（见 pages/Index.signOut）。
+   * `stashAll` 只是"搬去备份位"、留着以后回来用；而"退出登录"意味着这个人不该再留在本机 ——
+   * 不删的话备份会一直躺在盘上（用户要求过"必须清除所有相关信息"）。
+   *
+   * 注意：只删**缓存分区**（信息流 / 快拍 / 搜索 / 私信快照…）。会话与账号名在
+   * core/AccountBook 里，那边用 `forget` 单独删。
+   *
+   * @returns 删掉的键数（诊断用）
+   */
+  static purgeAccount(account: string): number {
+    const key: string = account.length > 0 ? account : ANON;
+    let removed: number = 0;
+    for (let index: number = 0; index < AccountScope.scoped.length; index++) {
+      const one: ScopedStore = AccountScope.scoped[index];
+      for (let at: number = 0; at < one.keys.length; at++) {
+        removed += AccountScope.drop(one.store, AccountScope.slotFor(one.keys[at], key));
+        removed += AccountScope.drop(one.store, AccountScope.backupKeyFor(one.keys[at], key));
+      }
+    }
+    hilog.info(DOMAIN, TAG, 'purged account=%{public}s entries=%{public}d', key, removed);
+    return removed;
+  }
+
+  /** 删一个键（存在才删）；返回是否删了。 */
+  private static drop(store: preferences.Preferences, key: string): number {
+    try {
+      const value: string = `${store.getSync(key, '')}`;
+      if (value.length === 0) {
+        return 0;
+      }
+      store.deleteSync(key);
+      store.flushSync();
+      return 1;
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'drop %{public}s failed: %{public}s', key, (error as Error).message);
+      return 0;
+    }
+  }
+
   /** 键值搬移（源存在才写目标、然后删源）；返回是否搬了。 */
   private static move(store: preferences.Preferences, from: string, to: string): number {
     try {

@@ -545,6 +545,45 @@ export class SearchViewModel {
   }
 
   /**
+   * **换账号：搜索页的一切作废**（用户报的"切换账号后搜索推荐流没有清空重新获取"）。
+   *
+   * 和 `clear()` 的区别：`clear()` 只是"清掉关键词、回到推荐态"，**推荐流本身留着**（缓存还在，
+   * 不用再拉网络）；而换账号之后那份推荐流是**上一个人的**，必须整份丢掉：
+   *   · 列表、账号结果、游标、翻页状态、预取队列全部清空；
+   *   · `recommendLoaded` / `opened` / `cacheTried` 复位 —— 下次切到搜索页时 `open()` 会
+   *     重新读**这个账号**的落盘缓存、再拉一遍新的推荐流；
+   *   · 所有变化都通过 `on*` 回调推给页面，页面的 @State 与 LazyForEach 数据源随之刷新
+   *     （界面不重建也能立刻空掉）。
+   */
+  forgetAccount(): void {
+    this.query = '';
+    this.onQuery('');
+    this.users = [];
+    this.onUsers([]);
+    this.posts = [];
+    this.onPosts([]);
+    this.onStatus('');
+    this.busy = false;
+    this.onBusy(false);
+    this.cursor = '';
+    this.hasMore = false;
+    this.onMore(false);
+    this.loadingMore = false;
+    this.onLoadingMore(false);
+    // 取数闸门全部复位：下次进搜索页 = 第一次进（重新吃缓存 + 重新拉推荐）。
+    this.opened = false;
+    this.recommendLoaded = false;
+    this.recommendBusy = false;
+    this.cacheTried = false;
+    this.gridFilling = false;
+    this.prefetched = [];
+    this.prefetching = false;
+    this.savedCount = 0;
+    this.active = false;
+    hilog.info(DOMAIN, TAG, 'search forgot account (lists cleared, will reload)');
+  }
+
+  /**
    * 当前这份**推荐列表**（给"推荐流 → Reels 页"用，见 pages/Index.openSearchReels）。
    *
    * 直接给内部那份：Reels 页只读它、拼自己的播放列表，不改它。
