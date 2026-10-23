@@ -153,6 +153,8 @@ import { MobileChallenge } from '../core/mobileapi/MobileChallenge';
 import { AccountCaches } from '../core/AccountCaches';
 // 账号动作里"与 UI 无关"的那一半（记住当前账号 / 从本机删掉账号）。
 import { AccountActionService } from '../core/AccountActionService';
+// 复位序列执行器（每步一个名字、各自 try/catch，见 core/SessionReset）。
+import { ResetStep, SessionReset } from '../core/SessionReset';
 // "这次登录态变化该做什么"的纯计算（applySession 前半段，见 core/SessionApplyPlan）。
 import { SessionApplyPlan } from '../core/SessionApplyPlan';
 // 换账号/退出登录的"会话清理事务"（停实时通道 → 清台账 → 归零限流 → 清缓存 → 作废会话材料）。
@@ -3556,40 +3558,62 @@ struct Index {
     /*
      * **不依赖 UI 状态的那几步交给 core/SessionService**（顺序在那里有注释，且只有一份）：
      * 停实时通道 → 清验证台账 → 归零限流/熔断 → 清进程内按人缓存 → 作废会话材料。
-     * 页面这边只处理自己的 `@State` 与视图模型实例（下面）。
      */
     SessionService.forgetAccountSession();
     this.realtimeStarted = false;
-    // 通知 + 关注 / 收藏 / 互动覆盖表（按人抓的，见 forgetNotifications）。
-    this.forgetNotifications();
-    this.refreshChallengeState();
-    // 各页面的列表与游标。
-    this.viewModel.reset();
-    this.reelsVm.reset();
-    this.reelsFollowVm.reset();
     /*
-     * 搜索页：**整份丢掉**（不只是清关键词）。
-     * `clear()` 是"回到推荐态、推荐流留着"，换账号时那样会把上一个人的推荐流留在网格里，
-     * 而且 `recommendLoaded` 还是 true，于是永远不重新拉 —— 用户报的就是这个。
+     * 页面这一半交给 `core/SessionReset` 顺序执行：**每步各自 try/catch**。
+     *
+     * 以前这是一段顺排语句 —— 任何一句抛异常（视图模型 `reset()` 碰了已释放资源、
+     * 网页宿主已卸载导致 `removeCache` 抛错…），后面的"清头像 / 清托盘队列 / 重读花名册"
+     * 就都不会执行，结果正是我们反复修过的"换号后还残留上一个人的东西"。
+     * 现在谁失败只记一行日志，其余照常清完，最后汇总失败名单。
      */
-    this.searchVm.forgetAccount();
-    this.profileVm.reset();
-    this.directVm.reset();
-    this.directThreadVm.reset();
-    // 快拍：托盘队列（页面持有的那份；内容/隐藏表/托盘缓存由 SessionService → AccountCaches 清）。
-    this.storyQueue = [];
-    // 「你的快拍」那一项的头像同样属于"这个人"：换人之后先把旧头像抹掉，等新头部回来再填。
-    this.selfAvatarUrl = '';
-    // 标题栏按钮上的账号名同理（见 selfUsername）。
-    this.selfUsername = '';
-    // 花名册里"其他账号"的判据也跟着换人：重读一遍（当前账号变了）。
-    this.refreshOtherAccounts();
-    // 网页的 **HTTP 缓存**里可能存着上一个人的页面（HTML / JS / 图片）：一起清掉。
-    try {
-      this.bridge.controller.removeCache(true);
-      hilog.info(DOMAIN, TAG, 'web cache cleared');
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'clear web cache failed: %{public}s', (error as Error).message);
+    const steps: Array<ResetStep> = [
+      new ResetStep('notifications', (): void => {
+        // 通知 + 关注 / 收藏 / 互动覆盖表（按人抓的，见 forgetNotifications）。
+        this.forgetNotifications();
+        this.refreshChallengeState();
+      }),
+      new ResetStep('feed', (): void => {
+        this.viewModel.reset();
+      }),
+      new ResetStep('reels', (): void => {
+        this.reelsVm.reset();
+        this.reelsFollowVm.reset();
+      }),
+      new ResetStep('search', (): void => {
+        /*
+         * 搜索页：**整份丢掉**（不只是清关键词）。`clear()` 是"回到推荐态、推荐流留着"，
+         * 换账号时那样会把上一个人的推荐流留在网格里，`recommendLoaded` 也还是 true。
+         */
+        this.searchVm.forgetAccount();
+      }),
+      new ResetStep('profile', (): void => {
+        this.profileVm.reset();
+      }),
+      new ResetStep('direct', (): void => {
+        this.directVm.reset();
+        this.directThreadVm.reset();
+        // 快拍托盘队列（页面持有的那份；内容/隐藏表/托盘缓存由 SessionService → AccountCaches 清）。
+        this.storyQueue = [];
+      }),
+      new ResetStep('identity', (): void => {
+        // 「你的快拍」头像与标题栏账号名都属于"这个人"：先抹掉，等新头部回来再填。
+        this.selfAvatarUrl = '';
+        this.selfUsername = '';
+        // 花名册里"其他账号"的判据也跟着换人：重读一遍。
+        this.refreshOtherAccounts();
+      }),
+      new ResetStep('web-cache', (): void => {
+        // 网页 HTTP 缓存里可能存着上一个人的页面（HTML / JS / 图片）。
+        this.bridge.controller.removeCache(true);
+      })
+    ];
+    const failed: Array<string> = SessionReset.run('account-memory', steps);
+    if (failed.length > 0) {
+      hilog.warn(DOMAIN, TAG, 'account memory cleared with failures: %{public}s',
+        failed.join(','));
     }
     this.loadedOnce = false;
     hilog.info(DOMAIN, TAG, 'account memory cleared');
