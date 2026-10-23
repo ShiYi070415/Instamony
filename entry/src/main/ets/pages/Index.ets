@@ -3471,10 +3471,29 @@ struct Index {
      * 所以改成：把网页亮出来（字段已经填好），用户只需点一下「登录」；
      * 登录成功那一刻我们自动收起网页并进主界面（见 watchLoginSession）。
      */
+    /*
+     * ① **先走网页自己的登录接口**（零点击）：在隐藏网页里 `fetch("/api/v1/web/accounts/login/ajax/")`。
+     *    它不经过 Bloks 渲染层，因此不存在"合成事件点不动按钮"的问题；
+     *    服务端回 `{"authenticated":true}` 时 cookie 已经种下。
+     * ② 这一发没成功（例如被要求验证码）才退回"填好 + 让用户点一下"。
+     */
+    const ajaxMessage: string = await WebLogin.loginByWebAjax(username, password);
+    if (ajaxMessage.length === 0) {
+      hilog.info(DOMAIN, TAG, 'web ajax login accepted → wait for session');
+      const waited: string = await WebLogin.login(username, password);
+      if (waited.length === 0) {
+        await this.refreshSessionFromJar();
+        this.unmountWebHost('login done');
+        return '';
+      }
+      hilog.info(DOMAIN, TAG, 'web ajax accepted but session missing: %{public}s', waited);
+    } else {
+      hilog.info(DOMAIN, TAG, 'web ajax login failed: %{public}s', ajaxMessage);
+    }
     const prefillMessage: string = await WebLogin.prefill(username, password);
     if (prefillMessage.length > 0) {
       hilog.info(DOMAIN, TAG, 'web login prefill failed: %{public}s', prefillMessage);
-      return prefillMessage;
+      return ajaxMessage.length > 0 ? ajaxMessage : prefillMessage;
     }
     this.webVisible = true;
     this.statusShown = false;

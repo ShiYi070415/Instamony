@@ -103,6 +103,15 @@ class PageSignal {
 }
 
 export class WebLogin {
+  /**
+   * **单飞闸门**：登录相关动作同一时刻只允许一个在跑。
+   *
+   * 为什么必须有：`login` / `prefill` / `loginByWebAjax` 三个入口会被界面重复触发
+   * （反复点按钮、重试定时器），每个都会导航/发请求 —— 页面于是被反复 reload，
+   * 用户看到的就是"网页不停抽搐"。有这一道，后来者直接返回"正在登录中"。
+   */
+  private static busy: boolean = false;
+  /** 兼容旧代码里的名字（`login()` 内部重入判断）。 */
   private static running: boolean = false;
   /**
    * 最近一次表单探测的结果（诊断用）。
@@ -126,22 +135,174 @@ export class WebLogin {
     if (user.length === 0 || password.length === 0) {
       return '请输入账号和密码';
     }
+    if (WebLogin.busy) {
+      return '正在登录中，请稍候';
+    }
     const bridge: InstagramPageBridge = InstagramPageBridge.getInstance();
     if (!bridge.isAttached()) {
       return '网页还没准备好，请再点一次登录';
     }
-    bridge.loadUrl(LOGIN_URL);
-    const state: PageState = await WebLogin.waitForForm(bridge);
-    if (!state.usable()) {
-      return `登录页没能加载出来${WebLogin.lastProbe}`;
+    WebLogin.busy = true;
+    try {
+      const state: PageState = await WebLogin.ensureLoginPage(bridge);
+      if (!state.usable()) {
+        return `登录页没能加载出来${WebLogin.lastProbe}`;
+      }
+      const applied: string = await bridge.runScript(WebLogin.submitAllScript(user, password));
+      hilog.info(DOMAIN, TAG, 'prefill → %{public}s', applied);
+      if (applied.indexOf('"set":0') >= 0) {
+        return `没能把账号密码填进登录框${WebLogin.lastProbe}`;
+      }
+      return '';
+    } finally {
+      WebLogin.busy = false;
     }
-    const applied: string = await bridge.runScript(WebLogin.submitAllScript(user, password));
-    hilog.info(DOMAIN, TAG, 'prefill → %{public}s', applied);
-    if (applied.indexOf('"set":0') >= 0) {
-      return `没能把账号密码填进登录框${WebLogin.lastProbe}`;
-    }
-    return '';
   }
+
+  /**
+   * **保证停在登录页上，但绝不重复导航**。
+   *
+   * 这一条是"网页不停抽搐 reload"的对症药：以前 `login` / `prefill` / `loginByWebAjax`
+   * 三处入口各自 `loadUrl`，加上重试与外部的重复调用，页面就被反复重新加载。
+   * 现在：先探一次；已经在登录页（有输入框）就直接用，只有真的不在才导航一次。
+   */
+  private static async ensureLoginPage(bridge: InstagramPageBridge): Promise<PageState> {
+    let state: PageState = await WebLogin.probeOnce(bridge);
+    if (state.usable()) {
+      return state;
+    }
+    hilog.info(DOMAIN, TAG, 'not on login page yet → navigate once');
+    bridge.loadUrl(LOGIN_URL);
+    state = await WebLogin.waitForForm(bridge);
+    return state;
+  }
+
+  /**
+   * **走 IG 网页自己的登录接口**（`/api/v1/web/accounts/login/ajax/`），绕开那颗 Bloks 按钮。
+   *
+   * 为什么这条路值得试：网页 App 登录时发的就是这一发 XHR（带 `X-CSRFToken` + 表单体），
+   * 服务端回 `{"authenticated":true,...}` 并种下 `sessionid`。它**不经过 Bloks 渲染层**，
+   * 所以我们不需要"点按钮"——这正是零点击的唯一现实入口。
+   *
+   * 实现上分两步（`runJavaScript` 拿不到 Promise 的结果，只能先起再查）：
+   *   ① 在页面里发 fetch（凭证随 cookie 走，csrf 从 `document.cookie` 取）；
+   *   ② 轮询 `window.__igwb` 拿状态码与响应体。
+   *
+   * @returns 空串 = 服务端说"已认证"；否则是失败原因（会带上服务端原话）
+   */
+  static async loginByWebAjax(username: string, password: string): Promise<string> {
+    const user: string = username.trim();
+    if (user.length === 0 || password.length === 0) {
+      return '请输入账号和密码';
+    }
+    if (WebLogin.busy) {
+      return '正在登录中，请稍候';
+    }
+    const bridge: InstagramPageBridge = InstagramPageBridge.getInstance();
+    if (!bridge.isAttached()) {
+      return '网页还没准备好，请再点一次登录';
+    }
+    WebLogin.busy = true;
+    try {
+      /*
+       * **已经在登录页上就别再导航**：`loadUrl` 会重载页面，把上一次发起、还没回来的 fetch
+       * 连同 `window.__igwb` 一起冲掉（真机日志里就是"started"刷了很多行、结果一条没有），
+       * 也是"网页不停抽搐 reload"的直接来源。
+       */
+      const state: PageState = await WebLogin.ensureLoginPage(bridge);
+      if (!state.usable()) {
+        return `登录页没能加载出来${WebLogin.lastProbe}`;
+      }
+      const started: string = await bridge.runScript(WebLogin.ajaxStartScript(user, password));
+      hilog.info(DOMAIN, TAG, 'web ajax start → %{public}s', started);
+      if (started.indexOf('started') < 0) {
+        return `没能在网页里发出登录请求（${started.slice(0, 60)}）`;
+      }
+      const deadline: number = Date.now() + 15000;
+      while (Date.now() < deadline) {
+        await WebLogin.sleep(600);
+        const raw: string = WebLogin.normalizeProbe(await bridge.runScript(WebLogin.AJAX_RESULT_JS));
+        if (raw.indexOf('"done":1') < 0) {
+          continue;
+        }
+        const body: string = WebLogin.fieldOf(raw, 'body');
+        const status: string = WebLogin.fieldOf(raw, 'status');
+        hilog.info(DOMAIN, TAG, 'web ajax → status=%{public}s body=%{public}s', status,
+          body.length > 200 ? `${body.substring(0, 200)}…` : body);
+        if (body.indexOf('"authenticated":true') >= 0
+          || body.indexOf('"authenticated": true') >= 0) {
+          // 服务端已认证：会话 cookie 应该已经落罐，交给上层确认。
+          return '';
+        }
+        return WebLogin.ajaxFailure(body, status);
+      }
+      return '网页里的登录请求超时（15 秒没有回应）';
+    } finally {
+      WebLogin.busy = false;
+    }
+  }
+
+  /** 只探一次（不导航、不等待），用于"现在是不是已经停在登录页上"。 */
+  private static async probeOnce(bridge: InstagramPageBridge): Promise<PageState> {
+    const raw: string = await bridge.runScript(FORM_PROBE_JS);
+    if (raw.trim().length === 0) {
+      return new PageState('', false, false, '');
+    }
+    const text: string = WebLogin.normalizeProbe(raw);
+    return new PageState(text, text.indexOf('"u":1') >= 0, text.indexOf('"p":1') >= 0,
+      WebLogin.fieldOf(text, 'r'));
+  }
+
+  /** 把网页 ajax 的失败原因翻译成一句中文（尽量用服务端原话）。 */
+  private static ajaxFailure(body: string, status: string): string {
+    const lower: string = body.toLowerCase();
+    if (lower.indexOf('two_factor') >= 0) {
+      return '这个账号开了两步验证，请用「网页登录」完成验证码';
+    }
+    if (lower.indexOf('checkpoint') >= 0 || lower.indexOf('challenge') >= 0) {
+      return 'Instagram 要求完成安全验证，请用「网页登录」完成';
+    }
+    if (lower.indexOf('bad_password') >= 0 || lower.indexOf('password') >= 0) {
+      return '账号或密码不正确';
+    }
+    if (lower.indexOf('wait a few minutes') >= 0) {
+      return '操作太频繁，被 IG 暂时限制了，过几分钟再试';
+    }
+    const message: string = WebLogin.fieldOf(body, 'message');
+    if (message.length > 0) {
+      return `登录失败：${message}`;
+    }
+    return `登录没有成功（HTTP ${status}）`;
+  }
+
+  /** 在页面里发起一次网页登录 XHR（见 loginByWebAjax）。 */
+  private static ajaxStartScript(user: string, password: string): string {
+    return '(function(){try{'
+      + 'var U=' + JSON.stringify(user) + ',P=' + JSON.stringify(password) + ';'
+      + 'window.__igwb={done:0,status:0,body:""};'
+      + 'var m=document.cookie.match(/csrftoken=([^;]+)/);var csrf=m?m[1]:"";'
+      + 'var ts=Math.floor(Date.now()/1000);'
+      // 浏览器端密码封装：`#PWD_INSTAGRAM_BROWSER:0:<ts>:<明文>`（网页 App 自己就是这么发的）
+      + 'var enc="#PWD_INSTAGRAM_BROWSER:0:"+ts+":"+P;'
+      + 'var body="username="+encodeURIComponent(U)'
+      + '+"&enc_password="+encodeURIComponent(enc)'
+      + '+"&queryParams=%7B%7D&optIntoOneTap=false&stopDeletionNonce="'
+      + '+"&trustedDeviceRecords=%7B%7D";'
+      + 'fetch("/api/v1/web/accounts/login/ajax/",{method:"POST",credentials:"include",'
+      + 'headers:{"Content-Type":"application/x-www-form-urlencoded","X-CSRFToken":csrf,'
+      + '"X-Requested-With":"XMLHttpRequest","X-Instagram-AJAX":"1"},body:body})'
+      + '.then(function(r){return r.text().then(function(t){'
+      + 'window.__igwb={done:1,status:r.status,body:(t||"").slice(0,400)};});})'
+      + '.catch(function(e){window.__igwb={done:1,status:-1,body:String(e).slice(0,120)};});'
+      + 'return "started";'
+      + '}catch(e){return "error:"+String(e).slice(0,100);}})()';
+  }
+
+  /** 读上面那一发的结果（`window.__igwb` 的 JSON）。 */
+  private static readonly AJAX_RESULT_JS: string =
+    '(function(){try{var o=window.__igwb||{done:0,status:0,body:""};'
+    + 'return JSON.stringify({done:o.done?1:0,status:o.status,body:o.body||""});}'
+    + 'catch(e){return JSON.stringify({done:1,status:-1,body:"err"});}})()';
 
   /** 正在跑（界面据此显示进度、禁用按钮）。 */
   static isRunning(): boolean {
@@ -168,17 +329,8 @@ export class WebLogin {
         return '网页还没准备好，请再点一次登录';
       }
       hilog.info(DOMAIN, TAG, 'headless login start user=%{public}d', user.length);
-      bridge.loadUrl(LOGIN_URL);
-      let state: PageState = await WebLogin.waitForForm(bridge);
-      if (!state.usable() && bridge.isAttached()) {
-        /*
-         * **再来一次导航**：第一次 `loadUrl` 很可能撞上"控制器刚挂上、页面还没开始导航"。
-         * 重发一次是安全的（等同刷新登录页）。
-         */
-        hilog.warn(DOMAIN, TAG, 'form missing → navigate login page again');
-        bridge.loadUrl(LOGIN_URL);
-        state = await WebLogin.waitForForm(bridge);
-      }
+      // 同样"已在登录页就不再导航"（见 ensureLoginPage：这是 reload 抽搐的对症药）。
+      let state: PageState = await WebLogin.ensureLoginPage(bridge);
       if (!state.usable()) {
         // 把诊断摘要带进界面文案（见 lastProbe 的说明）。
         return `登录页没能加载出来（也可点下方「网页登录」手动完成）${WebLogin.lastProbe}`;
