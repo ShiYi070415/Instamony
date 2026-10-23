@@ -162,8 +162,13 @@ export struct LoginPage {
     return this.stage === LoginStage.Challenge && this.challengePath.length > 0;
   }
 
-  /** 主按钮此刻该干什么（提交密码 / 提交两步验证码 / 提交安全验证码）。 */
+  /** 主按钮此刻该干什么（提交密码 / 提交两步验证码 / 版本被拒时直接转网页登录）。 */
   private primaryAction(): void {
+    if (this.stage === LoginStage.NeedsUpgrade) {
+      // IG 以"客户端版本过旧"关了密码登录：这里让主按钮直接把人送去网页登录，别让他白点。
+      this.onLogin();
+      return;
+    }
     if (this.stage === LoginStage.Challenge && this.challengePath.length > 0) {
       this.submitChallenge();
       return;
@@ -173,6 +178,9 @@ export struct LoginPage {
 
   /** 主按钮此刻的文案。 */
   private primaryLabel(): ResourceStr {
+    if (this.stage === LoginStage.NeedsUpgrade) {
+      return $r('app.string.login_web_fallback');
+    }
     if (this.needsCode()) {
       return $r('app.string.login_submit_code');
     }
@@ -292,6 +300,15 @@ export struct LoginPage {
           // 安全验证：原生做不了完整流程时，说明清楚 + 直达网页
           if (this.stage === LoginStage.Challenge) {
             Text($r('app.string.login_challenge_hint'))
+              .fontSize(12)
+              .lineHeight(18)
+              .fontColor($r('app.color.secondary_text'))
+              .width('100%')
+              .margin({ top: 2 })
+          }
+          // IG 关掉密码登录（版本过旧）：把"为什么"说清，别让人反复试密码
+          if (this.stage === LoginStage.NeedsUpgrade) {
+            Text($r('app.string.login_upgrade_hint'))
               .fontSize(12)
               .lineHeight(18)
               .fontColor($r('app.color.secondary_text'))

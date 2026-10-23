@@ -42,6 +42,15 @@ export enum LoginStage {
   Challenge = 'challenge',
   /** 账号或密码不对。 */
   BadPassword = 'badpassword',
+  /**
+   * **IG 以"客户端版本过旧"拒绝密码登录**（`error_type: needs_upgrade`）。
+   *
+   * 这是账号层面无法绕过的一类：IG 只允许"当前官方版本"的客户端做密码登录，
+   * 第三方客户端拿到的版本号（449 已经是 instagrapi 里最新的一档）永远追不上，
+   * 而且新版本登录实际走的是 Bloks CAA 编排（本机没有 Bloks 运行时）。
+   * 所以这一支不给"重试"，直接引导去网页登录。
+   */
+  NeedsUpgrade = 'upgrade',
   /** 其它失败（网络、限流、服务端拒收…），`message` 里有原因。 */
   Failed = 'failed'
 }
@@ -220,8 +229,39 @@ export class MobileLogin {
     return message.length === 0 && status === 'fail';
   }
 
-  /** 失败分类：2FA / 安全验证 / 密码错 / 限流 / 其它（见 login 的调用点）。 */
+  /**
+   * 是不是"客户端版本过旧"（IG 的 `needs_upgrade`）。
+   *
+   * 判据要宽一点：真机上见到的形状是
+   * `{"message":"Your Instagram app is out of date. Please upgrade to log in.",
+   *   "status":"fail","error_type":"needs_upgrade"}`，
+   * 但不同地区/版本里 `error_type` 可能缺、message 也可能只有 "Please upgrade" 一句。
+   */
+  private static isNeedsUpgrade(result: MobileResult): boolean {
+    const errorType: string = MobileLogin.fieldOf(result.body, 'error_type').toLowerCase();
+    if (errorType === 'needs_upgrade') {
+      return true;
+    }
+    const text: string = `${result.body} ${result.detail}`.toLowerCase();
+    if (text.indexOf('needs_upgrade') >= 0) {
+      return true;
+    }
+    return text.indexOf('out of date') >= 0 || text.indexOf('please upgrade') >= 0;
+  }
+
+  /** 失败分类：2FA / 安全验证 / 版本过旧 / 密码错 / 限流 / 其它（见 login 的调用点）。 */
   private static async classifyFailure(result: MobileResult, user: string): Promise<LoginOutcome> {
+    /*
+     * 先判"版本过旧"：IG 回的是
+     * `{"message":"Your Instagram app is out of date. Please upgrade to log in.","status":"fail",
+     *   "error_type":"needs_upgrade"}`（真机实测里界面显示的就是这句被翻译过的提示）。
+     * 这一支**重试没有意义**：账号没错、密码也没错，是客户端版本被政策挡住了。
+     */
+    if (MobileLogin.isNeedsUpgrade(result)) {
+      hilog.warn(DOMAIN, TAG, 'login blocked by client version: needs_upgrade');
+      return new LoginOutcome(LoginStage.NeedsUpgrade,
+        'IG 提示客户端版本过旧，已关闭第三方客户端的密码登录；请用网页登录（网页登录不受影响）');
+    }
     // 4) 失败分支：先看是不是 2FA / 安全验证，再落到"账号密码不对"。
     const twoFactorId: string = MobileLogin.fieldOf(result.body, 'two_factor_identifier');
     if (result.error === 'two_factor' || twoFactorId.length > 0) {
@@ -240,10 +280,6 @@ export class MobileLogin {
     if (result.error === 'bad_password' || result.detail === 'bad_password'
       || result.detail.indexOf('bad_password') >= 0) {
       return new LoginOutcome(LoginStage.BadPassword, '账号或密码不正确');
-    }
-    if (result.detail.indexOf('needs_upgrade') >= 0 || result.detail.indexOf('challenge_required') >= 0) {
-      return new LoginOutcome(LoginStage.Challenge,
-        'IG 要求先在 App/网页里完成验证（needs_upgrade / challenge），请用网页登录', '');
     }
     if (result.error === 'rate_limit' || result.error === 'throttled') {
       return new LoginOutcome(LoginStage.Failed, '被 IG 限流了，过几分钟再试');
