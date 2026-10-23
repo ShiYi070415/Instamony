@@ -6519,19 +6519,13 @@ struct Index {
        * 不会残留上一个人的任何一条数据（用户要求的第一条），登录页也自然占满整屏。
        */
       LoginPage({
-        onLogin: (): void => {
-          this.openLoginWeb();
-        },
         onRegister: (): void => {
           this.openSignupWeb();
         },
-        onRecheck: (): void => {
-          this.refreshSessionFromJar();
-        },
         /*
-         * **原生登录成功**：会话已经登记进 Cookie 罐（见 core/mobileapi/MobileLogin 的
-         * finish → InstagramCookieJar.adoptSession）。这里按罐重读一次登录态，
-         * 五个页签与底栏就会建起来 —— 和"网页登录成功后 signal 到达"走同一条路。
+         * **登录成功**：会话已经登记进 Cookie 罐（见 core/WebLogin + InstagramCookieJar）。
+         * 这里按罐重读一次登录态，五个页签与底栏就会建起来 —— 和"网页登录成功后 signal
+         * 到达"走同一条路。2FA 走的是面板 → submitLoginCode，成功也落在同一个回调上。
          */
         onSignedIn: (): void => {
           this.refreshSessionFromJar();
