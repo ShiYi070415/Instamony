@@ -66,11 +66,43 @@
     },
     {
       "name": "login_page_action",
-      "value": "登录 Instagram"
+      "value": "登录"
+    },
+    {
+      "name": "login_username_hint",
+      "value": "Instagram 用户名"
+    },
+    {
+      "name": "login_password_hint",
+      "value": "密码"
+    },
+    {
+      "name": "login_code_hint",
+      "value": "两步验证码"
+    },
+    {
+      "name": "login_challenge_code_hint",
+      "value": "安全验证码"
+    },
+    {
+      "name": "login_submit_code",
+      "value": "提交验证码"
+    },
+    {
+      "name": "login_web_fallback",
+      "value": "用 Instagram 网页登录"
+    },
+    {
+      "name": "login_challenge_hint",
+      "value": "这个账号被要求做安全验证。请到 Instagram 官方 App 或网页里完成验证，再回来登录。"
+    },
+    {
+      "name": "login_challenge_web",
+      "value": "去网页完成验证"
     },
     {
       "name": "login_page_hint_account",
-      "value": "账号与密码只在 Instagram 官方网页里输入，本应用不保存、也读不到。"
+      "value": "账号密码只用于本次登录请求，本应用不保存；登录成功后本地只保留会话 cookie。"
     },
     {
       "name": "login_page_hint_features",

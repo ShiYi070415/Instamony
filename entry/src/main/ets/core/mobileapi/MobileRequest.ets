@@ -97,9 +97,17 @@ export class MobileResult {
   readonly body: string;
   /** 服务端下发的原因文案（`message` / `error_type` 等），便于日志一眼看结论。 */
   readonly detail: string;
+  /**
+   * 响应头（小写键）。
+   *
+   * 登录要用它取两样东西：`ig-set-password-encryption-key-id` /
+   * `ig-set-password-encryption-pub-key`（`qe/sync/` 下发，用来加密密码），
+   * 以及 `ig-set-authorization`（登录成功后下发的会话凭证）。
+   */
+  readonly headers: Record<string, string>;
 
   constructor(ok: boolean, error: string, code: number, ms: number, bytes: number,
-              body: string, detail: string) {
+              body: string, detail: string, headers: Record<string, string> = {}) {
     this.ok = ok;
     this.error = error;
     this.code = code;
@@ -107,6 +115,7 @@ export class MobileResult {
     this.bytes = bytes;
     this.body = body;
     this.detail = detail;
+    this.headers = headers;
   }
 
   /** 一行摘要（日志用）。 */
@@ -269,6 +278,35 @@ export class MobileRequest {
       return new MobileResult(false, MOBILE_NO_SESSION, 0, Date.now() - started, 0, '',
         MobileRequest.lastDetail);
     }
+    return MobileRequest.dispatch(identity, endpoint, data, params, withSignature,
+      extraHeaders, opts, jsonBody, started);
+  }
+
+  /**
+   * 用**指定的设备身份**发一发 —— 登录专用（见 core/mobileapi/MobileLogin）。
+   *
+   * 与 `send` 的唯一区别：**不要求会话已建立**。`accounts/login/` 恰恰是在"还没有
+   * sessionid"的时候发的，用 `send` 会被 `no-usable-session` 直接挡掉。
+   * instagrapi 那边是 `private_request(..., login=True)`：同一个 session 对象，
+   * 只是不带 Authorization / Cookie。
+   */
+  static async sendAs(identity: MobileIdentity, endpoint: string, data: string = '',
+                      params: string = '', withSignature: boolean = true,
+                      extraHeaders: Record<string, string> | null = null,
+                      options: MobileOptions | null = null,
+                      jsonBody: boolean = false): Promise<MobileResult> {
+    const opts: MobileOptions = options === null ? new MobileOptions() : options;
+    MobileRequest.sends = MobileRequest.sends + 1;
+    return MobileRequest.dispatch(identity, endpoint, data, params, withSignature,
+      extraHeaders, opts, jsonBody, Date.now());
+  }
+
+  /** 真正的发送（`send` / `sendAs` 共用，见上面两处说明）。 */
+  private static async dispatch(identity: MobileIdentity, endpoint: string, data: string,
+                                params: string, withSignature: boolean,
+                                extraHeaders: Record<string, string> | null,
+                                opts: MobileOptions, jsonBody: boolean,
+                                started: number): Promise<MobileResult> {
     let jar: InstagramCookieSnapshot;
     try {
       jar = await InstagramCookieJar.inspect();
@@ -337,7 +375,8 @@ export class MobileRequest {
       } catch (error) {
       }
       const code: number = response.responseCode;
-      const outcome: MobileResult = MobileRequest.classify(code, text, Date.now() - started);
+      const outcome: MobileResult = MobileRequest.classify(code, text, Date.now() - started,
+        response.header as Record<string, string>);
       /*
        * **撞上限流就记冷却**（这条以前只有网页那几条路有，移动端这条路是新加的）。
        *
@@ -395,7 +434,8 @@ export class MobileRequest {
    * "要不要提示用户去完成安全验证"（challenge）、"是不是被限流了"（rate_limit / 429）、
    * "是不是会话没了"（login_required）——其余一律落到 `http-<码>`。
    */
-  private static classify(code: number, text: string, ms: number): MobileResult {
+  private static classify(code: number, text: string, ms: number,
+                          headers: Record<string, string> = {}): MobileResult {
     MobileRequest.lastCode = code;
     const parsed: Record<string, Object> | null = MobileRequest.parseJson(text);
     const message: string = MobileRequest.strField(parsed, 'message');
@@ -407,7 +447,7 @@ export class MobileRequest {
       MobileRequest.lastError = MOBILE_NON_JSON;
       MobileRequest.lastDetail = `http-${code} ${text.substring(0, 60)}`;
       return new MobileResult(false, MOBILE_NON_JSON, code, ms, text.length, text,
-        MobileRequest.lastDetail);
+        MobileRequest.lastDetail, headers);
     }
     // `status:"fail"` 也是失败（instagrapi 在 `_send_private_request` 末尾专门判了它）。
     const status: string = MobileRequest.strField(parsed, 'status');
@@ -415,7 +455,7 @@ export class MobileRequest {
     if (okCode && status !== 'fail') {
       MobileRequest.lastError = '-';
       MobileRequest.lastDetail = '-';
-      return new MobileResult(true, '', code, ms, text.length, text, '');
+      return new MobileResult(true, '', code, ms, text.length, text, '', headers);
     }
     let error: string = `http-${code}`;
     if (message === MOBILE_LOGIN_REQUIRED || code === 403) {
@@ -459,7 +499,8 @@ export class MobileRequest {
     }
     MobileRequest.lastError = error;
     MobileRequest.lastDetail = feedback.length > 0 ? `${message} ${feedback}` : detail;
-    return new MobileResult(false, error, code, ms, text.length, text, MobileRequest.lastDetail);
+    return new MobileResult(false, error, code, ms, text.length, text, MobileRequest.lastDetail,
+      headers);
   }
 
   /** 响应体里有没有"被限流"的判据（与 core/ApiThrottle.looksLimited 同一套判据）。 */

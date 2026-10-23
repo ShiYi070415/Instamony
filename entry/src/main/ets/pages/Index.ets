@@ -6310,6 +6310,14 @@ struct Index {
         },
         onRecheck: (): void => {
           this.refreshSessionFromJar();
+        },
+        /*
+         * **原生登录成功**：会话已经登记进 Cookie 罐（见 core/mobileapi/MobileLogin 的
+         * finish → InstagramCookieJar.adoptSession）。这里按罐重读一次登录态，
+         * 五个页签与底栏就会建起来 —— 和"网页登录成功后 signal 到达"走同一条路。
+         */
+        onSignedIn: (): void => {
+          this.refreshSessionFromJar();
         }
       })
     } else {

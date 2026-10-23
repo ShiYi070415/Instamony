@@ -375,6 +375,48 @@ export class MobileSession {
   }
 
   /**
+   * **登录专用的设备身份**（不需要会话已建立）。
+   *
+   * `accounts/login/` 恰恰是在"还没有 sessionid"的时候发的：用 `ensure()` 会被
+   * `not signed in` 直接挡掉。所以登录那条链用这一份 —— 只有设备 UUID（终身不变）、
+   * 空 userId / 空 sessionId，以及一个临时 csrf（IG 登录表单也就要它）。
+   *
+   * 与 instagrapi 的对应：`self.private_request(..., login=True)` 用的还是那个 Client，
+   * 只是请求上不带 Authorization / Cookie；设备身份来自 `set_uuids()`。
+   */
+  static seedIdentity(): MobileIdentity {
+    const seed: StoredIdentity = MobileSession.loadSeed();
+    // 登录请求要带 `_csrftoken`（instagrapi 的 `self.token` = cookie 里的 csrftoken，
+    // 没有就 `gen_token(64)` 现造）——这里走"没有就现造"那一支。
+    return new MobileIdentity(seed, '', '', '', seed.mid, '');
+  }
+
+  /**
+   * **把登录拿到的会话材料吸收进来**（`entries` 见 MobileLogin 的返回值）。
+   *
+   * 与 `absorbResponseHeaders` 的区别：那份要求"身份已存在且有会话"，
+   * 而登录是在那之前发生的 —— 这里直接从 seed 造一份完整身份，再落盘。
+   *
+   * @returns 是否拿到了可用的会话（false = 响应里没有 authorization / sessionid）
+   */
+  async adoptLogin(authorization: string, sessionId: string, userId: string,
+                   mid: string, rur: string): Promise<boolean> {
+    if (sessionId.length === 0 || userId.length === 0) {
+      return false;
+    }
+    const seed: StoredIdentity = MobileSession.loadSeed();
+    const identity: MobileIdentity =
+      new MobileIdentity(seed, userId, sessionId, '', mid, rur);
+    if (authorization.length > 0) {
+      identity.authorization = authorization;
+    }
+    this.identity = identity;
+    this.persist();
+    hilog.info(DOMAIN, TAG, 'adopt login ok %{public}s', identity.summary());
+    return true;
+  }
+
+  /**
    * 读落盘的身份；没有（全新安装 / 被清）就**造一份新的**。
    *
    * 造新的时候 8 个 UUID 全部现随机 —— 这是**一次性的**：

@@ -178,6 +178,48 @@ export class InstagramCookieJar {
     hilog.info(DOMAIN, TAG, 'cleared the cookie jar for sign out');
   }
 
+  /**
+   * **把原生登录拿到的会话写进 Cookie 罐**（见 core/mobileapi/MobileLogin）。
+   *
+   * 为什么写进罐而不是自己存一份：整个 App（`MobileSession.ensure`、网页兜底、
+   * 退出登录清罐）都只认这一个会话来源。原生密码登录成功后如果只在我们自己内存里存
+   * sessionid，就等于"App 有两套会话观"，页面刷新一次就退回登录页。
+   *
+   * 写法照 SDK：`configCookieSync(url, cookieString)` —— url 给 Instagram 域名即可，
+   * cookie 串里的 `Domain=.instagram.com` 让它对子域也生效。
+   */
+  static async adoptSession(sessionId: string, userId: string, csrf: string): Promise<boolean> {
+    if (sessionId.length === 0 || userId.length === 0) {
+      return false;
+    }
+    const attrs: string = 'Path=/; Domain=.instagram.com; Secure';
+    const write = (name: string, value: string, httpOnly: boolean): boolean => {
+      try {
+        webview.WebCookieManager.configCookieSync(INSTAGRAM_URL,
+          `${name}=${value}; ${attrs}${httpOnly ? '; HttpOnly' : ''}`);
+        return true;
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'configCookie %{public}s failed: %{public}s',
+          name, (error as Error).message);
+        return false;
+      }
+    };
+    const okSession: boolean = write('sessionid', sessionId, true);
+    write('ds_user_id', userId, false);
+    if (csrf.length > 0) {
+      write('csrftoken', csrf, false);
+    }
+    if (!okSession) {
+      return false;
+    }
+    // 立刻落盘：不落的话重启就要重新登录（同 save 的说明）。
+    await InstagramCookieJar.save();
+    InstagramCookieJar.invalidate();
+    hilog.info(DOMAIN, TAG, 'adopted native session sid=%{public}d uid=%{public}d csrf=%{public}d',
+      sessionId.length, userId.length, csrf.length);
+    return true;
+  }
+
   private static async read(): Promise<Array<CookieEntry>> {
     // **API < 23 没有 `fetchAllCookies` / `WebHttpCookie`**（它们和 name/value/isHttpOnly
     // 都是 6.1.0(23) 起）：低版本设备上退回老接口 `fetchCookie(url)` —— 它返回的是
