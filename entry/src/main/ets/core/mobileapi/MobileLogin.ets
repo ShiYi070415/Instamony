@@ -31,6 +31,14 @@ import { MobileOptions, MobileRequest, MobileResult } from './MobileRequest';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'MobileLogin';
+/**
+ * 登录那一发的 UA 版本号覆盖（**默认关**，空串 = 用 App 自己的版本）。
+ *
+ * 只用于诊断"`needs_upgrade` 是不是纯版本门槛"：填一个更高的版本号重试一次，
+ * 看回包会不会从 needs_upgrade 变成别的东西（详见 login 里的说明）。
+ * 生产环境必须保持空串 —— 版本号必须与 Bloks 版本、version_code 是一套（见 MobileConfig）。
+ */
+const LOGIN_UA_VERSION_OVERRIDE: string = '';
 
 /** 登录走到了哪一步（界面据此切 UI）。 */
 export enum LoginStage {
@@ -190,33 +198,49 @@ export class MobileLogin {
     const loginHeaders: Record<string, string> = {};
     loginHeaders['X-IG-Nav-Chain'] =
       '9MV:self_profile:2,ProfileMediaTabFragment:self_profile:3,9Xf:self_following:4';
-    const result: MobileResult = await MobileRequest.sendAs(identity, 'accounts/login/',
-      MobileRequest.formOf(data), '', true, loginHeaders,
-      new MobileOptions(ApiThrottle.DIRECT, ApiThrottle.urgent()));
-    hilog.info(DOMAIN, TAG, 'login resp %{public}s', result.summary());
-    if (result.ok) {
-      return await MobileLogin.finish(result, identity);
+    /*
+     * **版本号实验开关**（默认关）：只把这一发的 User-Agent 里的版本号换成别的值。
+     *
+     * 为什么要这个：IG 对 legacy 密码登录回 `needs_upgrade`（"客户端太旧"）。
+     * 如果那个判断纯粹看 UA 里的版本号，换一个更高的版本号就能看到回包变化
+     * （比如变成 `bad_password`）—— 那就说明"只是版本门槛"，值得继续想办法；
+     * 如果仍然是 needs_upgrade，说明版本号是和 Bloks 编排绑定的，换号无用。
+     * 只影响登录这一发，不动其它请求的指纹（其余请求必须是同一套版本，见 MobileConfig）。
+     */
+    if (LOGIN_UA_VERSION_OVERRIDE.length > 0) {
+      const base: string = identity.userAgent();
+      loginHeaders['User-Agent'] = base.replace(`Instagram ${identity.app.appVersion}`,
+        `Instagram ${LOGIN_UA_VERSION_OVERRIDE}`);
+      hilog.warn(DOMAIN, TAG, 'login UA override → %{public}s', LOGIN_UA_VERSION_OVERRIDE);
     }
     /*
-     * **签名体被拒时补一发明文表单**（真机实测出来的）。
+     * **明文表单先发，签名体兜底**。
      *
-     * 现象：`accounts/login/` 回 `400 {"message":"","status":"fail"}`（恰好 30 字节、message 为空）。
-     * 这个回包不是"密码不对"（那种会带 `error_type":"bad_password"` 或一句文案），
-     * 而是请求体在协议层就被丢了 —— 同一个 App 的其它端点用签名体都是 200，只有登录这样。
-     * instagrapi 那条 legacy 路是带签名的（它对应 2023 年的 203/269 客户端），
-     * 而 449 这套客户端里登录很可能已经改成**普通表单**。所以签名失败再试一次不签名。
+     * 真机实测（同一套身份、同一个账号，只有请求体不同）：
+     *   · 签名体（`signed_body=SIGNATURE.{…}`）→ `400 {"message":"","status":"fail"}`（30 字节，什么都没说）；
+     *   · 明文表单 → `400 {"message":"你的 Instagram 不是最新版本。请升级应用以登录 Instagram。", …}`
+     *     （98 字节，IG 真的解析了并给出带类型的错误）。
+     * 也就是说这个端点**只认明文表单**，签名体在协议层就被丢了 —— 先用明文那条，
+     * 只有它也"静默 400"时才退回签名体。
      */
-    if (MobileLogin.isSilent400(result)) {
-      const plain: MobileResult = await MobileRequest.sendAs(identity, 'accounts/login/',
-        MobileRequest.formOf(data), '', false, loginHeaders,
-        new MobileOptions(ApiThrottle.DIRECT, ApiThrottle.urgent()));
-      hilog.info(DOMAIN, TAG, 'login retry unsigned %{public}s', plain.summary());
-      if (plain.ok) {
-        return await MobileLogin.finish(plain, identity);
-      }
-      return MobileLogin.classifyFailure(plain, user);
+    const plain: MobileResult = await MobileRequest.sendAs(identity, 'accounts/login/',
+      MobileRequest.formOf(data), '', false, loginHeaders,
+      new MobileOptions(ApiThrottle.DIRECT, ApiThrottle.urgent()));
+    hilog.info(DOMAIN, TAG, 'login resp (unsigned) %{public}s', plain.summary());
+    if (plain.ok) {
+      return await MobileLogin.finish(plain, identity);
     }
-    return MobileLogin.classifyFailure(result, user);
+    if (MobileLogin.isSilent400(plain)) {
+      const signed: MobileResult = await MobileRequest.sendAs(identity, 'accounts/login/',
+        MobileRequest.formOf(data), '', true, loginHeaders,
+        new MobileOptions(ApiThrottle.DIRECT, ApiThrottle.urgent()));
+      hilog.info(DOMAIN, TAG, 'login retry signed %{public}s', signed.summary());
+      if (signed.ok) {
+        return await MobileLogin.finish(signed, identity);
+      }
+      return MobileLogin.classifyFailure(signed, user);
+    }
+    return MobileLogin.classifyFailure(plain, user);
   }
 
   /** `400` + `{"message":"","status":"fail"}` —— 协议层被丢的那种回包（见 login 里的说明）。 */
