@@ -39,6 +39,13 @@ const FORM_WAIT_MS: number = 20000;
 const SESSION_WAIT_MS: number = 45000;
 /** 轮询间隔（毫秒）。 */
 const POLL_MS: number = 700;
+/**
+ * 撞上 429 之后的冷却（毫秒）。
+ *
+ * IG 的登录限流通常按"分钟~小时"计；这里取 10 分钟：足够让窗口滑过去，
+ * 又不至于让用户觉得"这功能废了"。冷却期内**一次请求都不发**（见 loginByWebAjax）。
+ */
+const LOGIN_THROTTLE_COOLDOWN_MS: number = 10 * 60000;
 
 /**
  * 探测登录页现在长什么样（诊断 + 决策都靠它）。
@@ -111,6 +118,8 @@ export class WebLogin {
    * 用户看到的就是"网页不停抽搐"。有这一道，后来者直接返回"正在登录中"。
    */
   private static busy: boolean = false;
+  /** 429 冷却截止时刻（见 LOGIN_THROTTLE_COOLDOWN_MS）。 */
+  private static throttleUntilMs: number = 0;
   /** 兼容旧代码里的名字（`login()` 内部重入判断）。 */
   private static running: boolean = false;
   /**
@@ -217,6 +226,17 @@ export class WebLogin {
        * **三种表单体变体依次试**：这个端点的字段这几年换过几版，只试一种很容易被
        * "明明密码对却回 authenticated:false"误导。每种都把响应体记进日志，便于定位。
        */
+      /*
+       * **429 就立刻收手**。
+       *
+       * 实测（模拟器日志）：三种表单体**全部**回 `status=429` —— 说明 IG 限的是这个 IP/设备的
+       * 登录尝试频率，和表单字段无关；继续换形状或反复点只会把窗口拉得更长
+       * （这正是"越试越久"的老毛病）。所以遇到 429 设一个冷却，期间直接返回、不再发请求。
+       */
+      if (Date.now() < WebLogin.throttleUntilMs) {
+        const leftMin: number = Math.ceil((WebLogin.throttleUntilMs - Date.now()) / 60000);
+        return `IG 正在限制登录尝试（429），请约 ${leftMin} 分钟后再试`;
+      }
       let lastBody: string = '';
       let lastStatus: string = '';
       for (let variant: number = 0; variant < 3; variant++) {
@@ -244,6 +264,10 @@ export class WebLogin {
             || lastBody.indexOf('"authenticated": true') >= 0) {
             // 服务端已认证：会话 cookie 应该已经落罐，交给上层确认。
             return '';
+          }
+          if (lastStatus === '429' || lastBody.indexOf('429') >= 0) {
+            WebLogin.throttleUntilMs = Date.now() + LOGIN_THROTTLE_COOLDOWN_MS;
+            return `IG 正在限制登录尝试（429），请约 ${Math.round(LOGIN_THROTTLE_COOLDOWN_MS / 60000)} 分钟后再试`;
           }
           break;
         }
@@ -714,8 +738,29 @@ export class WebLogin {
       return '';
     }
     if (raw.charAt(cursor) === '"') {
-      const close: number = raw.indexOf('"', cursor + 1);
-      return close > cursor ? raw.substring(cursor + 1, close) : '';
+      /*
+       * 字符串值：要跳过 `\"` 转义再找结束引号。
+       *
+       * 踩过的坑：响应体是 JSON（里面的引号都转义成 `\"`），原来"找下一个引号"直接停在
+       * 第一个转义引号上，于是日志里 `body={\` 只剩一个花括号 —— 429 的真实文案全丢了。
+       */
+      let index: number = cursor + 1;
+      let collected: string = '';
+      while (index < raw.length) {
+        const ch: string = raw.charAt(index);
+        if (ch === '\\' && index + 1 < raw.length) {
+          const next: string = raw.charAt(index + 1);
+          collected += next === 'n' ? '\n' : next;
+          index += 2;
+          continue;
+        }
+        if (ch === '"') {
+          break;
+        }
+        collected += ch;
+        index++;
+      }
+      return collected;
     }
     let end: number = cursor;
     while (end < raw.length) {

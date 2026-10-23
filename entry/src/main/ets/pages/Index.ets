@@ -3490,6 +3490,14 @@ struct Index {
     } else {
       hilog.info(DOMAIN, TAG, 'web ajax login failed: %{public}s', ajaxMessage);
     }
+    /*
+     * **429 就直接说清楚，别再把人丢进网页**：IG 限的是这个 IP 的登录尝试频率，
+     * 在网页里点「登录」同样会 429 —— 白试一次还会把限流窗口拉长。
+     */
+    if (ajaxMessage.indexOf('429') >= 0 || ajaxMessage.indexOf('限制登录尝试') >= 0) {
+      hilog.info(DOMAIN, TAG, 'web login throttled → 不打开网页');
+      return ajaxMessage;
+    }
     const prefillMessage: string = await WebLogin.prefill(username, password);
     if (prefillMessage.length > 0) {
       hilog.info(DOMAIN, TAG, 'web login prefill failed: %{public}s', prefillMessage);
