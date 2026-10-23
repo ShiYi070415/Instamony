@@ -3241,6 +3241,31 @@ struct Index {
   }
 
   private async signOut(): Promise<void> {
+    /*
+     * **还有别的账号：不是"退出"，而是"换人"**（需求："如果没有其他账号存在就回到登录页，
+     * 如果有其他账号则切换到顺序第一个账号的主页"）。
+     *
+     * 顺序 = 账号选单里的顺序（按最近使用时间倒序，见 core/AccountBook.all），
+     * 也就是"除当前账号以外、最近用过的那个"。
+     * 切成功就直接结束（switchAccount → applySession 会复位并回主页重新取数）；
+     * 切失败（那个账号的会话过期了）就继续走下面真正的退出流程，落到登录页 ——
+     * 总不能因为一个失效的旧账号把用户卡在一个空壳上。
+     */
+    const others: Array<AccountEntry> = AccountBook.others(this.currentAccountId());
+    if (others.length > 0) {
+      hilog.info(DOMAIN, TAG, 'sign out → switch to first other account %{public}s (%{public}d total)',
+        others[0].userId, others.length);
+      // 退出登录是从设定页点的：先把那一页收掉，切完人正好落在主页。
+      if (this.navStack.getAllPathName().length > 0) {
+        this.navStack.clear();
+      }
+      const switched: boolean = await this.switchAccount(others[0].userId);
+      if (switched) {
+        return;
+      }
+      hilog.warn(DOMAIN, TAG, 'sign out: switch to %{public}s failed → real sign out',
+        others[0].userId);
+    }
     // 退出登录是从设定页点的：先把设定页收掉，免得登出之后还停在一个没有上下文的页面上。
     this.navStack.clear();
     // ① 会话：Cookie 罐 + 网页存储（见 InstagramCookieJar.clear 的说明）。
@@ -7761,22 +7786,24 @@ struct Index {
   }
 
   /**
-   * **切换到另一个账号**（选单里点某个人）。
+   * **切换到另一个账号**（选单里点某个人 / 退出登录时自动换人）。
    *
    * 三步：① 先把当前账号记进花名册（否则切走就回不来）；
    * ② 把目标账号的会话种回 Cookie 罐（`adoptSession`，和原生登录成功那条路同一个接口）；
    * ③ 交给 `applySession` —— 它会按 Cookie 里的 `ds_user_id` 做账号分区（上一个人的活跃分区
-   *    搬去备份位、这个人的备份搬回来）、清内存、清导航栈、重新取数（信息流 / 五个页签）。
+   *    搬去备份位、这个人的备份搬回来）、清内存、清导航栈、**回主页**、重新取数。
    * 所以这里**不要**自己再去清缓存，重复清只会把刚恢复的备份又抹掉。
+   *
+   * @returns 真的切过去了 = true（会话过期 / 没这条记录 = false，调用方据此决定要不要退回登录页）
    */
-  private async switchAccount(userId: string): Promise<void> {
+  private async switchAccount(userId: string): Promise<boolean> {
     const entry: AccountEntry | null = AccountBook.find(userId);
     if (entry === null || !entry.usable()) {
       this.toast($r('app.string.account_switch_failed'));
-      return;
+      return false;
     }
     if (userId === this.currentAccountId()) {
-      return;
+      return false;
     }
     hilog.info(DOMAIN, TAG, 'switch account → %{public}s (%{public}s)',
       userId, entry.username.length > 0 ? entry.username : '(no name)');
@@ -7785,14 +7812,14 @@ struct Index {
       entry.csrf);
     if (!adopted) {
       this.toast($r('app.string.account_switch_failed'));
-      return;
+      return false;
     }
     await InstagramCookieJar.save();
     InstagramCookieJar.invalidate();
     const snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
     if (!snapshot.signedIn) {
       this.toast($r('app.string.account_switch_failed'));
-      return;
+      return false;
     }
     /*
      * 走那条唯一的登录态出口：账号分区 + 清内存 + 清导航栈 + **回主页** + 重新取数都在里面
@@ -7806,6 +7833,7 @@ struct Index {
     this.selfUsername = entry.username;
     this.selfAvatarUrl = entry.avatarUrl;
     this.refreshOtherAccounts();
+    return true;
   }
 
   /**
