@@ -73,6 +73,26 @@
       "value": "登录"
     },
     {
+      "name": "login_label_username",
+      "value": "用户名"
+    },
+    {
+      "name": "login_label_password",
+      "value": "密码"
+    },
+    {
+      "name": "login_label_code",
+      "value": "验证码"
+    },
+    {
+      "name": "login_label_challenge_code",
+      "value": "安全验证码"
+    },
+    {
+      "name": "login_web_short",
+      "value": "网页登录"
+    },
+    {
       "name": "login_username_hint",
       "value": "Instagram 用户名"
     },

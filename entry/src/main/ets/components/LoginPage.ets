@@ -1,15 +1,24 @@
 /*
- * 「未登录」整页：品牌 + 账号密码 + 两步验证 + 安全验证（原生登录，见 core/mobileapi/MobileLogin）。
+ * 「未登录」整页：品牌 + 表单（标题 + 输入框）+ 按钮列（登录 / 注册 / 一行兜底）。
  *
- * 演进过程（别改回去）：这一页原来只有一颗「登录」按钮，点了把隐藏网页亮出来、
- * 在 IG 官方网页里登录。现在主路径改成**原生密码登录**（instagrapi 的 legacy 链：
- * `launcher/sync/` → `accounts/login/` → 必要时 `accounts/two_factor_login/`），
- * 网页登录退成"兜底出口"按钮。
+ * 布局（用户指定）：
+ *   ┌ 品牌图标 + 标题
+ *   │ 用户名            ← 标题
+ *   │ [ 输入框 ]
+ *   │ 密码              ← 标题
+ *   │ [ 输入框 ]                    ← 两步验证时再多一组「验证码」
+ *   └ Column {
+ *       登录
+ *       注册新账号
+ *       Row { 网页登录 | 重新检查 }
+ *     }
+ *
+ * 登录本身走原生（见 core/mobileapi/MobileLogin，对齐 instagrapi 的 legacy 链）；
+ * 网页登录 / 重新检查是兜底出口（网页里已经登好了、或原生被 IG 要求走 CUA/网页验证时）。
  *
  * 三条设计约束：
  *   1. **整页**：未登录时五个 tab 的内容层与底栏都不建（见 pages/Index），换账号不残留。
- *   2. **不保存密码**：密码只在这一次请求里用，落盘的只有会话 cookie；
- *      输入框是 `InputType.Password`，本页不留任何明文。
+ *   2. **不保存密码**：密码只在这一次请求里用，成功后清空输入；落盘的只有会话 cookie。
  *   3. **风格与本 App 一致**：卡片 = 项目降级那套玻璃底（FALLBACK_SURFACE + FALLBACK_BLUR），
  *      主按钮 = 沉浸光感（SurfaceModifier 挂在 Toggle 上），配色/圆角/间距沿用设置页那套。
  */
@@ -27,13 +36,14 @@ const FIELD_RADIUS: number = 14;
 const FIELD_H: number = 48;
 const BUTTON_H: number = 50;
 const BRAND_SIZE: number = 64;
+const LABEL_SIZE: number = 13;
 
 @Component
 export struct LoginPage {
-  /** 点「用网页登录」：把网页亮出来并导航到登录页（兜底出口，见 pages/Index.openLoginWeb）。 */
+  /** 点「网页登录」：把网页亮出来并导航到登录页（兜底出口，见 pages/Index.openLoginWeb）。 */
   onLogin: () => void = (): void => {
   };
-  /** 点「注册账号」：把网页亮出来并导航到 IG 的注册页。 */
+  /** 点「注册新账号」：把网页亮出来并导航到 IG 的注册页。 */
   onRegister: () => void = (): void => {
   };
   /** 点「重新检查」：网页里已经登好了、但信号没送到时的手动兜底。 */
@@ -48,52 +58,43 @@ export struct LoginPage {
   @State private username: string = '';
   @State private password: string = '';
   @State private code: string = '';
-  /** 当前步骤（决定显示密码框还是验证码框）。 */
+  /** 当前步骤（决定要不要再画一组「验证码」）。 */
   @State private stage: LoginStage = LoginStage.Failed;
   @State private busy: boolean = false;
   @State private error: string = '';
-  /** 两步验证要用的 id / 安全验证要用的 api_path（下一步带上）。 */
-  private twoFactorId: string = '';
+  /** 安全验证的 `api_path`（下一步带上；空 = 只能去网页完成）。 */
   private challengePath: string = '';
-  private challengeType: string = '';
 
-  /** 一行提示：图标 + 文案。 */
+  /** 一组"标题 + 输入框"：标题在上（灰小字），输入框在下（玻璃底）。 */
   @Builder
-  hintRow(symbol: Resource, text: ResourceStr) {
-    Row({ space: 10 }) {
-      SymbolGlyph(symbol)
-        .fontSize(16)
-        .fontColor([$r('app.color.secondary_text')])
-      Text(text)
-        .fontSize(13)
-        .lineHeight(19)
+  labeledField(label: ResourceStr, hint: ResourceStr, value: string, isPassword: boolean,
+               onEdit: (text: string) => void) {
+    Column({ space: 6 }) {
+      Text(label)
+        .fontSize(LABEL_SIZE)
         .fontColor($r('app.color.secondary_text'))
-        .layoutWeight(1)
+        .width('100%')
+        .textAlign(TextAlign.Start)
+        .padding({ left: 4 })
+      TextInput({ placeholder: hint, text: value })
+        .type(isPassword ? InputType.Password : InputType.Normal)
+        .height(FIELD_H)
+        .width('100%')
+        .padding({ left: 14, right: 14 })
+        .borderRadius(FIELD_RADIUS)
+        .backgroundColor(FALLBACK_SURFACE)
+        .backgroundBlurStyle(FALLBACK_BLUR)
+        .fontSize(15)
+        .fontColor($r('app.color.primary_text'))
+        .placeholderColor($r('app.color.secondary_text'))
+        .caretColor($r('app.color.accent'))
+        .enabled(!this.busy)
+        .onChange((text: string): void => {
+          onEdit(text);
+        })
     }
     .width('100%')
-    .alignItems(VerticalAlign.Top)
-  }
-
-  /** 输入框（玻璃底，与应用其它输入框同一套观感）。 */
-  @Builder
-  field(hint: Resource, value: string, isPassword: boolean,
-        onEdit: (text: string) => void) {
-    TextInput({ placeholder: hint, text: value })
-      .type(isPassword ? InputType.Password : InputType.Normal)
-      .height(FIELD_H)
-      .width('100%')
-      .padding({ left: 14, right: 14 })
-      .borderRadius(FIELD_RADIUS)
-      .backgroundColor(FALLBACK_SURFACE)
-      .backgroundBlurStyle(FALLBACK_BLUR)
-      .fontSize(15)
-      .fontColor($r('app.color.primary_text'))
-      .placeholderColor($r('app.color.secondary_text'))
-      .caretColor($r('app.color.accent'))
-      .enabled(!this.busy)
-      .onChange((text: string): void => {
-        onEdit(text);
-      })
+    .alignItems(HorizontalAlign.Start)
   }
 
   /** 主按钮（沉浸光感承载在 Toggle 上，见 MaterialSurface 的文件头）。 */
@@ -126,9 +127,51 @@ export struct LoginPage {
     })
   }
 
+  /** 这一步要不要画「验证码」那一组（两步验证 / 验证码类安全验证）。 */
+  private needsCode(): boolean {
+    if (this.stage === LoginStage.TwoFactor) {
+      return true;
+    }
+    return this.stage === LoginStage.Challenge && this.challengePath.length > 0;
+  }
+
+  /** 主按钮此刻该干什么（提交密码 / 提交两步验证码 / 提交安全验证码）。 */
+  private primaryAction(): void {
+    if (this.stage === LoginStage.Challenge && this.challengePath.length > 0) {
+      this.submitChallenge();
+      return;
+    }
+    this.submit();
+  }
+
+  /** 主按钮此刻的文案。 */
+  private primaryLabel(): ResourceStr {
+    if (this.needsCode()) {
+      return $r('app.string.login_submit_code');
+    }
+    return $r('app.string.login_page_action');
+  }
+
+  /** 密码框之上那段错误提示（有错才画）。 */
+  @Builder
+  errorRow() {
+    Row({ space: 6 }) {
+      SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+        .fontSize(14)
+        .fontColor([$r('app.color.accent')])
+      Text(this.error)
+        .fontSize(12)
+        .lineHeight(18)
+        .fontColor($r('app.color.accent'))
+        .layoutWeight(1)
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Top)
+  }
+
   build() {
     Stack({ alignContent: Alignment.Center }) {
-      // 背景渐变（材质要采样背后的画面，见 LoginPage 的文件头说明）。
+      // 背景渐变（材质要采样背后的画面，见文件头的说明）。
       Column()
         .width('100%')
         .height('100%')
@@ -154,111 +197,60 @@ export struct LoginPage {
           .fontSize(26)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.primary_text'))
-          .margin({ top: 14 })
+          .margin({ top: 14, bottom: 22 })
 
-        // ---- 账号密码卡片 ----
-        Column({ space: 10 }) {
-          this.field($r('app.string.login_username_hint'), this.username, false,
+        // ---- 表单：标题 + 输入框 ----
+        Column({ space: 14 }) {
+          this.labeledField($r('app.string.login_label_username'),
+            $r('app.string.login_username_hint'), this.username, false,
             (text: string): void => {
               this.username = text;
             })
-          this.field($r('app.string.login_password_hint'), this.password, true,
+          this.labeledField($r('app.string.login_label_password'),
+            $r('app.string.login_password_hint'), this.password, true,
             (text: string): void => {
               this.password = text;
             })
-          if (this.stage === LoginStage.TwoFactor) {
-            this.field($r('app.string.login_code_hint'), this.code, false,
-              (text: string): void => {
-                this.code = text;
-              })
-          }
-          if (this.stage === LoginStage.Challenge && this.challengePath.length > 0) {
-            // 只有"验证码类"的安全验证能在原生侧提交；其余引导去网页（见下面那块说明）。
-            this.field($r('app.string.login_challenge_code_hint'), this.code, false,
+          if (this.needsCode()) {
+            this.labeledField(this.stage === LoginStage.Challenge
+              ? $r('app.string.login_label_challenge_code')
+              : $r('app.string.login_label_code'),
+              $r('app.string.login_code_hint'), this.code, false,
               (text: string): void => {
                 this.code = text;
               })
           }
           if (this.error.length > 0) {
-            Row({ space: 6 }) {
-              SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
-                .fontSize(14)
-                .fontColor([$r('app.color.accent')])
-              Text(this.error)
-                .fontSize(12)
-                .lineHeight(18)
-                .fontColor($r('app.color.accent'))
-                .layoutWeight(1)
-            }
-            .width('100%')
+            this.errorRow()
           }
         }
         .width('100%')
-        .padding(14)
-        .borderRadius(CARD_RADIUS)
-        .backgroundColor(FALLBACK_SURFACE)
-        .backgroundBlurStyle(FALLBACK_BLUR)
-        .margin({ top: 22 })
+        .alignItems(HorizontalAlign.Start)
 
-        // ---- 主按钮：登录 / 提交验证码 ----
-        if (this.stage === LoginStage.TwoFactor) {
-          this.mainButton($r('app.string.login_submit_code'), (): void => {
-            this.submit();
+        // ---- 按钮列：登录 / 注册新账号 / Row{网页登录, 重新检查} ----
+        Column({ space: 12 }) {
+          this.mainButton(this.primaryLabel(), (): void => {
+            this.primaryAction();
           })
-        } else if (this.stage === LoginStage.Challenge && this.challengePath.length > 0) {
-          this.mainButton($r('app.string.login_submit_code'), (): void => {
-            this.submitChallenge();
+          MaterialLabelButton({
+            labelRes: $r('app.string.login_register'),
+            fullWidth: true,
+            fontSize: 15,
+            onTap: (): void => {
+              this.onRegister();
+            }
           })
-        } else {
-          this.mainButton($r('app.string.login_page_action'), (): void => {
-            this.submit();
-          })
-        }
-
-        // ---- 安全验证的说明（原生做不了完整流程时引导去网页）----
-        if (this.stage === LoginStage.Challenge) {
-          Column({ space: 12 }) {
-            this.hintRow($r('sys.symbol.lock_shield'), $r('app.string.login_challenge_hint'))
+          Row({ space: 12 }) {
             MaterialLabelButton({
-              labelRes: $r('app.string.login_challenge_web'),
+              labelRes: $r('app.string.login_web_short'),
               fullWidth: true,
               fontSize: 15,
               onTap: (): void => {
                 this.onLogin();
               }
             })
-          }
-          .width('100%')
-          .padding(16)
-          .borderRadius(CARD_RADIUS)
-          .backgroundColor(FALLBACK_SURFACE)
-          .backgroundBlurStyle(FALLBACK_BLUR)
-          .margin({ top: 12 })
-        } else {
-          // ---- 兜底：网页登录 / 注册（原来那两颗按钮，位置不变）----
-          MaterialLabelButton({
-            labelRes: $r('app.string.login_web_fallback'),
-            fullWidth: true,
-            fontSize: 15,
-            onTap: (): void => {
-              this.onLogin();
-            }
-          })
-            .margin({ top: 12 })
-
-          Row({ space: 12 }) {
-            MaterialLabelButton({
-              labelRes: $r('app.string.login_register'),
-              fullWidth: true,
-              fontSize: 15,
-              onTap: (): void => {
-                this.onRegister();
-              }
-            })
               .layoutWeight(1)
             MaterialLabelButton({
-              // 这里是"半宽"按钮，用短标签：`我已登录，重新检查` 在这种宽度下会被截断
-              // （模拟器实测："我已登录，重新检"）。语义不只靠字面，上面那段提示里写清楚了。
               labelRes: $r('app.string.login_recheck_short'),
               fullWidth: true,
               fontSize: 15,
@@ -269,8 +261,19 @@ export struct LoginPage {
               .layoutWeight(1)
           }
           .width('100%')
-          .margin({ top: 12 })
+
+          // 安全验证：原生做不了完整流程时，说明清楚 + 直达网页
+          if (this.stage === LoginStage.Challenge) {
+            Text($r('app.string.login_challenge_hint'))
+              .fontSize(12)
+              .lineHeight(18)
+              .fontColor($r('app.color.secondary_text'))
+              .width('100%')
+              .margin({ top: 2 })
+          }
         }
+        .width('100%')
+        .margin({ top: 22 })
 
         Blank()
       }
@@ -309,24 +312,6 @@ export struct LoginPage {
       });
   }
 
-  /** 把 core 的结果翻译成界面状态（该显示验证码框、还是错误、还是进主界面）。 */
-  private apply(outcome: LoginOutcome): void {
-    if (outcome.isOk()) {
-      this.error = '';
-      this.stage = LoginStage.Ok;
-      // 密码不留在内存里。
-      this.password = '';
-      this.code = '';
-      this.onSignedIn();
-      return;
-    }
-    this.stage = outcome.stage;
-    this.twoFactorId = outcome.twoFactorIdentifier;
-    this.challengePath = outcome.challengePath;
-    this.challengeType = outcome.challengeType;
-    this.error = outcome.message;
-  }
-
   /** 安全验证：提交收到的验证码（见 core/mobileapi/MobileLogin.challengeVerify）。 */
   private submitChallenge(): void {
     if (this.busy) {
@@ -343,5 +328,21 @@ export struct LoginPage {
         this.busy = false;
         this.error = `验证出错：${error.message}`;
       });
+  }
+
+  /** 把 core 的结果翻译成界面状态（该显示验证码框、还是错误、还是进主界面）。 */
+  private apply(outcome: LoginOutcome): void {
+    if (outcome.isOk()) {
+      this.error = '';
+      this.stage = LoginStage.Ok;
+      // 密码不留在内存里。
+      this.password = '';
+      this.code = '';
+      this.onSignedIn();
+      return;
+    }
+    this.stage = outcome.stage;
+    this.challengePath = outcome.challengePath;
+    this.error = outcome.message;
   }
 }
