@@ -8,6 +8,7 @@
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { taskpool } from '@kit.ArkTS';
 import { FeedItemDto } from '../model/FeedDto';
 import { NativeTimeline, NativeTimelineParser } from './NativeTimelineParser';
 // 首页时间线的移动端通道（实测 POST feed/timeline/ → 200；见那个文件的文件头）。
@@ -218,10 +219,13 @@ export class NativeFeed {
     if (page === null) {
       return null;
     }
+    /*
+     * ⚠️ **这一条不能进 TaskPool**（试过，真机报 `ReferenceError: AppStorage is not defined`）：
+     * 解析链里的 `MediaQuality` 要读画质设置，而设置在 AppStorage 上 —— 线程池里没有这个 API。
+     * 要挪得先把"图片/视频清晰度"当参数喂进解析器（改动面比前三条大），暂缓。
+     */
     const parsed: NativeTimeline | null = NativeTimelineParser.parseMobileFeed(page.body);
     if (parsed === null) {
-      hilog.info(DOMAIN, TAG, 'feed mobile unparsable bytes=%{public}d (%{public}s)',
-        page.body.length, MobileFeedTimeline.detail());
       /*
        * **明确是"关注流已看完"**（这一页只有 `end_of_feed_demarcator` 占位，没有媒体行）时
        * 记一笔，之后 10 分钟不再白问（见 fetchPage 的跳过逻辑）。
