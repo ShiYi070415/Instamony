@@ -62,29 +62,32 @@ export function inboxPictureOf(user: Record<string, Object>): string {
 }
 
 /**
- * 我还没看的消息有几条（`last_seen_at[我的 id]` 与 `items[]` 的时间戳比，封顶 4）。
+ * 我还没看的消息有几条（**封顶 4**）。这是**唯一实现**：主线程回退路径
+ * (`DirectMapper.unreadCountOf`) 直接调它，保证"走线程池"和"退回主线程"算出同一个数。
  *
- * 与 `DirectMapper.unreadCountOf` 同一套判据（那边是主线程回退路径，两边必须一致，
- * 否则"加载更多"前后同一会话的未读数会跳）。
+ * 判据（真机校准过，别改）：
+ *   · `items` 为空 → 0（这一条会话最近没有消息，谈不上未读）；
+ *   · 不知道我是谁（`me` 为空）→ -1（算不出来，交给调用方按 `read_state` 兜底）；
+ *   · 没有 `last_seen_at` → -1（同上）；
+ *   · 有 `last_seen_at` 但没有我这一项 → 当作"从没读过"（seenMicros = 0），于是**全部算未读**；
+ *   · 比较用**微秒原值**（时间戳都是微秒，别先除 1000，边界上会差一条）。
  */
 export function inboxUnreadCountOf(thread: Record<string, Object>, me: string,
                                    items: Array<Object>): number {
-  const seenAt: Record<string, Object> | null = JsonRead.recordOf(thread, 'last_seen_at');
-  if (seenAt === null || me.length === 0) {
+  if (items.length === 0) {
+    return 0;
+  }
+  if (me.length === 0) {
     return -1;
   }
-  const mine: Record<string, Object> | null = JsonRead.recordOf(seenAt, me);
-  if (mine === null) {
+  const lastSeen: Record<string, Object> | null = JsonRead.recordOf(thread, 'last_seen_at');
+  if (lastSeen === null) {
     return -1;
   }
-  // 微秒 → 毫秒（REST 那条给的是微秒）。
-  const seenMicros: number = JsonRead.numOf(mine, 'timestamp');
-  if (seenMicros <= 0) {
-    return -1;
-  }
-  const seenMs: number = Math.round(seenMicros / 1000);
+  const mine: Record<string, Object> | null = JsonRead.recordOf(lastSeen, me);
+  const seenMicros: number = mine === null ? 0 : JsonRead.numOf(mine, 'timestamp');
   let count: number = 0;
-  for (let index: number = 0; index < items.length; index++) {
+  for (let index: number = 0; index < items.length && count < 4; index++) {
     const item: Record<string, Object> | null = JsonRead.asRecord(items[index]);
     if (item === null) {
       continue;
@@ -93,15 +96,9 @@ export function inboxUnreadCountOf(thread: Record<string, Object>, me: string,
     if (sender.length > 0 && sender === me) {
       continue;
     }
-    const micros: number = JsonRead.numOf(item, 'timestamp');
-    if (micros <= 0) {
-      continue;
-    }
-    if (Math.round(micros / 1000) > seenMs) {
+    const at: number = JsonRead.numOf(item, 'timestamp');
+    if (at > seenMicros) {
       count++;
-      if (count >= 4) {
-        return 4;
-      }
     }
   }
   return count;

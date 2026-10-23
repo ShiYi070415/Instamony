@@ -3472,6 +3472,14 @@ struct Index {
    * （用户报的"快拍还是上一个人的"就是其中一条）。任何"按人"的新状态都加到这里，并且**只加这里**。
    */
   private forgetAccountMemory(): void {
+    /*
+     * **实时通道必须先下线**（审计 P0）：它拿的是**上一个账号的 sessionid**，不下线就会继续收
+     * 那个号的私信、并把帧派发到新账号的界面上（串号）。放在最前面 —— 后面的清理都假设
+     * "没有人在往里推数据"。`realtimeStarted` 一起复位，之后由 switchAccount / 登录成功那条路重新拉起。
+     */
+    RealtimeWorkerClient.getInstance().stop();
+    this.realtimeStarted = false;
+    DirectRealtime.clearAccount();
     // 通知 + 关注 / 收藏 / 互动覆盖表（按人抓的，见 forgetNotifications）。
     this.forgetNotifications();
     // 账号安全验证的台账也属于"这个人"：换账号后必须清（见 MobileChallenge）。
@@ -7978,6 +7986,12 @@ struct Index {
     this.selfUsername = entry.username;
     this.selfAvatarUrl = entry.avatarUrl;
     this.refreshOtherAccounts();
+    /*
+     * **换完人重新拉起实时通道**：`applySession → forgetAccountMemory` 里把它停掉了
+     * （否则旧 Worker 还拿上一个账号的 sessionid 在收私信）。这里用新会话重新连，
+     * 连上之后 `startRealtime` 会自己重新做 iris 订阅（seq 位点也是新账号的）。
+     */
+    this.scheduleRealtimeStart();
     return true;
   }
 

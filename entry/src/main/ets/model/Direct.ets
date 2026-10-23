@@ -12,7 +12,7 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { JsonRead } from '../core/JsonRead';
 // 收件箱解析在 TaskPool 里做（见 workers/InboxParseTask），这里只按它回传的行建对象。
-import { InboxParseResult, InboxRow } from '../workers/InboxParseModels';
+import { InboxParseResult, InboxRow, inboxUnreadCountOf } from '../workers/InboxParseModels';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'DirectMapper';
@@ -826,41 +826,15 @@ export class DirectMapper {
   /**
    * 这一条收件箱会话里"我还没看的、别人发来的"消息有几条（**封顶 4**）。
    *
-   * 判据：`last_seen_at[我的 id].timestamp`（我上次读到哪儿，微秒）与 `items[]` 里每条消息的
-   * `timestamp`（也是微秒）比；只有**别人发的**才算未读。算不出来（没有 last_seen_at /
-   * 不知道我是谁）就给 0 —— 界面那时按 `unread` 那个布尔显示加粗就行。
+   * **实现只有一份**：`workers/InboxParseModels.inboxUnreadCountOf`。
+   * 这里只做转发 —— 收件箱的解析平时走 TaskPool（那边用同一份实现），
+   * 线程池不可用时才退回主线程（`inboxFromRestJson` → 本方法）。
+   * 以前两边各写一份，判据在"items 为空 / 没有 last_seen_at / 微秒比较"三处不一致，
+   * 同一个响应会算出不同的未读数（用户看到的就是"加载更多前后红点跳变"）。
    */
   private static unreadCountOf(th: Record<string, Object>, me: string,
                                items: Array<Object>): number {
-    if (items.length === 0) {
-      return 0;
-    }
-    if (me.length === 0) {
-      return -1;
-    }
-    const lastSeen: Record<string, Object> | null = JsonRead.recordOf(th, 'last_seen_at');
-    if (lastSeen === null) {
-      // 不知道"读到哪里了"：交给调用方按 read_state 那个布尔兜底。
-      return -1;
-    }
-    const mine: Record<string, Object> | null = JsonRead.recordOf(lastSeen, me);
-    const seenMicros: number = mine === null ? 0 : JsonRead.numOf(mine, 'timestamp');
-    let count: number = 0;
-    for (let index: number = 0; index < items.length && count < 4; index++) {
-      const item: Record<string, Object> | null = JsonRead.asRecord(items[index]);
-      if (item === null) {
-        continue;
-      }
-      const sender: string = JsonRead.strOf(item, 'user_id');
-      if (sender.length > 0 && sender === me) {
-        continue;
-      }
-      const at: number = JsonRead.numOf(item, 'timestamp');
-      if (at > seenMicros) {
-        count++;
-      }
-    }
-    return count;
+    return inboxUnreadCountOf(th, me, items);
   }
 
   static threadFromJson(raw: string, ownId: string): DirectThreadView | null {

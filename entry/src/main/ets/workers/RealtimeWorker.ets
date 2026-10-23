@@ -137,8 +137,12 @@ function onPacket(info: MqttPacketInfo): void {
     return;
   }
   const text: string = textOf(plain);
-  post(WorkerEvent.frame(topic, plain.length,
-    text.length > 4000 ? text.substring(0, 4000) : text, state.eventCount));
+  /*
+   * ⚠️ **不要截断**：这条文本要交给主线程的 `DirectRealtime` 做 JSON.parse。
+   * 早先这里截到 4000 字符，长一点的 `message_sync` 补丁每次都会解析失败并被静默丢弃
+   * （主线程那版没有截断，于是两版行为分叉 —— 表现就是"Worker 版丢私信"）。
+   */
+  post(WorkerEvent.frame(topic, plain.length, text, state.eventCount));
 }
 
 function onBytes(bytes: Uint8Array): void {
@@ -185,6 +189,12 @@ function clearPing(): void {
 function closeSocket(why: string): void {
   clearPing();
   state.connected = false;
+  /*
+   * ⚠️ **必须把 ping 的两个记账也清掉**：不清的话，只要发生过一次 ping 超时，
+   * 之后每次重连都会在第一个 12 秒 tick 立刻被判"又超时"并自己断开 —— 变成连得上、活不过 12 秒。
+   */
+  state.pingPending = false;
+  state.pingSentAt = 0;
   const ref: socket.TLSSocket | null = state.sock;
   state.sock = null;
   if (ref !== null) {

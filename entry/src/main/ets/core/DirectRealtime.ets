@@ -65,6 +65,20 @@ export class DirectRealtime {
     DirectRealtime.threadHandlers.push(handler);
   }
 
+  /**
+   * **换账号 / 退出登录时清干净**（见 pages/Index.forgetAccountMemory）。
+   *
+   * 要清 `ownId` 的原因：它决定"这条消息是不是我发的"（气泡左右）。不清的话换了账号之后，
+   * 上一个人的 id 还留着，新账号发给自己的消息会被判成"别人发的"。
+   * 派发回调（handlers）**不清** —— 那是页面注册的，页面还活着。
+   */
+  static clearAccount(): void {
+    DirectRealtime.ownId = '';
+    DirectRealtime.messageCount = 0;
+    DirectRealtime.updateCount = 0;
+    hilog.info(DOMAIN, TAG, 'direct realtime account state cleared');
+  }
+
   /** 一行诊断（`messages` 是"真的解析出新消息"的条数）。 */
   static describe(): string {
     return `messages=${DirectRealtime.messageCount} updates=${DirectRealtime.updateCount}`;

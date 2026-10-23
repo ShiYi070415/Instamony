@@ -30,6 +30,12 @@ const WORKER_PATH: string = 'entry/ets/workers/RealtimeWorker.ets';
 const KEEP_ALIVE_S: number = 20;
 /** 等 Worker 报"连上了"的上限（毫秒）：TLS + CONNACK 实测 200ms 级，给足弱网余量。 */
 const READY_WAIT_MS: number = 12000;
+/**
+ * 掉线重连的退避（毫秒）。第 n 次用它，超出取最后一档。
+ *
+ * 为什么要退避：弱网下马上重连只会连着失败，把线程和 IG 的尝试次数一起烧掉。
+ */
+const BACKOFF_MS: Array<number> = [1000, 3000, 8000, 20000, 30000];
 
 /** Worker 回传的一帧（已经解压成字符串）。 */
 export class RealtimeFrame {
@@ -52,6 +58,13 @@ export class RealtimeWorkerClient {
   private up: boolean = false;
   private lastError: string = '';
   private frames: number = 0;
+  /** 是否"应该保持连接"（false = 被 stop() 主动停掉，不再自动重连）。 */
+  private wanted: boolean = false;
+  /** 并发 start 的单飞（见 start）。 */
+  private startInFlight: Promise<boolean> | null = null;
+  /** 重连定时器 / 已经重试几次（退避用）。 */
+  private reconnectTimer: number = 0;
+  private attempts: number = 0;
   private frameHandler: (frame: RealtimeFrame) => void = (frame: RealtimeFrame): void => {
   };
   /** `start()` 里等 Worker 回报时的兑现函数（null = 没人在等）。 */
@@ -81,12 +94,31 @@ export class RealtimeWorkerClient {
   /**
    * 启动（幂等）：已经有 Worker 就直接报当前状态。
    *
+   * 注意：**并发调用只会建一个 Worker**（`startInFlight`），否则两个 ThreadWorker 里
+   * 有一个永远不会 terminate（审计发现的泄漏）。
+   *
    * @returns 是否在 `READY_WAIT_MS` 内等到 CONNACK
    */
   async start(): Promise<boolean> {
+    this.wanted = true;
     if (this.port !== null) {
       return this.up;
     }
+    const running: Promise<boolean> | null = this.startInFlight;
+    if (running !== null) {
+      return running;
+    }
+    const task: Promise<boolean> = this.spawn();
+    this.startInFlight = task;
+    try {
+      return await task;
+    } finally {
+      this.startInFlight = null;
+    }
+  }
+
+  /** 真正建 Worker 并等 CONNACK（只被 start 调）。 */
+  private async spawn(): Promise<boolean> {
     const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
     if (identity === null || !identity.isComplete()) {
       this.lastError = 'no-session';
@@ -104,21 +136,55 @@ export class RealtimeWorkerClient {
         this.lastError = `worker: ${error.message ?? 'unknown'}`;
         hilog.warn(DOMAIN, TAG, 'worker error: %{public}s', this.lastError);
         this.up = false;
+        /*
+         * **必须把 port 也清掉**：只置 up=false 的话，下次 start() 会看到 port 非空直接返回 false，
+         * 这个 Worker 线程就永远闲在那儿（线程 + 它的 TLS 都泄漏）。
+         */
+        this.dropPort();
+        this.onDown('worker-error');
       };
       port.postMessage(RealtimeWorkerClient.startCommand(plain));
       hilog.info(DOMAIN, TAG, 'worker started, waiting connack (user=%{public}s)',
         plain.userId);
+      this.attempts = 0;
       return await this.waitReady(READY_WAIT_MS);
     } catch (error) {
       this.lastError = `spawn: ${(error as Error).message ?? 'unknown'}`;
       hilog.warn(DOMAIN, TAG, 'worker spawn failed: %{public}s', this.lastError);
-      this.port = null;
+      this.dropPort();
+      this.onDown('spawn-failed');
       return false;
     }
   }
 
-  /** 断开并回收 Worker（下次 start 会新建一条）。 */
-  stop(): void {
+  /**
+   * **掉线后自己重连**（审计：Worker 版原来完全没有重连，断一次就永久静默）。
+   *
+   * 策略：`wanted` 为真时按 `BACKOFF_MS` 退避重建 Worker（新 Worker = 新 socket + 新心跳，
+   * 比在旧线程里救更干净）。`stop()` 会把 `wanted` 置假，于是不再重连。
+   */
+  private onDown(why: string): void {
+    this.up = false;
+    if (!this.wanted || this.reconnectTimer !== 0) {
+      return;
+    }
+    const delay: number = BACKOFF_MS[Math.min(this.attempts, BACKOFF_MS.length - 1)];
+    this.attempts++;
+    hilog.info(DOMAIN, TAG, 'worker down (%{public}s) → reconnect in %{public}dms (#%{public}d)',
+      why, delay, this.attempts);
+    this.reconnectTimer = setTimeout((): void => {
+      this.reconnectTimer = 0;
+      if (!this.wanted) {
+        return;
+      }
+      this.dropPort();
+      this.start().catch((): void => {
+      });
+    }, delay);
+  }
+
+  /** 把 Worker 收掉（不 terminate 会留下线程与它的 TLS）。 */
+  private dropPort(): void {
     const port: worker.ThreadWorker | null = this.port;
     this.port = null;
     this.up = false;
@@ -129,8 +195,26 @@ export class RealtimeWorkerClient {
       port.postMessage(RealtimeWorkerClient.simpleCommand('stop'));
       port.terminate();
     } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'worker stop failed: %{public}s', (error as Error).message);
+      hilog.warn(DOMAIN, TAG, 'worker drop failed: %{public}s', (error as Error).message);
     }
+  }
+
+  /**
+   * 断开并回收 Worker（下次 start 会新建一条）。
+   *
+   * **谁调它**：换账号 / 退出登录（见 pages/Index.forgetAccountMemory）。
+   * 审计发现的 P0：以前全仓没有任何调用点，于是换号之后旧 Worker 带着**上一个账号的 sessionid**
+   * 继续收私信并派发到新账号的界面。
+   */
+  stop(): void {
+    this.wanted = false;
+    this.attempts = 0;
+    if (this.reconnectTimer !== 0) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = 0;
+    }
+    this.dropPort();
+    hilog.info(DOMAIN, TAG, 'worker stopped (frames=%{public}d)', this.frames);
   }
 
   /** 发一条 JSON（topic 134 = 私信同步订阅；132 = 私信指令）。 */
@@ -194,7 +278,7 @@ export class RealtimeWorkerClient {
     const data: WorkerEvent = event.data as WorkerEvent;
     const type: string = `${data.type ?? ''}`;
     if (type === 'state') {
-      const up: boolean = `${data.up ?? false}` === 'true';
+      const up: boolean = data.up === true;
       this.up = up;
       const detail: string = `${data.detail ?? ''}`;
       hilog.info(DOMAIN, TAG, 'worker state up=%{public}s %{public}s', `${up}`, detail);
@@ -202,6 +286,14 @@ export class RealtimeWorkerClient {
       if (resolve !== null) {
         this.readyResolve = null;
         resolve(up);
+      }
+      /*
+       * **掉线自愈**：Worker 内部没有重连（它只负责一条连接的生命周期），
+       * 策略放在这一层 —— 只要还"想要连着"，就退避重建。
+       * 注意 `already-connected` 那种重复上报不算掉线。
+       */
+      if (!up && detail.indexOf('already-connected') < 0) {
+        this.onDown(detail);
       }
       return;
     }
