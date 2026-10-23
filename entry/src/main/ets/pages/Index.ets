@@ -264,6 +264,17 @@ const WEB_HEADLESS_SETTLE_MS: number = 300;
  */
 const WEB_LOGIN_AUTO_PROBE: boolean = false;
 /**
+ * **诊断开关**：实时通道连上后跑一次 MQTT 写通道自检（见 runMqttWriteSelfTest）。
+ *
+ * 动作是 `indicate_activity` + `activity_status:"0"`（"停止输入"），对方看不到任何东西，
+ * 也不会往会话里发消息 —— 只用来确认 topic 132 这条路我们发得出去、IG 认。
+ * 验证完把它改回 false（写操作的主链路仍然走 REST）。
+ *
+ * 2026-10-23 真机验证结果：已确认可用（132 → 133 回 `{"action":"item_ack","status":"ok",
+ * "status_code":"200",…}`），所以现在关掉，只有需要再测时打开。
+ */
+const MQTT_WRITE_SELF_TEST: boolean = false;
+/**
  * 收件箱还没读回来的话，前几拍先等它（见 consumeNotifyRoute 里那段）。
  *
  * 4 拍 × 500ms = 2 秒：冷启动的 `direct_v2/inbox/` 真机实测 1.5~3 秒回来，
@@ -2803,6 +2814,43 @@ struct Index {
     }
     this.realtimeStarted = true;
     await this.syncRealtimeSubscription();
+    this.runMqttWriteSelfTest();
+  }
+
+  /**
+   * **MQTT 写通道自检**（一次性，见 `MQTT_WRITE_SELF_TEST`）。
+   *
+   * 目的：验证 topic 132（`SEND_MESSAGE`）这条路我们发得出去、IG 也认 ——
+   * 现在私信发送走 REST，这条写通道只做到"能用"为止，不进主链路。
+   * 自检动作选 `indicate_activity` + `activity_status:"0"`（**停止输入**）：
+   * 对方没看到"正在输入"时这个动作是无副作用的（等于告知"我没在输入"），
+   * 比 `send_item` 安全得多 —— 不会往任何会话里塞一条消息。
+   */
+  private runMqttWriteSelfTest(): void {
+    if (!MQTT_WRITE_SELF_TEST || this.mqttSelfTestDone) {
+      return;
+    }
+    const threads: Array<DirectThread> = this.directVm.list();
+    if (threads.length === 0) {
+      // 收件箱还没到手：稍后再试（预热链里有 direct 那一步）
+      if (this.mqttSelfTestTries < 10) {
+        this.mqttSelfTestTries++;
+        setTimeout((): void => {
+          this.runMqttWriteSelfTest();
+        }, 3000);
+      }
+      return;
+    }
+    this.mqttSelfTestDone = true;
+    const thread: DirectThread = threads[0];
+    hilog.info(DOMAIN, TAG, 'mqtt write self-test → thread=%{public}s (%{public}d threads)',
+      thread.id, threads.length);
+    MobileRealtime.publishDirectCommand('indicate_activity', thread.id,
+      '"activity_status":"0"').then((sent: boolean): void => {
+      hilog.info(DOMAIN, TAG, 'mqtt write self-test sent=%{public}s', `${sent}`);
+    }).catch((error: Error): void => {
+      hilog.warn(DOMAIN, TAG, 'mqtt write self-test failed: %{public}s', error.message);
+    });
   }
 
   /**
@@ -8310,6 +8358,10 @@ struct Index {
    * 所以流程期间**忽略未登录信号**，结束后再按罐确认一次。
    */
   private addAccountFlow: boolean = false;
+  /** MQTT 写通道自检跑过了没有（见 runMqttWriteSelfTest）。 */
+  private mqttSelfTestDone: boolean = false;
+  /** 等收件箱的重试次数（自检用）。 */
+  private mqttSelfTestTries: number = 0;
   /** 已经为哪个账号试过"补名字/头像"（同一个账号只试一次，见 ensureAccountProfile）。 */
   private profileBootstrapFor: string = '';
   /**

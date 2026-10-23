@@ -278,6 +278,51 @@ export class MobileRealtime {
 
   // ------------------------------------------------------------------ 收包
 
+  /**
+   * **原始实时订阅**（instagrapi 的 `graph_ql_subscribe`，发到 topic 149）。
+   *
+   * 说明（照抄 instagrapi 文档的口径）：`graph_ql` / `skywalker` 的订阅串属于"高级且不稳定"，
+   * 私信同步**不需要**它 —— 那一路由 CONNECT 里的 `subscribeTopics` 直接推送。
+   * 这里只提供能力，谁需要谁调（比如将来做评论/通知的实时角标）。
+   */
+  static async subscribeGraphQl(subs: Array<string>): Promise<boolean> {
+    return MobileRealtime.publish('149', `{"sub":${JSON.stringify(subs)}}`);
+  }
+
+  /** **skywalker 订阅**（instagrapi 的 `skywalker_subscribe`，发到 topic 88，体同样是 `{"sub":[…]}`）。 */
+  static async subscribeSkywalker(subs: Array<string>): Promise<boolean> {
+    return MobileRealtime.publish('88', `{"sub":${JSON.stringify(subs)}}`);
+  }
+
+  /**
+   * **走 MQTT 发一条私信指令**（instagrapi 的 `_publish_direct_command`，topic 132）。
+   *
+   * 报文口径（照抄 instagrapi）：
+   * `{"action":"<动作>","thread_id":"<会话id>", <额外字段…>, "client_context":"<uuid>"}`
+   * 动作有 `send_item`（文本/表情回应）、`mark_seen`（已读）、`indicate_activity`（正在输入）。
+   *
+   * ⚠️ 本项目的约定是**写操作走 REST、MQTT 只读**；这个入口默认不被主链路调用，
+   * 只给"自检/将来提速"用（见 pages/Index 的 MQTT 自检）。
+   */
+  static async publishDirectCommand(action: string, threadId: string,
+                                    extraJson: string = ''): Promise<boolean> {
+    const context: string = MobileRealtime.clientContext();
+    const extra: string = extraJson.length > 0 ? `,${extraJson}` : '';
+    const body: string = `{"action":${JSON.stringify(action)},`
+      + `"thread_id":${JSON.stringify(threadId)}${extra},`
+      + `"client_context":${JSON.stringify(context)}}`;
+    hilog.info(DOMAIN, TAG, 'direct command →132 action=%{public}s thread=%{public}s ctx=%{public}s',
+      action, threadId, context);
+    return MobileRealtime.publish('132', body);
+  }
+
+  /** `client_context`：Instagram 用"毫秒时间戳 + 4 位序号"当请求 id（和 REST 那边同规则）。 */
+  private static clientContext(): string {
+    const now: number = Date.now();
+    const seq: number = (now % 9000) + 1000;
+    return `${now}-${seq}`;
+  }
+
   /** 收到一段字节：进缓冲 → 按 MQTT 帧拆 → 逐条处理。 */
   private static onBytes(bytes: Uint8Array): void {
     for (let index: number = 0; index < bytes.length; index++) {
