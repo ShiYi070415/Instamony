@@ -297,6 +297,58 @@ export class MobileLogin {
   }
 
   /**
+   * **用 sessionid 登录**（instagrapi 的 `login_by_sessionid`）—— 密码登录被政策挡住时的原生替代。
+   *
+   * ## 为什么需要这一条
+   * instagrapi 官方文档（Login Migration）写得很清楚：
+   *   · 3.x 的 `login()` 直接走 **CAA（Bloks 编排）**；`login_legacy()` 是旧的 accounts 端点；
+   *   · "An explicit legacy login **may invoke its CAA fallback**, including when the accounts
+   *     endpoint returns `needs_upgrade`" —— 也就是说**密码登录离开 CAA 就走不完**；
+   *   · 推荐的迁移方式是 **Reuse saved sessions**（保存/复用会话）。
+   * 本机没有 Bloks 运行时，所以照文档走"复用会话"这一支：用户从浏览器（或别的客户端）
+   * 拿一条 `sessionid` 贴进来，我们按 `login_by_sessionid` 的做法验证并接管。
+   *
+   * ## 做法（与 instagrapi 一一对应）
+   *   1. sessionid 的数字前缀就是 user id（`userIdOfSession`）；
+   *   2. 先用它发一发只读请求（`users/{id}/info/`）验证这个会话还有效 —— 验过再写罐；
+   *   3. 写进 Cookie 罐（`InstagramCookieJar.adoptSession`）+ `MobileSession.adoptLogin`
+   *      （Authorization 由 `MobileIdentity.buildAuthorization` 现生成）。
+   */
+  static async loginBySessionId(rawSessionId: string): Promise<LoginOutcome> {
+    const sessionId: string = rawSessionId.trim();
+    if (sessionId.length < 30) {
+      return new LoginOutcome(LoginStage.Failed,
+        'sessionid 看起来不完整（一般是 30 位以上，以数字账号 id 开头）');
+    }
+    const userId: string = MobileSession.userIdOfSession(sessionId);
+    if (userId.length === 0) {
+      return new LoginOutcome(LoginStage.Failed, 'sessionid 应该以数字账号 id 开头，请检查是否复制完整');
+    }
+    const identity: MobileIdentity = MobileSession.identityForSession(sessionId, userId);
+    // 只读验证：拿自己的资料（instagrapi `login_by_sessionid` 也是先 `user_info_v1`）。
+    const check: MobileResult = await MobileRequest.sendAs(identity, `users/${userId}/info/`,
+      '', '', false, null, new MobileOptions(ApiThrottle.DIRECT, ApiThrottle.urgent()));
+    hilog.info(DOMAIN, TAG, 'sessionid check %{public}s', check.summary());
+    if (!check.ok) {
+      MobileLogin.lastDetail = check.detail.length > 0 ? check.detail : check.error;
+      return new LoginOutcome(LoginStage.Failed,
+        `这个 sessionid 已失效或不被接受（${MobileLogin.lastDetail}）`);
+    }
+    // 验证通过：写罐 + 登记身份（顺序很重要 —— 罐是唯一会话来源，见 adoptSession 的说明）。
+    const wrote: boolean = await InstagramCookieJar.adoptSession(sessionId, userId, identity.csrf);
+    if (!wrote) {
+      return new LoginOutcome(LoginStage.Failed, '会话写入失败，请重试');
+    }
+    const mid: string = MobileLogin.headerOf(check.headers, 'ig-set-x-mid');
+    const rur: string = MobileLogin.headerOf(check.headers, 'ig-set-ig-u-rur');
+    await MobileSession.getInstance().adoptLogin(identity.authorization, sessionId, userId, mid, rur);
+    MobileSession.getInstance().absorbResponseHeaders(check.headers);
+    hilog.info(DOMAIN, TAG, 'login by sessionid ok user=%{public}d sid=%{public}d',
+      userId.length, sessionId.length);
+    return new LoginOutcome(LoginStage.Ok, '', '', '', '', userId);
+  }
+
+  /**
    * 提交两步验证码（instagrapi `accounts/two_factor_login/`）。
    */
   private static async twoFactor(identity: MobileIdentity, username: string, code: string,

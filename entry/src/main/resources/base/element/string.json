@@ -93,6 +93,26 @@
       "value": "网页登录"
     },
     {
+      "name": "login_label_session",
+      "value": "sessionid"
+    },
+    {
+      "name": "login_session_hint",
+      "value": "以数字账号 id 开头的那串（浏览器 Cookie 里叫 sessionid）"
+    },
+    {
+      "name": "login_use_session",
+      "value": "用 sessionid 登录"
+    },
+    {
+      "name": "login_use_session_action",
+      "value": "用 sessionid 登录"
+    },
+    {
+      "name": "login_use_password",
+      "value": "改用账号密码登录"
+    },
+    {
       "name": "login_username_hint",
       "value": "Instagram 用户名"
     },

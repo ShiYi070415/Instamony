@@ -57,6 +57,15 @@ export struct LoginPage {
   @State private username: string = '';
   @State private password: string = '';
   @State private code: string = '';
+  /**
+   * 走"sessionid 登录"（instagrapi 的 `login_by_sessionid`）。
+   *
+   * 为什么留着这一条：官方文档写明密码登录离不开 CAA（Bloks 编排），
+   * 第三方客户端会拿到 `needs_upgrade`；而"复用已有会话"是官方推荐的正路。
+   * 默认收起，不影响主布局。
+   */
+  @State private sessionMode: boolean = false;
+  @State private sessionId: string = '';
   /** 当前步骤（决定要不要再画一组「验证码」）。 */
   @State private stage: LoginStage = LoginStage.Failed;
   @State private busy: boolean = false;
@@ -162,11 +171,15 @@ export struct LoginPage {
     return this.stage === LoginStage.Challenge && this.challengePath.length > 0;
   }
 
-  /** 主按钮此刻该干什么（提交密码 / 提交两步验证码 / 版本被拒时直接转网页登录）。 */
+  /** 主按钮此刻该干什么（sessionid / 提交密码 / 提交验证码 / 版本被拒时转网页登录）。 */
   private primaryAction(): void {
     if (this.stage === LoginStage.NeedsUpgrade) {
       // IG 以"客户端版本过旧"关了密码登录：这里让主按钮直接把人送去网页登录，别让他白点。
       this.onLogin();
+      return;
+    }
+    if (this.sessionMode) {
+      this.submitSession();
       return;
     }
     if (this.stage === LoginStage.Challenge && this.challengePath.length > 0) {
@@ -180,6 +193,9 @@ export struct LoginPage {
   private primaryLabel(): ResourceStr {
     if (this.stage === LoginStage.NeedsUpgrade) {
       return $r('app.string.login_web_fallback');
+    }
+    if (this.sessionMode) {
+      return $r('app.string.login_use_session_action');
     }
     if (this.needsCode()) {
       return $r('app.string.login_submit_code');
@@ -236,17 +252,29 @@ export struct LoginPage {
 
         // ---- 表单：标题 + 输入框 ----
         Column({ space: 14 }) {
-          this.labeledField($r('app.string.login_label_username'),
-            $r('app.string.login_username_hint'), this.username, false,
-            (text: string): void => {
-              this.username = text;
-            })
-          this.labeledField($r('app.string.login_label_password'),
-            $r('app.string.login_password_hint'), this.password, true,
-            (text: string): void => {
-              this.password = text;
-            })
-          if (this.needsCode()) {
+          if (this.sessionMode) {
+            /*
+             * sessionid 登录（官方推荐的"复用会话"这条路，见 MobileLogin.loginBySessionId）。
+             * 收在"用 sessionid 登录"后面，不打断默认的账号密码布局。
+             */
+            this.labeledField($r('app.string.login_label_session'),
+              $r('app.string.login_session_hint'), this.sessionId, false,
+              (text: string): void => {
+                this.sessionId = text;
+              })
+          } else {
+            this.labeledField($r('app.string.login_label_username'),
+              $r('app.string.login_username_hint'), this.username, false,
+              (text: string): void => {
+                this.username = text;
+              })
+            this.labeledField($r('app.string.login_label_password'),
+              $r('app.string.login_password_hint'), this.password, true,
+              (text: string): void => {
+                this.password = text;
+              })
+          }
+          if (this.needsCode() && !this.sessionMode) {
             this.labeledField(this.stage === LoginStage.Challenge
               ? $r('app.string.login_label_challenge_code')
               : $r('app.string.login_label_code'),
@@ -296,6 +324,17 @@ export struct LoginPage {
               .layoutWeight(1)
           }
           .width('100%')
+
+          // ---- 第三行：切成「用 sessionid 登录」（官方推荐的复用会话那条）----
+          Text(this.sessionMode ? $r('app.string.login_use_password')
+            : $r('app.string.login_use_session'))
+            .fontSize(13)
+            .fontColor($r('app.color.accent'))
+            .padding({ top: 8, bottom: 8 })
+            .onClick((): void => {
+              this.sessionMode = !this.sessionMode;
+              this.error = '';
+            })
 
           // 安全验证：原生做不了完整流程时，说明清楚 + 直达网页
           if (this.stage === LoginStage.Challenge) {
@@ -371,6 +410,31 @@ export struct LoginPage {
       .catch((error: Error): void => {
         this.busy = false;
         this.error = `验证出错：${error.message}`;
+      });
+  }
+
+  /** sessionid 登录：验证 + 接管（见 core/mobileapi/MobileLogin.loginBySessionId）。 */
+  private submitSession(): void {
+    if (this.busy) {
+      return;
+    }
+    if (this.sessionId.trim().length === 0) {
+      this.error = '请粘贴 sessionid';
+      return;
+    }
+    this.error = '';
+    this.busy = true;
+    MobileLogin.loginBySessionId(this.sessionId)
+      .then((outcome: LoginOutcome): void => {
+        this.busy = false;
+        if (outcome.isOk()) {
+          this.sessionId = '';
+        }
+        this.apply(outcome);
+      })
+      .catch((error: Error): void => {
+        this.busy = false;
+        this.error = `登录出错：${error.message}`;
       });
   }
 

@@ -392,6 +392,19 @@ export class MobileSession {
   }
 
   /**
+   * 用**给定的 sessionid** 造一份身份（登录前先验证它是否还有效用）。
+   *
+   * 对应 instagrapi 的 `login_by_sessionid(sessionid)`：那一路**不做密码登录**，
+   * 只是把 sessionid 放进 cookie 罐、从它的数字前缀取 user id、再把
+   * `{ds_user_id, sessionid, should_use_header_over_cookies}` 塞进 Authorization。
+   * 我们这里不碰罐子，先用它发一发只读请求验证，验过了再由 MobileLogin 写罐。
+   */
+  static identityForSession(sessionId: string, userId: string): MobileIdentity {
+    const seed: StoredIdentity = MobileSession.loadSeed();
+    return new MobileIdentity(seed, userId, sessionId, '', seed.mid, '');
+  }
+
+  /**
    * **把登录拿到的会话材料吸收进来**（`entries` 见 MobileLogin 的返回值）。
    *
    * 与 `absorbResponseHeaders` 的区别：那份要求"身份已存在且有会话"，
