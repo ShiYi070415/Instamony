@@ -2190,8 +2190,8 @@ export struct FeedList {
       .borderRadius(20)
     }
     .width('100%')
-    // 留白：**左右各 16vp**（需求），上下各 10vp（需求："平衡卡片顶部和底部的空隙"）。
-    .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+    // 留白：**左右各 10vp**（需求），上下也是 10vp（"平衡卡片顶部和底部的空隙"）。
+    .padding({ left: 10, right: 10, top: 10, bottom: 10 })
   }
 
   /**
