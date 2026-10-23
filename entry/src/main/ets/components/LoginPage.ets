@@ -285,6 +285,20 @@ export struct LoginPage {
           }
           if (this.error.length > 0) {
             this.errorRow()
+          } else if (!this.sessionMode) {
+            /*
+             * 常驻一行说明（只在账号密码模式显示）。
+             *
+             * 依据官方文档（instagrapi Login Migration）：3.x 的 `login()` 走 CAA（Bloks 编排），
+             * `login_legacy()` 的 needs_upgrade 也会转 CAA —— 也就是**第三方客户端的密码登录
+             * 已经被政策收口**。提前讲清楚，别让用户反复试密码（失败登录本身也是风控信号）。
+             */
+            Text($r('app.string.login_password_note'))
+              .fontSize(11)
+              .lineHeight(16)
+              .fontColor($r('app.color.secondary_text'))
+              .width('100%')
+              .padding({ left: 6 })
           }
         }
         .width('100%')

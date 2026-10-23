@@ -113,6 +113,10 @@
       "value": "改用账号密码登录"
     },
     {
+      "name": "login_password_note",
+      "value": "IG 已只允许官方客户端用密码登录，第三方客户端的密码登录通常会被拒（与账号密码无关）。被拒时请改用「网页登录」或「用 sessionid 登录」。"
+    },
+    {
       "name": "login_username_hint",
       "value": "Instagram 用户名"
     },
