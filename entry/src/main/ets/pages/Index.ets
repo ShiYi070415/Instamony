@@ -149,6 +149,8 @@ import { NativeStories } from '../core/NativeStories';
 import { NativeSearch, SearchPostPage } from '../core/NativeSearch';
 // 账号安全验证（challenge_required）的台账：界面据此给「去验证」入口。
 import { MobileChallenge } from '../core/mobileapi/MobileChallenge';
+// 换账号时"按人的进程内缓存"由它一处清（见 core/AccountCaches）。
+import { AccountCaches } from '../core/AccountCaches';
 // 时间线翻页参数探针（诊断开关 TIMELINE_PAGE_PROBE，见 core/mobileapi/TimelineProbe）。
 import { TimelineProbe } from '../core/mobileapi/TimelineProbe';
 // 换号时要清掉探索流的页级短缓存（见 forgetAccountMemory）。
@@ -2620,6 +2622,47 @@ struct Index {
    *
    * 任何一步失败都只记一行日志：预热失败不该影响正常路径（用户切过去时页面自己会再读一次）。
    */
+  /**
+   * **首屏画完、用户手停下来之后**，再预取私信收件箱（见 warmOtherTabs 里那段说明）。
+   *
+   * 两道闸：
+   *   1) 等首屏**真的有帖子**（最多等 12 秒；超时就放弃这一轮预热 —— 用户切到私信页时
+   *      `DirectPage` 自己会拉，行为与以前一致）；
+   *   2) 等用户**手停下来**（`waitIdle`：滚动中不要抢那 2 个闸门名额）。
+   *
+   * 收益：首屏之后那几发（快拍、后续翻页）不再被一发 800KB 的收件箱顶到后面。
+   * 代价：预热晚十几秒开始 —— 用户在这段时间里点进私信，就走页面自己的加载。
+   */
+  private async prefetchInboxWhenIdle(): Promise<void> {
+    try {
+      if (!this.signedIn) {
+        return;
+      }
+      const started: number = Date.now();
+      const deadline: number = started + 12000;
+      while (this.viewModel.list().length === 0 && Date.now() < deadline) {
+        await this.delay(150);
+      }
+      if (!this.signedIn) {
+        return;
+      }
+      if (this.directVm.list().length > 0) {
+        hilog.info(DOMAIN, TAG, 'direct prefetch skip (already loaded)');
+        return;
+      }
+      // 等手停（滚动中不抢名额）：`waitIdle` 自己有上限，不会无限等。
+      await this.waitIdle();
+      if (!this.signedIn) {
+        return;
+      }
+      await this.directVm.load(false);
+      hilog.info(DOMAIN, TAG, 'direct prefetch done n=%{public}d (after first paint +%{public}dms)',
+        this.directVm.list().length, Date.now() - started);
+    } catch (error) {
+      hilog.info(DOMAIN, TAG, 'direct prefetch failed: %{public}s', (error as Error).message);
+    }
+  }
+
   private async warmOtherTabs(): Promise<void> {
     if (this.warmStarted) {
       return;
@@ -2642,11 +2685,12 @@ struct Index {
      *   · 成功：`directVm` 里就有数据了（同一个实例，见 `directPage()`），
      *     用户切过去时 `DirectPage.aboutToAppear` 走 `syncFromVm()` + `isFresh()`，**零等待**；
      *   · 失败/太慢：用户切过去时那条链会自己走一遍（`isFresh` 判 false），行为与以前一致。
+     *
+     * **但不要和首屏抢名额**（这一批的改动）：收件箱那一发 ≈800KB，而全局闸门只有 2 个名额 ——
+     * 它一起飞就会把"首屏的后续几发"顶到后面。所以改成"**首屏真的画出来 + 用户手停下来**
+     * 之后才发"（见 prefetchInboxWhenIdle）。请求数不变，只是晚了十几秒。
      */
-    this.directVm.load(false).then((): void => {
-      hilog.info(DOMAIN, TAG, 'direct prefetch done n=%{public}d', this.directVm.list().length);
-    }).catch((): void => {
-    });
+    this.prefetchInboxWhenIdle();
     /*
      * 0) **限时快拍托盘**（需求："快拍功能在启动 app 时预加载，和 feeds 流一样"）。
      *
@@ -3537,13 +3581,15 @@ struct Index {
     this.profileVm.reset();
     this.directVm.reset();
     this.directThreadVm.reset();
-    // 快拍：托盘队列 + 预缓存 —— "快拍还是上一个人的"就在这里。
+    // 快拍：托盘队列（页面持有的那份）。
     this.storyQueue = [];
-    StoryCache.reset([], 0);
-    // "已关注过的推荐快拍"那张表也是按人的（见 NativeStories.hideSuggested）。
-    NativeStories.clearHidden();
-    // 上一份托盘缓存同样按人（见 NativeStories.forgetTray）。
-    NativeStories.forgetTray();
+    /*
+     * 其余"按人生效的**进程内缓存**"统统交给 core/AccountCaches 一处清
+     * （快拍内容/隐藏表/托盘缓存、头像小图、预下载、译文、我是谁、页级 memo…）。
+     * 以前这十几行散在这个方法里，每加一个缓存就要回来补一行 —— 漏一个就是"上一个
+     * 人的东西还留在内存里"（换号后快拍托盘/Reels/搜索各残留过一轮）。
+     */
+    AccountCaches.clearProcessCaches();
     // 「你的快拍」那一项的头像同样属于"这个人"：换人之后先把旧头像抹掉，等新头部回来再填。
     this.selfAvatarUrl = '';
     // 标题栏按钮上的账号名同理（见 selfUsername）。
@@ -3552,20 +3598,6 @@ struct Index {
     this.refreshOtherAccounts();
     // 设备侧会话材料（claim / rur / mid / authorization）：设备身份留着，会话材料作废。
     MobileSession.getInstance().clearSession();
-    // "我是谁"那份缓存（`ds_user_id`）：不清的话换账号后"我的"页面会按上一个人的 id 取头部
-    // （用户报的"我的页面拿到不是本账号的头部数据"就是这么来的）。
-    NativeProfile.clearCache();
-    // 图片缓存 / 预下载 / 译文缓存。
-    PosterCache.clear();
-    MediaPrefetch.clearCache();
-    Translator.clear();
-    /*
-     * **进程内的"页级"短缓存也要清**：首页翻页 memo（`NativeFeed`）与探索流 memo
-     * （`MobileDiscover`）都是按游标存的、**不带账号**，换号后不清就会把上一个人的
-     * 帖子/推荐页当成"刚拿到的"直接铺出来（它们各自还有作废代数兜底，见两处 clearCache）。
-     */
-    NativeFeed.clearCache();
-    MobileDiscover.clearCache();
     // 网页的 **HTTP 缓存**里可能存着上一个人的页面（HTML / JS / 图片）：一起清掉。
     try {
       this.bridge.controller.removeCache(true);
