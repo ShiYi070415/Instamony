@@ -1108,9 +1108,17 @@ export class FeedViewModel {
     // 缓存那份也过同一道筛：里面可能混着"没关注"的推荐帖（见 followedOnly）。
     this.following = FeedViewModel.followedOnly(mapped);
     this.composePosts();
-    // 游标/翻页状态也先用缓存里的：万一网络那份迟迟不回，上滑照样能接着翻（新的一页会覆盖它）。
-    this.nativeCursor = cached.cursor;
-    this.nativeHasMore = cached.hasMore;
+    /*
+     * **落盘那份的游标不许用来翻页**（这是"上滑翻不出更多关注帖"的根因之一）。
+     *
+     * 盘上的 `cursor` 是**上一次运行、上一次刷新**那条链的 `next_max_id`。IG 不认这种
+     * "旧链"的游标，拿它去要下一页，服务端**原样把第一页再回一遍**（真机日志：
+     * `prefetch stop: no progress cursor=760 next=104`）—— 白白一发 350KB，还把并发名额占了。
+     * 所以这里只把缓存用来**铺画面**，游标一律作废；紧接着的那一轮取数已经是
+     * `wantFirstPage = true`（上面刚置的），它会重新读第一页、给出**这条链自己的**游标。
+     */
+    this.nativeCursor = '';
+    this.nativeHasMore = false;
     this.hasMore = true;
     this.sawEnd = false;
     this.wantFirstPage = true;
@@ -1551,11 +1559,24 @@ export class FeedViewModel {
        * 会把这条链重新打开（见 refresh），所以不会像以前那样"永远翻不动"。
        */
       if (page.nextCursor === cursor || !this.hasUnseenNativeItems(page)) {
-        this.nativeHasMore = false;
+        /*
+         * **把游标锚到"刚刚这一发给的那个"**，而不是继续留着那条失效的链。
+         *
+         * IG 的时间线游标是**每次首屏请求开一条新链**：拿旧链的 `next_max_id` 去翻页，
+         * 服务端会把第一页原样回一遍（`next` 才是这条新链的合法游标）。
+         * 所以这里除了停预取，还要把 `nativeCursor` 换成返回里的新游标 ——
+         * 下一次用户上滑时用的就是合法游标，不会又白打一发。
+         */
+        if (page.nextCursor.length > 0 && page.nextCursor !== this.nativeCursor) {
+          this.nativeCursor = page.nextCursor;
+          this.nativeHasMore = page.hasMore;
+        } else {
+          this.nativeHasMore = false;
+        }
         this.pagingStuck = true;
         this.lastRestartMs = Date.now();
         hilog.warn(DOMAIN, TAG,
-          'native prefetch stop: no progress cursor=%{public}d next=%{public}d n=%{public}d',
+          'native prefetch stop: no progress cursor=%{public}d next=%{public}d n=%{public}d (re-anchored)',
           cursor.length, page.nextCursor.length, page.items.length);
         return;
       }
