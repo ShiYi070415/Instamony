@@ -110,6 +110,7 @@ import {
   ACCOUNT_OTHERS,
   ACCOUNT_TITLE_AVATAR,
   ACCOUNT_TITLE_NAME,
+  AccountMenu,
   AccountSwitcher
 } from '../components/AccountSwitcher';
 import { CommentItem, CommentsPayload, LikePayload, SavePayload } from '../model/Comment';
@@ -2191,6 +2192,15 @@ struct Index {
        * 是 @Prop + @Watch，到了就换上去（见 StoriesTray.onSelfAvatarReady）。
        */
       this.profileVm.onHeader = (header: ProfileHeader): void => {
+        /*
+         * 迟到的"上一个人的头部"一律不理（见 headerMatchesCurrent）：
+         * 既不能拿去画当前账号，更不能写进花名册（那就把别人的头像落到这个账号上了）。
+         */
+        if (!this.headerMatchesCurrent(header)) {
+          hilog.info(DOMAIN, TAG, 'stale header @%{public}s ignored (current=%{public}s)',
+            header.username, this.currentAccountId());
+          return;
+        }
         if (header.avatarUrl.length > 0 && header.avatarUrl !== this.selfAvatarUrl) {
           this.selfAvatarUrl = header.avatarUrl;
           hilog.info(DOMAIN, TAG, 'self avatar ready @%{public}s len=%{public}d',
@@ -3065,7 +3075,17 @@ struct Index {
     const account: AccountChange = cookie.length > 0
       ? AccountScope.adoptFrom(cookie)
       : new AccountChange(AccountScope.current(), AccountScope.current());
-    if (account.changed() && this.sessionChecked) {
+    /*
+     * **"换账号"必须和"登录态变了"一样当回事**（用户报的问题）。
+     *
+     * 以前这里只看 `changed`（= 登录态 true/false 有没有变）。切换账号时两边都是 true，
+     * 于是下面那段整块被跳过：页签停在原来那页、导航栈没清、列表没重置、**隐藏网页也没卸**——
+     * 而那个网页还挂在**上一个账号**的会话上，它会不停改写 Cookie，罐里的 `ds_user_id`
+     * 就在两个号之间来回跳（真机日志：`remembered …` 每 1~3 秒换一个人，头像于是串号）。
+     * 现在"账号变了"也算变化：走同一套复位（回主页、清栈、清数据、卸网页、重新取数）。
+     */
+    const accountChanged: boolean = account.changed() && this.sessionChecked;
+    if (accountChanged) {
       hilog.info(DOMAIN, TAG, 'account switch %{public}s -> %{public}s',
         account.previous.length > 0 ? account.previous : '(none)',
         account.current.length > 0 ? account.current : '(none)');
@@ -3088,10 +3108,14 @@ struct Index {
       this.rememberAccount().catch((): void => {
       });
     }
-    if (!changed) {
+    /*
+     * 任何"人数变了"或"登录态变了"都要走下面的复位；两者都没变才早退。
+     * （换账号那条以前被漏在这里，见上面 accountChanged 的说明。）
+     */
+    if (!changed && !accountChanged) {
       return;
     }
-    // 换了登录态 = 列表会清空重来，首屏骨架屏要重新生效。
+    // 换了登录态 / 换了人 = 列表会清空重来，首屏骨架屏要重新生效。
     this.loadedOnce = false;
     /*
      * **换账号要连"现在停在哪一页"一起复位**（用户报的"退出登录后注册新账号，直接跳进我的
@@ -3100,6 +3124,12 @@ struct Index {
      * 另外把导航栈也清掉：登录前可能正停在帖子页 / 设置页 / 别人的主页上。
      */
     this.selectedIndex = 0;
+    /*
+     * **还要把底栏那条 Tabs 真正切过去**：`Tabs({index})` 只在创建时生效，之后改
+     * `selectedIndex` 只换了内容层（用户会看到"内容回主页了、底栏还高亮在「我的」"）。
+     * `syncTabsIndex` 就是干这个的（见它的说明）。
+     */
+    this.syncTabsIndex();
     if (this.navStack.getAllPathName().length > 0) {
       this.navStack.clear();
       hilog.info(DOMAIN, TAG, 'session changed → nav stack cleared');
@@ -7525,11 +7555,8 @@ struct Index {
       .padding({ left: REELS_TITLE_LEFT_PAD_VP })
 
       AccountSwitcher({
-        onSwitch: (userId: string): void => {
-          this.switchAccount(userId);
-        },
-        onAdd: (): void => {
-          this.addAccount();
+        onToggle: (): void => {
+          this.accountMenuOpen = true;
         }
       })
     }
@@ -7574,9 +7601,35 @@ struct Index {
    * 在 `aboutToAppear` 里先建键，之后每次值变了都调一次。
    */
   private syncAccountTitle(): void {
+    const entry: AccountEntry | null = AccountBook.find(this.currentAccountId());
+    /*
+     * 头像的取用顺序：当前账号的实时头像 → **花名册里这个账号存的那份** → 空（按钮退回应用图标）。
+     *
+     * 为什么要这层兜底（用户报的"切换账号头像不准确"）：实时头像要等「我的」头部回来（2~5 秒），
+     * 这段时间里 `selfAvatarUrl` 已经被清空；不兜底的话按钮要么空白、要么被上一个账号的残值占着。
+     * 花名册那份是**按账号存的**，切换瞬间就换成了目标账号的那张。
+     */
+    const avatar: string = this.selfAvatarUrl.length > 0 ? this.selfAvatarUrl
+      : (entry === null ? '' : entry.avatarUrl);
     AppStorage.setOrCreate(ACCOUNT_TITLE_NAME, this.titleAccountName());
-    AppStorage.setOrCreate(ACCOUNT_TITLE_AVATAR, this.selfAvatarUrl);
+    AppStorage.setOrCreate(ACCOUNT_TITLE_AVATAR, avatar);
     AppStorage.setOrCreate(ACCOUNT_OTHERS, this.otherAccounts);
+  }
+
+  /**
+   * 这个头部资料是不是**当前账号**的。
+   *
+   * 为什么要判：切换账号的瞬间，视图模型里可能还留着上一个人的头部（或者它的一发请求正在路上），
+   * 那种"迟到的旧头部"一旦写进花名册，就会把**别人**的头像挂到这个账号上 ——
+   * 用户看到的就是"切换后头像不对"（而且会一直错下去，因为花名册是落盘的）。
+   * 判据用账号名比对：花名册里这个账号已有名字时，头部名字必须一致。
+   */
+  private headerMatchesCurrent(header: ProfileHeader): boolean {
+    const entry: AccountEntry | null = AccountBook.find(this.currentAccountId());
+    if (entry === null || entry.username.length === 0 || header.username.length === 0) {
+      return true;
+    }
+    return entry.username.toLowerCase() === header.username.toLowerCase();
   }
 
   /** 重新读一遍"其他账号"（花名册变了就调；见 rememberAccount / applySession）。 */
@@ -7649,11 +7702,17 @@ struct Index {
       this.toast($r('app.string.account_switch_failed'));
       return;
     }
-    // 走那条唯一的登录态出口：账号分区 + 清内存 + 清导航栈 + 重新取数都在里面。
-    // 先把头像/账号名换成花名册里那份，标题栏那颗按钮在 applySession 里就会读到新值。
-    this.selfAvatarUrl = entry.avatarUrl;
-    this.selfUsername = entry.username;
+    /*
+     * 走那条唯一的登录态出口：账号分区 + 清内存 + 清导航栈 + **回主页** + 重新取数都在里面
+     * （见 applySession 里 accountChanged 那条：换人现在和换登录态走同一套复位）。
+     */
     this.applySession(true, snapshot.cookie);
+    /*
+     * 复位之后再放**目标账号**的名字/头像（applySession 里的 forgetAccountMemory 会先把它们清掉）。
+     * 这样按钮在「我的」头部回来之前（2~5 秒）就已经是对的人了，不会短暂显示上一个账号。
+     */
+    this.selfUsername = entry.username;
+    this.selfAvatarUrl = entry.avatarUrl;
     this.refreshOtherAccounts();
   }
 
@@ -7992,12 +8051,21 @@ struct Index {
    */
   @State private selfUsername: string = '';
   /**
-   * **其他账号**（不含当前这个）：喂给「我的」标题栏那颗下拉按钮（见 AccountSwitcher）。
+   * **其他账号**（不含当前这个）：喂给「我的」标题栏那颗下拉按钮与它的选单
+   * （见 components/AccountSwitcher）。
    *
    * 为什么只存"其他"：当前账号的头像/账号名是从 Cookie 罐与「我的」头部实时来的，
    * 花名册里那份只是**切回来时**的兜底。列表为空时选单只显示「新增账号」（需求）。
    */
   @State private otherAccounts: Array<AccountEntry> = [];
+  /**
+   * 账号选单**浮层**开没开。
+   *
+   * 为什么浮层放在 Index 这一层（而不是按钮自己的弹窗）：需求要"选单背景透明 + 评论那种
+   * 沉浸光感材质"，而弹窗层自带材质疑→ 内层材质静默失效，压不透明。放到页面根 Stack 里
+   * （和评论面板同一层）材质才真的生效，见 components/AccountSwitcher 的文件头。
+   */
+  @State private accountMenuOpen: boolean = false;
   /**
    * 让托盘**重新拉一次**的信号（每 +1 一次；见 StoriesTray.reloadSignal）。
    *
@@ -10523,6 +10591,30 @@ struct Index {
           }
         })
           .zIndex(30)
+      }
+
+      /*
+       * **账号选单浮层**（「我的」标题栏那颗按钮弹出来的，见 components/AccountSwitcher）。
+       *
+       * 为什么挂在这一层：它要"透明背景 + 评论那种沉浸光感材质"，而弹窗（bindMenu/bindPopup）
+       * 自带一层材质，内层材质会静默失效 —— 只有放进页面根 Stack（和评论面板同一层、同一个窗口）
+       * 那块 Toggle 材质才真的生效。层级压在标题栏（zIndex 10）与底栏之上。
+       */
+      if (this.accountMenuOpen) {
+        AccountMenu({
+          onPick: (userId: string): void => {
+            this.accountMenuOpen = false;
+            this.switchAccount(userId);
+          },
+          onAdd: (): void => {
+            this.accountMenuOpen = false;
+            this.addAccount();
+          },
+          onClose: (): void => {
+            this.accountMenuOpen = false;
+          }
+        })
+          .zIndex(80)
       }
 
       if (this.probeVisible) {
