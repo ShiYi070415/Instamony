@@ -97,18 +97,23 @@ export class MobileCrypto {
     }
   }
 
-  /** RSA PKCS#1 v1.5 加密（公钥来自 base64 的 DER/X.509）。 */
+  /**
+   * RSA PKCS#1 v1.5 加密。
+   *
+   * 公钥的形状有个坑（线上实测）：`ig-set-password-encryption-pub-key` 是
+   * **"PEM 文本"再做 base64** —— 解开后是 `-----BEGIN PUBLIC KEY-----\nMIIBIj…`，
+   * 不是裸 DER。instagrapi 直接把这段文本喂给 `RSA.import_key()`（它能吃 PEM），
+   * 而鸿蒙的 `convertKey` 只认 DER，所以这里要把 PEM 盔甲剥掉再解一次 base64。
+   */
   private static async rsaEncrypt(data: Uint8Array, publicKeyBase64: string): Promise<Uint8Array | null> {
-    let der: Uint8Array;
-    try {
-      der = new util.Base64Helper().decodeSync(publicKeyBase64);
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'public key base64 decode failed');
+    const der: Uint8Array | null = MobileCrypto.derFromPublicKey(publicKeyBase64);
+    if (der === null) {
+      hilog.warn(DOMAIN, TAG, 'public key decode failed');
       return null;
     }
-    // 公钥位数决定算法名（IG 一直是 1024；这里两档都试，别因为换密钥就整条登录挂掉）。
-    const algs: Array<string> = ['RSA1024|PKCS1', 'RSA2048|PKCS1'];
-    const generators: Array<string> = ['RSA1024', 'RSA2048'];
+    // IG 现在的密钥是 **2048 位**（key id 176），旧版本见过 1024。两档都试，别因为换密钥就整条登录挂掉。
+    const algs: Array<string> = ['RSA2048|PKCS1', 'RSA1024|PKCS1'];
+    const generators: Array<string> = ['RSA2048', 'RSA1024'];
     for (let index: number = 0; index < algs.length; index++) {
       try {
         const generator: cryptoFramework.AsyKeyGenerator =
@@ -118,6 +123,8 @@ export class MobileCrypto {
         const cipher: cryptoFramework.Cipher = cryptoFramework.createCipher(algs[index]);
         await cipher.init(cryptoFramework.CryptoMode.ENCRYPT_MODE, pair.pubKey, null);
         const encrypted: cryptoFramework.DataBlob = await cipher.doFinal({ data: data });
+        hilog.info(DOMAIN, TAG, 'rsa %{public}s ok %{public}d→%{public}d',
+          algs[index], data.length, encrypted.data.length);
         return encrypted.data;
       } catch (error) {
         hilog.info(DOMAIN, TAG, 'rsa with %{public}s failed: %{public}s',
@@ -125,6 +132,49 @@ export class MobileCrypto {
       }
     }
     return null;
+  }
+
+  /**
+   * 公钥 base64 → DER 字节。
+   *
+   * 两种形状都认：① 裸 DER（base64 后第一段是 `MII…`）；② **PEM 文本**再 base64
+   * （解开以 `-----BEGIN` 开头）。网上那份公钥现在是第 ② 种。
+   */
+  private static derFromPublicKey(publicKeyBase64: string): Uint8Array | null {
+    const helper: util.Base64Helper = new util.Base64Helper();
+    let raw: Uint8Array;
+    try {
+      raw = helper.decodeSync(publicKeyBase64.trim());
+    } catch (error) {
+      return null;
+    }
+    if (raw.length === 0) {
+      return null;
+    }
+    const pemText: string = new util.TextDecoder().decodeToString(raw);
+    const head: string = pemText.substring(0, 32);
+    if (head.indexOf('-----BEGIN') < 0) {
+      // 已经是 DER（裸二进制）。
+      return raw;
+    }
+    // PEM：去掉盔甲行，剩下的 base64 再解一次。
+    const lines: Array<string> = pemText.split('\n');
+    let body: string = '';
+    for (let index: number = 0; index < lines.length; index++) {
+      const line: string = lines[index].trim();
+      if (line.length === 0 || line.startsWith('-----')) {
+        continue;
+      }
+      body += line;
+    }
+    if (body.length === 0) {
+      return null;
+    }
+    try {
+      return helper.decodeSync(body);
+    } catch (error) {
+      return null;
+    }
   }
 
   /** AES-256-GCM 加密；返回密文与 16 字节 tag（GCM 契约：doFinal 输出末尾 16 字节是 tag）。 */

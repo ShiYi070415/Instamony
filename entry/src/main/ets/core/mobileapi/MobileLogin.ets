@@ -172,24 +172,63 @@ export class MobileLogin {
       // 2FA 那次走的是两段式（见下），这里只在"带码重试登录"时补上，和 instagrapi 一致。
       data['two_factor_verification_code'] = verificationCode.trim();
     }
+    /*
+     * 登录这一发额外带 `X-IG-Nav-Chain`：本项目在"身份自洽"模式里**全局不发**这个头
+     * （见 MobileRequest.baseHeaders 的说明），但 instagrapi 的登录请求是带的
+     * （`base_headers` 里那条固定串）。登录是这个端点族里唯一"还没有会话"的请求，
+     * 缺头和缺会话叠在一起更容易被当成异常客户端，所以按 instagrapi 补回来。
+     */
+    const loginHeaders: Record<string, string> = {};
+    loginHeaders['X-IG-Nav-Chain'] =
+      '9MV:self_profile:2,ProfileMediaTabFragment:self_profile:3,9Xf:self_following:4';
     const result: MobileResult = await MobileRequest.sendAs(identity, 'accounts/login/',
-      MobileRequest.formOf(data), '', true, null,
+      MobileRequest.formOf(data), '', true, loginHeaders,
       new MobileOptions(ApiThrottle.DIRECT, ApiThrottle.urgent()));
     hilog.info(DOMAIN, TAG, 'login resp %{public}s', result.summary());
     if (result.ok) {
       return await MobileLogin.finish(result, identity);
     }
+    /*
+     * **签名体被拒时补一发明文表单**（真机实测出来的）。
+     *
+     * 现象：`accounts/login/` 回 `400 {"message":"","status":"fail"}`（恰好 30 字节、message 为空）。
+     * 这个回包不是"密码不对"（那种会带 `error_type":"bad_password"` 或一句文案），
+     * 而是请求体在协议层就被丢了 —— 同一个 App 的其它端点用签名体都是 200，只有登录这样。
+     * instagrapi 那条 legacy 路是带签名的（它对应 2023 年的 203/269 客户端），
+     * 而 449 这套客户端里登录很可能已经改成**普通表单**。所以签名失败再试一次不签名。
+     */
+    if (MobileLogin.isSilent400(result)) {
+      const plain: MobileResult = await MobileRequest.sendAs(identity, 'accounts/login/',
+        MobileRequest.formOf(data), '', false, loginHeaders,
+        new MobileOptions(ApiThrottle.DIRECT, ApiThrottle.urgent()));
+      hilog.info(DOMAIN, TAG, 'login retry unsigned %{public}s', plain.summary());
+      if (plain.ok) {
+        return await MobileLogin.finish(plain, identity);
+      }
+      return MobileLogin.classifyFailure(plain, user);
+    }
+    return MobileLogin.classifyFailure(result, user);
+  }
+
+  /** `400` + `{"message":"","status":"fail"}` —— 协议层被丢的那种回包（见 login 里的说明）。 */
+  private static isSilent400(result: MobileResult): boolean {
+    if (result.code !== 400) {
+      return false;
+    }
+    const message: string = MobileLogin.fieldOf(result.body, 'message');
+    const status: string = MobileLogin.fieldOf(result.body, 'status');
+    return message.length === 0 && status === 'fail';
+  }
+
+  /** 失败分类：2FA / 安全验证 / 密码错 / 限流 / 其它（见 login 的调用点）。 */
+  private static async classifyFailure(result: MobileResult, user: string): Promise<LoginOutcome> {
     // 4) 失败分支：先看是不是 2FA / 安全验证，再落到"账号密码不对"。
     const twoFactorId: string = MobileLogin.fieldOf(result.body, 'two_factor_identifier');
     if (result.error === 'two_factor' || twoFactorId.length > 0) {
-      if (verificationCode.trim().length === 0) {
-        // 记住 id：界面第二次调用（带验证码）时直接从 two_factor_login/ 接着走。
-        MobileLogin.pendingTwoFactorId = twoFactorId;
-        MobileLogin.pendingUsername = user;
-        return new LoginOutcome(LoginStage.TwoFactor, '需要两步验证码',
-          twoFactorId, '', '', '');
-      }
-      return await MobileLogin.twoFactor(identity, user, verificationCode.trim(), twoFactorId);
+      // 记住 id：界面第二次调用（带验证码）时直接从 two_factor_login/ 接着走。
+      MobileLogin.pendingTwoFactorId = twoFactorId;
+      MobileLogin.pendingUsername = user;
+      return new LoginOutcome(LoginStage.TwoFactor, '需要两步验证码', twoFactorId, '', '', '');
     }
     if (result.error === 'challenge_required') {
       const path: string = MobileLogin.fieldOf(result.body, 'api_path');
@@ -199,15 +238,23 @@ export class MobileLogin {
         '', path, type, '');
     }
     if (result.error === 'bad_password' || result.detail === 'bad_password'
-      || result.detail.indexOf('password') >= 0) {
+      || result.detail.indexOf('bad_password') >= 0) {
       return new LoginOutcome(LoginStage.BadPassword, '账号或密码不正确');
     }
-    if (result.detail.indexOf('needs_upgrade') >= 0) {
-      return new LoginOutcome(LoginStage.Failed,
-        'IG 要求更新客户端（needs_upgrade），本客户端被拒；请用网页登录');
+    if (result.detail.indexOf('needs_upgrade') >= 0 || result.detail.indexOf('challenge_required') >= 0) {
+      return new LoginOutcome(LoginStage.Challenge,
+        'IG 要求先在 App/网页里完成验证（needs_upgrade / challenge），请用网页登录', '');
     }
     if (result.error === 'rate_limit' || result.error === 'throttled') {
       return new LoginOutcome(LoginStage.Failed, '被 IG 限流了，过几分钟再试');
+    }
+    if (MobileLogin.isSilent400(result)) {
+      /*
+       * 两种体都被这个 400 拒了：说明不是"密码错"，而是这套客户端版本 / 参数不被这套后端接受。
+       * 如实说清楚 + 给网页登录兜底（别让用户以为密码打错了）。
+       */
+      return new LoginOutcome(LoginStage.Failed,
+        'IG 拒收了这次登录请求（未给原因，通常是客户端版本过旧或该账号被要求走验证），请用网页登录');
     }
     MobileLogin.lastDetail = result.detail.length > 0 ? result.detail : result.error;
     return new LoginOutcome(LoginStage.Failed, `登录失败：${MobileLogin.lastDetail}`);
@@ -344,10 +391,23 @@ export class MobileLogin {
       MobileLogin.headerOf(headers, 'ig-set-x-mid'), MobileLogin.headerOf(headers, 'ig-set-ig-u-rur'));
   }
 
-  /** 取密码公钥：`qe/sync/` 的响应头（instagrapi `password_publickeys`）。 */
+  /**
+   * 取密码公钥：`qe/sync/` 的响应头（instagrapi `password_publickeys`）。
+   *
+   * ⚠️ 三个真机/线上实测出来的坑（照 instagrapi 那个 `self.public.get(...)` 搬会全踩）：
+   *   1. **必须 POST**：`GET /api/v1/qe/sync/` 直接回 **405 Method Not Allowed**（响应体为空，
+   *      我们的分类器会报 `non-json http=405`）；
+   *   2. **必须带 `id` + `server_config_retrieval`**：只发一个 `id=1234` 会 400；
+   *   3. **不能签名**（`withSignature=false`）：这个端点在"还没有会话"时用明文表单就能通，
+   *      包成 `signed_body=` 反而被拒。
+   */
   private static async publicKeys(identity: MobileIdentity): Promise<PasswordKeys | null> {
-    const result: MobileResult = await MobileRequest.sendAs(identity, 'qe/sync/', '', '',
-      false, null, new MobileOptions(ApiThrottle.DIRECT, ApiThrottle.urgent()));
+    const data: Record<string, string> = {};
+    data['id'] = identity.uuid;
+    data['server_config_retrieval'] = '1';
+    const result: MobileResult = await MobileRequest.sendAs(identity, 'qe/sync/',
+      MobileRequest.formOf(data), '', false, null,
+      new MobileOptions(ApiThrottle.DIRECT, ApiThrottle.urgent()));
     if (!result.ok) {
       MobileLogin.lastDetail = result.detail.length > 0 ? result.detail : result.error;
       hilog.warn(DOMAIN, TAG, 'qe/sync for keys failed: %{public}s', MobileLogin.lastDetail);
@@ -365,13 +425,18 @@ export class MobileLogin {
     return new PasswordKeys(keyId, publicKey);
   }
 
-  /** 登录前预热：`launcher/sync/`（instagrapi `pre_login_flow`）。失败只记日志。 */
+  /**
+   * 登录前预热：`launcher/sync/`（instagrapi `pre_login_flow`）。失败只记日志。
+   *
+   * 同样**必须不签名**：包成 `signed_body=` 时 IG 回 `400 No valid ID given`
+   * （它只认明文表单里的 `id`），这一点是模拟器上实测出来的。
+   */
   private static async syncLauncher(identity: MobileIdentity): Promise<void> {
     const data: Record<string, string> = {};
     data['id'] = identity.uuid;
     data['server_config_retrieval'] = '1';
     const result: MobileResult = await MobileRequest.sendAs(identity, 'launcher/sync/',
-      MobileRequest.formOf(data), '', true, null,
+      MobileRequest.formOf(data), '', false, null,
       new MobileOptions(ApiThrottle.DIRECT, ApiThrottle.warm()));
     hilog.info(DOMAIN, TAG, 'launcher/sync %{public}s', result.summary());
   }
