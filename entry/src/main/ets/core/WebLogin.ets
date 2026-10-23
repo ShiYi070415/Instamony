@@ -154,8 +154,15 @@ export class WebLogin {
       return '正在登录中，请稍候';
     }
     const bridge: InstagramPageBridge = InstagramPageBridge.getInstance();
-    if (!bridge.isAttached()) {
-      return '网页还没准备好，请再点一次登录';
+    /*
+     * **等宿主绑上，而不是立刻失败**（用户报过"显示网页还没准备好"）。
+     *
+     * `bridge.attached` 要等 Web 组件的控制器挂上、页面跑完一次加载才置位；
+     * 登录页刚出现、宿刚刚挂载的那一两秒里它还是 false。以前直接返回错误，
+     * 用户点得快一点就会看到"网页还没准备好"。现在最多等 10 秒。
+     */
+    if (!await WebLogin.waitAttached(bridge)) {
+      return '网页还没准备好（隐藏网页没能起来，请退出 App 重进再试）';
     }
     WebLogin.busy = true;
     try {
@@ -214,8 +221,15 @@ export class WebLogin {
       return '正在登录中，请稍候';
     }
     const bridge: InstagramPageBridge = InstagramPageBridge.getInstance();
-    if (!bridge.isAttached()) {
-      return '网页还没准备好，请再点一次登录';
+    /*
+     * **等宿主绑上，而不是立刻失败**（用户报过"显示网页还没准备好"）。
+     *
+     * `bridge.attached` 要等 Web 组件的控制器挂上、页面跑完一次加载才置位；
+     * 登录页刚出现、宿刚刚挂载的那一两秒里它还是 false。以前直接返回错误，
+     * 用户点得快一点就会看到"网页还没准备好"。现在最多等 10 秒。
+     */
+    if (!await WebLogin.waitAttached(bridge)) {
+      return '网页还没准备好（隐藏网页没能起来，请退出 App 重进再试）';
     }
     WebLogin.busy = true;
     try {
@@ -288,6 +302,29 @@ export class WebLogin {
     } finally {
       WebLogin.busy = false;
     }
+  }
+
+  /**
+   * **等宿主绑定完成**（最多 `timeoutMs`）。
+   *
+   * 为什么要等：`attached` 在"Web 组件的控制器挂上 + 页面跑完一次加载"之后才置位。
+   * 登录页刚出现时才刚挂宿主，用户点得快就会撞上 false —— 以前直接报"网页还没准备好"。
+   */
+  private static async waitAttached(bridge: InstagramPageBridge): Promise<boolean> {
+    const deadline: number = Date.now() + 10000;
+    let waited: number = 0;
+    while (Date.now() < deadline) {
+      if (bridge.isAttached()) {
+        if (waited > 0) {
+          hilog.info(DOMAIN, TAG, 'web host attached after %{public}dms', waited);
+        }
+        return true;
+      }
+      await WebLogin.sleep(300);
+      waited += 300;
+    }
+    hilog.warn(DOMAIN, TAG, 'web host still not attached after 10s');
+    return false;
   }
 
   /** 只探一次（不导航、不等待），用于"现在是不是已经停在登录页上"。 */

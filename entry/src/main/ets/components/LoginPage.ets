@@ -25,6 +25,7 @@
 
 import { MaterialLabelButton, SurfaceModifier } from './MaterialSurface';
 import {
+  AppSettings,
   MATERIAL_THICKNESS_ULTRA_THIN,
   SETTING_MATERIAL_THICKNESS
 } from '../core/AppSettings';
@@ -77,6 +78,21 @@ export struct LoginPage {
    */
   @StorageLink('login_username') username: string = '';
   @StorageLink('login_password') password: string = '';
+
+  /**
+   * 进页面就把**上次用过的账号**填好（只填账号，不碰密码）。
+   *
+   * 优先级：AppStorage 里已有的（同一次运行里输入过）> 落盘里的（上次运行）。
+   * 这样"点登录后账号留着"在重启之后也成立。
+   */
+  aboutToAppear(): void {
+    if (this.username.length === 0) {
+      const saved: string = AppSettings.loadLoginUsername();
+      if (saved.length > 0) {
+        this.username = saved;
+      }
+    }
+  }
   @State private code: string = '';
   /**
    * 走"sessionid 登录"（instagrapi 的 `login_by_sessionid`）。
@@ -429,6 +445,11 @@ export struct LoginPage {
      */
     const typed: string = this.password;
     this.password = '';
+    /*
+     * 账号**落盘记住**（只记用户名，不记密码）：重启 App、登录页重建都不会丢。
+     * 需求："点登录后只清密码，账号留着"。
+     */
+    AppSettings.saveLoginUsername(this.username.trim());
     this.onWebLogin(this.username, typed)
       .then((message: string): void => {
         this.busy = false;

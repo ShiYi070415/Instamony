@@ -378,6 +378,21 @@ export class AppSettings {
    * 存下来之后，冷启动可以**立刻用上次的位点先订阅**（对端会按位点补差量），
    * 收件箱回来后如果更新了位点再补一次订阅 —— 实时通道从"等几秒~几十秒"变成"开局就在"。
    */
+  /**
+   * **上次登录用的账号**（只存用户名，**不存密码**）。
+   *
+   * 需求："点登录后只清密码，账号留着"；连 App 重启也要记住，
+   * 所以落盘而不是只放 `@StorageLink`（后者只活在进程里，重启就空）。
+   */
+  static saveLoginUsername(name: string): void {
+    AppSettings.write('login_username', name);
+  }
+
+  /** 上次登录用的账号（空串 = 没记过）。 */
+  static loadLoginUsername(): string {
+    return AppSettings.readString('login_username', '');
+  }
+
   static saveDirectSync(seqId: number, snapshotAtMs: number): void {
     if (seqId <= 0 || snapshotAtMs <= 0) {
       return;
