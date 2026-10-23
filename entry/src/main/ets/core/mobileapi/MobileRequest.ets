@@ -146,15 +146,6 @@ export class MobileRequest {
     return MobileRequest.lastError;
   }
 
-  static lastHttpCode(): number {
-    return MobileRequest.lastCode;
-  }
-
-  /** 本进程发出的移动端请求数（诊断/降噪度量用，见 `sends` 字段）。 */
-  static sendCount(): number {
-    return MobileRequest.sends;
-  }
-
   /**
    * 那套约 40 个请求头（instagrapi 的 `base_headers` property）。
    *

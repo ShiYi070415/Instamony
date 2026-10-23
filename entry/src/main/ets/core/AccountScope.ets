@@ -198,11 +198,6 @@ export class AccountScope {
     return `${base}@${AccountScope.account.length > 0 ? AccountScope.account : ANON}`;
   }
 
-  /** 备份键（退出登录时搬到这里）。 */
-  static backupSlot(base: string): string {
-    return `${base}#backup@${AccountScope.account.length > 0 ? AccountScope.account : ANON}`;
-  }
-
   /**
    * 把一个分区键按**指定账号**拼出来（不依赖"当前账号"）。
    *
