@@ -2830,6 +2830,7 @@ struct Index {
         `${workerUp}`, client.status());
       if (workerUp) {
         this.realtimeStarted = true;
+    this.realtimeStartPending = false;
         await this.syncRealtimeSubscription();
         return;
       }
@@ -2847,6 +2848,7 @@ struct Index {
       return;
     }
     this.realtimeStarted = true;
+    this.realtimeStartPending = false;
     await this.syncRealtimeSubscription();
     this.runMqttWriteSelfTest();
   }
@@ -2920,6 +2922,15 @@ struct Index {
    * 那时 `start()` 会返回 false；2.5 秒后再补一发，之后交给它自己的退避重连。
    */
   private scheduleRealtimeStart(): void {
+    /*
+     * **已经有排队的启动就别再排**（真机日志：冷启动会连着发两次 iris 订阅）：
+     * 现在 applySession 成功那条路也会调本方法，于是和 aboutToAppear 那次撞在一起。
+     * 用"待执行标记"去重，`startRealtime` 一开跑就把它清掉。
+     */
+    if (this.realtimeStartPending) {
+      return;
+    }
+    this.realtimeStartPending = true;
     const delays: Array<number> = REALTIME_START_DELAYS_MS;
     for (let index: number = 0; index < delays.length; index++) {
       setTimeout((): void => {
@@ -3331,6 +3342,14 @@ struct Index {
       this.viewModel.loadFeed();
       this.warmOtherTabs().catch((): void => {
       });
+      /*
+       * **登录态确认之后保证实时通道在跑**（换号那条路已经会 stop 再 start；
+       * 这里兜住两种顺序：冷启动时"先 schedule 后被 forgetAccountMemory 停掉"、
+       * 以及网页里登录成功后没有别的入口去拉起它）。
+       */
+      if (!this.realtimeStarted) {
+        this.scheduleRealtimeStart();
+      }
       return;
     }
     this.viewModel.reset();
@@ -3845,14 +3864,25 @@ struct Index {
   private async submitLoginCode(username: string, code: string): Promise<string> {
     const message: string = await WebLogin.submitTwoFactorCode(username, code);
     if (message.length > 0) {
+      // 验证码没通过：如果是"新增账号"这条支线，按失败收尾（不把用户留在半截状态）。
+      if (this.addAccountFlow) {
+        await this.finishAddAccount('code-rejected');
+      }
       return message;
     }
     const waited: string = await WebLogin.awaitSession();
     if (waited.length > 0) {
+      if (this.addAccountFlow) {
+        await this.finishAddAccount('code-no-session');
+      }
       return waited;
     }
     await this.refreshSessionFromJar();
     this.unmountWebHost('login done');
+    // 登进去了：收旗（applySession(true) 已经把账号切过去了）。
+    if (this.addAccountFlow) {
+      await this.finishAddAccount('code-ok');
+    }
     return '';
   }
 
@@ -5003,7 +5033,12 @@ struct Index {
     this.searchVm.setActive(false);
     const signedBefore: boolean = this.signedIn;
     const snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
-    this.applySession(snapshot.signedIn);
+    /*
+     * **必须带 cookie**（审计 P0）：不带的话 `applySession` 里走
+     * `new AccountChange(当前, 当前)`，账号**永不重判** —— 比如在网页里换了账号再关网页，
+     * `AccountScope` 还指着上一个人，之后所有缓存与取数都写进旧分区。
+     */
+    this.applySession(snapshot.signedIn, snapshot.cookie);
     /*
      * 从网页回来时，用户很可能刚完成**账号安全验证**（见 MobileChallenge 的说明）：
      * 验证通过的话 Cookie 罐已经更新，清掉台账、重新取数即可；没通过的话下一发请求会把
@@ -7846,20 +7881,28 @@ struct Index {
       if (header === null) {
         return;
       }
-      AccountBook.saveProfile(userId, header.username, header.avatarUrl);
-      // 期间可能又切了人：账本照写（按 userId 存），但界面只在这个人还是当前账号时才动。
-      if (this.currentAccountId() === userId) {
-        if (header.username.length > 0) {
-          this.selfUsername = header.username;
-        }
-        if (header.avatarUrl.length > 0) {
-          this.selfAvatarUrl = header.avatarUrl;
-        }
-        this.refreshOtherAccounts();
+      /*
+       * **写账本必须在"当前账号还是这个人"的判断之内**（审计 P0）：
+       * 这一发跨过了用户切号的瞬间的话，`header` 已经是**新账号**的资料，
+       * 却按旧 `userId` 写进花名册 —— 从此那个账号永久挂着别人的头像与名字。
+       */
+      if (this.currentAccountId() !== userId) {
+        hilog.info(DOMAIN, TAG, 'bootstrap profile for %{public}s ignored (account switched)', userId);
+        return;
       }
+      AccountBook.saveProfile(userId, header.username, header.avatarUrl);
+      if (header.username.length > 0) {
+        this.selfUsername = header.username;
+      }
+      if (header.avatarUrl.length > 0) {
+        this.selfAvatarUrl = header.avatarUrl;
+      }
+      this.refreshOtherAccounts();
       hilog.info(DOMAIN, TAG, 'own profile bootstrapped @%{public}s avatar=%{public}d',
         header.username, header.avatarUrl.length);
     }).catch((error: Error): void => {
+      // 失败不重试（只是"让按钮早点好看"），但**要允许下次再试**：把记账还回去。
+      this.profileBootstrapFor = '';
       hilog.warn(DOMAIN, TAG, 'bootstrap own profile failed: %{public}s', error.message);
     });
   }
@@ -8075,9 +8118,12 @@ struct Index {
       return '正在登录中，请稍候';
     }
     this.addAccountFlow = true;
+    let pending: boolean = false;
     try {
       await this.rememberAccount();
       const previous: AccountEntry | null = AccountBook.find(this.currentAccountId());
+      // 记下"原来那个人"：2FA / 去网页验证这两条支线结束时还要用它回滚（见 finishAddAccount）。
+      this.addAccountPrevious = previous;
       /*
        * **先卸隐藏网页，再清罐**：顺序反了的话，那个还挂着的网页会先收到"会话没了"
        * 的信号并回调 onSessionChanged(false)。
@@ -8092,23 +8138,63 @@ struct Index {
       const message: string = await this.headlessWebLogin(username, password);
       const ok: boolean = message.length === 0;
       // 2FA 那两种"还要再走一步"也不算失败：罐里还没有新会话，但流程还没结束。
-      const pending: boolean = message === WEB_LOGIN_NEEDS_CODE || message === WEB_LOGIN_NEEDS_WEB;
-      if (!ok && !pending && previous !== null && previous.usable()) {
+      pending = message === WEB_LOGIN_NEEDS_CODE || message === WEB_LOGIN_NEEDS_WEB;
+      if (!ok && !pending) {
         // 登录没成：把原来的会话种回去 —— 不能让"新增账号"把当前账号弄丢。
-        const restored: boolean = await InstagramCookieJar.adoptSession(previous.sessionId,
-          previous.userId, previous.csrf);
-        hilog.info(DOMAIN, TAG, 'add-account failed → restore previous session ok=%{public}s',
-          `${restored}`);
-        if (restored) {
-          await InstagramCookieJar.save();
-          InstagramCookieJar.invalidate();
-          // 罐里又有人了：让界面按罐把登录态确认一次（旗子还在，所以这里不会误判）。
-          await this.refreshSessionFromJar();
-        }
+        await this.restoreAddAccountPrevious('login-failed');
       }
       return message;
     } finally {
-      this.addAccountFlow = false;
+      /*
+       * ⚠️ **只在"这次真的结束了"时收旗**（审计 P0）：
+       * 2FA / 去网页验证属于同一个事务的后续步骤，那时罐已经清空 —— 一旦此时把旗子收掉，
+       * 隐藏网页随后报未登录就会照常走 `applySession(false)`，整壳被换成整页登录页
+       * （新增账号页与验证码面板一起被销毁，用户以为被登出了）。
+       * 这两种情况把收旗交给 `submitLoginCode` / `finishAddAccount`。
+       */
+      if (!pending) {
+        this.addAccountFlow = false;
+        this.addAccountPrevious = null;
+      }
+    }
+  }
+
+  /**
+   * **新增账号事务的真正收尾**（2FA 提交完 / 网页验证回来 / 用户中途退出时调）。
+   *
+   * 收旗 + 如果罐里还是没有新会话，就把原来那个人的会话种回去 —— 让"新增账号"永远可以安全退出。
+   */
+  private async finishAddAccount(reason: string): Promise<void> {
+    if (!this.addAccountFlow) {
+      return;
+    }
+    this.addAccountFlow = false;
+    const previous: AccountEntry | null = this.addAccountPrevious;
+    this.addAccountPrevious = null;
+    // 已经登进去了（applySession(true) 会把 signedIn 置真）：什么都不用回滚。
+    InstagramCookieJar.invalidate();
+    const snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
+    if (snapshot.signedIn) {
+      hilog.info(DOMAIN, TAG, 'add-account finished (%{public}s): signed in', reason);
+      return;
+    }
+    await this.restoreAddAccountPrevious(reason);
+  }
+
+  /** 把"新增账号前那个人"的会话种回去（失败也就算了：大不了重新登录）。 */
+  private async restoreAddAccountPrevious(reason: string): Promise<void> {
+    const previous: AccountEntry | null = this.addAccountPrevious;
+    if (previous === null || !previous.usable()) {
+      return;
+    }
+    const restored: boolean = await InstagramCookieJar.adoptSession(previous.sessionId,
+      previous.userId, previous.csrf);
+    hilog.info(DOMAIN, TAG, 'add-account restore previous (%{public}s) ok=%{public}s',
+      reason, `${restored}`);
+    if (restored) {
+      await InstagramCookieJar.save();
+      InstagramCookieJar.invalidate();
+      await this.refreshSessionFromJar();
     }
   }
 
@@ -8457,6 +8543,10 @@ struct Index {
    * 所以流程期间**忽略未登录信号**，结束后再按罐确认一次。
    */
   private addAccountFlow: boolean = false;
+  /** "新增账号"开始前那张账号（2FA/网页验证失败或用户退出时回滚用，见 finishAddAccount）。 */
+  private addAccountPrevious: AccountEntry | null = null;
+  /** 实时通道的启动是否已经排过队（见 scheduleRealtimeStart 的去重）。 */
+  private realtimeStartPending: boolean = false;
   /** MQTT 写通道自检跑过了没有（见 runMqttWriteSelfTest）。 */
   private mqttSelfTestDone: boolean = false;
   /** 等收件箱的重试次数（自检用）。 */
@@ -9510,6 +9600,15 @@ struct Index {
       .titleMode(HdsNavDestinationTitleMode.MINI)
       .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
       .clip(false)
+      /*
+       * **离开这一页就收尾**（审计 P1/P0 的收尾口）：用户在 2FA 面板 / 网页验证半途按返回，
+       * 或者在网页里验完直接关网页，都要把"新增账号"这个事务结掉并回滚原会话 ——
+       * 否则旗子永远立着（之后所有"未登录"信号都被忽略），或者原账号被清掉回不来。
+       */
+      .onHidden((): void => {
+        this.finishAddAccount('page-left').catch((): void => {
+        });
+      })
       .onBackPressed((): boolean => this.handleDestinationBack())
     } else if (name === USER_PROFILE_PAGE) {
       /*
@@ -11010,7 +11109,17 @@ struct Index {
             this.handlePageReady();
           },
           onSessionChanged: (signedIn: boolean): void => {
-            this.applySession(signedIn);
+            /*
+             * **以罐为准，并且带 cookie 进来**（审计 P0）：网页这条信号只说"页面觉得登没登"，
+             * 它不带 cookie 的话 `applySession` 无法重判账号（换号后分区还指上一个人）。
+             * `refreshSessionFromJar` 正好做这件事：读罐 → `applySession(signedIn, cookie)`。
+             */
+            if (signedIn) {
+              this.refreshSessionFromJar().catch((): void => {
+              });
+              return;
+            }
+            this.applySession(false);
           }
         })
           .width('100%')
