@@ -265,6 +265,24 @@ export class NativeFeed {
       }
     }
     if (viaMobile !== null) {
+      /*
+       * **首屏 200、体也不小，但解析出 0 条媒体 → 记成"关注流已看完"**。
+       *
+       * 真机抓到过：`timeline ok cursor=0 bytes=680787 keys=[feed_items,items,…]` 之后
+       * `feed mobile failed`、`native first fetched n=0` —— 响应体里只有占位/推荐条目，
+       * 一条关注帖都没有（这个账号的关注流就是薄的）。不记这个状态的话，**每次进首页/
+       * 下拉刷新都要再白打一发 2~6 秒、几百 KB 的请求**，而回答不会变。
+       *
+       * 判据里的"体够大"是防呆：真出错（403/形状变了）时体通常很小或 detail 不是 ok，
+       * 那种情况**不能**记成"已看完"（否则 30 分钟都不再问）。
+       */
+      const detail: string = MobileFeedTimeline.detail();
+      if (cursor.length === 0 && viaMobile.items.length === 0 && detail.startsWith('ok bytes=')) {
+        NativeFeed.markCaughtUp();
+        hilog.info(DOMAIN, TAG,
+          'feed timeline parsed 0 media (%{public}s) → mark caught up for %{public}dmin',
+          detail, Math.round(NativeFeed.CAUGHT_UP_TTL_MS / 60000));
+      }
       // 换号之后回来的那一页属于上一个人：不许写进 memo（见 clearCache 的说明）。
       if (cursor.length > 0 && NativeFeed.epoch === epoch) {
         NativeFeed.rememberPage(cursor, viaMobile);
