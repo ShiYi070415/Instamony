@@ -11,6 +11,8 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { JsonRead } from '../core/JsonRead';
+// 收件箱解析在 TaskPool 里做（见 workers/InboxParseTask），这里只按它回传的行建对象。
+import { InboxParseResult, InboxRow } from '../workers/InboxParseModels';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'DirectMapper';
@@ -691,6 +693,30 @@ export class DirectMapper {
       }
     }
     return false;
+  }
+
+  /**
+   * **TaskPool 解析结果 → 会话对象**（见 workers/InboxParseTask）。
+   *
+   * 解析（正则 + JSON.parse + 取字段）已经在别的线程做完，这里只把纯数据拼成 `DirectThread` ——
+   * 对象构建在主线程做是有意的：`DirectThread` 带方法（`threadUrl()`），TaskPool 传对象时不带方法，
+   * 所以不能让它跨线程。
+   */
+  static inboxFromParsed(parsed: InboxParseResult): DirectInboxPage | null {
+    if (parsed.error.length > 0) {
+      return null;
+    }
+    const threads: Array<DirectThread> = [];
+    for (let index: number = 0; index < parsed.rows.length; index++) {
+      const row: InboxRow = parsed.rows[index];
+      if (row.id.length === 0) {
+        continue;
+      }
+      threads.push(new DirectThread(row.id, row.key, row.title, row.avatar, row.isGroup,
+        row.unread, row.muted, row.pinned, row.tsMs, row.text, row.kind, row.username,
+        row.unreadCount));
+    }
+    return new DirectInboxPage(threads, parsed.cursor, parsed.hasOlder);
   }
 
   static inboxFromRestJson(raw: string): DirectInboxPage | null {

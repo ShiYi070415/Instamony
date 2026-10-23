@@ -21,6 +21,7 @@
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { taskpool } from '@kit.ArkTS';
 import { ApiThrottle } from '../ApiThrottle';
 // 实时同步位点要落盘，冷启动才能"先订阅、后补差"（见 noteSyncState / primeSyncStateFromDisk）。
 import { AppSettings } from '../AppSettings';
@@ -29,6 +30,8 @@ import { MobileSession, MobileIdentity } from './MobileSession';
 // 发消息要现生成两个 uuid（`client_context` / `mutation_token`）。
 import { uuid4 } from './MobileSign';
 import { DirectInboxPage, DirectMapper, DirectThread, DirectThreadView } from '../../model/Direct';
+import { InboxParseResult } from '../../workers/InboxParseModels';
+import { parseInboxTask } from '../../workers/InboxParseTask';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'MobileDirect';
@@ -96,20 +99,23 @@ export class MobileDirect {
     // 请求带没带游标、翻页回来的第一会话是谁 —— 排查"加载更多到底动没动"就看这一行。
     hilog.info(DOMAIN, TAG, 'inbox req cursorLen=%{public}d bytes=%{public}d',
       cursor.length, result.bytes);
-    const page: DirectInboxPage | null = DirectMapper.inboxFromRestJson(result.body);
+    const page: DirectInboxPage | null = await MobileDirect.parseInboxOffThread(result.body);
     if (page === null) {
       hilog.warn(DOMAIN, TAG, 'inbox parse failed bytes=%{public}d head=%{public}s',
         result.bytes, result.body.substring(0, 160));
       return null;
     }
-    const fixed: DirectInboxPage = MobileDirect.withCursor(page, result.body);
+    const fixed: DirectInboxPage = page;
+    // 位点已在线程池那次解析里带走（见 parseInboxOffThread），这里不再 parse 整页。
     hilog.info(DOMAIN, TAG, 'inbox ok n=%{public}d more=%{public}s cursor=%{public}d',
       fixed.threads.length, `${fixed.hasMore}`, fixed.endCursor.length);
     if (fixed.threads.length > 0) {
       hilog.info(DOMAIN, TAG, 'inbox first title=%{public}s avatar=%{public}s',
         fixed.threads[0].title, fixed.threads[0].avatarUrl.substring(0, 90));
     }
-    MobileDirect.noteSyncState(result.body);
+    if (!MobileDirect.syncParsedInline) {
+      MobileDirect.noteSyncState(result.body);
+    }
     return fixed;
   }
 
@@ -434,6 +440,55 @@ export class MobileDirect {
    * 另外那句 400 的教训值得记着：**200 不等于翻页成功** —— IG 对不认识的游标会原样再给第一页，
    * 只看状态码会把"原地打转"当成功、把同一页塞两遍。
    */
+  /**
+   * **把收件箱解析丢到 TaskPool**（见 workers/InboxParseTask）。
+   *
+   * 一页 20 条会话的响应常有 100~300 KB，解析是"正则预处理 + JSON.parse + 逐字段取"，
+   * 以前还在主线程上做了**两遍**（建模型一遍、捞游标一遍）。现在两件事一次做完，全在线程池里；
+   * 主线程只按回传的行拼 `DirectThread`。
+   *
+   * TaskPool 不可用（老设备 / 初始化失败）时退回主线程那版 —— 慢一点，但功能不能少。
+   */
+  private static async parseInboxOffThread(body: string): Promise<DirectInboxPage | null> {
+    MobileDirect.syncParsedInline = false;
+    try {
+      const parsed: InboxParseResult =
+        await taskpool.execute(parseInboxTask, body) as InboxParseResult;
+      /*
+       * **位点也在线程池里取到了**（`seq_id` / `snapshot_at_ms`）：主线程以前为了这两个值
+       * 又 parse 一遍整页（实测这页 851907 字节）。顺手带走之后，下面 inbox() 里那句
+       * `noteSyncState(body)` 就不用跑了（靠 syncParsedInline 这个旗子）。
+       */
+      if (parsed.error.length === 0 && parsed.seqId > 0 && parsed.snapshotAtMs > 0) {
+        MobileDirect.noteSyncStateFromParsed(parsed.seqId, parsed.snapshotAtMs);
+        MobileDirect.syncParsedInline = true;
+      }
+      const page: DirectInboxPage | null = DirectMapper.inboxFromParsed(parsed);
+      if (page !== null) {
+        hilog.info(DOMAIN, TAG, 'inbox parsed in taskpool n=%{public}d', page.threads.length);
+        return page;
+      }
+      hilog.warn(DOMAIN, TAG, 'inbox taskpool parse returned nothing (%{public}s) → main thread',
+        parsed.error);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'inbox taskpool failed: %{public}s → main thread',
+        (error as Error).message);
+    }
+    return DirectMapper.inboxFromRestJson(body);
+  }
+
+  /** 这页的实时同步位点是不是已经由线程池那次解析给出了（true = 主线程别再 parse）。 */
+  private static syncParsedInline: boolean = false;
+
+  /** 位点落账（线程池路径与主线程路径共用，见 noteSyncState）。 */
+  private static noteSyncStateFromParsed(seq: number, snapshot: number): void {
+    MobileDirect.syncSeqId = seq;
+    MobileDirect.syncSnapshotAtMs = snapshot;
+    AppSettings.saveDirectSync(seq, snapshot);
+    hilog.info(DOMAIN, TAG, 'inbox sync state (taskpool) seq=%{public}d snapshot=%{public}d',
+      seq, snapshot);
+  }
+
   private static withCursor(page: DirectInboxPage, body: string): DirectInboxPage {
     if (page.endCursor.length > 0 || !page.hasMore) {
       return page;
