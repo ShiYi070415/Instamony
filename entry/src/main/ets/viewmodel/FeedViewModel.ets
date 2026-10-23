@@ -86,6 +86,13 @@ const NATIVE_SRC: string = 'native';
  */
 const NATIVE_CACHE_PAGES: number = 3;
 /**
+ * "翻页没有前进"之后的**冷却时长**（毫秒，见 prefetchNativePage）。
+ *
+ * 1 分钟：这段时间里不再预取（否则每铺一页就重试一次，每次 ~350KB 的空转），
+ * 但用户下拉刷新会立刻清掉这个状态重新试（见 refresh）。
+ */
+const NATIVE_STUCK_COOLDOWN_MS: number = 60000;
+/**
  * 预热那一页最多能放多久（毫秒）。
  *
  * app 可能在后台躺很久，那份数据早就不新了；超过这个年龄就当没有，老老实实再发一次。
@@ -1533,6 +1540,16 @@ export class FeedViewModel {
     if (this.nativeFetching || this.nativeQueue.length >= NATIVE_CACHE_PAGES) {
       return;
     }
+    /*
+     * **"上一轮没有前进"之后先别再试**（见下面 no-progress 分支）。
+     *
+     * 每铺一页都会调一次 `prefetchNativePage`，而"服务端把同一页又回一遍"这个状态下
+     * 每次都重试会变成一条**每 8~17 秒一发、每发 ~350KB** 的空转链（真机日志里连打了 3 发）。
+     * 现在置一个冷却：这段时间内不再预取，等用户下拉刷新（`refresh` 会清 `pagingStuck`）。
+     */
+    if (this.pagingStuck && Date.now() - this.lastRestartMs < NATIVE_STUCK_COOLDOWN_MS) {
+      return;
+    }
     if (!this.nativeHasMore) {
       return;
     }
@@ -1569,10 +1586,13 @@ export class FeedViewModel {
          */
         if (page.nextCursor.length > 0 && page.nextCursor !== this.nativeCursor) {
           this.nativeCursor = page.nextCursor;
-          this.nativeHasMore = page.hasMore;
-        } else {
-          this.nativeHasMore = false;
         }
+        /*
+         * **这一轮到此为止**（`nativeHasMore = false`），但**不是永久关闭**：
+         * 冷却过后（或用户下拉刷新）会带着新锚的游标再试一次。
+         * 上一版这里保留了 `page.hasMore`（=true），于是"铺一页就重试一次"变成空转链。
+         */
+        this.nativeHasMore = false;
         this.pagingStuck = true;
         this.lastRestartMs = Date.now();
         hilog.warn(DOMAIN, TAG,

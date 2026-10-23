@@ -2549,24 +2549,21 @@ struct Index {
       }
       const started: number = Date.now();
       /*
-       * ===== 阶段零：**快拍托盘先发**（它在屏幕最上面，且比首屏探索流小得多）=====
+       * ===== 阶段零/一：**先把 feeds 那一发派出去**，托盘随后跟上 =====
        *
-       * 托盘那一发（`feed/reels_tray/`，50 条 / 一两百 KB）比探索流（0.5~1MB）便宜，
-       * 而它显示在最顶上 —— 先发它，用户最先看到"快拍头像长出来"，然后才是帖子。
-       * 配合 `ApiThrottle` 现在允许**两发并发**（见那里的说明），两者互相不挡。
+       * 以前是"先托盘、再 feeds"（理由是托盘更小、显示在最上面）。但真机日志显示首屏那一发
+       * 在闸门里排了 ~1 秒：`paced feed/timeline/ waited=1050ms ... inflight=2/2` ——
+       * 托盘 + 收件箱预热先各占了一个名额。托盘的收益只是"头像长出来"，
+       * 而 feeds 才是用户真正在等的内容，所以顺序反过来：
+       *   1) 先 `loadFeed()`（不 await，让它立刻进闸门排队）；
+       *   2) 紧接着托盘（并发 2，两边能同时在飞）；
+       *   3) 再 `await` feeds 完成。
+       * 请求数一个没多，只是把"谁先排队"摆对了。
        */
+      const wantFeed: boolean = this.viewModel.list().length === 0;
+      const feedTask: Promise<void> = wantFeed ? this.viewModel.loadFeed() : Promise.resolve();
       this.warmStoriesNow();
-      /*
-       * ===== 阶段一：feeds（首屏）=====
-       *
-       * ⚠️ **不再等网页就绪**：网页宿主现在是按需挂载的（见 `webHostMounted`），冷启动时
-       * 根本没有它 —— 以前这里 `awaitPageReady(PRELOAD_PAGE_WAIT_MS)` 会**白等满 8 秒**
-       * 才往下走，首屏探索流和后面的预热链全被它堵着（这就是"冷启动还要等好几秒"的一大块）。
-       * 数据全走移动端接口，一行都不需要网页；真要用网页的那几条路自己会等。
-       */
-      if (this.viewModel.list().length === 0) {
-        await this.viewModel.loadFeed();
-      }
+      await feedTask;
       hilog.info(DOMAIN, TAG, 'preload feed posts=%{public}d %{public}dms',
         this.viewModel.list().length, Date.now() - started);
       // ===== 阶段二：其余四个页面（不 await，别挡着首屏）=====
