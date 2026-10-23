@@ -15,6 +15,8 @@ import { NativeTimeline, NativeTimelineParser } from './NativeTimelineParser';
 import { MobileFeedPage, MobileFeedTimeline } from './mobileapi/MobileFeedTimeline';
 // "关注流已看完"这个状态要落盘（见 markCaughtUp）。
 import { FeedCache } from './FeedCache';
+import { QualityProfile } from './MediaQuality';
+import { parseFeedTask } from '../workers/FeedParseTask';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeFeed';
@@ -220,11 +222,24 @@ export class NativeFeed {
       return null;
     }
     /*
-     * ⚠️ **这一条不能进 TaskPool**（试过，真机报 `ReferenceError: AppStorage is not defined`）：
-     * 解析链里的 `MediaQuality` 要读画质设置，而设置在 AppStorage 上 —— 线程池里没有这个 API。
-     * 要挪得先把"图片/视频清晰度"当参数喂进解析器（改动面比前三条大），暂缓。
+     * **解析丢进 TaskPool**（见 workers/FeedParseTask）：`feed/timeline/` 一页 300~400 KB，
+     * 正好压在"骨架屏换成真内容"那一帧。
+     * 画质档在**主线程**算好（`QualityProfile.now()`，只有它能读设置/网络状态），
+     * 只把三个纯值递进线程池 —— 解析链因此不再碰 AppStorage。
      */
-    const parsed: NativeTimeline | null = NativeTimelineParser.parseMobileFeed(page.body);
+    let parsed: NativeTimeline | null = null;
+    try {
+      const profile: QualityProfile = QualityProfile.now();
+      const started: number = Date.now();
+      parsed = await taskpool.execute(parseFeedTask, page.body, profile.imageTarget,
+        profile.videoTarget, profile.gridMode) as NativeTimeline | null;
+      hilog.info(DOMAIN, TAG, 'feed parsed in taskpool bytes=%{public}d ms=%{public}d',
+        page.body.length, Date.now() - started);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'feed taskpool failed: %{public}s → main thread',
+        (error as Error).message);
+      parsed = NativeTimelineParser.parseMobileFeed(page.body);
+    }
     if (parsed === null) {
       /*
        * **明确是"关注流已看完"**（这一页只有 `end_of_feed_demarcator` 占位，没有媒体行）时

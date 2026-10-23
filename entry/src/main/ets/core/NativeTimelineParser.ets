@@ -12,7 +12,7 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { FeedItemDto, FeedMediaItemDto } from '../model/FeedDto';
-import { MediaQuality, PickedMedia } from './MediaQuality';
+import { MediaQuality, PickedMedia, QualityProfile } from './MediaQuality';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeTimelineParser';
@@ -162,6 +162,12 @@ export class NativeTimeline {
 
 export class NativeTimelineParser {
   /**
+   * 本次解析用的画质档（见 parseMobileFeed）：null = 读全局设置（老路径）。
+   * 放静态字段的原因：pick 那几层是私有的、调用链很深，一路传参改动面太大；
+   * 而解析是**同步**的，同一条线程上不会交错（TaskPool 每个线程各自一份模块实例）。
+   */
+  private static parsingProfile: QualityProfile | null = null;
+  /**
    * **移动端 `feed/timeline/` 那条**的解析（形状与网页 GraphQL 不同）。
    *
    * 移动端响应（实测 200 / 253KB）通常是：
@@ -173,7 +179,9 @@ export class NativeTimelineParser {
    * 字段映射**复用 `toItem`**：v1 媒体与 GraphQL 媒体的字段名基本重合
    * （`image_versions2` / `video_versions` / `carousel_media` / `user` / `caption` …）。
    */
-  static parseMobileFeed(body: string): NativeTimeline | null {
+  static parseMobileFeed(body: string, profile: QualityProfile | null = null): NativeTimeline | null {
+    // 画质档由调用方给（见 MediaQuality.QualityProfile）：解析可能跑在 TaskPool 里，那里读不到设置。
+    NativeTimelineParser.parsingProfile = profile;
     if (body.length === 0) {
       return null;
     }
@@ -714,11 +722,16 @@ export class NativeTimelineParser {
       widths.push(candidates[index].width ?? 0);
       heights.push(candidates[index].height ?? 0);
     }
+    const profile: QualityProfile | null = NativeTimelineParser.parsingProfile;
     const picked: PickedMedia = original
       ? MediaQuality.originalImage(urls, widths, heights)
       : thumb
-        ? MediaQuality.displayImageAt(urls, widths, heights, THUMB_WIDTH)
-        : MediaQuality.displayImage(urls, widths, heights);
+        ? (profile === null
+          ? MediaQuality.displayImageAt(urls, widths, heights, THUMB_WIDTH)
+          : MediaQuality.imageAtWith(profile, urls, widths, heights, THUMB_WIDTH))
+        : (profile === null
+          ? MediaQuality.displayImage(urls, widths, heights)
+          : MediaQuality.imageWith(profile, urls, widths, heights));
     return new PickedImage(picked.url, picked.width, picked.height);
   }
 
@@ -737,9 +750,12 @@ export class NativeTimelineParser {
       widths.push(versions[index].width ?? 0);
       heights.push(versions[index].height ?? 0);
     }
+    const profile: QualityProfile | null = NativeTimelineParser.parsingProfile;
     const picked: PickedMedia = original
       ? MediaQuality.originalVideo(urls, widths, heights)
-      : MediaQuality.displayVideo(urls, widths, heights);
+      : (profile === null
+        ? MediaQuality.displayVideo(urls, widths, heights)
+        : MediaQuality.videoWith(profile, urls, widths, heights));
     if (picked.url.length === 0) {
       return undefined;
     }

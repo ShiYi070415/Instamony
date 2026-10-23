@@ -50,6 +50,40 @@ export class PickedMedia {
   }
 }
 
+/**
+ * **算好的画质档**（纯数据，可跨线程）。
+ *
+ * 为什么需要它：解析器一旦搬进 TaskPool，就**不能**再读 `AppSettings` / `NetworkState`
+ * （真机报 `ReferenceError: AppStorage is not defined` —— 线程池里没有这个 API）。
+ * 所以主线程先用 `QualityProfile.now()` 把"当前该用多大"算成三个数，再把这份纯数据递进解析，
+ * 解析里只做纯计算。
+ */
+export class QualityProfile {
+  /** 全宽图片的目标宽度（-1 = 原画，取最大那档）。 */
+  readonly imageTarget: number;
+  /** 视频的目标宽度（-1 = 原画）。 */
+  readonly videoTarget: number;
+  /**
+   * 网格/封面那类"自带目标基数"的档位：`saver` / `high` / `original` / `base`。
+   *
+   * 为什么不是一个因子：`original` 那一档是"**至少 1440**"（不是按比例放大），
+   * 用因子表达不了（基数本身是变的）。所以带档位名，缩放规则仍在 MediaQuality 里算。
+   */
+  readonly gridMode: string;
+
+  constructor(imageTarget: number, videoTarget: number, gridMode: string) {
+    this.imageTarget = imageTarget;
+    this.videoTarget = videoTarget;
+    this.gridMode = gridMode;
+  }
+
+  /** 主线程算一份"现在的画质档"（只有这里会碰设置/网络状态）。 */
+  static now(): QualityProfile {
+    return new QualityProfile(MediaQuality.imageTarget(), MediaQuality.videoTarget(),
+      MediaQuality.gridModeNow());
+  }
+}
+
 export class MediaQuality {
   /**
    * 图片候选 → 展示用那一张（宽度 ≥ 目标里最接近的；都不够就取最大的）。
@@ -81,6 +115,51 @@ export class MediaQuality {
   /** 视频候选 → 展示用那一档（宽度 ≥ 目标里最接近的；都不够就取最大的）。 */
   static displayVideo(urls: Array<string>, widths: Array<number>, heights: Array<number>): PickedMedia {
     return MediaQuality.pick(urls, widths, heights, MediaQuality.videoTarget());
+  }
+
+  // ---- 下面这一组是"画质档由外部给"的版本（解析器在 TaskPool 里跑时用，见 QualityProfile）----
+
+  /** 图片：按给定档取展示那一张。 */
+  static imageWith(profile: QualityProfile, urls: Array<string>, widths: Array<number>,
+                   heights: Array<number>): PickedMedia {
+    return MediaQuality.pick(urls, widths, heights, profile.imageTarget);
+  }
+
+  /** 图片：按给定档取展示那一张，**自带目标基数**（网格/封面）也会按档缩放。 */
+  static imageAtWith(profile: QualityProfile, urls: Array<string>, widths: Array<number>,
+                     heights: Array<number>, base: number): PickedMedia {
+    return MediaQuality.pick(urls, widths, heights, MediaQuality.gridTargetWith(profile, base));
+  }
+
+  /** 视频：按给定档取展示那一档。 */
+  static videoWith(profile: QualityProfile, urls: Array<string>, widths: Array<number>,
+                   heights: Array<number>): PickedMedia {
+    return MediaQuality.pick(urls, widths, heights, profile.videoTarget);
+  }
+
+  /** 给定档位下"自带基数"的目标宽度（和 scaledTarget 同一套判据，只是不读设置）。 */
+  static gridTargetWith(profile: QualityProfile, base: number): number {
+    if (profile.gridMode === MEDIA_QUALITY_SAVER) {
+      return Math.max(TARGET_MIN, Math.floor(base * 0.72));
+    }
+    if (profile.gridMode === MEDIA_QUALITY_HIGH) {
+      return Math.max(base, Math.floor(base * 1.4));
+    }
+    if (profile.gridMode === MEDIA_QUALITY_ORIGINAL) {
+      return Math.max(base, TARGET_HIGH);
+    }
+    return base;
+  }
+
+  /** 主线程：当前的网格档位（供 QualityProfile.now 用）。 */
+  static gridModeNow(): string {
+    const quality: string = AppSettings.imageQualityNow();
+    if (quality === MEDIA_QUALITY_SAVER || quality === MEDIA_QUALITY_HIGH
+      || quality === MEDIA_QUALITY_ORIGINAL) {
+      return quality;
+    }
+    // auto：蜂窝网络按省流处理，Wi-Fi 用原始基数（和 scaledTarget 同一套判据）。
+    return NetworkState.allowPrefetch() ? 'base' : MEDIA_QUALITY_SAVER;
   }
 
   /** 视频候选 → 下载用的原视频（最大的一档）。 */
