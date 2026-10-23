@@ -153,6 +153,8 @@ import { MobileChallenge } from '../core/mobileapi/MobileChallenge';
 import { AccountCaches } from '../core/AccountCaches';
 // 账号动作里"与 UI 无关"的那一半（记住当前账号 / 从本机删掉账号）。
 import { AccountActionService } from '../core/AccountActionService';
+// "这次登录态变化该做什么"的纯计算（applySession 前半段，见 core/SessionApplyPlan）。
+import { SessionApplyPlan } from '../core/SessionApplyPlan';
 // 换账号/退出登录的"会话清理事务"（停实时通道 → 清台账 → 归零限流 → 清缓存 → 作废会话材料）。
 import { SessionService } from '../core/SessionService';
 // 时间线翻页参数探针（诊断开关 TIMELINE_PAGE_PROBE，见 core/mobileapi/TimelineProbe）。
@@ -3302,27 +3304,21 @@ struct Index {
      *   · 这个账号以前登过、有备份，就搬回活跃位（用户要求："可以保存备份"）；
      *   · 内存里"按人"的东西全清（列表、托盘队列、预取、覆盖表、会话材料…）。
      */
-    const account: AccountChange = cookie.length > 0
-      ? AccountScope.adoptFrom(cookie)
-      : new AccountChange(AccountScope.current(), AccountScope.current());
     /*
-     * **"换账号"必须和"登录态变了"一样当回事**（用户报的问题）。
-     *
-     * 以前这里只看 `changed`（= 登录态 true/false 有没有变）。切换账号时两边都是 true，
-     * 于是下面那段整块被跳过：页签停在原来那页、导航栈没清、列表没重置、**隐藏网页也没卸**——
-     * 而那个网页还挂在**上一个账号**的会话上，它会不停改写 Cookie，罐里的 `ds_user_id`
-     * 就在两个号之间来回跳（真机日志：`remembered …` 每 1~3 秒换一个人，头像于是串号）。
-     * 现在"账号变了"也算变化：走同一套复位（回主页、清栈、清数据、卸网页、重新取数）。
+     * **判据与副作用分开**：前半段（登的是谁 / 换没换人 / 要不要搬分区）交给
+     * `core/SessionApplyPlan`（只有一个只读结果），这里照着执行副作用。
      */
-    const accountChanged: boolean = account.changed() && this.sessionChecked;
+    const plan: SessionApplyPlan = SessionApplyPlan.make(cookie, this.sessionChecked, changed);
+    const account: AccountChange = plan.account;
+    const accountChanged: boolean = plan.accountChanged;
     if (accountChanged) {
-      hilog.info(DOMAIN, TAG, 'account switch %{public}s -> %{public}s',
+      hilog.info(DOMAIN, TAG, 'account switch %{public}s -> %{public}s (%{public}s)',
         account.previous.length > 0 ? account.previous : '(none)',
-        account.current.length > 0 ? account.current : '(none)');
-      if (account.previous.length > 0) {
+        account.current.length > 0 ? account.current : '(none)', plan.describe());
+      if (plan.stashPrevious) {
         AccountScope.stashAll(account.previous);
       }
-      if (account.current.length > 0) {
+      if (plan.restoreCurrent) {
         AccountScope.restoreAll(account.current);
       }
       this.forgetAccountMemory();
