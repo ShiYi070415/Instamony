@@ -51,11 +51,30 @@ export struct LoginPage {
   /** **原生登录成功**（会话已写进 Cookie 罐）：页面据此切到主界面。 */
   onSignedIn: () => void = (): void => {
   };
+  /**
+   * **把账号密码交给隐藏网页去登录**（见 core/WebLogin）。
+   *
+   * 这是本页主按钮真正干的事：IG 已经不放第三方客户端走原生密码登录（`needs_upgrade`），
+   * 而它自己的网页里就是账号密码登录 —— 所以在隐藏网页里静默完成，用户只面对本 App。
+   *
+   * @returns 空串 = 成功；否则是给用户看的失败原因
+   */
+  onWebLogin: (username: string, password: string) => Promise<string> =
+    (username: string, password: string): Promise<string> => {
+      return Promise.resolve('网页登录未接入');
+    };
   /** 材质厚度：跟随设置页那一档（@StorageLink 与其它页面同源）。 */
   @StorageLink(SETTING_MATERIAL_THICKNESS) materialThickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
 
-  @State private username: string = '';
-  @State private password: string = '';
+  /**
+   * 账号与密码放在 AppStorage 里，而不是普通 `@State`。
+   *
+   * 原因（实测）：点了登录之后，Index 会把**隐藏网页宿主**挂上（无头网页登录要用引擎），
+   * 那一层是根 Stack 的新子节点，LoginPage 会跟着重建一次 —— 普通 @State 会丢，
+   * 用户看到"刚输的账号密码没了"（截图里就是这样）。@StorageLink 让输入跨重建存活。
+   */
+  @StorageLink('login_username') username: string = '';
+  @StorageLink('login_password') password: string = '';
   @State private code: string = '';
   /**
    * 走"sessionid 登录"（instagrapi 的 `login_by_sessionid`）。
@@ -384,9 +403,11 @@ export struct LoginPage {
   }
 
   /**
-   * 提交：第一次是"账号 + 密码"，第二步是验证码。
+   * 提交：主按钮 = "拿账号密码去隐藏网页里登录"（见 onWebLogin）。
    *
-   * 两个入口共用同一个函数：`stage` 决定发什么（见 core/mobileapi/MobileLogin）。
+   * 只有 sessionid 模式那条走 MobileLogin；账号密码一律交给隐藏网页 ——
+   * 因为原生 `accounts/login/` 已被 IG 的版本政策挡住（`needs_upgrade`），
+   * 详见 core/mobileapi/MobileLogin 与 core/WebLogin 的文件头。
    */
   private submit(): void {
     if (this.busy) {
@@ -398,10 +419,17 @@ export struct LoginPage {
     }
     this.error = '';
     this.busy = true;
-    MobileLogin.login(this.username, this.password, this.code)
-      .then((outcome: LoginOutcome): void => {
+    this.onWebLogin(this.username, this.password)
+      .then((message: string): void => {
         this.busy = false;
-        this.apply(outcome);
+        if (message.length === 0) {
+          // 密码不留在内存里；会话已进 Cookie 罐，Index 那边会重读登录态。
+          this.password = '';
+          this.stage = LoginStage.Ok;
+          this.onSignedIn();
+          return;
+        }
+        this.error = message;
       })
       .catch((error: Error): void => {
         this.busy = false;

@@ -101,6 +101,8 @@ import { AppTab } from '../model/AppTab';
 import { DeepLink, DeepLinkIntent, DeepLinkRoute } from '../core/DeepLink';
 // 点私信通知要直接进那条会话（EntryAbility 把会话 id 交给它，见 consumeNotifyRoute）。
 import { NotifyRoute } from '../core/NotifyRoute';
+// 无头网页登录：账号密码在隐藏网页里完成（见 core/WebLogin）。
+import { WebLogin } from '../core/WebLogin';
 import { CommentItem, CommentsPayload, LikePayload, SavePayload } from '../model/Comment';
 import { FeedMapper } from '../model/FeedMapper';
 import { FeedStatus } from '../model/FeedStatus';
@@ -219,6 +221,14 @@ const DIRECT_THREAD_PAGE: string = 'directThread';
  */
 const NOTIFY_ROUTE_RETRY_MS: number = 500;
 const NOTIFY_ROUTE_MAX_TRIES: number = 15;
+/**
+ * 无头网页登录：第一次挂载隐藏网页后等多久再动手（毫秒）。
+ *
+ * 引擎初始化 + 控制器绑定是异步的（`onControllerAttached` 之后才能 `runJavaScript`）。
+ * 800ms 是按真机/模拟器上"挂载到可用"的实测节奏取的；WebLogin 自己还会轮询表单，
+ * 所以这里只是别在"控制器还没绑上"时就发第一枪。
+ */
+const WEB_LOGIN_MOUNT_WAIT_MS: number = 800;
 /**
  * 收件箱还没读回来的话，前几拍先等它（见 consumeNotifyRoute 里那段）。
  *
@@ -2955,6 +2965,14 @@ struct Index {
     this.sessionChecked = true;
     this.lastSessionState = signedIn;
     this.signedIn = signedIn;
+    if (!signedIn) {
+      /*
+       * 登录页一出现就把**隐藏网页**挂好：点「登录」时引擎已经就绪（见
+       * prepareHiddenWebForLogin 的说明），而且挂载这件事不再发生在点击路径上
+       * —— 否则输入框会被重建清空。
+       */
+      this.prepareHiddenWebForLogin();
+    }
     /*
      * **登录闸门**（见 core/SessionGate）：未登录时只允许网页停在登录流程那几条地址上，
      * 其余导航一律丢掉。放在这里（applySession）是因为这是全 app 唯一的登录态出口 ——
@@ -3363,6 +3381,50 @@ struct Index {
     }
     hilog.info(DOMAIN, TAG, 'mount web host (on demand) start=%{public}s', this.webStartUrl);
     this.webHostMounted = true;
+  }
+
+  /**
+   * **提前**把隐藏网页宿主挂好（登录页一出现就挂），这样点「登录」时引擎已经就绪。
+   *
+   * 为什么不在点击时挂：挂载会在根 Stack 里插一个新节点，`LoginPage` 会跟着重建一次
+   * （实测：输好的账号密码被清空）。提前挂 + 保持 `webVisible = false`，
+   * 用户全程看不到网页，点击那一刻也不会引起任何布局变化。
+   */
+  private prepareHiddenWebForLogin(): void {
+    if (this.webHostMounted) {
+      return;
+    }
+    hilog.info(DOMAIN, TAG, 'prepare hidden web host for headless login');
+    this.noteStartUrl(AppConfig.INSTAGRAM_LOGIN_URL);
+    this.webVisible = false;
+    this.mountWebHost();
+  }
+
+  /**
+   * **无头网页登录**：把账号密码交给隐藏网页去完成登录（见 core/WebLogin）。
+   *
+   * 与 `openLoginWeb` 的区别只有一处：**不把网址亮出来**（`webVisible` 保持 false）。
+   * 宿主照样要挂上（`prepareHiddenWebForLogin`），因为只有挂了才有 Web 引擎跑那段登录页的 JS；
+   * 它是 `Visibility.Hidden` 的，所以用户看不到 —— 需求要求的正是这一点。
+   *
+   * @returns 空串 = 成功；否则是给登录页显示的原因
+   */
+  private async headlessWebLogin(username: string, password: string): Promise<string> {
+    const freshlyMounted: boolean = !this.webHostMounted;
+    if (freshlyMounted) {
+      this.prepareHiddenWebForLogin();
+      // 引擎初始化 + 控制器绑定是异步的（`onControllerAttached` 之后才能 runJavaScript）。
+      await Index.delay(WEB_LOGIN_MOUNT_WAIT_MS);
+    }
+    const message: string = await WebLogin.login(username, password);
+    if (message.length === 0) {
+      // 会话已经进罐：重读登录态（五个页签随之建起来），并把隐藏网页收掉省电。
+      await this.refreshSessionFromJar();
+      this.unmountWebHost('login done');
+      return '';
+    }
+    hilog.info(DOMAIN, TAG, 'headless web login failed: %{public}s', message);
+    return message;
   }
 
   /**
@@ -6318,6 +6380,16 @@ struct Index {
          */
         onSignedIn: (): void => {
           this.refreshSessionFromJar();
+        },
+        /*
+         * **账号密码 → 隐藏网页登录**（需求：原生输入，网页里登录，不显示网页）。
+         *
+         * 为什么这么接：IG 已经不给第三方客户端走原生密码登录（`needs_upgrade`），
+         * 但它自己的网页就是账号密码登录。于是把账号密码丢进**隐藏**的网页宿主去完成，
+         * 用户全程只看到本 App 的登录页（宿主是 `Visibility.Hidden`，见 InstagramWebHost）。
+         */
+        onWebLogin: (username: string, password: string): Promise<string> => {
+          return this.headlessWebLogin(username, password);
         }
       })
     } else {

@@ -388,6 +388,34 @@ export class InstagramPageBridge {
   }
 
   /**
+   * **直接执行一段 JS 并把结果当字符串拿回来**（不依赖页面的 ogNative 桥）。
+   *
+   * 用在哪：无头网页登录（见 core/WebLogin）—— 要在登录页里填账号密码、点提交、读错误文案，
+   * 那几条都不该走 `runBridge`：它要求页面里已经注入过 `ogNative`（模板机制的产物），
+   * 而登录页是 IG 自己的 React 页面，没有我们的桥对象。
+   *
+   * 之所以还能用：宿主是 `Visibility.Hidden` 的，但引擎里 JS / 定时器 / 网络照常跑
+   * （见 InstagramWebHost 那段注释），所以"看不见地登录"这件事成立。
+   */
+  async runScript(script: string): Promise<string> {
+    if (!this.attached) {
+      return '';
+    }
+    try {
+      const out: string = await this.controller.runJavaScript(script);
+      return out === undefined || out === null ? '' : `${out}`;
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'runScript failed: %{public}s', (error as Error).message);
+      return '';
+    }
+  }
+
+  /** 宿主挂上了没有（`runScript` 是否有意义）。 */
+  isAttached(): boolean {
+    return this.attached;
+  }
+
+  /**
    * Runs a page-side expression and waits for its asynchronous result.
    *
    * The expression should return a value or a Promise. Everything is serialized
