@@ -21,9 +21,11 @@
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { taskpool } from '@kit.ArkTS';
 import { NotificationsPayload, NotifyPayloadItem } from '../model/Notification';
 import { MobileNews } from './mobileapi/MobileNews';
 import { MobileResult } from './mobileapi/MobileRequest';
+import { parseNotificationsTask } from '../workers/NotifyParseTask';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeNotify';
@@ -271,7 +273,19 @@ export class NativeNotifications {
       NativeNotifications.logInboxShape(inbox.body);
     }
     step = 'parse-inbox';
-    const items: Array<NotifyPayloadItem> = NativeNotifications.parseInbox(inbox.body);
+    /*
+     * **解析丢进 TaskPool**：一页通知几百 KB，JSON.parse + 逐条取字段在主线程上是能感觉到的
+     * （见 workers/NotifyParseTask）。线程池不可用/解析异常时退回本线程那版 —— 功能不能少。
+     */
+    let items: Array<NotifyPayloadItem> = [];
+    try {
+      items = await taskpool.execute(parseNotificationsTask, inbox.body) as Array<NotifyPayloadItem>;
+      hilog.info(DOMAIN, TAG, 'mobile notify parsed in taskpool n=%{public}d', items.length);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'notify taskpool failed: %{public}s → main thread',
+        (error as Error).message);
+      items = NativeNotifications.parseInboxItems(inbox.body);
+    }
     if (!NativeNotifications.itemsLogged) {
       NativeNotifications.itemsLogged = true;
       NativeNotifications.logItems(items);
@@ -467,8 +481,13 @@ export class NativeNotifications {
     });
   }
 
-  /** news/inbox → 页面用的条目（字段形状与网页脚本一致）。 */
-  private static parseInbox(text: string): Array<NotifyPayloadItem> {
+  /**
+   * **new/inbox 响应 → 条目**（public：TaskPool 那边的 `parseNotificationsTask` 也调它）。
+   *
+   * 纯函数：只做 JSON.parse 与字符串处理，不碰 AppStorage / 单例 / UI —— 这是它能被搬到
+   * 线程池的前提（见 workers/NotifyParseTask 的说明）。
+   */
+  static parseInboxItems(text: string): Array<NotifyPayloadItem> {
     const out: Array<NotifyPayloadItem> = [];
     let data: NewsInbox | null = null;
     try {
