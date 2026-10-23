@@ -31,9 +31,6 @@ import {
 // WEB_LOGIN_NEEDS_CODE / WEB_LOGIN_NEEDS_WEB：密码过了之后"还要再走一步"的两种情形
 // （能在这里输验证码 / 只能去网页里验），见 core/WebLogin。
 import { WEB_LOGIN_NEEDS_CODE, WEB_LOGIN_NEEDS_WEB } from '../core/WebLogin';
-// 本机登录过的账号（登录页那一栏"切回已有账号"用，见 core/AccountBook）。
-import { AccountEntry } from '../core/AccountBook';
-import { ACCOUNT_OTHERS } from './AccountSwitcher';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const DOMAIN: number = 0xFF00;
@@ -68,14 +65,6 @@ export struct LoginPage {
    */
   onWebVerify: () => void = (): void => {
   };
-  /**
-   * **切回本机登录过的账号**（见 core/AccountBook）：登录页那一栏点某个账号，
-   * 会话直接从花名册种回 Cookie 罐，不用重新输密码。
-   */
-  onPickAccount: (userId: string) => void = (userId: string): void => {
-  };
-  /** 本机登录过的账号（空 = 不画那一栏）。 */
-  @StorageLink(ACCOUNT_OTHERS) savedAccounts: Array<AccountEntry> = [];
   /**
    * **把账号密码交给隐藏网页去登录**（见 core/WebLogin）。
    *
@@ -495,53 +484,6 @@ export struct LoginPage {
         }
         .width('100%')
         .alignItems(HorizontalAlign.Start)
-
-        /*
-         * **本机登录过的账号**（多账号，见 core/AccountBook）：登录页也能一键切回去，
-         * 不必重新输密码 —— 否则「新增账号」等于"登出就回不来"。
-         * 没有记录时整块不画（新装用户看不到没用的东西）。
-         */
-        if (this.savedAccounts.length > 0) {
-          Column({ space: 8 }) {
-            Text($r('app.string.login_saved_accounts'))
-              .fontSize(11)
-              .fontColor($r('app.color.secondary_text'))
-              .width('100%')
-              .padding({ left: 6 })
-            ForEach(this.savedAccounts, (one: AccountEntry): void => {
-              Row({ space: 10 }) {
-                Image(one.avatarUrl.length > 0 ? one.avatarUrl : $r('app.media.startIcon'))
-                  .width(28)
-                  .height(28)
-                  .borderRadius(14)
-                  .objectFit(ImageFit.Cover)
-                  .draggable(false)
-                Text(one.username.length > 0 ? one.username : one.userId)
-                  .fontSize(14)
-                  .fontColor($r('app.color.primary_text'))
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  .layoutWeight(1)
-                SymbolGlyph($r('sys.symbol.chevron_right'))
-                  .fontSize(12)
-                  .fontColor([$r('app.color.secondary_text')])
-              }
-              .width('100%')
-              .height(46)
-              .padding({ left: 12, right: 12 })
-              .borderRadius(23)
-              .backgroundColor(FALLBACK_SURFACE)
-              .backgroundBlurStyle(FALLBACK_BLUR)
-              .enabled(!this.busy)
-              .onClick((): void => {
-                this.onPickAccount(one.userId);
-              })
-            }, (one: AccountEntry): string => `saved-${one.userId}`)
-          }
-          .width('100%')
-          .alignItems(HorizontalAlign.Start)
-          .margin({ top: 4 })
-        }
 
         // ---- 按钮列：登录 / 注册新账号 ----
         Column({ space: 12 }) {

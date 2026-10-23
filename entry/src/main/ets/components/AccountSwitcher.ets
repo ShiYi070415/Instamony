@@ -31,8 +31,8 @@ export const ACCOUNT_TITLE_NAME: string = 'account_title_name';
 export const ACCOUNT_TITLE_AVATAR: string = 'account_title_avatar';
 export const ACCOUNT_OTHERS: string = 'account_others';
 
-/** 胶囊高度（比标题栏里其它胶囊矮一点，才不会把那一行顶满）。 */
-const CHIP_H: number = 36;
+/** 胶囊高度：**和标题栏里 menus 那几颗按钮一致**（需求）。材质层的 "the" 高度就是 40，见 MaterialSurface 的 MATERIAL_BUTTON_SIZE。 */
+const CHIP_H: number = 40;
 /** 胶囊里的头像直径。 */
 const CHIP_AVATAR: number = 24;
 /** 选单里每一行的头像直径。 */
@@ -44,12 +44,13 @@ const ROW_H: number = 48;
 /** 选单的圆角（和评论面板那种卡片一个量级）。 */
 const MENU_RADIUS: number = 22;
 /**
- * 选单浮层距离屏幕顶端的距离（vp）。
+ * 选单浮层距离屏幕顶端的距离（vp）：**贴着下拉按钮，间隔 10vp**（需求）。
  *
- * 要正好落在标题栏下面：状态栏 39 + 标题栏 56 ≈ 95，取 100 让开一点。
- * 选单和按钮都是水平居中的，所以纵向对上了就看着像"从按钮下面长出来"。
+ * 实测数据（模拟器 1280x2832，3.5 px/vp）：胶囊在 `y=164..304`（40vp 高、标题栏内居中），
+ * 浮层容器从 37vp 处开始 —— 要让卡片顶边落在 304px + 35px(10vp) = 339px，
+ * padding 就得是 (339 - 129) / 3.5 ≈ 60。
  */
-export const ACCOUNT_MENU_TOP_VP: number = 100;
+export const ACCOUNT_MENU_TOP_VP: number = 58;
 
 /** 头像：有地址就画图，没有就用应用图标兜底。 */
 @Builder

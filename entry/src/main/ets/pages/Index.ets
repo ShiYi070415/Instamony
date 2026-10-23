@@ -189,6 +189,14 @@ const DOMAIN: number = 0xFF00;
 const NOTIFICATIONS_PAGE: string = 'notifications';
 /** 设定页在 NavPathStack 里的名字（见 destinationBuilder）。 */
 const SETTINGS_PAGE: string = 'settings';
+/**
+ * **新增账号页**在 NavPathStack 里的名字（见 destinationBuilder）。
+ *
+ * 需求："新增账号时登录页作为新一页展开，应该是 navigation，左上角添加返回按钮"。
+ * 所以它是一页 NavDestination（左上角自带返回键），压在当前账号的壳之上 ——
+ * 点返回就原样退回，当前账号一点不受影响。
+ */
+const ADD_ACCOUNT_PAGE: string = 'addAccount';
 /** **用户主页**在 NavPathStack 里的名字（从信息流的资料行点进去，见 destinationBuilder）。 */
 const USER_PROFILE_PAGE: string = 'userProfile';
 /**
@@ -6655,13 +6663,6 @@ struct Index {
          */
         onWebVerify: (): void => {
           this.openLoginWeb();
-        },
-        /*
-         * **登录页一键切回本机登录过的账号**（见 core/AccountBook）：
-         * 会话直接种回 Cookie 罐，不用重新输密码 —— 否则「新增账号」等于"登出就回不来"。
-         */
-        onPickAccount: (userId: string): void => {
-          this.switchAccount(userId);
         }
       })
     } else {
@@ -7717,16 +7718,54 @@ struct Index {
   }
 
   /**
-   * **新增账号**：先把当前账号记下来，再走一次"退出登录"（它会清罐、清内存、停在登录页）。
+   * **新增账号**：压一页登录页上来（NavDestination，左上角返回键），**不动当前账号**。
    *
-   * 为什么复用 signOut 而不是另写一套：清的东西必须完全一样（会话 / 落盘分区 / 内存 / 诊断文件），
-   * 分开写必然漏一条（见 signOut 的注释）。花名册**不**受 signOut 影响（见 core/AccountBook）。
+   * 以前这一条是"先把当前账号记下来 → signOut → 整页登录页"，代价是登出之后必须重新登录才能
+   * 回来（用户明确不要这个）。现在登录页只是一页普通路由：退了原样回来，登成功了再切过去。
    */
-  private async addAccount(): Promise<void> {
-    hilog.info(DOMAIN, TAG, 'add account → sign out then show login page');
+  private addAccount(): void {
+    hilog.info(DOMAIN, TAG, 'add account → push login page');
+    this.navStack.pushPath({ name: ADD_ACCOUNT_PAGE });
+  }
+
+  /**
+   * 新增账号页里的「登录」：**先把罐清干净再走无头登录**。
+   *
+   * 为什么要清：IG 的网页登录接口在一个已登录的会话上行为不稳（会回
+   * `showAccountRecoveryModal` 之类），而"换号"本质上就是"没有会话时登一次"。
+   * 所以：先把当前账号记进花名册 → 清罐 → 走 headlessWebLogin。
+   * 失败就把原会话**还回去**（否则用户点一下新增账号，自己的号就没了）。
+   */
+  private async addAccountLogin(username: string, password: string): Promise<string> {
     await this.rememberAccount();
-    await this.signOut();
-    this.refreshOtherAccounts();
+    const previous: AccountEntry | null = AccountBook.find(this.currentAccountId());
+    /*
+     * 清罐 + 重置隐藏网页：登录页要在"干净未登录"的文档里发那一发 fetch
+     * （旧文档的会话和缓存会被带进请求里）。
+     */
+    try {
+      await InstagramCookieJar.getInstance().clear();
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'clear jar before add-account failed: %{public}s',
+        (error as Error).message);
+    }
+    this.unmountWebHost('add-account');
+    const message: string = await this.headlessWebLogin(username, password);
+    const ok: boolean = message.length === 0;
+    // 2FA 那两种"还要再走一步"也不算失败：罐里还没有新会话，但流程还没结束。
+    const pending: boolean = message === WEB_LOGIN_NEEDS_CODE || message === WEB_LOGIN_NEEDS_WEB;
+    if (!ok && !pending && previous !== null && previous.usable()) {
+      // 登录没成：把原来的会话种回去 —— 不能让"新增账号"把当前账号弄丢。
+      const restored: boolean = await InstagramCookieJar.adoptSession(previous.sessionId,
+        previous.userId, previous.csrf);
+      hilog.info(DOMAIN, TAG, 'add-account failed → restore previous session ok=%{public}s',
+        `${restored}`);
+      if (restored) {
+        await InstagramCookieJar.save();
+        InstagramCookieJar.invalidate();
+      }
+    }
+    return message;
   }
 
   /**
@@ -9069,6 +9108,50 @@ struct Index {
         this.onPageHidden(SETTINGS_PAGE);
       })
       // 返回键：**评论浮层开着就先收评论**（需求："返回优先收起面板"），不再 pop 页面。
+      .onBackPressed((): boolean => this.handleDestinationBack())
+    } else if (name === ADD_ACCOUNT_PAGE) {
+      /*
+       * **新增账号**（需求："新增账号时登录页作为新一页展开，应该是 navigation，左上角添加返回按钮"）。
+       *
+       * 和"整页登录页"那条路的区别：这里**不动当前账号**（不 signOut、不换 signedIn），
+       * 只是在壳上面压一页登录页；左上角返回键是 HdsNavDestination 自带的，退了就原样回来。
+       * 登录成功后由 `addAccountLogin` 收尾（新会话进罐 → applySession 按新账号复位 → 这页自动被清掉）。
+       * 已登录过的账号**不在这一页显示**（需求），所以这里和整页登录页用的是同一个组件、同一套参数。
+       */
+      HdsNavDestination() {
+        LoginPage({
+          onRegister: (): void => {
+            this.openSignupWeb();
+          },
+          onSignedIn: (): void => {
+            // 兜底：真走到这里说明会话已经进罐了，按罐重读一次即可（applySession 会复位并清栈）。
+            this.refreshSessionFromJar();
+          },
+          // 登录本身和整页登录页走同一条无头链路，只是前面多了"先清干净罐"这一步。
+          onWebLogin: (username: string, password: string): Promise<string> => {
+            return this.addAccountLogin(username, password);
+          },
+          onVerifyCode: (username: string, code: string): Promise<string> => {
+            return this.submitLoginCode(username, code);
+          },
+          onWebVerify: (): void => {
+            this.openLoginWeb();
+          }
+        })
+      }
+      .titleBar({
+        content: {
+          title: { mainTitle: $r('app.string.account_add') }
+        },
+        style: this.destinationTitleStyle(),
+        avoidLayoutSafeArea: false,
+        enableComponentSafeArea: false
+      })
+      // 需求：左上角要返回按钮。
+      .hideBackButton(false)
+      .titleMode(HdsNavDestinationTitleMode.MINI)
+      .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
+      .clip(false)
       .onBackPressed((): boolean => this.handleDestinationBack())
     } else if (name === USER_PROFILE_PAGE) {
       /*
