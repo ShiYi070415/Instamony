@@ -3036,6 +3036,15 @@ struct Index {
   }
 
   private applySession(signedIn: boolean, cookie: string = ''): void {
+    /*
+     * **新增账号流程里的"未登录"信号是预期的**（见 addAccountFlow）：那段时间罐被清空，
+     * 隐藏网页会报未登录；照常走的话整个壳会换成整页登录页（那一页没有返回键），
+     * 用户就被困住了 —— 真机报的 bug 就是这个。所以这里直接忽略。
+     */
+    if (!signedIn && this.addAccountFlow) {
+      hilog.info(DOMAIN, TAG, 'signed-out signal ignored (add-account flow)');
+      return;
+    }
     // 这一次之前有没有核对过：用来区分"首次核对"和"真的换了登录态"（见下面 signedIn 那一支）。
     const wasChecked: boolean = this.sessionChecked;
     const changed: boolean = !this.sessionChecked || this.lastSessionState !== signedIn;
@@ -3118,6 +3127,8 @@ struct Index {
     if (signedIn) {
       this.rememberAccount().catch((): void => {
       });
+      // 名字/头像缺了就主动补一次（见 ensureAccountProfile：真机上不能指望用户先进「我的」）。
+      this.ensureAccountProfile();
     }
     /*
      * 任何"人数变了"或"登录态变了"都要走下面的复位；两者都没变才早退。
@@ -3587,6 +3598,13 @@ struct Index {
        */
       const waited: string = await WebLogin.awaitSession();
       if (waited.length === 0) {
+        /*
+         * **先把"名字"记下来**（真机 bug 的修复）：头像/账号名要靠「我的」头部那一发，
+         * 真机上要好几秒，而用户登录完可能根本不进「我的」—— 那按钮就会一直显示
+         * "未命名账号 + 默认头像"。用户刚输入的账号名是**现成的、来源可靠**，先记进花名册。
+         * 头像随后由 ensureAccountProfile 补（一次 users/{pk}/info）。
+         */
+        await this.rememberTypedName(username);
         await this.refreshSessionFromJar();
         this.unmountWebHost('login done');
         return '';
@@ -7599,6 +7617,76 @@ struct Index {
   }
 
   /**
+   * 把**用户刚输入的账号名**记进花名册（登录成功那一刻，见 headlessWebLogin）。
+   *
+   * 为什么用"输入的"而不是等接口：IG 没有"只取我的用户名"这种轻接口，
+   * 而真机上「我的」头部要 3~5 秒，用户不进那一页就永远拿不到名字 ——
+   * 按钮上就会一直是"未命名账号"。输入的这串本身就是这个账号的名字，先垫上；
+   * 头像随后由 `ensureAccountProfile` 补（拿到真头部时会用真名字覆盖）。
+   */
+  private async rememberTypedName(username: string): Promise<void> {
+    const typed: string = username.trim();
+    if (typed.length === 0) {
+      return;
+    }
+    try {
+      InstagramCookieJar.invalidate();
+      const snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
+      const session: AccountEntry = AccountBook.sessionOf(snapshot.cookie);
+      if (!session.usable()) {
+        return;
+      }
+      AccountBook.saveSession(session.userId, session.sessionId, session.csrf);
+      AccountBook.saveProfile(session.userId, typed, '');
+      hilog.info(DOMAIN, TAG, 'typed name remembered: %{public}s → %{public}s',
+        typed, session.userId);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'remember typed name failed: %{public}s',
+        (error as Error).message);
+    }
+  }
+
+  /**
+   * **补当前账号的头像与账号名**（一次 `users/{pk}/info`，花名册里缺才发）。
+   *
+   * 为什么需要它：标题栏那颗按钮要"头像 + 账号名"，而这两样原来只能靠「我的」页头部
+   * （真机 3~5 秒、而且用户不进那一页就永远没有）。这里在登录/切换之后主动补一次，
+   * 同一个账号只试一次（`profileBootstrapFor`），失败也不重试 —— 这只是"让按钮早点好看"。
+   */
+  private ensureAccountProfile(): void {
+    const userId: string = this.currentAccountId();
+    if (userId.length === 0 || this.profileBootstrapFor === userId) {
+      return;
+    }
+    const entry: AccountEntry | null = AccountBook.find(userId);
+    if (entry !== null && entry.username.length > 0 && entry.avatarUrl.length > 0) {
+      return;
+    }
+    this.profileBootstrapFor = userId;
+    hilog.info(DOMAIN, TAG, 'bootstrap own profile for %{public}s', userId);
+    NativeProfile.fetchHeader().then((header: ProfileHeader | null): void => {
+      if (header === null) {
+        return;
+      }
+      AccountBook.saveProfile(userId, header.username, header.avatarUrl);
+      // 期间可能又切了人：账本照写（按 userId 存），但界面只在这个人还是当前账号时才动。
+      if (this.currentAccountId() === userId) {
+        if (header.username.length > 0) {
+          this.selfUsername = header.username;
+        }
+        if (header.avatarUrl.length > 0) {
+          this.selfAvatarUrl = header.avatarUrl;
+        }
+        this.refreshOtherAccounts();
+      }
+      hilog.info(DOMAIN, TAG, 'own profile bootstrapped @%{public}s avatar=%{public}d',
+        header.username, header.avatarUrl.length);
+    }).catch((error: Error): void => {
+      hilog.warn(DOMAIN, TAG, 'bootstrap own profile failed: %{public}s', error.message);
+    });
+  }
+
+  /**
    * 把标题栏按钮要的三样东西写进 **AppStorage**（见 AccountSwitcher 文件头：那个 builder
    * 不会因为本组件状态变化而重画，只能靠 `@StorageLink` 让按钮自己更新）。
    *
@@ -7765,35 +7853,51 @@ struct Index {
    * 失败就把原会话**还回去**（否则用户点一下新增账号，自己的号就没了）。
    */
   private async addAccountLogin(username: string, password: string): Promise<string> {
-    await this.rememberAccount();
-    const previous: AccountEntry | null = AccountBook.find(this.currentAccountId());
     /*
-     * 清罐 + 重置隐藏网页：登录页要在"干净未登录"的文档里发那一发 fetch
-     * （旧文档的会话和缓存会被带进请求里）。
+     * **进流程先立旗**（真机 bug 的修复）：下面清罐会让隐藏网页报"未登录"，
+     * 而 `applySession(false)` 一跑，整个壳就会换成"整页登录页"（那一页没有返回键，
+     * 用户就被困住了 —— 正是用户报的"新增账号点登录后回到没有返回按钮的登录页"）。
+     * 所以这一整段时间里，**未登录信号一律忽略**（见 applySession 开头）。
      */
+    if (this.addAccountFlow) {
+      return '正在登录中，请稍候';
+    }
+    this.addAccountFlow = true;
     try {
-      await InstagramCookieJar.getInstance().clear();
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'clear jar before add-account failed: %{public}s',
-        (error as Error).message);
-    }
-    this.unmountWebHost('add-account');
-    const message: string = await this.headlessWebLogin(username, password);
-    const ok: boolean = message.length === 0;
-    // 2FA 那两种"还要再走一步"也不算失败：罐里还没有新会话，但流程还没结束。
-    const pending: boolean = message === WEB_LOGIN_NEEDS_CODE || message === WEB_LOGIN_NEEDS_WEB;
-    if (!ok && !pending && previous !== null && previous.usable()) {
-      // 登录没成：把原来的会话种回去 —— 不能让"新增账号"把当前账号弄丢。
-      const restored: boolean = await InstagramCookieJar.adoptSession(previous.sessionId,
-        previous.userId, previous.csrf);
-      hilog.info(DOMAIN, TAG, 'add-account failed → restore previous session ok=%{public}s',
-        `${restored}`);
-      if (restored) {
-        await InstagramCookieJar.save();
-        InstagramCookieJar.invalidate();
+      await this.rememberAccount();
+      const previous: AccountEntry | null = AccountBook.find(this.currentAccountId());
+      /*
+       * **先卸隐藏网页，再清罐**：顺序反了的话，那个还挂着的网页会先收到"会话没了"
+       * 的信号并回调 onSessionChanged(false)。
+       */
+      this.unmountWebHost('add-account');
+      try {
+        await InstagramCookieJar.getInstance().clear();
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'clear jar before add-account failed: %{public}s',
+          (error as Error).message);
       }
+      const message: string = await this.headlessWebLogin(username, password);
+      const ok: boolean = message.length === 0;
+      // 2FA 那两种"还要再走一步"也不算失败：罐里还没有新会话，但流程还没结束。
+      const pending: boolean = message === WEB_LOGIN_NEEDS_CODE || message === WEB_LOGIN_NEEDS_WEB;
+      if (!ok && !pending && previous !== null && previous.usable()) {
+        // 登录没成：把原来的会话种回去 —— 不能让"新增账号"把当前账号弄丢。
+        const restored: boolean = await InstagramCookieJar.adoptSession(previous.sessionId,
+          previous.userId, previous.csrf);
+        hilog.info(DOMAIN, TAG, 'add-account failed → restore previous session ok=%{public}s',
+          `${restored}`);
+        if (restored) {
+          await InstagramCookieJar.save();
+          InstagramCookieJar.invalidate();
+          // 罐里又有人了：让界面按罐把登录态确认一次（旗子还在，所以这里不会误判）。
+          await this.refreshSessionFromJar();
+        }
+      }
+      return message;
+    } finally {
+      this.addAccountFlow = false;
     }
-    return message;
   }
 
   /**
@@ -8133,6 +8237,16 @@ struct Index {
    * （和评论面板同一层）材质才真的生效，见 components/AccountSwitcher 的文件头。
    */
   @State private accountMenuOpen: boolean = false;
+  /**
+   * **"新增账号"流程进行中**（见 addAccountLogin）。
+   *
+   * 那段时间里罐会被清空，隐藏网页因此会报"未登录"；如果照常走 `applySession(false)`，
+   * 整个壳会换成整页登录页（那一页没有返回键）—— 用户就被困住了。
+   * 所以流程期间**忽略未登录信号**，结束后再按罐确认一次。
+   */
+  private addAccountFlow: boolean = false;
+  /** 已经为哪个账号试过"补名字/头像"（同一个账号只试一次，见 ensureAccountProfile）。 */
+  private profileBootstrapFor: string = '';
   /**
    * 让托盘**重新拉一次**的信号（每 +1 一次；见 StoriesTray.reloadSignal）。
    *
