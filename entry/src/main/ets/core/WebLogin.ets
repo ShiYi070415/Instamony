@@ -721,19 +721,32 @@ export class WebLogin {
 
   /** 页面上有没有验证码输入框（JSON：`{"code":1}` = 有）。 */
   private static readonly TWO_FACTOR_PROBE_JS: string =
-    '(function(){var i=document.querySelectorAll("input");var c=0;'
-    + 'for(var k=0;k<i.length;k++){var t=(i[k].type||"").toLowerCase();'
-    + 'var n=((i[k].name||"")+" "+(i[k].id||"")+" "+(i[k].getAttribute("autocomplete")||"")).toLowerCase();'
-    + 'if(t==="tel"||t==="number"||/code|verif|otp|security|confirm/.test(n)||i[k].maxLength===6){c=1;}}'
-    + 'return JSON.stringify({code:c,inputs:i.length});})()';
+    '(function(){var t=(document.body&&document.body.innerText||"");'
+    + 'var hint=/6\\s*位|验证码|verification code|two-factor|双重验证|身份验证/.test(t);'
+    + 'var i=document.querySelectorAll("input");var out={code:0,inputs:i.length,hint:hint?1:0,types:[]};'
+    + 'for(var k=0;k<i.length;k++){var ty=(i[k].type||"text").toLowerCase();'
+    + 'var n=((i[k].name||"")+" "+(i[k].id||"")+" "+(i[k].getAttribute("autocomplete")||"")'
+    + '+" "+(i[k].getAttribute("aria-label")||"")+" "+(i[k].getAttribute("inputmode")||"")).toLowerCase();'
+    + 'if(ty==="password"){continue;}'
+    + 'if(/code|verif|otp|security|confirm|one-time|numeric|验证码/.test(n)||i[k].maxLength===6){out.code=1;}'
+    + 'out.types.push(ty+":"+(i[k].maxLength||0));}'
+    // **兜底**：页面文案明确在要 6 位码时，把第一个可填的文本/数字框当成验证码框
+    + 'if(!out.code&&hint){for(var j=0;j<i.length;j++){var t2=(i[j].type||"text").toLowerCase();'
+    + 'if(t2!=="password"&&t2!=="hidden"&&t2!=="checkbox"){out.code=1;break;}}}'
+    + 'return JSON.stringify(out);})()';
 
   /** 把验证码填进页面的框并提交（JSON：`{"ok":1,"btn":1}`）。 */
   private static twoFactorFillScript(code: string): string {
     const safe: string = code.replace(/[^0-9a-zA-Z]/g, '');
-    return '(function(){var v="' + safe + '";var i=document.querySelectorAll("input");var el=null;'
-      + 'for(var k=0;k<i.length;k++){var t=(i[k].type||"").toLowerCase();'
-      + 'var n=((i[k].name||"")+" "+(i[k].id||"")+" "+(i[k].getAttribute("autocomplete")||"")).toLowerCase();'
-      + 'if(t==="tel"||t==="number"||/code|verif|otp|security|confirm/.test(n)||i[k].maxLength===6){el=i[k];break;}}'
+    return '(function(){var v="' + safe + '";var t=(document.body&&document.body.innerText||"");'
+      + 'var hint=/6\\s*位|验证码|verification code|two-factor|双重验证|身份验证/.test(t);'
+      + 'var i=document.querySelectorAll("input");var el=null;'
+      + 'for(var k=0;k<i.length;k++){var ty=(i[k].type||"text").toLowerCase();if(ty==="password"){continue;}'
+      + 'var n=((i[k].name||"")+" "+(i[k].id||"")+" "+(i[k].getAttribute("autocomplete")||"")'
+      + '+" "+(i[k].getAttribute("aria-label")||"")+" "+(i[k].getAttribute("inputmode")||"")).toLowerCase();'
+      + 'if(/code|verif|otp|security|confirm|one-time|numeric|验证码/.test(n)||i[k].maxLength===6){el=i[k];break;}}'
+      + 'if(!el&&hint){for(var j=0;j<i.length;j++){var t2=(i[j].type||"text").toLowerCase();'
+      + 'if(t2!=="password"&&t2!=="hidden"&&t2!=="checkbox"){el=i[j];break;}}}'
       + 'if(!el){return JSON.stringify({ok:0});}'
       + 'try{el.focus();}catch(e){}'
       + 'var d=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,"value");'
@@ -742,7 +755,7 @@ export class WebLogin {
       + 'try{el.dispatchEvent(new Event("change",{bubbles:true}));}catch(e){}'
       + 'var btn=0;var bs=document.querySelectorAll("button,[role=button]");'
       + 'for(var b=0;b<bs.length;b++){var txt=(bs[b].innerText||"").trim();'
-      + 'if(/^(next|continue|verify|confirm|submit|确认|验证|下一步|继续)$/i.test(txt)||bs[b].type==="submit"){'
+      + 'if(/^(next|continue|verify|confirm|submit|继续|确认|验证|下一步)$/i.test(txt)||bs[b].type==="submit"){'
       + 'try{bs[b].click();btn=1;break;}catch(e){}}}'
       + 'if(btn===0){try{el.form&&el.form.requestSubmit?el.form.requestSubmit():el.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",keyCode:13,bubbles:true}));'
       + 'el.dispatchEvent(new KeyboardEvent("keyup",{key:"Enter",keyCode:13,bubbles:true}));btn=2;}catch(e){}}'
