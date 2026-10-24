@@ -4011,8 +4011,19 @@ struct Index {
     }
     const message: string = await WebLogin.submitTwoFactorCode(username, code);
     if (message.length > 0) {
-      // 验证码没通过：如果是"新增账号"这条支线，按失败收尾（不把用户留在半截状态）。
-      if (this.addAccountFlow) {
+      /*
+       * **"还要继续验证"不算失败**（用户报："输完验证码点确认，网页自动跳出来了"）。
+       *
+       * `WEB_LOGIN_NEEDS_WEB` 的意思是"这一步得去网页里验"，面板会随之切到"去网页验证"那一档
+       * 等用户**自己点**。但"新增账号"这条支线以前把**任何**非空返回都当成失败收尾
+       * （`finishAddAccount('code-rejected')` → 回滚原会话），那个回滚动作会让网页亮出来 ——
+       * 于是用户看到的就是"点验证 → 网页自己跳出来了"。
+       * 现在把"还要继续"的两个标记排除在失败收尾之外。
+       */
+      const stillPending: boolean =
+        message === WEB_LOGIN_NEEDS_WEB || message === WEB_LOGIN_NEEDS_CODE;
+      if (this.addAccountFlow && !stillPending) {
+        // 验证码真的被拒了：按失败收尾（不把用户留在半截状态）。
         await this.finishAddAccount('code-rejected');
       }
       return message;
