@@ -303,6 +303,12 @@ const MQTT_WRITE_SELF_TEST: boolean = false;
  */
 const TIMELINE_PAGE_PROBE: boolean = false;
 /**
+ * 网页组件自己那条顶栏占的高度（vp，含一点间隙）：网页内容要往下让这么多，
+ * 否则会盖住 IG 页面自己的顶部导航栏（见 build 里 InstagramWebHost 的说明）。
+ * `components/WebChromeBar` 自身高度是 52。
+ */
+const WEB_CHROME_VP: number = 56;
+/**
  * **实时通道跑在哪条线程**（见 core/mobileapi/RealtimeWorkerClient）。
  *
  * true  = MQTToT 整个搬到 Worker（连接 / 心跳 / 拆帧 / inflate / JSON 解析都在那边），
@@ -11371,8 +11377,15 @@ struct Index {
             this.applySession(false);
           }
         })
+          /*
+           * **网页内容从自身顶部导航栏下方开始**（用户报："顶部的网页组件导航栏挡住了 IG 网页端
+           * 的顶部导航栏"）。`WebChromeBar` 是 52vp 的不透明条，压在整屏网页最上面 ——
+           * IG 页面自己的顶栏正好在 y=0，于是被整条盖住（返回/关闭/输入框都看不见）。
+           * 这里把网页整体下移 56vp（52 + 4 间隙），高度相应减掉，IG 的顶栏就露出来了。
+           */
           .width('100%')
-          .height('100%')
+          .height(`calc(100% - ${WEB_CHROME_VP}vp)`)
+          .margin({ top: WEB_CHROME_VP })
       }
 
       if (!this.webVisible) {
