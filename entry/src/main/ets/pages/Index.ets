@@ -1096,6 +1096,13 @@ struct Index {
    */
   @State barSink: number = 0;
   /**
+   * Reels 页当前活动那条视频的封面地址（由 `ReelsPage.onActiveCover` 上报）。
+   *
+   * 用途：标题栏与底栏背后那两层高模糊背景（见 `reelsCoverBackdrop`）。空串 = 还没拿到，
+   * 此时不画（视频区本来就有画面，不会露出突兀的空白）。
+   */
+  @State private reelsCover: string = '';
+  /**
    * 系统显隐：底栏当前是不是已经藏起来了（见 hideBar / showBar）。
    *
    * 只用来**去重**：官方动效接口是"播一次动效"，重复播同一支动效会打断上一支，
@@ -3282,6 +3289,53 @@ struct Index {
      */
     if (!this.realtimeStarted) {
       this.scheduleRealtimeStart();
+    }
+  }
+
+  /**
+   * ReelsPage 上报的"当前活动封面"（见 resetAfterSignIn 附近的状态区）。
+   *
+   * 只在真的变了才写 `@State`，避免每次 `publishAction` 都触发一次重绘。
+   */
+  private onReelsActiveCover(coverUrl: string): void {
+    if (coverUrl === this.reelsCover) {
+      return;
+    }
+    this.reelsCover = coverUrl;
+  }
+
+  /**
+   * **Reels 页：标题栏与底栏背后垫一层当前视频封面的高模糊**（需求：背景向上下填充）。
+   *
+   * 为什么必须在外壳做：截图证实视频把"标题栏 ↔ 底栏"之间**全部占满**，页内任何背景层都
+   * 没有可见空间；而上下那两块纯黑属于壳（标题栏 / 底栏），只有壳能让它们透出画面。
+   *
+   * 两层：顶部约占屏高 30%（覆盖标题栏那两行），底部约占 22%（覆盖悬浮底栏与手势条留白），
+   * `zIndex(9)` 压在内容之上、控件之下（控件是 10 及以上）。
+   */
+  @Builder
+  reelsCoverBackdrop() {
+    if (this.reelsCover.length > 0) {
+      Image(this.reelsCover)
+        .draggable(false)
+        .width('100%')
+        .height('30%')
+        .align(Alignment.Top)
+        .objectFit(ImageFit.Fill)
+        .blur(80)
+        .opacity(0.55)
+        .hitTestBehavior(HitTestMode.None)
+        .zIndex(9)
+      Image(this.reelsCover)
+        .draggable(false)
+        .width('100%')
+        .height('22%')
+        .align(Alignment.Bottom)
+        .objectFit(ImageFit.Fill)
+        .blur(80)
+        .opacity(0.55)
+        .hitTestBehavior(HitTestMode.None)
+        .zIndex(9)
     }
   }
 
@@ -8549,6 +8603,10 @@ struct Index {
       vm: vm,
       // 标题栏那两颗按钮按**来源**取用（见 core/ReelsAction）：这是底栏那一页。
       source: ReelsAction.HOME,
+      // 当前活动那条的封面 → 外壳给标题栏/底栏背后垫模糊背景（见 reelsCoverBackdrop）。
+      onActiveCover: (coverUrl: string): void => {
+        this.onReelsActiveCover(coverUrl);
+      },
       // 刷到自己的视频时不画关注按钮（同其它两页）。
       ownAuthor: this.profileVm.ownAccountName(),
       // 手指一动就下沉，且**只沉不回**（点栏才恢复）——见 onReelsSink。
@@ -11451,6 +11509,13 @@ struct Index {
        * 自带一层材质，内层材质会静默失效 —— 只有放进页面根 Stack（和评论面板同一层、同一个窗口）
        * 那块 Toggle 材质才真的生效。层级压在标题栏（zIndex 10）与底栏之上。
        */
+      /*
+       * **Reels 页的背景填充**：标题栏与底栏背后垫当前视频封面的高模糊（见 reelsCoverBackdrop）。
+       * 只在这一页生效；其它页不渲染，避免多一次模糊合成。
+       */
+      if (this.currentTab() === AppTab.Reels) {
+        this.reelsCoverBackdrop()
+      }
       if (this.accountMenuOpen) {
         AccountMenu({
           onPick: (userId: string): void => {
