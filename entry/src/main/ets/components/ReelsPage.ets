@@ -1473,6 +1473,22 @@ export struct ReelsPage {
   @Builder
   reelPage(reel: Reel, index: number) {
     Stack({ alignContent: Alignment.Center }) {
+      /*
+       * **整页铺底：当前这条视频封面的高模糊版本**（需求："reels 背景用高模糊的视频封面"）。
+       *
+       * 为什么还要在这一层（`ReelSlide` 里已经有一层）：那一层在**画面盒子内部**，竖屏视频
+       * 会把盒子撑满整屏，于是它被盖住、看不见；而这一层是**整页大小**，所以标题栏/底栏
+       * 后面、以及横屏视频的上下留白处都能看到它。两层用同一张封面（`PosterCache` 命中同一图）。
+       */
+      Image(reel.coverUrl.length > 0 ? reel.coverUrl : $r('app.media.startIcon'))
+        .draggable(false)
+        .width('100%')
+        .height('100%')
+        .objectFit(ImageFit.Cover)
+        .blur(60)
+        .scale({ x: 1.2, y: 1.2 })
+        .opacity(0.6)
+        .backgroundColor(Color.Black)
       // 画面盒子：**宽度铺满 + 高度按视频比例**，居中放在全屏背景上。
       //
       // 为什么这样做（而不是让播放器整屏 Cover）：Cover 是按"两个方向都要铺满"去裁的 ——
