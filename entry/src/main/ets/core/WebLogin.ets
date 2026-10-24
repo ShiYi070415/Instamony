@@ -494,7 +494,13 @@ export class WebLogin {
     try {
       let lastBody: string = '';
       let lastStatus: string = '';
-      for (let variant: number = 0; variant < 3; variant++) {
+      /*
+       * **没有标识时只发一发**：三种表单变体在没有 `two_factor_identifier` 的情况下
+       * 回的都是同一个 `400 {"message":"无效参数"}`（真机抓取证实），连发三次只会
+       * 白白消耗 IG 的尝试次数（紧跟着就是 429）。
+       */
+      const variants: number = id.length > 0 ? 3 : 1;
+      for (let variant: number = 0; variant < variants; variant++) {
         const started: string = await bridge.runScript(
           WebLogin.twoFactorScript(user, value, id, variant));
         if (started.indexOf('started') < 0) {
