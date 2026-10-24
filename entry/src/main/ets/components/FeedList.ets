@@ -1623,6 +1623,17 @@ export struct FeedList {
       // -1/越界 = 这条已经不在当前列表里了（刷新把那条刷掉了）：不写进去，免得后面按它算焦点。
       return;
     }
+    /*
+     * **再校验一次"这个下标此刻还是不是这条帖子"**（审计 D4）。
+     *
+     * `onVisibleAreaChange` 的闭包捕获的是**构建时**的 index；`ForEach` 键值没变时
+     * item builder 不重跑，刷新/插帖之后那个 index 指向的已经是别人 —— 于是
+     * `visiblePosts` 里会记下"错误的 key → 错误的 index"，焦点算错，严重时会把
+     * 正在播的视频判成"看不见"并停掉。这里用一次字符串比较把它挡住（代价可忽略）。
+     */
+    if (FeedMapper.keyOf(this.posts[index]) !== FeedMapper.keyOf(post)) {
+      return;
+    }
     this.visiblePosts.set(FeedMapper.keyOf(post), index);
     this.refreshFocus();
   }
