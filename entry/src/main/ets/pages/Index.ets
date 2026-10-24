@@ -4120,8 +4120,36 @@ struct Index {
    * 点登录，网页一直反复刷新"里就有一份是这个多余的重载）。所以这里先看它现在停在哪：
    * 已经在 Instagram 的 `/accounts/...` 那一族（登录页 / 二次验证 / 改密页）就直接亮出来。
    */
-  private openLoginWeb(): void {
-    /*
+  /**
+   * 网页亮着时**每 5 秒采样一次登录现场**，最多 45 秒（见 core/LoginTrace）。
+   *
+   * 为什么要持续采样：手动登录时页面加载/跳转是异步的，只在 `openLoginWeb()` 那一下抓一次
+   * 通常什么都读不到（宿主还没 attach）。而我们在意的是**IG 自己发出的登录请求与回包**
+   * （尤其手动 2FA 成功那一次），它出现在页面加载之后的几秒里。
+   *
+   * 采到"已登录"就停；45 秒后也停（不常驻、不刷屏）。
+   */
+  private async traceWhileManualLogin(): Promise<void> {
+    for (let round: number = 0; round < 9; round++) {
+      await this.delay(5000);
+      if (!this.webVisible) {
+        hilog.info(DOMAIN, TAG, 'login trace: web closed at round %{public}d', round);
+        return;
+      }
+      await LoginTrace.snapshot(this.bridge, `manual-web-${round}`);
+      try {
+        const snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
+        if (snapshot.signedIn) {
+          hilog.info(DOMAIN, TAG, 'login trace: signed in at round %{public}d', round);
+          return;
+        }
+      } catch (error) {
+        // 读罐失败就继续采
+      }
+    }
+  }
+
+  private openLoginWeb(): void {    /*
      * **手动网页登录也要被现场抓取**（诊断：看清 IG 自己在网页里发的登录请求/回包）。
      *
      * 用户在网页里**自己**点登录、自己输验证码时，页面是 SPA 正常流程 —— 那一串请求
@@ -4132,6 +4160,8 @@ struct Index {
     LoginTrace.reset();
     LoginTrace.snapshot(this.bridge, 'manual-web-open').catch((): void => {
     });
+    // 网页亮出来之后**持续采样**（手动登录时我们才知道 IG 发了什么，见 traceWhileManualLogin）。
+    this.traceWhileManualLogin();
     // 挂着的时候才谈"它现在停在哪"；没挂的话下面会带着登录页地址重新建一个（见 noteStartUrl）。
     const onInstagramAuth: boolean = this.webHostMounted
       && this.currentUrl.indexOf('instagram.com') >= 0
