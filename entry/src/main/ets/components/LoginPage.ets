@@ -498,6 +498,22 @@ export struct LoginPage {
               this.onRegister();
             }
           })
+          /*
+           * **网页登录**（用户报："新增账号页没有网页登录选项"）。
+           *
+           * 之前这页只有「登录」（无头，账号密码交给隐藏网页）和「注册新账号」两颗按钮，
+           * 而"网页登录"只存在于 2FA 面板的兜底档里 —— 于是新增账号这条支线在
+           * "IG 要人工确认"时就无路可走。补一颗常驻入口：点它把网页亮出来，
+           * 用户在 IG 自己的页面里完成登录/验证（那条路 SPA 会正常弹它的模态框）。
+           */
+          MaterialLabelButton({
+            labelRes: $r('app.string.login_web_short'),
+            fullWidth: true,
+            fontSize: 15,
+            onTap: (): void => {
+              this.onWebVerify();
+            }
+          })
         }
         .width('100%')
         .margin({ top: 22 })
