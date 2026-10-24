@@ -969,6 +969,7 @@ struct UserProfileRoute {
  * 完全相同」剔掉 —— 配文本来就已经作为面板第一条单独展示了。
  */
 function withoutCaption(items: CommentItem[], post: MediaPost): CommentItem[] {
+
   if (post.caption.length === 0) {
     return items;
   }
@@ -3244,7 +3245,18 @@ struct Index {
      *
      * 只在"罐里确实没有会话"时做一次，失败就算了（照常走登录页）。
      */
-    if (!snapshot.signedIn) {
+    /*
+     * **只在"本次启动的第一次核对"里恢复一次**（用户报："重新登录大号后无法同步小号了，
+     * 应该是之前有小号的记录"）。
+     *
+     * 原来"只要罐里没会话就去花名册恢复"—— 于是任何时候罐为空都会把**上一次用过的那个号**
+     * 塞回去：新增账号刚清完会话 cookie、或用户在网页里登出准备换号，都会被它抢先恢复成旧账号，
+     * 表现就是"登了大号却又变回小号 / 小号同步不上"。现在两道闸：
+     *   · 一个进程只恢复一次（`sessionRecoveryTried`）；
+     *   · 登录 / 新增账号流程进行中（`addAccountFlow`）绝不恢复。
+     */
+    if (!snapshot.signedIn && !this.sessionRecoveryTried && !this.addAccountFlow) {
+      this.sessionRecoveryTried = true;
       const restored: AccountEntry | null = await this.restoreRememberedSession();
       if (restored !== null) {
         // `adoptSession` 内部已经作废了读罐缓存（见 InstagramCookieJar.adoptSession），这里重读一次。
@@ -8800,6 +8812,13 @@ struct Index {
   private addAccountPrevious: AccountEntry | null = null;
   /** 实时通道的启动是否已经排过队（见 scheduleRealtimeStart 的去重）。 */
   private realtimeStartPending: boolean = false;
+  /**
+   * "本次启动的花名册会话恢复"做过了没有（见 refreshSessionFromJar）。
+   *
+   * 一个进程只恢复一次：否则新增账号清会话 cookie、或在网页里登出换号时，
+   * 都会被它抢先恢复成**上一次用过的那个号**（用户报的"登了大号又变回小号"）。
+   */
+  private sessionRecoveryTried: boolean = false;
   /** MQTT 写通道自检跑过了没有（见 runMqttWriteSelfTest）。 */
   private mqttSelfTestDone: boolean = false;
   /** 等收件箱的重试次数（自检用）。 */
