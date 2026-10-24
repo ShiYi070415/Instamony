@@ -8329,14 +8329,23 @@ struct Index {
       this.addAccountPrevious = AccountBook.find(this.currentAccountId());
       // 先卸网页再清罐（顺序反了网页会先收到"会话没了"）。
       this.unmountWebHost('add-account-web');
-      try {
-        await InstagramCookieJar.getInstance().clear();
-      } catch (error) {
-        hilog.warn(DOMAIN, TAG, 'clear jar before add-account web failed: %{public}s',
-          (error as Error).message);
+      hilog.info(DOMAIN, TAG, 'add-account: open web login (session-only clear, device kept)');
+      /*
+       * **只清会话、保留设备 cookie**（用户反馈：同 Meta 账户下、已登录大号时加小号
+       * **不需要 2FA**；而整罐清会让 IG 把我们当全新设备，转成"恢复确认"且不给验证码）。
+       * 删失败就把整罐清掉兜底 —— 至少能进登录页，不至于卡住。
+       */
+      const sessionCleared: boolean = await InstagramCookieJar.clearSessionOnly();
+      if (!sessionCleared) {
+        hilog.warn(DOMAIN, TAG, 'session-only clear failed → fall back to full clear');
+        try {
+          await InstagramCookieJar.getInstance().clear();
+        } catch (error) {
+          hilog.warn(DOMAIN, TAG, 'full clear failed too: %{public}s',
+            (error as Error).message);
+        }
       }
-      hilog.info(DOMAIN, TAG, 'add-account: open web login (jar cleared, previous kept)');
-      // 现在罐是空的，网页会停在登录页，用户可以登**另一个**账号。
+      // 现在没有 sessionid，网页会停在登录页，用户可以登**另一个**账号。
       this.openLoginWeb();
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'add-account web verify failed: %{public}s', (error as Error).message);

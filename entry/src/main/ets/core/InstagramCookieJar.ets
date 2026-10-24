@@ -201,6 +201,52 @@ export class InstagramCookieJar {
     hilog.info(DOMAIN, TAG, 'cleared the cookie jar for sign out');
   }
 
+  /** 只删**会话类** cookie 的名字（见 `clearSessionOnly`）。 */
+  private static readonly SESSION_COOKIES: Array<string> = [
+    'sessionid', 'ds_user_id', 'csrftoken', 'rur', 'shbid', 'shbts'
+  ];
+
+  /**
+   * **只清会话、保留设备身份**（"新增账号"用，见 pages/Index.addAccountWebVerify）。
+   *
+   * 为什么不能整罐清：用户反馈"两个号在同一个 Meta 账户下，浏览器里已登录大号时加小号
+   * **不需要 2FA**"——IG 判"可信设备"靠的是 `datr` / `ig_did` / `mid` 这类**设备** cookie
+   * 以及网页存储。整罐清（`clearAllCookiesSync` + `deleteAllData`）等于把自己伪装成
+   * 一台全新设备，IG 于是要求"恢复确认"，而且**不给 6 位验证码**（我们抓到过：
+   * `authenticated:false` + `showAccountRecoveryModal:true`，没有 `two_factor_required`）。
+   *
+   * 所以这条路只删会话那几颗：登录页照样会显示（没有 sessionid 就不是登录态），
+   * 但设备指纹与存储留着，IG 更可能走"同一台设备切换账号"的轻路径。
+   *
+   * @returns 是否至少删掉了一颗（失败时让调用方决定要不要退回整罐清）
+   */
+  static async clearSessionOnly(): Promise<boolean> {
+    InstagramCookieJar.invalidate();
+    let removed: number = 0;
+    for (let index: number = 0; index < InstagramCookieJar.SESSION_COOKIES.length; index++) {
+      const name: string = InstagramCookieJar.SESSION_COOKIES[index];
+      try {
+        /*
+         * 这个 SDK 的 `WebCookieManager` **没有** `deleteCookieSync`（编译期就报不存在），
+         * 所以用"把同名 cookie 覆盖成已过期"这个标准做法来删：
+         * `name=; Max-Age=0; Path=/; Domain=.instagram.com`。
+         */
+        webview.WebCookieManager.configCookieSync('https://www.instagram.com/',
+          `${name}=; Max-Age=0; Path=/; Domain=.instagram.com`);
+        webview.WebCookieManager.configCookieSync('https://i.instagram.com/',
+          `${name}=; Max-Age=0; Path=/; Domain=.instagram.com`);
+        removed++;
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'expire cookie %{public}s failed: %{public}s',
+          name, (error as Error).message);
+      }
+    }
+    await InstagramCookieJar.save();
+    hilog.info(DOMAIN, TAG, 'cleared %{public}d session cookie(s), device cookies kept',
+      removed);
+    return removed > 0;
+  }
+
   /**
    * **把原生登录拿到的会话写进 Cookie 罐**（见 core/mobileapi/MobileLogin）。
    *
