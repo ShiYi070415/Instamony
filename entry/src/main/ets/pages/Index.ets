@@ -3316,27 +3316,39 @@ struct Index {
   @Builder
   reelsCoverBackdrop() {
     if (this.reelsCover.length > 0) {
-      Image(this.reelsCover)
-        .draggable(false)
-        .width('100%')
-        .height('30%')
-        .align(Alignment.Top)
-        .objectFit(ImageFit.Fill)
-        .blur(80)
-        .opacity(0.55)
-        .hitTestBehavior(HitTestMode.None)
-        .zIndex(9)
-      Image(this.reelsCover)
-        .draggable(false)
-        .width('100%')
-        .height('22%')
-        .align(Alignment.Bottom)
-        .objectFit(ImageFit.Fill)
-        .blur(80)
-        .opacity(0.55)
-        .hitTestBehavior(HitTestMode.None)
-        .zIndex(9)
-    }
+      /*
+       * **用 Column 明确摆位**（用户指出：图片没有形变到顶/底，怀疑高度或等于被 width 卡住）。
+       *
+       * 之前是两张 `Image` 直接放进根 `Stack` 再靠 `.align(Top/Bottom)` 定位 —— 但 `Stack`
+       * 里子组件的对齐由 `alignContent` 决定，`.align()` 在这里并不可靠（实测底部那张会
+       * 落回顶部、和视频叠在一起，底部于是仍是黑的）。改成 Column 三段式：
+       *   上段 30%（标题栏两行） / 中间弹性空白 / 下段 22%（悬浮底栏与手势条留白），
+       * 高度由 Column 的 `layoutWeight` 与百分比共同决定，不会被宽度约束影响。
+       */
+      Column() {
+        Image(this.reelsCover)
+          .draggable(false)
+          .width('100%')
+          .height('30%')
+          .objectFit(ImageFit.Fill)
+          .blur(80)
+          .opacity(0.55)
+          .hitTestBehavior(HitTestMode.None)
+        Blank()
+          .layoutWeight(1)
+        Image(this.reelsCover)
+          .draggable(false)
+          .width('100%')
+          .height('22%')
+          .objectFit(ImageFit.Fill)
+          .blur(80)
+          .opacity(0.55)
+          .hitTestBehavior(HitTestMode.None)
+      }
+      .width('100%')
+      .height('100%')
+      .hitTestBehavior(HitTestMode.None)
+      .zIndex(9)}
   }
 
   private async refreshSessionFromJar(): Promise<void> {
