@@ -228,7 +228,7 @@ export class MobileLogin {
       new MobileOptions(ApiThrottle.DIRECT, ApiThrottle.urgent()));
     hilog.info(DOMAIN, TAG, 'login resp (unsigned) %{public}s', plain.summary());
     if (plain.ok) {
-      return await MobileLogin.finish(plain, identity);
+      return await MobileLogin.finish(plain, identity, user);
     }
     if (MobileLogin.isSilent400(plain)) {
       const signed: MobileResult = await MobileRequest.sendAs(identity, 'accounts/login/',
@@ -236,7 +236,7 @@ export class MobileLogin {
         new MobileOptions(ApiThrottle.DIRECT, ApiThrottle.urgent()));
       hilog.info(DOMAIN, TAG, 'login retry signed %{public}s', signed.summary());
       if (signed.ok) {
-        return await MobileLogin.finish(signed, identity);
+        return await MobileLogin.finish(signed, identity, user);
       }
       return MobileLogin.classifyFailure(signed, user);
     }
@@ -273,8 +273,40 @@ export class MobileLogin {
     return text.indexOf('out of date') >= 0 || text.indexOf('please upgrade') >= 0;
   }
 
-  /** 失败分类：2FA / 安全验证 / 版本过旧 / 密码错 / 限流 / 其它（见 login 的调用点）。 */
-  private static async classifyFailure(result: MobileResult, user: string): Promise<LoginOutcome> {
+  /**
+   * 回包里的 `two_factor_identifier`（**顶层或嵌套**都认）。
+   *
+   * 为什么要单独一个：IG 把它放在 `two_factor_info.two_factor_identifier` 里，
+   * 而 `fieldOf` 只看顶层 —— 于是"需要 2FA"的回包被当成"登录失败"（真机 bug）。
+   */
+  private static twoFactorIdOf(body: string): string {
+    const direct: string = MobileLogin.fieldOf(body, 'two_factor_identifier');
+    if (direct.length > 0) {
+      return direct;
+    }
+    const info: string = MobileLogin.fieldOf(body, 'two_factor_info');
+    if (info.length > 0) {
+      const nested: string = MobileLogin.fieldOf(info, 'two_factor_identifier');
+      if (nested.length > 0) {
+        return nested;
+      }
+    }
+    const challenge: string = MobileLogin.fieldOf(body, 'challenge');
+    if (challenge.length > 0) {
+      return MobileLogin.fieldOf(challenge, 'two_factor_identifier');
+    }
+    return '';
+  }
+
+  /** 回包有没有说"要两步验证"（`two_factor_required: true` / `"1"`）。 */
+  private static twoFactorRequired(body: string): boolean {
+    const text: string = body.toLowerCase();
+    return text.indexOf('"two_factor_required":true') >= 0
+      || text.indexOf('"two_factor_required":"1"') >= 0
+      || text.indexOf('"two_factor_required":1') >= 0;
+  }
+
+  /** 失败分类：2FA / 安全验证 / 版本过旧 / 密码错 / 限流 / 其它（见 login 的调用点）。 */  private static async classifyFailure(result: MobileResult, user: string): Promise<LoginOutcome> {
     /*
      * 先判"版本过旧"：IG 回的是
      * `{"message":"Your Instagram app is out of date. Please upgrade to log in.","status":"fail",
@@ -287,7 +319,7 @@ export class MobileLogin {
         'IG 提示客户端版本过旧，已关闭第三方客户端的密码登录；请用网页登录（网页登录不受影响）');
     }
     // 4) 失败分支：先看是不是 2FA / 安全验证，再落到"账号密码不对"。
-    const twoFactorId: string = MobileLogin.fieldOf(result.body, 'two_factor_identifier');
+    const twoFactorId: string = MobileLogin.twoFactorIdOf(result.body);
     if (result.error === 'two_factor' || twoFactorId.length > 0) {
       // 记住 id：界面第二次调用（带验证码）时直接从 two_factor_login/ 接着走。
       MobileLogin.pendingTwoFactorId = twoFactorId;
@@ -396,7 +428,7 @@ export class MobileLogin {
       new MobileOptions(ApiThrottle.DIRECT, ApiThrottle.urgent()));
     hilog.info(DOMAIN, TAG, '2fa resp %{public}s', result.summary());
     if (result.ok) {
-      return await MobileLogin.finish(result, identity);
+      return await MobileLogin.finish(result, identity, twoFactorIdentifier);
     }
     MobileLogin.lastDetail = result.detail.length > 0 ? result.detail : result.error;
     return new LoginOutcome(LoginStage.TwoFactor, `验证码不对或已过期（${MobileLogin.lastDetail}）`,
@@ -444,7 +476,26 @@ export class MobileLogin {
    *      instagrapi 就是解析它；
    *   ② `set-cookie` 里的 `sessionid` / `ds_user_id`（有些回包只给 cookie）。
    */
-  private static async finish(result: MobileResult, identity: MobileIdentity): Promise<LoginOutcome> {
+  private static async finish(result: MobileResult, identity: MobileIdentity,
+                              user: string): Promise<LoginOutcome> {
+    /*
+     * **先看"是不是卡在两步验证"**（真机 bug：登录不跳 2FA）。
+     *
+     * IG 对"密码对了但要 2FA"的回包是 **HTTP 200**，形状有两种：
+     *   `{"two_factor_required":true,"two_factor_info":{"two_factor_identifier":"…"}}`
+     *   `{"message":"challenge_required","challenge":{"…two_factor_identifier…"}}`
+     * 而 `classifyFailure` 只在**非 200** 时才跑，所以这一支以前直接走到下面
+     * "登录成功但没拿到会话"（界面上看着就是"登录失败"），**永远进不了验证码面板**。
+     * 现在在收尾处先认它：把 id 记下来，返回 TwoFactor —— 面板里输码就能过。
+     */
+    const tfId: string = MobileLogin.twoFactorIdOf(result.body);
+    if (tfId.length > 0 || MobileLogin.twoFactorRequired(result.body)) {
+      MobileLogin.pendingTwoFactorId = tfId;
+      MobileLogin.pendingUsername = user;
+      hilog.warn(DOMAIN, TAG, 'login 200 but needs 2FA (id=%{public}d) → panel',
+        tfId.length);
+      return new LoginOutcome(LoginStage.TwoFactor, '需要两步验证码', tfId, '', '', '');
+    }
     const session: LoginSession = MobileLogin.sessionOf(result);
     if (!session.usable()) {
       hilog.warn(DOMAIN, TAG, 'login ok but no session material: keys=%{public}s',
