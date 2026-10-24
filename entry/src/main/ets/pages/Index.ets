@@ -8621,6 +8621,10 @@ struct Index {
    */
   @Builder
   reelsStream(vm: ReelsViewModel) {
+    // **背景垫在这一段内容的最底层**（见 reelsCoverBackdrop 的说明）：
+    // 它和视频在同一个容器里、画在视频之前，所以只会在视频没铺到的区域露出来，
+    // 而且不会盖到标题栏/底栏（那两块在容器之外）。
+    this.reelsCoverBackdrop()
     ReelsPage({
       vm: vm,
       // 标题栏那两颗按钮按**来源**取用（见 core/ReelsAction）：这是底栏那一页。
@@ -11508,10 +11512,6 @@ struct Index {
       }
 
       if (!this.webVisible) {
-        // **Reels 背景垫在壳之前**（兄弟顺序 = 绘制顺序：先画的在下面，被视频压着）。
-        if (this.currentTab() === AppTab.Reels) {
-          this.reelsCoverBackdrop()
-        }
         this.nativeShell()
       } else {
         WebChromeBar({
