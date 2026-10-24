@@ -660,6 +660,17 @@ export class WebLogin {
     if (lower.indexOf('checkpoint') >= 0 || lower.indexOf('challenge') >= 0) {
       return 'Instagram 要求完成安全验证，请用「网页登录」完成';
     }
+    /*
+     * **"账号认出来了、密码也过了，但还差一步"**（真机回包：`{"user":true,
+     * "authenticated":false,"status":"ok"}`，HTTP 200）。
+     *
+     * 这种既不是密码错、也不是成功：IG 还要用户再确认一次（2FA / 设备确认 / 安全检查）。
+     * 以前这里没有匹配项，落到最后那句 `登录没有成功（HTTP 200）` —— 用户完全不知道下一步该做什么
+     * （用户报的"显示登录没有成功200"就是这一行）。现在明确指路：用「去网页验证」把这一步走完。
+     */
+    if (lower.indexOf('"authenticated":false') >= 0 || lower.indexOf('"authenticated": false') >= 0) {
+      return '密码已通过，但 IG 还要再确认一次（两步验证 / 设备确认）：请点下方「去网页验证」完成';
+    }
     if (lower.indexOf('bad_password') >= 0 || lower.indexOf('password') >= 0) {
       return '账号或密码不正确';
     }
