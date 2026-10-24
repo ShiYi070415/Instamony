@@ -27,6 +27,8 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { InstagramCookieSnapshot, InstagramCookieJar } from './InstagramCookieJar';
 import { InstagramPageBridge } from '../bridge/PageBridge';
+// 登录现场抓取（诊断：网页版走了哪一步、能不能进 2FA，见 core/LoginTrace）。
+import { LoginTrace } from './LoginTrace';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'WebLogin';
@@ -324,6 +326,8 @@ export class WebLogin {
           hilog.info(DOMAIN, TAG, 'web ajax v%{public}d status=%{public}s body=%{public}s',
             variant, lastStatus,
             lastBody.length > 700 ? `${lastBody.substring(0, 700)}…` : lastBody);
+          // 现场抓取：页面此刻在哪、有没有验证码框、页面自己打了哪些接口（见 core/LoginTrace）。
+          await LoginTrace.snapshot(bridge, `ajax-v${variant}`);
           /*
            * **抓两步验证上下文**（`two_factor_info` 里有 `two_factor_identifier`）。
            * 放在"已认证"判断之前：需要 2FA 时这一发必然是 `authenticated:false`，
@@ -418,6 +422,8 @@ export class WebLogin {
 
   static async submitTwoFactorCode(username: string, code: string): Promise<string> {
     const value: string = code.replace(/[\s-]+/g, '');
+    LoginTrace.reset();
+    await LoginTrace.snapshot(InstagramPageBridge.getInstance(), 'before-2fa');
     if (value.length === 0) {
       return '请输入验证码';
     }
