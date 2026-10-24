@@ -151,6 +151,8 @@ import { NativeSearch, SearchPostPage } from '../core/NativeSearch';
 import { MobileChallenge } from '../core/mobileapi/MobileChallenge';
 // 换账号时"按人的进程内缓存"由它一处清（见 core/AccountCaches）。
 import { AccountCaches } from '../core/AccountCaches';
+// 登录现场抓取（诊断：网页版到底发了什么、能不能进 2FA，见 core/LoginTrace）。
+import { LoginTrace } from '../core/LoginTrace';
 // 账号动作里"与 UI 无关"的那一半（记住当前账号 / 从本机删掉账号）。
 import { AccountActionService } from '../core/AccountActionService';
 // 复位序列执行器（每步一个名字、各自 try/catch，见 core/SessionReset）。
@@ -4119,6 +4121,17 @@ struct Index {
    * 已经在 Instagram 的 `/accounts/...` 那一族（登录页 / 二次验证 / 改密页）就直接亮出来。
    */
   private openLoginWeb(): void {
+    /*
+     * **手动网页登录也要被现场抓取**（诊断：看清 IG 自己在网页里发的登录请求/回包）。
+     *
+     * 用户在网页里**自己**点登录、自己输验证码时，页面是 SPA 正常流程 —— 那一串请求
+     * 正是我们脚本要复刻的目标。这里提前把钩子装上并把起点记一笔，之后每次
+     * `LoginTrace.snapshot` 都能看到 IG 自己发的 `/accounts/login/ajax/` 与
+     * `/accounts/login/ajax/two_factor/`（URL / 状态码 / 回包前 200 字）。
+     */
+    LoginTrace.reset();
+    LoginTrace.snapshot(this.bridge, 'manual-web-open').catch((): void => {
+    });
     // 挂着的时候才谈"它现在停在哪"；没挂的话下面会带着登录页地址重新建一个（见 noteStartUrl）。
     const onInstagramAuth: boolean = this.webHostMounted
       && this.currentUrl.indexOf('instagram.com') >= 0
