@@ -7491,7 +7491,18 @@ struct Index {
    * 背板（沉浸光感材质给的模糊）**常驻**，任何时候都有模糊背景 —— 和用户认可的通知页一致。
    */
   private pageTitleStyle(): TitleBarStyleOptions {
-    return this.currentTab() === AppTab.Home ? this.feedTitleStyle() : this.destinationTitleStyle();
+    /*
+     * **Reels 页也用首页那套标题栏样式**（用户报："顶部还是黑块"）。
+     *
+     * 原来只有首页用 `feedTitleStyle()`（材质背板 + 滚动时渐变的动态背景），其余页签用
+     * `destinationTitleStyle()` —— 那套在"没有滚动绑定"时基本是一块**不透明底**，于是
+     * Reels 内容区上下留出的模糊背景带**在顶部被标题栏的黑底盖住**，看起来就是黑块。
+     * 换成首页那套之后，标题栏背后是材质/透明，模糊背景就能透出来。
+     */
+    if (this.currentTab() === AppTab.Home || this.currentTab() === AppTab.Reels) {
+      return this.feedTitleStyle();
+    }
+    return this.destinationTitleStyle();
   }
 
   /**
