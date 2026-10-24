@@ -448,22 +448,16 @@ export class WebLogin {
      */
     if (WebLogin.twoFactorIdentifier.length === 0) {
       /*
-       * **直接指路到「网页登录」，不再自己折腾**（真机取证后的结论）。
+       * **在网页里"填表 → 点登录 → 等它自己出验证码页 → 填码 → 点继续"**（用户的要求：
+       * "你可以在网页输入后模拟点击登录按钮"）。
        *
-       * 抓到的成功样本：IG 现在的网页登录走 **Bloks CAA**
-       * （`/async/wbloks/fetch/?appid=com.bloks.www.bloks.caa.login.async.send_login_request`），
-       * 验证码界面是它渲染出来的、**并且从不给 `two_factor_identifier`**。
-       * 所以：
-       *   · 老 ajax 端点（`/accounts/login/ajax/two_factor/`）必定回 `400 无效参数`；
-       *   · 无头"推进页面找输入框"要么找不到（Bloks 的框不匹配常规选择器），
-       *     要么要等几十秒 —— 用户看到的就是"一直转圈，最后参数无效"。
-       *
-       * 与其让用户白等 + 白耗 IG 的尝试次数，不如**立刻**把面板切到"去网页验证"那一档，
-       * 由用户在网页里完成那一次（那条路 SPA 会正常渲染 Bloks 验证码页，你已验证可行）。
+       * 这条路能成立的关键证据（真机取样）：IG 的 2FA 界面是 **Bloks CAA** 渲染的，
+       * 它出现在**同一个路由**里 —— 所以 `login()` 那种"等 URL/表单变化"的成功判据永远等不到，
+       * 会误报"45 秒没完成"。这里改成**不依赖它的返回值**：提交完就自己轮询页面找验证码框
+       * （判据见 TWO_FACTOR_PROBE_JS：inputmode / aria-label / maxLength / 页面文案兜底）。
        */
-      hilog.info(DOMAIN, TAG,
-        '2fa without identifier → immediate web-login hand-off (Bloks CAA path)');
-      return WEB_LOGIN_NEEDS_WEB;
+      hilog.info(DOMAIN, TAG, '2fa without identifier → drive page (fill form, click, then code)');
+      return await WebLogin.completeTwoFactorOnPage(value);
     }
     const user: string = WebLogin.twoFactorUser.length > 0
       ? WebLogin.twoFactorUser : username.trim();
