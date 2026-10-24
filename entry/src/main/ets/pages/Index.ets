@@ -11508,6 +11508,10 @@ struct Index {
       }
 
       if (!this.webVisible) {
+        // **Reels 背景垫在壳之前**（兄弟顺序 = 绘制顺序：先画的在下面，被视频压着）。
+        if (this.currentTab() === AppTab.Reels) {
+          this.reelsCoverBackdrop()
+        }
         this.nativeShell()
       } else {
         WebChromeBar({
@@ -11532,8 +11536,10 @@ struct Index {
        * 那块 Toggle 材质才真的生效。层级压在标题栏（zIndex 10）与底栏之上。
        */
       /*
-       * **Reels 页的背景填充**：标题栏与底栏背后垫当前视频封面的高模糊（见 reelsCoverBackdrop）。
-       * 只在这一页生效；其它页不渲染，避免多一次模糊合成。
+       * **Reels 页的背景填充**：整块铺满屏幕、放在**视频层之前**（兄弟节点里靠前 = 画在下面），
+       * 所以它被视频压着、只在视频没有覆盖到的区域露出来（见 reelsCoverBackdrop）。
+       *
+       * 特意**不给 zIndex**：一旦给正数就会压到 nativeShell 上面（红块盖住整个界面的那次就是这样）。
        */
       if (this.currentTab() === AppTab.Reels) {
         this.reelsCoverBackdrop()
