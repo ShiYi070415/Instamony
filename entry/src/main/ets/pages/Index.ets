@@ -3955,17 +3955,21 @@ struct Index {
      */
     if (ajaxMessage.indexOf('额外验证') >= 0 || ajaxMessage.indexOf('两步验证') >= 0) {
       /*
-       * 两种"密码过了但还要再走一步"，分得清才不至于让人白输验证码：
-       *   · 回包带 `two_factor_info.two_factor_identifier` → 面板里输 6 位码就能过；
-       *   · 只回 `showAccountRecoveryModal`（没有标识）→ 那是 IG 自己的账号恢复/安全检查，
-       *     拿不到标识发验证码只会回"无效参数"（实测），只能去网页里走一次。
+       * **一律弹半模态验证码面板**（用户明确要的交互："之前的版本可以跳半模态弹窗做 2FA"）。
+       *
+       * 上一版在这里分叉：有 `two_factor_identifier` 才弹面板，没有就直接回"去网页验证"——
+       * 结果这个账号（IG 只回 `showAccountRecoveryModal`，不带标识）**永远看不到面板**，
+       * 用户只收到一句提示，观感就是"2FA 没了"。
+       *
+       * 现在都弹面板，让用户先在自己熟悉的地方输码：
+       *   · 有标识 → 面板里直接发出去（`accounts/two_factor_login/`），输对就进首页；
+       *   · 没标识 → 面板提交时 `WebLogin.submitTwoFactorCode` 会返回
+       *     `WEB_LOGIN_NEEDS_WEB`，面板随之切到"去网页验证"那一档（它本来就有这个状态）。
+       * 也就是说：面板是主入口，网页是它的兜底，而不是把两者对立起来。
        */
-      if (WebLogin.hasTwoFactorIdentifier()) {
-        hilog.info(DOMAIN, TAG, 'web login needs 2fa code → half modal');
-        return WEB_LOGIN_NEEDS_CODE;
-      }
-      hilog.info(DOMAIN, TAG, 'web login needs ig verification → offer web');
-      return WEB_LOGIN_NEEDS_WEB;
+      hilog.info(DOMAIN, TAG, 'web login needs verification (2fa id=%{public}s) → half modal',
+        WebLogin.hasTwoFactorIdentifier() ? 'y' : 'n');
+      return WEB_LOGIN_NEEDS_CODE;
     }
     const prefillMessage: string = await WebLogin.prefill(username, password);
     if (prefillMessage.length > 0) {
