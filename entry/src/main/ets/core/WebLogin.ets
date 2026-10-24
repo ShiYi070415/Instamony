@@ -256,6 +256,7 @@ export class WebLogin {
    * @returns 空串 = 服务端说"已认证"；否则是失败原因（会带上服务端原话）
    */
   static async loginByWebAjax(username: string, password: string): Promise<string> {
+    WebLogin.rememberCredentials(username, password);
     const user: string = username.trim();
     if (user.length === 0 || password.length === 0) {
       return '请输入账号和密码';
@@ -393,6 +394,28 @@ export class WebLogin {
     return WebLogin.twoFactorIdentifier.length > 0;
   }
 
+  /**
+   * 这次登录用的凭据（**只在内存里、只在这条登录流程内有效**，15 分钟过期）。
+   *
+   * 为什么需要：面板收到验证码时，「拿不到 `two_factor_identifier`」的那条路要
+   * **在隐藏网页里**把 IG 自己的验证码页推出来（见 completeTwoFactorOnPage），
+   * 而推进它需要再提交一次账号密码。密码不落盘、不写日志，过期即废。
+   */
+  private static loginUser: string = '';
+  private static loginPassword: string = '';
+  private static loginCredAtMs: number = 0;
+  private static readonly CRED_TTL_MS: number = 15 * 60000;
+
+  /** 记住这次登录的凭据（见上面三个字段的说明）。 */
+  static rememberCredentials(user: string, password: string): void {
+    if (user.trim().length === 0 || password.length === 0) {
+      return;
+    }
+    WebLogin.loginUser = user.trim();
+    WebLogin.loginPassword = password;
+    WebLogin.loginCredAtMs = Date.now();
+  }
+
   static async submitTwoFactorCode(username: string, code: string): Promise<string> {
     const value: string = code.replace(/[\s-]+/g, '');
     if (value.length === 0) {
@@ -418,8 +441,17 @@ export class WebLogin {
      * 而且白白消耗 IG 的尝试次数（紧跟着就是 429）。
      */
     if (WebLogin.twoFactorIdentifier.length === 0) {
-      hilog.info(DOMAIN, TAG, '2fa submit without identifier → ask for web verification');
-      return WEB_LOGIN_NEEDS_WEB;
+      /*
+       * **拿不到 `two_factor_identifier` 时：在隐藏网页里就地完成验证**（用户需求：
+       * "弹出半模态 2FA 面板，用户输入后自动在网页验证登录，不需要显示网页"）。
+       *
+       * 为什么必须走网页：`showAccountRecoveryModal` 那种回包不给标识，用移动端接口
+       * 硬发验证码 IG 一律回 `无效参数`（实测）。而 IG **自己的网页**知道该认哪个标识 ——
+       * 所以这里把码交给网页：先确保页面走到它的验证码页（必要时用记住的账号密码
+       * 用真实表单推进一次），再把码填进去、点提交，全程 `webVisible` 保持 false。
+       */
+      hilog.info(DOMAIN, TAG, '2fa submit without identifier → headless web verify');
+      return await WebLogin.completeTwoFactorOnPage(value);
     }
     const user: string = WebLogin.twoFactorUser.length > 0
       ? WebLogin.twoFactorUser : username.trim();
@@ -540,7 +572,90 @@ export class WebLogin {
       id.length > 14 ? `${id.substring(0, 14)}…` : id, id.length, WebLogin.twoFactorMethod);
   }
 
-  /** 从 JSON 文本里取一个字符串字段（不过 JSON.parse：回包可能被截断，正则可容错）。 */
+  /**
+   * **在隐藏网页里完成两步验证**（用户输入面板里的码之后调，见 submitTwoFactorCode）。
+   *
+   * 三步，全程**不显示网页**（`webVisible` 由调用方保持 false）：
+   *   1) 看页面上有没有验证码输入框；没有就用"记住的账号密码"用**真实表单**提交一次
+   *      （`login()` 会真的填表 + 点提交，IG 自己的流程随后渲染它的验证码页）；
+   *   2) 把用户输入的码填进那个框并点提交（页面自己带着它认的标识发出去）；
+   *   3) 轮询 Cookie 罐，等 `sessionid` 出现 —— 出现就是登进去了。
+   *
+   * @returns 空串 = 成功；否则是给面板看的原因
+   */
+  private static async completeTwoFactorOnPage(code: string): Promise<string> {
+    const bridge: InstagramPageBridge = InstagramPageBridge.getInstance();
+    if (!await WebLogin.waitAttached(bridge)) {
+      return '网页还没准备好，请稍后重试';
+    }
+    const credentialFresh: boolean = WebLogin.loginUser.length > 0
+      && WebLogin.loginPassword.length > 0
+      && Date.now() - WebLogin.loginCredAtMs < WebLogin.CRED_TTL_MS;
+    let probe: string = WebLogin.normalizeProbe(await bridge.runScript(WebLogin.TWO_FACTOR_PROBE_JS));
+    if (probe.indexOf('"code":1') < 0 && credentialFresh) {
+      // 页面还停在登录页：用真实表单推进一次，让 IG 把它自己的验证码页渲染出来。
+      hilog.info(DOMAIN, TAG, '2fa headless: advance page by real form submit');
+      const advanced: string = await WebLogin.login(WebLogin.loginUser, WebLogin.loginPassword);
+      hilog.info(DOMAIN, TAG, '2fa headless: form submit → %{public}s',
+        advanced.length > 60 ? `${advanced.substring(0, 60)}…` : advanced);
+      await WebLogin.sleep(2500);
+      probe = WebLogin.normalizeProbe(await bridge.runScript(WebLogin.TWO_FACTOR_PROBE_JS));
+    }
+    if (probe.indexOf('"code":1') < 0) {
+      hilog.warn(DOMAIN, TAG, '2fa headless: no code input on page (%{public}s)', probe);
+      return '网页里没出现验证码输入框，请稍后重试';
+    }
+    const filled: string = WebLogin.normalizeProbe(
+      await bridge.runScript(WebLogin.twoFactorFillScript(code)));
+    hilog.info(DOMAIN, TAG, '2fa headless: fill+submit → %{public}s', filled);
+    if (filled.indexOf('"ok":1') < 0) {
+      return '没能把验证码填进网页，请稍后重试';
+    }
+    const deadline: number = Date.now() + 25000;
+    while (Date.now() < deadline) {
+      await WebLogin.sleep(800);
+      try {
+        const snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
+        if (snapshot.signedIn) {
+          hilog.info(DOMAIN, TAG, '2fa headless: session appeared → done');
+          return '';
+        }
+      } catch (error) {
+        // 读罐失败就当还没好，继续等
+      }
+    }
+    return '验证码已提交，但没等到登录成功；请再试一次，或点「去网页验证」';
+  }
+
+  /** 页面上有没有验证码输入框（JSON：`{"code":1}` = 有）。 */
+  private static readonly TWO_FACTOR_PROBE_JS: string =
+    '(function(){var i=document.querySelectorAll("input");var c=0;'
+    + 'for(var k=0;k<i.length;k++){var t=(i[k].type||"").toLowerCase();'
+    + 'var n=((i[k].name||"")+" "+(i[k].id||"")+" "+(i[k].getAttribute("autocomplete")||"")).toLowerCase();'
+    + 'if(t==="tel"||t==="number"||/code|verif|otp|security|confirm/.test(n)||i[k].maxLength===6){c=1;}}'
+    + 'return JSON.stringify({code:c,inputs:i.length});})()';
+
+  /** 把验证码填进页面的框并提交（JSON：`{"ok":1,"btn":1}`）。 */
+  private static twoFactorFillScript(code: string): string {
+    const safe: string = code.replace(/[^0-9a-zA-Z]/g, '');
+    return '(function(){var v="' + safe + '";var i=document.querySelectorAll("input");var el=null;'
+      + 'for(var k=0;k<i.length;k++){var t=(i[k].type||"").toLowerCase();'
+      + 'var n=((i[k].name||"")+" "+(i[k].id||"")+" "+(i[k].getAttribute("autocomplete")||"")).toLowerCase();'
+      + 'if(t==="tel"||t==="number"||/code|verif|otp|security|confirm/.test(n)||i[k].maxLength===6){el=i[k];break;}}'
+      + 'if(!el){return JSON.stringify({ok:0});}'
+      + 'try{el.focus();}catch(e){}'
+      + 'var d=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,"value");'
+      + 'if(d&&d.set){d.set.call(el,v);}else{el.value=v;}'
+      + 'try{el.dispatchEvent(new Event("input",{bubbles:true}));}catch(e){}'
+      + 'try{el.dispatchEvent(new Event("change",{bubbles:true}));}catch(e){}'
+      + 'var btn=0;var bs=document.querySelectorAll("button,[role=button]");'
+      + 'for(var b=0;b<bs.length;b++){var txt=(bs[b].innerText||"").trim();'
+      + 'if(/^(next|continue|verify|confirm|submit|确认|验证|下一步|继续)$/i.test(txt)||bs[b].type==="submit"){'
+      + 'try{bs[b].click();btn=1;break;}catch(e){}}}'
+      + 'if(btn===0){try{el.form&&el.form.requestSubmit?el.form.requestSubmit():el.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",keyCode:13,bubbles:true}));'
+      + 'el.dispatchEvent(new KeyboardEvent("keyup",{key:"Enter",keyCode:13,bubbles:true}));btn=2;}catch(e){}}'
+      + 'return JSON.stringify({ok:1,btn:btn});})()';
+  }
   private static jsonString(body: string, name: string): string {
     const pattern: RegExp = new RegExp('"' + name + '"\\s*:\\s*"([^"]*)"');
     const found: RegExpMatchArray | null = body.match(pattern);
@@ -746,6 +861,8 @@ export class WebLogin {
     if (user.length === 0 || password.length === 0) {
       return '请输入账号和密码';
     }
+    // 面板里"无标识 → 在网页里完成 2FA"那条路要靠它推进页面（见 rememberCredentials）。
+    WebLogin.rememberCredentials(user, password);
     if (WebLogin.running) {
       return '正在登录中，请稍候';
     }
