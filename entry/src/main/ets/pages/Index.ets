@@ -3231,6 +3231,60 @@ struct Index {
   }
 
   /** 以 Cookie 罐为准刷新登录态；罐里有会话时顺手落盘。 */
+  /**
+   * **登录成功 / 换人之后的复位与取数**（从 `applySession` 里搬出来的具名方法）。
+   *
+   * 为什么单独一个方法：这段原来嵌在 `applySession` 的两百多行里，读的时候要一路往下翻
+   * 才能拼出"登录成功后到底做了哪几件事"。现在它有了名字，调用点只剩一句
+   * `this.resetAfterSignIn(wasChecked)` —— 判据在 `SessionApplyPlan`、内存复位在
+   * `SessionReset`、这一段是"界面与取数"，三者边界清楚。
+   *
+   * @param wasChecked 这一次之前是否已经核对过一次登录态（首次核对不能收网页，见方法体注释）
+   */
+  private resetAfterSignIn(wasChecked: boolean): void {
+    this.selectedTab = AppTab.Home;
+    // 直接改 selectedTab 会绕过 selectTab 里的可见性同步：搜索页已经不是当前页了，
+    // 必须显式关掉它的"接受滚动翻页"闸门（审计 C1：否则 active 与实际可见页不符）。
+    this.searchVm.setActive(false);
+    /*
+     * **只有真正的登录态切换才把网页收起来**（`wasChecked` = 这一次之前已经核对过一次）。
+     *
+     * 为什么首次核对不能收：冷启动时 `refreshSessionFromJar → applySession(true)` 一定
+     * "看起来像切换"（第一次核对，`changed` 必然是 true），而它和用户点开网页/深链是
+     * **同一两秒里**的事（真机日志：`mount web host … 02:09:31.795` →
+     * `unmount web host … 02:09:31.797`，中间只隔 2 毫秒）。表现就是"点了帖子/深链，
+     * 网页一闪就没了、回到信息流"。
+     */
+    if (wasChecked) {
+      this.webVisible = false;
+      /*
+       * **登录完成后不再让网页常驻**（见 webHostMounted 的说明）。
+       * 网页只是登录/验证的入口，登录完就没它的事了 —— 留着只会每帧合成、烧 CPU。
+       */
+      this.unmountWebHost('session');
+    }
+    this.viewModel.reset();
+    /*
+     * **登录完成后立刻按正常加载流程取数**（走既有那条链，不另起一套）：
+     *   · 信息流首屏 = 原生 HTTP 直发（core/NativeFeed，头里是**当前这个账号**的会话）；
+     *   · 其余页签交给预热链（托盘 → 收件箱 → reels/搜索/我的 按需）。
+     * `warmStarted` 归零是为了让预热链在**这次登录之后重新跑一遍** —— 它在 aboutToAppear
+     * 里已经跑过一次，那次多半还是未登录状态（等于白跑）。
+     */
+    this.warmStarted = false;
+    this.viewModel.loadFeed();
+    this.warmOtherTabs().catch((): void => {
+    });
+    /*
+     * **登录态确认之后保证实时通道在跑**（换号那条路已经会 stop 再 start；
+     * 这里兜住两种顺序：冷启动时"先 schedule 后被 forgetAccountMemory 停掉"、
+     * 以及网页里登录成功后没有别的入口去拉起它）。
+     */
+    if (!this.realtimeStarted) {
+      this.scheduleRealtimeStart();
+    }
+  }
+
   private async refreshSessionFromJar(): Promise<void> {
     let snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
     hilog.info(DOMAIN, TAG, 'cookie jar entries=%{public}d signedIn=%{public}s names=%{public}s',
@@ -3448,55 +3502,8 @@ struct Index {
       hilog.info(DOMAIN, TAG, 'session changed → nav stack cleared');
     }
     if (signedIn) {
-      this.selectedTab = AppTab.Home;
-      // 直接改 selectedTab 会绕过 selectTab 里的可见性同步：搜索页已经不是当前页了，
-      // 必须显式关掉它的"接受滚动翻页"闸门（审计 C1：否则 active 与实际可见页不符）。
-      this.searchVm.setActive(false);
-      /*
-       * **只有真正的登录态切换才把网页收起来**（`wasChecked` = 这一次之前已经核对过一次）。
-       *
-       * 为什么首次核对不能收：冷启动时 `refreshSessionFromJar → applySession(true)` 一定
-       * "看起来像切换"（第一次核对，`changed` 必然是 true），而它和用户点开网页/深链是
-       * **同一两秒里**的事（真机日志：`mount web host … 02:09:31.795` →
-       * `unmount web host … 02:09:31.797`，中间只隔 2 毫秒）。表现就是"点了帖子/深链，
-       * 网页一闪就没了、回到信息流"。
-       */
-      if (wasChecked) {
-        this.webVisible = false;
-        /*
-         * **登录完成后不再让网页常驻**（见 webHostMounted 的说明）。
-         *
-         * 以前这里要 `bridge.loadUrl(HOME)`：那时信息流是"回放网页那条查询"的，必须让隐藏网页
-         * 停在首页才拿得到数据。现在信息流、Reels、搜索、我的、私信全部走移动端私有接口，
-         * 网页只是登录/验证的入口 —— 登录完就没它的事了。留着它只会每帧合成、烧 CPU。
-         * 所以：直接走下面的原生取数链，然后把宿主卸掉。
-         */
-        this.unmountWebHost('session');
-      }
-      this.viewModel.reset();
-      /*
-       * **登录完成后立刻按正常加载流程取数**（用户要求："登录后立刻通过 http 请求按正常
-       * 加载流程获取数据（当前用户的 token）"）。
-       *
-       * 走的是既有那条链，不另起一套：
-       *   · 信息流首屏 = **原生 HTTP 直发**（core/NativeFeed，头里用的是 Cookie 罐里
-       *     **当前这个账号**的 session/csrf，见 applySession 上面刚做完的账号判定）；
-       *   · 其余页签交给预热链（托盘 → 通知 → reels → 搜索 → 我的 → 私信预取）。
-       * `warmStarted` 归零是为了让预热链在**这次登录之后重新跑一遍** —— 它在
-       * aboutToAppear 里已经跑过一次，那次多半还是未登录状态（等于白跑）。
-       */
-      this.warmStarted = false;
-      this.viewModel.loadFeed();
-      this.warmOtherTabs().catch((): void => {
-      });
-      /*
-       * **登录态确认之后保证实时通道在跑**（换号那条路已经会 stop 再 start；
-       * 这里兜住两种顺序：冷启动时"先 schedule 后被 forgetAccountMemory 停掉"、
-       * 以及网页里登录成功后没有别的入口去拉起它）。
-       */
-      if (!this.realtimeStarted) {
-        this.scheduleRealtimeStart();
-      }
+      // 登录/换人之后的复位与取数（具名方法，见 resetAfterSignIn 的说明）。
+      this.resetAfterSignIn(wasChecked);
       return;
     }
     this.viewModel.reset();
