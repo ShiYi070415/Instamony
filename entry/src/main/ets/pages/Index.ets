@@ -3326,23 +3326,26 @@ struct Index {
        * 高度由 Column 的 `layoutWeight` 与百分比共同决定，不会被宽度约束影响。
        */
       Column() {
-        Image(this.reelsCover)
-          .draggable(false)
+        /*
+         * **诊断：先用纯红色块**（不是图片、不加模糊）。
+         *
+         * 用户连续反馈"还是黑"，已经排除了比例/拉伸/摆位；现在要区分的是最后一件事：
+         * 这一层**到底有没有被画出来**。
+         *   · 看到红色 → 层在、位置对，问题只在图片/模糊（图源或 blur 渲染）；
+         *   · 仍是黑   → 这一层被更上层的不透明容器盖住了（zIndex/容器嵌套问题），
+         *                要改的是壳的那两块材质，而不是这里。
+         */
+        Column()
           .width('100%')
           .height('30%')
-          .objectFit(ImageFit.Fill)
-          .blur(80)
-          .opacity(0.55)
+          .backgroundColor('#FF3B30')
           .hitTestBehavior(HitTestMode.None)
         Blank()
           .layoutWeight(1)
-        Image(this.reelsCover)
-          .draggable(false)
+        Column()
           .width('100%')
           .height('22%')
-          .objectFit(ImageFit.Fill)
-          .blur(80)
-          .opacity(0.55)
+          .backgroundColor('#FF3B30')
           .hitTestBehavior(HitTestMode.None)
       }
       .width('100%')
