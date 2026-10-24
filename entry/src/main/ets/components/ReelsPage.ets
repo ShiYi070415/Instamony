@@ -1398,6 +1398,8 @@ export struct ReelsPage {
    * 下载用的是**原视频**地址（Reel.originalVideoUrl）：展示用的那份已经降到 1080 档省流量了。
    */
   private publishAction(): void {
+    hilog.info(DOMAIN, TAG, 'active cover idx=%{public}d len=%{public}d reels=%{public}d',
+      this.activeIndex, this.activeCoverUrl().length, this.reels.length);
     /*
      * **把"当前这条的封面"抛给外壳**（需求：标题栏/底栏背后要垫一层当前视频封面的高模糊）。
      *
@@ -1613,8 +1615,19 @@ export struct ReelsPage {
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Fill)
-          .blur(80)
-          .opacity(0.55)
+          .blur(30)
+          .opacity(1)
+          .hitTestBehavior(HitTestMode.None)
+      } else {
+        /*
+         * **诊断兜底**：封面地址为空时画一块深蓝。
+         * 上下露出的带子里若是深蓝 → 层在、只是没有图（URL 为空）；
+         * 仍是黑 → 层没被画出来（那是布局/层级，不是数据）。
+         */
+        Column()
+          .width('100%')
+          .height('100%')
+          .backgroundColor('#1B2A4A')
           .hitTestBehavior(HitTestMode.None)
       }
       if (this.reels.length === 0) {
