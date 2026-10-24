@@ -8276,6 +8276,43 @@ struct Index {
    * 所以：先把当前账号记进花名册 → 清罐 → 走 headlessWebLogin。
    * 失败就把原会话**还回去**（否则用户点一下新增账号，自己的号就没了）。
    */
+  /**
+   * **新增账号页的「网页登录」**（用户报："点网页登录直接跳到已登录账号的主页了"）。
+   *
+   * 原因：那颗按钮原来直接走 `openLoginWeb()` —— 它用的是**当前账号还活着的会话**，
+   * IG 的网页一看已登录，立刻重定向到信息流，用户就被带回了原账号首页（等于白点）。
+   *
+   * 新增账号要的是"在网页里登**另一个**账号"，所以必须先做和 `addAccountLogin`
+   * 一样的前置：立旗（这段时间忽略"未登录"信号）+ 记下原账号（退出时回滚用）
+   * + 卸掉隐藏网页 + 清空 Cookie 罐，**然后**才把网页亮出来。
+   * 之后用户在 IG 页面里手动登录/验证，成功后 `watchLoginSession` 照常收尾。
+   */
+  private async addAccountWebVerify(): Promise<void> {
+    if (this.addAccountFlow) {
+      return;
+    }
+    this.addAccountFlow = true;
+    try {
+      await this.rememberAccount();
+      this.addAccountPrevious = AccountBook.find(this.currentAccountId());
+      // 先卸网页再清罐（顺序反了网页会先收到"会话没了"）。
+      this.unmountWebHost('add-account-web');
+      try {
+        await InstagramCookieJar.getInstance().clear();
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'clear jar before add-account web failed: %{public}s',
+          (error as Error).message);
+      }
+      hilog.info(DOMAIN, TAG, 'add-account: open web login (jar cleared, previous kept)');
+      // 现在罐是空的，网页会停在登录页，用户可以登**另一个**账号。
+      this.openLoginWeb();
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'add-account web verify failed: %{public}s', (error as Error).message);
+      // 失败就把旗子收掉（沿用 finishAddAccount 的回滚语义，别把用户留在半截状态）。
+      await this.finishAddAccount('web-open-failed');
+    }
+  }
+
   private async addAccountLogin(username: string, password: string): Promise<string> {
     /*
      * **进流程先立旗**（真机 bug 的修复）：下面清罐会让隐藏网页报"未登录"，
@@ -9751,8 +9788,10 @@ struct Index {
           onVerifyCode: (username: string, code: string): Promise<string> => {
             return this.submitLoginCode(username, code);
           },
+          // 新增账号页的「网页登录」：必须先清罐再亮网页，否则会回到当前账号的信息流。
           onWebVerify: (): void => {
-            this.openLoginWeb();
+            this.addAccountWebVerify().catch((): void => {
+            });
           }
         })
       }
