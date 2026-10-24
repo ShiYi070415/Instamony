@@ -3221,13 +3221,74 @@ struct Index {
 
   /** 以 Cookie 罐为准刷新登录态；罐里有会话时顺手落盘。 */
   private async refreshSessionFromJar(): Promise<void> {
-    const snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
+    let snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
     hilog.info(DOMAIN, TAG, 'cookie jar entries=%{public}d signedIn=%{public}s names=%{public}s',
       snapshot.count, snapshot.signedIn ? '1' : '0', snapshot.names);
+    /*
+     * **冷启动恢复**（用户报：在"切换账号"页退出 App、重开之后落在**没有返回键的登录页**）。
+     *
+     * 根因："新增账号"流程一开始就会**清空 Cookie 罐**（见 addAccountLogin —— 不清的话 IG 的
+     * 网页登录接口在已登录会话上行为不稳）。用户在这条支线中途杀掉 App 时，罐里是空的，
+     * 但**花名册里原来那个人的会话还是好的**。这时候应该把那个人种回罐里继续用，
+     * 而不是把用户丢进整屏登录页（那一页没有返回键，退无可退）。
+     *
+     * 只在"罐里确实没有会话"时做一次，失败就算了（照常走登录页）。
+     */
+    if (!snapshot.signedIn) {
+      const restored: AccountEntry | null = await this.restoreRememberedSession();
+      if (restored !== null) {
+        // `adoptSession` 内部已经作废了读罐缓存（见 InstagramCookieJar.adoptSession），这里重读一次。
+        snapshot = await InstagramCookieJar.inspect();
+        hilog.info(DOMAIN, TAG, 'cold-start session restored uid=%{public}s signedIn=%{public}s',
+          restored.userId, snapshot.signedIn ? '1' : '0');
+      }
+    }
     if (snapshot.signedIn) {
       await InstagramCookieJar.save();
     }
     this.applySession(snapshot.signedIn, snapshot.cookie);
+  }
+
+  /**
+   * 从花名册里把"上一次登录过的账号"的会话种回 Cookie 罐（见 refreshSessionFromJar 的说明）。
+   *
+   * 挑法：优先 `AccountScope.current()`（上一次真正在用的那个人），没有就取花名册最后一条。
+   * 任一可用会话都不存在时返回 null —— 调用方照常落到登录页。
+   */
+  private async restoreRememberedSession(): Promise<AccountEntry | null> {
+    try {
+      const saved: Array<AccountEntry> = AccountBook.all();
+      if (saved.length === 0) {
+        return null;
+      }
+      const scoped: string = AccountScope.current();
+      const preferred: string = scoped.startsWith('u') ? scoped.substring(1) : scoped;
+      const candidates: Array<AccountEntry> = [];
+      const hit: AccountEntry | null = preferred.length > 0 ? AccountBook.find(preferred) : null;
+      if (hit !== null && hit.usable()) {
+        candidates.push(hit);
+      }
+      for (let index: number = saved.length - 1; index >= 0; index--) {
+        const one: AccountEntry = saved[index];
+        if (one.usable() && (hit === null || one.userId !== hit.userId)) {
+          candidates.push(one);
+        }
+      }
+      for (let index: number = 0; index < candidates.length; index++) {
+        const one: AccountEntry = candidates[index];
+        const ok: boolean = await InstagramCookieJar.adoptSession(one.sessionId, one.userId,
+          one.csrf);
+        if (ok) {
+          hilog.info(DOMAIN, TAG, 'restored remembered session uid=%{public}s', one.userId);
+          return one;
+        }
+      }
+      return null;
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'restore remembered session failed: %{public}s',
+        (error as Error).message);
+      return null;
+    }
   }
 
   /**
@@ -3929,6 +3990,21 @@ struct Index {
    * @returns 空串 = 通过并已进登录态；否则是给面板显示的原因
    */
   private async submitLoginCode(username: string, code: string): Promise<string> {
+    /*
+     * **先把隐藏网页确保就绪**（用户报：验证时跳网页 → 点关闭 → 回来输验证码，报"网页没准备好"）。
+     *
+     * 两步验证码是**在隐藏网页里**发出去的（`core/WebLogin.submitTwoFactorCode` 驱动页面自己的
+     * 接口）。而"关闭网页"以前会无条件卸掉宿主（见 closeWeb），引擎一没，这一步必然失败。
+     * 现在两边都兜：closeWeb 在未登录时保留宿主；这里再补一道 —— 真被卸了就重新挂 + 等就绪。
+     */
+    if (!this.webHostMounted) {
+      hilog.info(DOMAIN, TAG, 'verify code: web host not mounted → remount before submit');
+      this.mountWebHost();
+      const ready: string = await this.bridge.awaitPageReady(NAV_READY_TIMEOUT_MS);
+      if (ready.length > 0) {
+        return '网页没准备好，请稍后重试';
+      }
+    }
     const message: string = await WebLogin.submitTwoFactorCode(username, code);
     if (message.length > 0) {
       // 验证码没通过：如果是"新增账号"这条支线，按失败收尾（不把用户留在半截状态）。
@@ -5092,7 +5168,17 @@ struct Index {
      * 现在恢复"先收起、再处理会话"，并把宿主一起卸掉（不卸就又常驻烧 CPU 了，见 webHostMounted）。
      */
     this.webVisible = false;
-    this.unmountWebHost('close');
+    /*
+     * **未登录时别卸网页宿主**（用户报：验证时跳网页、点关闭之后，原生输入框提交验证码失败 ——
+     * "网页没准备好"）。两步验证是**在隐藏网页里**把码送出去的（见 core/WebLogin.submitTwoFactorCode），
+     * 所以登录/验证这条线上"关闭网页"只能收 chrome，不能把引擎销毁。
+     * 已登录时照旧卸掉（那时网页只是登录/验证入口，留着只会白烧 CPU）。
+     */
+    if (this.signedIn) {
+      this.unmountWebHost('close');
+    } else {
+      hilog.info(DOMAIN, TAG, 'close web: keep host mounted (not signed in, verify may follow)');
+    }
     this.selectedTab = AppTab.Home;
     // 和 applySession 里同理：切页真正看的是 selectedIndex，必须一起复位到首页。
     this.selectedIndex = 0;
