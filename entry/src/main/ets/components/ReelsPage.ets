@@ -1472,13 +1472,26 @@ export struct ReelsPage {
    * 放在页面级、只取当前活动那条，背景就不会跟着手指跑。
    */
   private activeCoverUrl(): string {
-    const list: Array<Reel> = this.reels;
     const index: number = this.activeIndex;
-    if (index < 0 || index >= list.length) {
+    if (this.reels.length === 0) {
       return '';
     }
-    const reel: Reel = list[index];
-    return reel.coverUrl.length > 0 ? reel.coverUrl : '';
+    if (index >= 0 && index < this.reels.length) {
+      const reel: Reel = this.reels[index];
+      if (reel.coverUrl.length > 0) {
+        return reel.coverUrl;
+      }
+    }
+    /*
+     * 兜底：活动下标越界 / 那一条没封面时，退到**列表里第一个有封面的**。
+     * 不这么做的话，背景层会因为 URL 为空**整层不渲染**（用户报的"背景模糊直接消失了"）。
+     */
+    for (let at: number = 0; at < this.reels.length; at++) {
+      if (this.reels[at].coverUrl.length > 0) {
+        return this.reels[at].coverUrl;
+      }
+    }
+    return '';
   }
 
   /**
