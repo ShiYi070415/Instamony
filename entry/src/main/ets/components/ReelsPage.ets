@@ -192,11 +192,10 @@ struct ReelSlide {
         .draggable(false)
         .width('100%')
         .height('100%')
-        .objectFit(ImageFit.Cover)
+        .objectFit(ImageFit.Fill)
         .blur(48)
         .scale({ x: 1.15, y: 1.15 })
         .opacity(0.55)
-        .backgroundColor(Color.Black)
       /*
        * **画面盒子**：宽度永远铺满屏幕，高度按**视频自己的比例**（实测优先，见 aspect()）。
        *
@@ -212,7 +211,6 @@ struct ReelSlide {
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Contain)
-          .backgroundColor(Color.Black)
         if (this.reel.playable() && (this.playing || this.preload)) {
           // 播放器换成 AVPlayer + XComponent 的共用组件，理由见 VideoSurface 的说明：
           // 它能在 prepare 阶段就把首帧送到表面上（showFirstFrameOnPrepare），
@@ -1557,11 +1555,13 @@ export struct ReelsPage {
       .width('100%')
       .aspectRatio(this.videoAspect(reel))
       /*
-       * **画面高度上限 88%**：竖屏视频按宽铺满后的高度会超过屏高，压到 88% 之后
-       * 上下各留约 6% 给背景（模糊封面）。这就是"背景向上下填充"的可见空间来源 ——
-       * 不加这个约束的话，竖屏视频会把整块区域铺满，背景永远看不见。
+       * **恢复满屏**（用户："之前有一版没有黑块的"）。
+       *
+       * 那个"黑块"正是我加高度上限之后、视频顶部让出来的那条带子 —— 而它后面是
+       * HDS 标题栏的**不透明底**，所以看起来就是黑块。撤掉上限即回到"视频顶满、
+       * 标题栏后面是画面"的观感；背景模糊仍在底部（底栏是半透明材质，能透出）。
+       * 顶部要也显示模糊，只能改成自绘标题行（下一批做），不是调参数能解决的。
        */
-      .constraintSize({ maxHeight: '78%' })
       .align(Alignment.Center)
       // 竖屏视频（高 > 屏高）超出的部分在这里被裁掉，而不是把它压扁。
       .clip(true)
