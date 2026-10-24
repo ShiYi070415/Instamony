@@ -11391,6 +11391,19 @@ struct Index {
             if (signedIn) {
               this.refreshSessionFromJar().catch((): void => {
               });
+              /*
+               * **网页登录成功后强制记一次账**（用户报："重新登录大号后无法同步小号"）。
+               *
+               * `applySession(true)` 里本来会 `rememberAccount()`，但它依赖"账号/登录态变化"
+               * 那条分支；网页这条信号偶尔只是"页面说登上了"，而罐里的 `ds_user_id` 已经变了 ——
+               * 那种情况下花名册不会更新，于是切过去的号在原生选单里还是旧的。
+               * 这里再记一次（幂等：同一账号同一会话只会覆盖同一条记录）。
+               */
+              this.rememberAccount().then((): void => {
+                hilog.info(DOMAIN, TAG, 'web login success → roster synced (%{public}s)',
+                  AccountBook.describe());
+              }).catch((): void => {
+              });
               return;
             }
             this.applySession(false);
