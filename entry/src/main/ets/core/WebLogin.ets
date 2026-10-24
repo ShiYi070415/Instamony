@@ -619,25 +619,46 @@ export class WebLogin {
       && Date.now() - WebLogin.loginCredAtMs < WebLogin.CRED_TTL_MS;
     let probe: string = WebLogin.normalizeProbe(await bridge.runScript(WebLogin.TWO_FACTOR_PROBE_JS));
     if (probe.indexOf('"code":1') < 0 && credentialFresh) {
-      // 页面还停在登录页：用真实表单推进一次，让 IG 把它自己的验证码页渲染出来。
-      hilog.info(DOMAIN, TAG, '2fa headless: advance page by real form submit');
-      const advanced: string = await WebLogin.login(WebLogin.loginUser, WebLogin.loginPassword);
-      hilog.info(DOMAIN, TAG, '2fa headless: form submit → %{public}s',
-        advanced.length > 60 ? `${advanced.substring(0, 60)}…` : advanced);
-      await WebLogin.sleep(2000);
       /*
-       * **推着页面往前走**（真机抓取的关键教训）。
+       * **把"提交登录"这件事按几种触发方式依次试**（真机现状：页面没出现验证码框）。
        *
-       * 抓到的实况：`POST /api/v1/web/accounts/login/ajax/` 回
-       * `{"user":true,"authenticated":false,"showAccountRecoveryModal":true}` ——
-       * 这正是 IG "要你再确认一步（2FA / 恢复确认）"的信号，**页面本该据此弹一个模态框**。
-       * 但我们是用脚本**模拟点击**提交的，那个模态框有时候不会自己出来（或者要再点一次
-       * "继续/确认"）。于是用户输完码却始终没有输入框可填 —— 就是我们看到的
-       * `2fa headless: no code input on page`。
-       *
-       * 所以这里补一段"nudge"：扫页面上像"继续/确认/下一步"的按钮点它，最多 4 轮；
-       * 每轮都重新探测有没有验证码框，出现就停。
+       * 抓到的事实：手动点登录时，页面会打 `/async/wbloks/fetch/?appid=…caa.login…`，
+       * 验证码页随后出现；而我们自己派发 click 之后**那条请求没出现** —— 说明 Bloks 的按钮
+       * 没被我们"点中"。所以这里换几种方式，每试一种就查一下 `window.__igTrace` 里有没有
+       * 出现 wbloks，出现了就说明流程真的动起来了：
+       *   ① 现有那套「填值 + 派发 pointer/touch/mouse 全序列 + click」；
+       *   ② 在密码框上派发 Enter（keydown/keypress/keyup，keyCode 13）；
+       *   ③ 表单 `requestSubmit()`（若页面用的是 form）。
        */
+      for (let strategy: number = 0; strategy < 3; strategy++) {
+        if (strategy === 0) {
+          const applied: string = await bridge.runScript(
+            WebLogin.submitAllScript(WebLogin.loginUser, WebLogin.loginPassword));
+          hilog.info(DOMAIN, TAG, '2fa headless: submit#0 fill+click → %{public}s', applied);
+        } else if (strategy === 1) {
+          const enter: string = await bridge.runScript(WebLogin.ENTER_SUBMIT_JS);
+          hilog.info(DOMAIN, TAG, '2fa headless: submit#1 enter → %{public}s', enter);
+        } else {
+          const submit: string = await bridge.runScript(WebLogin.FORM_SUBMIT_JS);
+          hilog.info(DOMAIN, TAG, '2fa headless: submit#2 form → %{public}s', submit);
+        }
+        // 等 2.5 秒看页面有没有动（Bloks 请求 / 验证码框 / 视图切换）
+        await WebLogin.sleep(2500);
+        await LoginTrace.snapshot(bridge, `submit-${strategy}`);
+        probe = WebLogin.normalizeProbe(await bridge.runScript(WebLogin.TWO_FACTOR_PROBE_JS));
+        if (probe.indexOf('"code":1') >= 0) {
+          hilog.info(DOMAIN, TAG, '2fa headless: code input appeared after submit#%{public}d', strategy);
+          break;
+        }
+        const wbloks: string = WebLogin.normalizeProbe(await bridge.runScript(WebLogin.BLOKS_SEEN_JS));
+        hilog.info(DOMAIN, TAG, '2fa headless: submit#%{public}d bloks started=%{public}s',
+          strategy, wbloks);
+        if (wbloks.indexOf('"seen":1') >= 0) {
+          // 流程已经动起来了（Bloks 在跑）：再等它把验证码页渲染出来。
+          await WebLogin.sleep(3000);
+          break;
+        }
+      }
       await WebLogin.nudgeToTwoFactor(bridge);
       probe = WebLogin.normalizeProbe(await bridge.runScript(WebLogin.TWO_FACTOR_PROBE_JS));
     }
@@ -666,6 +687,32 @@ export class WebLogin {
     }
     return '验证码已提交，但没等到登录成功；请再试一次，或点「去网页验证」';
   }
+
+  /** 在密码框上派发 Enter（Bloks/表单都可能吃这一下）。 */
+  private static readonly ENTER_SUBMIT_JS: string =
+    '(function(){try{var i=document.querySelectorAll("input");var el=null;'
+    + 'for(var k=0;k<i.length;k++){if((i[k].type||"").toLowerCase()==="password"){el=i[k];}}'
+    + 'if(!el&&i.length>0){el=i[i.length-1];}'
+    + 'if(!el){return "noinput";}el.focus();'
+    + 'var opts={key:"Enter",code:"Enter",keyCode:13,which:13,bubbles:true,cancelable:true,composed:true};'
+    + 'try{el.dispatchEvent(new KeyboardEvent("keydown",opts));}catch(e){}'
+    + 'try{el.dispatchEvent(new KeyboardEvent("keypress",opts));}catch(e){}'
+    + 'try{el.dispatchEvent(new KeyboardEvent("keyup",opts));}catch(e){}'
+    + 'return "enter";}catch(e){return "err";}})()';
+
+  /** 若页面用的是 form：直接 requestSubmit()。 */
+  private static readonly FORM_SUBMIT_JS: string =
+    '(function(){try{var f=document.querySelector("form");'
+    + 'if(!f){return "noform";}'
+    + 'if(f.requestSubmit){f.requestSubmit();return "submit";}'
+    + 'f.submit();return "submit";}catch(e){return "err";}})()';
+
+  /** 页面有没有开始跑 Bloks CAA 登录（`async/wbloks` 请求 / CAA 相关请求出现）。 */
+  private static readonly BLOKS_SEEN_JS: string =
+    '(function(){var a=(window.__igTrace||[]);for(var k=0;k<a.length;k++){'
+    + 'if(String(a[k].u||"").indexOf("wbloks")>=0||String(a[k].u||"").indexOf("caa")>=0){'
+    + 'return JSON.stringify({seen:1});}}'
+    + 'return JSON.stringify({seen:0,n:a.length});})()';
 
   /**
    * 把页面**推**到 IG 自己的验证步骤（点"继续/确认"这类按钮），最多 4 轮。
