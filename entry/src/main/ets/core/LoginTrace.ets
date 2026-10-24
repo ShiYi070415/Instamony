@@ -25,14 +25,19 @@
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { fileIo } from '@kit.CoreFileKit';
+import { common } from '@kit.AbilityKit';
 import { InstagramPageBridge } from '../bridge/PageBridge';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'LoginTrace';
+const FILE_NAME: string = 'Instarmony_login_trace.txt';
 
 export class LoginTrace {
   /** 一轮登录里的所有行（也用于 `tail()` 直接回给界面/日志）。 */
   private static lines: Array<string> = [];
+  /** 应用上下文（见 bind；用来把同样的内容落到沙箱文件）。 */
+  private static context: common.Context | null = null;
 
   /**
    * 抓一次现场（幂等注入页面钩子，读回快照）。
@@ -52,13 +57,45 @@ export class LoginTrace {
     }
   }
 
-  /** 记一行（分块进 hilog，避免单条被截断）。 */
+  /** 记一行（分块进 hilog，同时**追加到沙箱文件**，见 bind/flush）。 */
   static push(line: string): void {
     LoginTrace.lines.push(line);
     const chunk: number = 800;
     for (let at: number = 0; at < line.length; at += chunk) {
       const end: number = at + chunk < line.length ? at + chunk : line.length;
       hilog.info(DOMAIN, TAG, '%{public}s', line.substring(at, end));
+    }
+    LoginTrace.append(line);
+  }
+
+  /**
+   * 绑定应用上下文（`pages/Index` 启动时调一次）。
+   *
+   * 为什么要有：真机上 `hilog` 的缓冲**很快就被系统日志刷掉**（这一轮排查里连续三次
+   * 拉不到 App 行）。把同样的内容再写一份到 `filesDir/Instarmony_login_trace.txt`，
+   * 就能随时用 `hdc file recv` 取回，不受日志缓冲影响。
+   */
+  static bind(context: common.Context): void {
+    LoginTrace.context = context;
+  }
+
+  /** 追加一行到沙箱文件（没有上下文时静默跳过）。 */
+  private static append(line: string): void {
+    const context: common.Context | null = LoginTrace.context;
+    if (context === null) {
+      return;
+    }
+    try {
+      const path: string = `${context.filesDir}/${FILE_NAME}`;
+      const file: fileIo.File = fileIo.openSync(path,
+        fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.APPEND);
+      try {
+        fileIo.writeSync(file.fd, line + '\n');
+      } finally {
+        fileIo.closeSync(file);
+      }
+    } catch (error) {
+      // 写文件失败不该影响登录流程
     }
   }
 

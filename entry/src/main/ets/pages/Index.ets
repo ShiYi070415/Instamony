@@ -2189,6 +2189,8 @@ struct Index {
     const host: common.Context | undefined = this.getUIContext().getHostContext();
     if (host !== undefined) {
       AppSettings.init(host);
+      // 登录现场抓取也要落到沙箱文件（真机 hilog 缓冲很快被刷，见 core/LoginTrace.bind）。
+      LoginTrace.bind(host);
       /*
        * 通知权限**等首帧之后再要**（在 EntryAbility.onCreate 里要会回
        * "IPC communication failed"，见 core/PushCenter.requestPermissionNow）。
