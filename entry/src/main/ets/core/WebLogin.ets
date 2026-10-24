@@ -448,28 +448,22 @@ export class WebLogin {
      */
     if (WebLogin.twoFactorIdentifier.length === 0) {
       /*
-       * **没有标识也先按老路发一次**（用户反馈："之前有一版功能正常，输入完验证码点按钮就进去了"）。
+       * **直接指路到「网页登录」，不再自己折腾**（真机取证后的结论）。
        *
-       * 那一版就是**网页 ajax 的 two_factor_login**：它靠**页面自己的 cookie 会话**认这次待验证的
-       * 登录，很多账号并不需要 `two_factor_identifier`（那是移动端接口的硬要求）。
-       * 后来加了一道"没标识就别发"的守卫，把这条本来能成的路一起堵死了 —— 于是变成"网页里没输入框"。
+       * 抓到的成功样本：IG 现在的网页登录走 **Bloks CAA**
+       * （`/async/wbloks/fetch/?appid=com.bloks.www.bloks.caa.login.async.send_login_request`），
+       * 验证码界面是它渲染出来的、**并且从不给 `two_factor_identifier`**。
+       * 所以：
+       *   · 老 ajax 端点（`/accounts/login/ajax/two_factor/`）必定回 `400 无效参数`；
+       *   · 无头"推进页面找输入框"要么找不到（Bloks 的框不匹配常规选择器），
+       *     要么要等几十秒 —— 用户看到的就是"一直转圈，最后参数无效"。
        *
-       * 现在的顺序（从最轻到最重）：
-       *   ① 用空标识发网页 ajax（老版行为，多数账号这一步就够）；
-       *   ② 不行再在隐藏网页里把 IG 自己的验证码页推出来填表提交（见 completeTwoFactorOnPage）。
+       * 与其让用户白等 + 白耗 IG 的尝试次数，不如**立刻**把面板切到"去网页验证"那一档，
+       * 由用户在网页里完成那一次（那条路 SPA 会正常渲染 Bloks 验证码页，你已验证可行）。
        */
-      hilog.info(DOMAIN, TAG, '2fa submit without identifier → try web ajax (legacy behaviour)');
-      const legacy: string = await WebLogin.submitTwoFactorAjax(username, value, '');
-      if (legacy.length === 0) {
-        return '';
-      }
-      hilog.info(DOMAIN, TAG, '2fa legacy ajax said: %{public}s → headless page verify', legacy);
-      const onPage: string = await WebLogin.completeTwoFactorOnPage(value);
-      if (onPage.length === 0) {
-        return '';
-      }
-      // 两条都不成：把**最接近真相**的那句回给面板（网页那条的失败原因更有用）。
-      return onPage.length > 0 && onPage.indexOf('没出现验证码输入框') < 0 ? onPage : legacy;
+      hilog.info(DOMAIN, TAG,
+        '2fa without identifier → immediate web-login hand-off (Bloks CAA path)');
+      return WEB_LOGIN_NEEDS_WEB;
     }
     const user: string = WebLogin.twoFactorUser.length > 0
       ? WebLogin.twoFactorUser : username.trim();
