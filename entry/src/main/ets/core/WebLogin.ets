@@ -347,7 +347,24 @@ export class WebLogin {
       if (lastBody.length === 0) {
         return '网页里的登录请求没有回应（三次都没回）';
       }
-      return WebLogin.ajaxFailure(lastBody, lastStatus);
+      const reason: string = WebLogin.ajaxFailure(lastBody, lastStatus);
+      /*
+       * **"需要额外验证"就改用页面自己的表单再走一遍**（用户报的核心问题）。
+       *
+       * `fetch` 那条路只拿到一个回包，**页面本身不前进** —— 所以我们随后把网页亮出来时，
+       * 用户看到的还是那张登录页，而不是 IG 的验证码页（"打开网页后是网页版登录页"）。
+       * 而 `WebLogin.login()` 是**真的填表 + 点提交**（见 submitAllScript 的说明），
+       * IG 自己的流程会接着往下走，验证码页就在网页里出现了 —— 用户在那里输码即可，
+       * 验完 cookie 落罐，我们的 `watchLoginSession` 会自动收尾。
+       *
+       * 只在"要验证"这类回包上这么做：密码错/限流/429 这些不该再折腾一次表单。
+       */
+      if (reason.indexOf('额外验证') >= 0 || reason.indexOf('两步验证') >= 0
+        || reason.indexOf('安全验证') >= 0) {
+        hilog.info(DOMAIN, TAG, 'ajax needs verification → drive real form so IG shows its 2FA page');
+        return await WebLogin.login(user, password);
+      }
+      return reason;
     } finally {
       WebLogin.busy = false;
     }
