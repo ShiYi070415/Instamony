@@ -1554,6 +1554,13 @@ export struct ReelsPage {
       }
       .width('100%')
       .aspectRatio(this.videoAspect(reel))
+      /*
+       * **画面高度上限 88%**：竖屏视频按宽铺满后的高度会超过屏高，压到 88% 之后
+       * 上下各留约 6% 给背景（模糊封面）。这就是"背景向上下填充"的可见空间来源 ——
+       * 不加这个约束的话，竖屏视频会把整块区域铺满，背景永远看不见。
+       */
+      .constraintSize({ maxHeight: '78%' })
+      .align(Alignment.Center)
       // 竖屏视频（高 > 屏高）超出的部分在这里被裁掉，而不是把它压扁。
       .clip(true)
 
@@ -1593,6 +1600,23 @@ export struct ReelsPage {
 
   build() {
     Stack({ alignContent: Alignment.BottomStart }) {
+      /*
+       * **整块背景：当前视频封面的高模糊**（需求：reels 背景用高模糊的视频封面）。
+       *
+       * 位置很关键：它是根 `Stack` 的**第一个子节点**（Stack 是叠放，不会把后面的人挤走），
+       * 所以画在视频之下、被视频压着；视频没铺到的区域（上下留白/横屏视频的上下边）就会露出它。
+       * 之前两次失败分别是：放在壳的根 Stack（盖住了标题栏）、放在壳的内容区但顺序摆放（把视频挤走）。
+       */
+      if (this.activeCoverUrl().length > 0) {
+        Image(this.activeCoverUrl())
+          .draggable(false)
+          .width('100%')
+          .height('100%')
+          .objectFit(ImageFit.Fill)
+          .blur(80)
+          .opacity(0.55)
+          .hitTestBehavior(HitTestMode.None)
+      }
       if (this.reels.length === 0) {
         Column({ space: 10 }) {
           if (this.busy) {
