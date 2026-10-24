@@ -176,6 +176,28 @@ struct ReelSlide {
   build() {
     Stack({ alignContent: Alignment.Center }) {
       /*
+       * **高模糊封面背景**（需求：reels 及类 reels 页的背景都用视频封面的高模糊版本）。
+       *
+       * 为什么放最外层：画面盒子是按视频比例算出来的，竖屏视频上下会有留白 ——
+       * 以前那里是纯黑，观感像"视频掉在黑底上"。现在用**同一张封面**放大 + 高模糊铺满整屏，
+       * 留白处就有了颜色延续（和 IG 自己的做法一致），而且不需要额外拉图：
+       * 封面地址本来就来自解析结果（`reel.coverUrl`），`PosterCache` 也会命中同一张。
+       *
+       * 几个参数的理由：
+       *   · `ImageFit.Cover` + `scale(1.15)`：模糊会把边缘算成半透明，放大一点避免露出黑边；
+       *   · `blur(48)`：够糊到看不出细节，又不至于变成一块纯色；
+       *   · `opacity(0.55)`：压暗一档，保证前景文字（作者行/操作栏）的对比度不受影响。
+       */
+      Image(this.reel.coverUrl.length > 0 ? this.reel.coverUrl : $r('app.media.startIcon'))
+        .draggable(false)
+        .width('100%')
+        .height('100%')
+        .objectFit(ImageFit.Cover)
+        .blur(48)
+        .scale({ x: 1.15, y: 1.15 })
+        .opacity(0.55)
+        .backgroundColor(Color.Black)
+      /*
        * **画面盒子**：宽度永远铺满屏幕，高度按**视频自己的比例**（实测优先，见 aspect()）。
        *
        * 需求："视频填充逻辑用视频宽度按比例填满" —— 所以既不能靠整屏 Cover 裁（16:9 会切掉左右），
