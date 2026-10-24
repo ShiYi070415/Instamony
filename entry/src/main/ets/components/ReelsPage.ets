@@ -1173,6 +1173,14 @@ export struct ReelsPage {
     (reel: Reel, follow: boolean): Promise<boolean> => Promise.resolve(false);
   onOpenUser: (reel: Reel) => void = (reel: Reel): void => {
   };
+  /**
+   * **当前活动那条的封面地址**（空串 = 还没拿到）。
+   *
+   * 外壳用它给"标题栏 / 底栏"背后垫高模糊背景（见 pages/Index 里 Reels 分支的说明）。
+   * 只上报地址、不上报 Reel 对象：外壳不需要别的字段，也不该持有业务模型。
+   */
+  onActiveCover: (coverUrl: string) => void = (coverUrl: string): void => {
+  };
   onComments: (reel: Reel) => void = (reel: Reel): void => {
   };
   onShare: (reel: Reel) => void = (reel: Reel): void => {
@@ -1393,6 +1401,13 @@ export struct ReelsPage {
    * 下载用的是**原视频**地址（Reel.originalVideoUrl）：展示用的那份已经降到 1080 档省流量了。
    */
   private publishAction(): void {
+    /*
+     * **把"当前这条的封面"抛给外壳**（需求：标题栏/底栏背后要垫一层当前视频封面的高模糊）。
+     *
+     * 为什么不在壳里自己取：活动页只有本组件知道（`activeIndex`）。壳拿到 URL 后
+     * 就能在标题栏与底栏那两条黑区域背后画模糊背景，让"上下填充"成立。
+     */
+    this.onActiveCover(this.activeCoverUrl());
     const reel: Reel | null = this.current();
     if (reel === null || !reel.playable()) {
       ReelsAction.publish(this.source, false, '', '');
