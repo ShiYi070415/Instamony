@@ -442,20 +442,46 @@ export class WebLogin {
      */
     if (WebLogin.twoFactorIdentifier.length === 0) {
       /*
-       * **拿不到 `two_factor_identifier` 时：在隐藏网页里就地完成验证**（用户需求：
-       * "弹出半模态 2FA 面板，用户输入后自动在网页验证登录，不需要显示网页"）。
+       * **没有标识也先按老路发一次**（用户反馈："之前有一版功能正常，输入完验证码点按钮就进去了"）。
        *
-       * 为什么必须走网页：`showAccountRecoveryModal` 那种回包不给标识，用移动端接口
-       * 硬发验证码 IG 一律回 `无效参数`（实测）。而 IG **自己的网页**知道该认哪个标识 ——
-       * 所以这里把码交给网页：先确保页面走到它的验证码页（必要时用记住的账号密码
-       * 用真实表单推进一次），再把码填进去、点提交，全程 `webVisible` 保持 false。
+       * 那一版就是**网页 ajax 的 two_factor_login**：它靠**页面自己的 cookie 会话**认这次待验证的
+       * 登录，很多账号并不需要 `two_factor_identifier`（那是移动端接口的硬要求）。
+       * 后来加了一道"没标识就别发"的守卫，把这条本来能成的路一起堵死了 —— 于是变成"网页里没输入框"。
+       *
+       * 现在的顺序（从最轻到最重）：
+       *   ① 用空标识发网页 ajax（老版行为，多数账号这一步就够）；
+       *   ② 不行再在隐藏网页里把 IG 自己的验证码页推出来填表提交（见 completeTwoFactorOnPage）。
        */
-      hilog.info(DOMAIN, TAG, '2fa submit without identifier → headless web verify');
-      return await WebLogin.completeTwoFactorOnPage(value);
+      hilog.info(DOMAIN, TAG, '2fa submit without identifier → try web ajax (legacy behaviour)');
+      const legacy: string = await WebLogin.submitTwoFactorAjax(username, value, '');
+      if (legacy.length === 0) {
+        return '';
+      }
+      hilog.info(DOMAIN, TAG, '2fa legacy ajax said: %{public}s → headless page verify', legacy);
+      const onPage: string = await WebLogin.completeTwoFactorOnPage(value);
+      if (onPage.length === 0) {
+        return '';
+      }
+      // 两条都不成：把**最接近真相**的那句回给面板（网页那条的失败原因更有用）。
+      return onPage.length > 0 && onPage.indexOf('没出现验证码输入框') < 0 ? onPage : legacy;
     }
     const user: string = WebLogin.twoFactorUser.length > 0
       ? WebLogin.twoFactorUser : username.trim();
-    const id: string = WebLogin.twoFactorIdentifier;
+    return await WebLogin.submitTwoFactorAjax(user, value, WebLogin.twoFactorIdentifier);
+  }
+
+  /**
+   * 用**网页 ajax** 提交两步验证码（老版行为；`identifier` 允许为空）。
+   *
+   * 之所以单独一个方法：面板那条路现在有两种标识状态（有 / 没有），而"发码"这段逻辑
+   * 与"判定回包"必须只写一份 —— 否则又会像上次那样两处行为不一致。
+   *
+   * @returns 空串 = 通过；否则是给面板显示的原因
+   */
+  private static async submitTwoFactorAjax(user: string, value: string,
+                                           identifier: string): Promise<string> {
+    const bridge: InstagramPageBridge = InstagramPageBridge.getInstance();
+    const id: string = identifier;
     hilog.info(DOMAIN, TAG, '2fa submit: user=%{public}s idLen=%{public}d method=%{public}s',
       user, id.length, WebLogin.twoFactorMethod);
     WebLogin.busy = true;
