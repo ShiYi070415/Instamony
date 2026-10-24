@@ -1615,7 +1615,9 @@ export struct ReelsPage {
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Fill)
-          .blur(30)
+          .blur(25)
+          // 提亮一档：封面本身暗时（夜景/暗背景视频），模糊后看起来就像黑边。
+          .brightness(1.35)
           .opacity(1)
           .hitTestBehavior(HitTestMode.None)
       } else {
