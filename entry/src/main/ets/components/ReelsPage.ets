@@ -259,15 +259,10 @@ struct ReelSlide {
       .width('100%')
       .aspectRatio(this.aspect())
       /*
-       * **画面不再顶满屏高**（需求 A：背景改成"整屏高的高模糊封面"，要让它在上下露出来）。
-       *
-       * `maxHeight('86%')` + `clip(true)`：竖屏视频按宽铺满后的高度会超过屏高，这里把它压到
-       * 86% 屏高、居中显示 —— 上下各留出约 7% 的模糊背景带，于是"每段视频之间"有了可见的
-       * 背景边界（不再是纯黑边）。横屏/方视频本来就矮于这个上限，行为不变。
+       * **视频仍然"横向填满屏幕"**（用户确认：背景拉伸模糊、视频保持按宽铺满）。
+       * 竖屏视频超出的高度由外层裁掉 —— 这是原来就有的行为，本轮把上一版的 86% 上限撤回。
        */
-      .constraintSize({ maxHeight: '86%' })
       .clip(true)
-      .align(Alignment.Center)
     }
     .width('100%')
     .height('100%')
@@ -1613,14 +1608,21 @@ export struct ReelsPage {
          * 用 200ms 透明度过渡盖住这一下切换。
          */
         if (this.activeCoverUrl().length > 0) {
+          /*
+           * **封面纵向拉伸铺满整屏 + 超高高斯模糊**（用户的要求与实测原因）。
+           *
+           * 之前用 `ImageFit.Cover`：封面本身是固定比例（通常 3:4 / 1:1），Cover 只保证
+           * "两个方向都铺到"，于是模糊层的高度其实**跟着封面比例走**，屏幕上下就露不出背景。
+           * 现在改成 `ImageFit.Fill` —— 纵向拉伸到满屏（模糊之后看不出变形），
+           * 再把模糊半径拉很高（120），彻底变成一层色雾。
+           */
           Image(this.activeCoverUrl())
             .draggable(false)
             .width('100%')
             .height('100%')
-            .objectFit(ImageFit.Cover)
-            .blur(60)
-            .scale({ x: 1.2, y: 1.2 })
-            .opacity(0.6)
+            .objectFit(ImageFit.Fill)
+            .blur(120)
+            .opacity(0.7)
             .backgroundColor(Color.Black)
             .animation({ duration: 200, curve: Curve.EaseOut })
         }
