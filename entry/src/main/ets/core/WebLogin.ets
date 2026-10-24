@@ -636,7 +636,21 @@ export class WebLogin {
       const advanced: string = await WebLogin.login(WebLogin.loginUser, WebLogin.loginPassword);
       hilog.info(DOMAIN, TAG, '2fa headless: form submit → %{public}s',
         advanced.length > 60 ? `${advanced.substring(0, 60)}…` : advanced);
-      await WebLogin.sleep(2500);
+      await WebLogin.sleep(2000);
+      /*
+       * **推着页面往前走**（真机抓取的关键教训）。
+       *
+       * 抓到的实况：`POST /api/v1/web/accounts/login/ajax/` 回
+       * `{"user":true,"authenticated":false,"showAccountRecoveryModal":true}` ——
+       * 这正是 IG "要你再确认一步（2FA / 恢复确认）"的信号，**页面本该据此弹一个模态框**。
+       * 但我们是用脚本**模拟点击**提交的，那个模态框有时候不会自己出来（或者要再点一次
+       * "继续/确认"）。于是用户输完码却始终没有输入框可填 —— 就是我们看到的
+       * `2fa headless: no code input on page`。
+       *
+       * 所以这里补一段"nudge"：扫页面上像"继续/确认/下一步"的按钮点它，最多 4 轮；
+       * 每轮都重新探测有没有验证码框，出现就停。
+       */
+      await WebLogin.nudgeToTwoFactor(bridge);
       probe = WebLogin.normalizeProbe(await bridge.runScript(WebLogin.TWO_FACTOR_PROBE_JS));
     }
     if (probe.indexOf('"code":1') < 0) {
@@ -664,6 +678,46 @@ export class WebLogin {
     }
     return '验证码已提交，但没等到登录成功；请再试一次，或点「去网页验证」';
   }
+
+  /**
+   * 把页面**推**到 IG 自己的验证步骤（点"继续/确认"这类按钮），最多 4 轮。
+   *
+   * 见 completeTwoFactorOnPage 里的说明：`showAccountRecoveryModal` 本该让页面弹模态框，
+   * 但我们是脚本模拟点击提交的，模态框有时不会自己出现 —— 补点几下。
+   */
+  private static async nudgeToTwoFactor(bridge: InstagramPageBridge): Promise<void> {
+    for (let round: number = 0; round < 4; round++) {
+      await LoginTrace.snapshot(bridge, `nudge-${round}`);
+      const clicked: string =
+        WebLogin.normalizeProbe(await bridge.runScript(WebLogin.NUDGE_JS));
+      hilog.info(DOMAIN, TAG, '2fa headless: nudge %{public}d → %{public}s', round, clicked);
+      if (clicked.indexOf('"code":1') >= 0) {
+        return;
+      }
+      await WebLogin.sleep(1500);
+      const probe: string =
+        WebLogin.normalizeProbe(await bridge.runScript(WebLogin.TWO_FACTOR_PROBE_JS));
+      if (probe.indexOf('"code":1') >= 0) {
+        return;
+      }
+    }
+  }
+
+  /**
+   * 点一下"继续/确认/下一步"这类按钮；顺带回报页面上现在有没有验证码框。
+   *
+   * 只点**文案明确**的那几个词，避免点到"退出/取消"把流程打断。
+   */
+  private static readonly NUDGE_JS: string =
+    '(function(){var out={code:0,clicked:0};var i=document.querySelectorAll("input");'
+    + 'for(var k=0;k<i.length;k++){var t=(i[k].type||"").toLowerCase();'
+    + 'var n=((i[k].name||"")+" "+(i[k].id||"")).toLowerCase();'
+    + 'if(t==="tel"||t==="number"||/code|verif|otp|security|confirm/.test(n)||i[k].maxLength===6){out.code=1;}}'
+    + 'var bs=document.querySelectorAll("button,[role=button]");'
+    + 'for(var b=0;b<bs.length;b++){var tx=(bs[b].innerText||"").trim();'
+    + 'if(/^(继续|确认|确定|下一步|继续操作|continue|confirm|next|ok)$/i.test(tx)){'
+    + 'try{bs[b].click();out.clicked=1;break;}catch(e){}}}'
+    + 'return JSON.stringify(out);})()';
 
   /** 页面上有没有验证码输入框（JSON：`{"code":1}` = 有）。 */
   private static readonly TWO_FACTOR_PROBE_JS: string =
