@@ -3348,7 +3348,17 @@ struct Index {
       .width('100%')
       .height('100%')
       .hitTestBehavior(HitTestMode.None)
-      .zIndex(9)}
+      /*
+       * **层级给足**（用户确认：黑色是上盖物挡住了红块 → 说明 9 这个层级被内容盖住了）。
+       *
+       * 根 Stack 里 `nativeShell()` 是上一级的兄弟节点（视频流就在它里面），而它内部的
+       * 视频/容器把整块区域涂黑了；`zIndex(9)` 显然没有压过它。这里直接给 50：
+       *   · 内容层（视频）之上 —— 红块/模糊层就看得见；
+       *   · 控件层（标题栏 10、底栏 30、浮层 60+）：
+       *       标题栏/底栏若在其内部更高层级，仍会盖住我们（那时要改它们的材质）；
+       *       浮层（评论 70/80）本来就该在我们之上，不受影响。
+       */
+      .zIndex(50)}
   }
 
   private async refreshSessionFromJar(): Promise<void> {
