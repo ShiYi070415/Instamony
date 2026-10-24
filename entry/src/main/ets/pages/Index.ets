@@ -3332,33 +3332,30 @@ struct Index {
          *   · 仍是黑   → 这一层被更上层的不透明容器盖住了（zIndex/容器嵌套问题），
          *                要改的是壳的那两块材质，而不是这里。
          */
-        Column()
-          .width('100%')
-          .height('30%')
-          .backgroundColor('#FF3B30')
-          .hitTestBehavior(HitTestMode.None)
-        Blank()
-          .layoutWeight(1)
-        Column()
-          .width('100%')
-          .height('22%')
-          .backgroundColor('#FF3B30')
-          .hitTestBehavior(HitTestMode.None)
+        /*
+         * **整块背景 = 当前视频封面的高模糊**（垫在视频下面、只覆盖内容区，不碰标题栏/底栏）。
+         * 封面纵向拉伸铺满（`Fill`）+ 超高高斯模糊：看不出形变，只剩一层色雾。
+         */
+        if (this.reelsCover.length > 0) {
+          Image(this.reelsCover)
+            .draggable(false)
+            .width('100%')
+            .height('100%')
+            .objectFit(ImageFit.Fill)
+            .blur(80)
+            .opacity(0.55)
+            .hitTestBehavior(HitTestMode.None)
+        } else {
+          Column()
+            .width('100%')
+            .height('100%')
+            .backgroundColor(Color.Black)
+            .hitTestBehavior(HitTestMode.None)
+        }
       }
       .width('100%')
       .height('100%')
-      .hitTestBehavior(HitTestMode.None)
-      /*
-       * **层级给足**（用户确认：黑色是上盖物挡住了红块 → 说明 9 这个层级被内容盖住了）。
-       *
-       * 根 Stack 里 `nativeShell()` 是上一级的兄弟节点（视频流就在它里面），而它内部的
-       * 视频/容器把整块区域涂黑了；`zIndex(9)` 显然没有压过它。这里直接给 50：
-       *   · 内容层（视频）之上 —— 红块/模糊层就看得见；
-       *   · 控件层（标题栏 10、底栏 30、浮层 60+）：
-       *       标题栏/底栏若在其内部更高层级，仍会盖住我们（那时要改它们的材质）；
-       *       浮层（评论 70/80）本来就该在我们之上，不受影响。
-       */
-      .zIndex(50)}
+      .hitTestBehavior(HitTestMode.None)}
   }
 
   private async refreshSessionFromJar(): Promise<void> {
