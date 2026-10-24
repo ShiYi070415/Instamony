@@ -1465,6 +1465,23 @@ export struct ReelsPage {
   }
 
   /**
+   * 当前活动那条视频的封面地址（整页背景用它，见页面根 Stack 的说明）。
+   *
+   * 为什么从"活动下标"取、而不是从每页 builder 的参数取：背景一旦做进每一页，就会
+   * **跟着 Swiper 一起横向滑动** —— 用户看到的就是"还在看当前这条，背景已经变成下一条了"。
+   * 放在页面级、只取当前活动那条，背景就不会跟着手指跑。
+   */
+  private activeCoverUrl(): string {
+    const list: Array<Reel> = this.reels;
+    const index: number = this.activeIndex;
+    if (index < 0 || index >= list.length) {
+      return '';
+    }
+    const reel: Reel = list[index];
+    return reel.coverUrl.length > 0 ? reel.coverUrl : '';
+  }
+
+  /**
    * 一页 = 画面 + **这一条自己的信息层**。
    *
    * 两块都在页内（不是浮在 Swiper 上）：画面那条理由见 ReelSlide 的说明，信息层那条见
@@ -1473,35 +1490,6 @@ export struct ReelsPage {
   @Builder
   reelPage(reel: Reel, index: number) {
     Stack({ alignContent: Alignment.Center }) {
-      /*
-       * **整页铺底：当前这条视频封面的高模糊版本**（需求："reels 背景用高模糊的视频封面"）。
-       *
-       * 为什么还要在这一层（`ReelSlide` 里已经有一层）：那一层在**画面盒子内部**，竖屏视频
-       * 会把盒子撑满整屏，于是它被盖住、看不见；而这一层是**整页大小**，所以标题栏/底栏
-       * 后面、以及横屏视频的上下留白处都能看到它。两层用同一张封面（`PosterCache` 命中同一图）。
-       */
-      Image(reel.coverUrl.length > 0 ? reel.coverUrl : $r('app.media.startIcon'))
-        .draggable(false)
-        .width('100%')
-        .height('100%')
-        .objectFit(ImageFit.Cover)
-        .blur(60)
-        .scale({ x: 1.2, y: 1.2 })
-        .opacity(0.6)
-        .backgroundColor(Color.Black)
-      /*
-       * **相邻两页之间的分界线**（用户报："切换时下一条视频的背景还是当前背景的封面"）。
-       *
-       * 背景是"整页铺底 + 巨大模糊"，两页交界处两张大模糊图叠在一起、又都很软，
-       * 视觉上就分不清"这已经是下一页了"。加一条 1vp 的暗线把边界点出来：
-       * 它属于每一页自己的左边缘，随页面一起滑动，所以翻页时看得见"过去了"。
-       */
-      Divider()
-        .vertical(true)
-        .strokeWidth(1)
-        .color('#40000000')
-        .height('100%')
-        .align(Alignment.Start)
       // 画面盒子：**宽度铺满 + 高度按视频比例**，居中放在全屏背景上。
       //
       // 为什么这样做（而不是让播放器整屏 Cover）：Cover 是按"两个方向都要铺满"去裁的 ——
@@ -1595,6 +1583,26 @@ export struct ReelsPage {
         .height('100%')
         .justifyContent(FlexAlign.Center)
       } else {
+        /*
+         * **整页背景：当前活动那条视频封面的高模糊版本**（需求："reels 背景用高模糊的视频封面"）。
+         *
+         * 关键点：它放在 **Swiper 之外**、只取 `activeIndex` 那一条。放在每一页里面的话，
+         * 背景会跟着手指横向滑动 —— 用户看到的就是"当前视频还在看，背景已经换成下一条了"
+         * （这正是你反馈的现象）。放在这里之后：背景不跟手，翻页完成那一刻才换成新那条。
+         * 用 200ms 透明度过渡盖住这一下切换。
+         */
+        if (this.activeCoverUrl().length > 0) {
+          Image(this.activeCoverUrl())
+            .draggable(false)
+            .width('100%')
+            .height('100%')
+            .objectFit(ImageFit.Cover)
+            .blur(60)
+            .scale({ x: 1.2, y: 1.2 })
+            .opacity(0.6)
+            .backgroundColor(Color.Black)
+            .animation({ duration: 200, curve: Curve.EaseOut })
+        }
         Swiper(this.swiperController) {
           ForEach(this.reels, (reel: Reel, index: number): void => {
             this.reelPage(reel, index)
