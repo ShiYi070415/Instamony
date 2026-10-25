@@ -57,6 +57,19 @@ export struct VideoSurface {
   @Prop @Watch('onPropChanged') url: string = '';
   /** 现在是不是"该播这一条"。 */
   @Prop @Watch('onPropChanged') playing: boolean = false;
+  /**
+   * 本页所属分段（0 = 探索 / 1 = 关注 / -1 = 独立页）。创建后不变。
+   */
+  segment: number = -1;
+  /**
+   * **全局播放开关**（组件自己订阅，不靠 @Prop 逐层传）。
+   *
+   * 为什么必须在这里订阅：播放器节点在 ForEach 里，键没变时上层传下来的 @Prop 到不了
+   * 已经建好的节点 —— 结果就是「另一段还在播」「滑动时不停」。@StorageLink 是组件级订阅，
+   * 值一变本组件一定重跑、@Watch 一定触发，才真能 pause()。
+   */
+  @StorageLink('reels_frozen_all') @Watch('onPropChanged') frozenAll: boolean = false;
+  @StorageLink('reels_active_segment') @Watch('onPropChanged') activeSegment: number = 0;
   /** 是不是"下一条"（只提前 prepare，不播）—— 预加载就靠它。 */
   @Prop @Watch('onPropChanged') preload: boolean = false;
   /**
@@ -82,6 +95,20 @@ export struct VideoSurface {
    */
   onVideoSize: (w: number, h: number) => void = (w: number, h: number): void => {
   };
+
+  /**
+   * **这一颗播放器此刻该不该真的在播**：调用方说该播 + 没被全局冻住 + 自己是当前分段。
+   * 只暂停、不销毁（销毁了就回到「黑一下」的老问题）。
+   */
+  private wantsPlay(): boolean {
+    if (!this.playing || this.frozenAll) {
+      return false;
+    }
+    if (this.segment >= 0 && this.segment !== this.activeSegment) {
+      return false;
+    }
+    return true;
+  }
 
   private readonly xController: XComponentController = new XComponentController();
   private player: media.AVPlayer | null = null;
@@ -202,7 +229,7 @@ export struct VideoSurface {
   private reportError(detail: string): void {
     hilog.error(DOMAIN, TAG, '%{public}s url=%{public}s playing=%{public}s',
       detail, this.shortUrl(), this.playing ? 'y' : 'n');
-    if (this.playing) {
+    if (this.wantsPlay()) {
       this.onError();
     }
   }
@@ -259,7 +286,7 @@ export struct VideoSurface {
       this.applyRenderOptions();
       hilog.info(DOMAIN, TAG, 'prepared in %{public}dms surface=%{public}s url=%{public}s',
         Date.now() - this.prepareStartedMs, this.surfaceReady ? 'y' : 'n', this.shortUrl());
-      if (this.playing) {
+      if (this.wantsPlay()) {
         this.beginWhenSurfaceReady();
       }
     } else if (state === 'playing') {
@@ -277,7 +304,7 @@ export struct VideoSurface {
       }
     } else if (state === 'paused' || state === 'stopped' || state === 'completed') {
       // 播放中被暂停（如被别的播放器抢占）、或播完：还想播就接着播（feeds/reels 都是循环短视频）。
-      if (this.playing) {
+      if (this.wantsPlay()) {
         this.beginWhenSurfaceReady();
       }
     }
@@ -384,7 +411,7 @@ export struct VideoSurface {
       return;
     }
     this.applyRenderOptions();
-    if (this.playing) {
+    if (this.wantsPlay()) {
       this.beginWhenSurfaceReady();
     } else {
       this.pausePlayback();

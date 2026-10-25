@@ -144,6 +144,8 @@ struct ReelSlide {
   @ObjectLink reel: Reel;
   /** 现在是这一条在播吗。 */
   @Prop playing: boolean = false;
+  /** 本页所属分段（0 = 探索 / 1 = 关注 / -1 = 独立页），原样转给播放器做全局播放闸门。 */
+  segment: number = -1;
   /** 提前 prepare 下一条。 */
   @Prop preload: boolean = false;
   /** 静音（全局开关）。 */
@@ -218,6 +220,7 @@ struct ReelSlide {
           VideoSurface({
             url: this.reel.videoUrl,
             playing: this.playing,
+            segment: this.segment,
             preload: this.preload,
             muted: this.muted,
             // 盒子比例已经等于视频比例，所以用 FIT（完整显示）就正好铺满这个盒子；
@@ -1585,8 +1588,8 @@ export struct ReelsPage {
          */
         ReelSlide({
           reel: reel,
-          playing: index === this.activeIndex && !this.frozenAll
-          && (this.segment < 0 || this.segment === this.activeSegment),
+          segment: this.segment,
+          playing: index === this.activeIndex && !this.frozenAll,
           // 预加载下一条：一直开着（原先按网络开关过，实测会影响切换观感；
           // 播放器的预下载缓冲已经收到 2 秒，这一项的开销有界）。
           preload: index === this.activeIndex + 1,
