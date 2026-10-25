@@ -1171,14 +1171,6 @@ export struct ReelsPage {
     (reel: Reel, follow: boolean): Promise<boolean> => Promise.resolve(false);
   onOpenUser: (reel: Reel) => void = (reel: Reel): void => {
   };
-  /**
-   * **当前活动那条的封面地址**（空串 = 还没拿到）。
-   *
-   * 外壳用它给"标题栏 / 底栏"背后垫高模糊背景（见 pages/Index 里 Reels 分支的说明）。
-   * 只上报地址、不上报 Reel 对象：外壳不需要别的字段，也不该持有业务模型。
-   */
-  onActiveCover: (coverUrl: string) => void = (coverUrl: string): void => {
-  };
   onComments: (reel: Reel) => void = (reel: Reel): void => {
   };
   onShare: (reel: Reel) => void = (reel: Reel): void => {
@@ -1429,13 +1421,6 @@ export struct ReelsPage {
   private publishAction(): void {
     hilog.info(DOMAIN, TAG, 'active cover idx=%{public}d len=%{public}d reels=%{public}d',
       this.activeIndex, this.activeCoverUrl().length, this.reels.length);
-    /*
-     * **把"当前这条的封面"抛给外壳**（需求：标题栏/底栏背后要垫一层当前视频封面的高模糊）。
-     *
-     * 为什么不在壳里自己取：活动页只有本组件知道（`activeIndex`）。壳拿到 URL 后
-     * 就能在标题栏与底栏那两条黑区域背后画模糊背景，让"上下填充"成立。
-     */
-    this.onActiveCover(this.activeCoverUrl());
     const reel: Reel | null = this.current();
     if (reel === null || !reel.playable()) {
       ReelsAction.publish(this.source, false, '', '');
@@ -1669,35 +1654,17 @@ export struct ReelsPage {
   build() {
     Stack({ alignContent: Alignment.BottomStart }) {
       /*
-       * **整块背景：当前视频封面的高模糊**（需求：reels 背景用高模糊的视频封面）。
+       * **页级背景：纯黑**。
        *
-       * 位置很关键：它是根 `Stack` 的**第一个子节点**（Stack 是叠放，不会把后面的人挤走），
-       * 所以画在视频之下、被视频压着；视频没铺到的区域（上下留白/横屏视频的上下边）就会露出它。
-       * 之前两次失败分别是：放在壳的根 Stack（盖住了标题栏）、放在壳的内容区但顺序摆放（把视频挤走）。
+       * 这里原来铺的是「当前视频封面的高模糊 + 提亮」—— 和每条视频各自那层背景重复，
+       * 而且分段页被拖出边界时会整块露出来（看到的就是一张糊照片）。
+       * 现在只留纯黑：每条的背景由它自己的 slide 负责（见 ReelSlide），页级不再画任何图。
        */
-      if (this.activeCoverUrl().length > 0) {
-        Image(this.activeCoverUrl())
-          .draggable(false)
-          .width('100%')
-          .height('100%')
-          .objectFit(ImageFit.Fill)
-          .blur(25)
-          // 提亮一档：封面本身暗时（夜景/暗背景视频），模糊后看起来就像黑边。
-          .brightness(1.35)
-          .opacity(1)
-          .hitTestBehavior(HitTestMode.None)
-      } else {
-        /*
-         * **诊断兜底**：封面地址为空时画一块深蓝。
-         * 上下露出的带子里若是深蓝 → 层在、只是没有图（URL 为空）；
-         * 仍是黑 → 层没被画出来（那是布局/层级，不是数据）。
-         */
-        Column()
-          .width('100%')
-          .height('100%')
-          .backgroundColor('#1B2A4A')
-          .hitTestBehavior(HitTestMode.None)
-      }
+      Column()
+        .width('100%')
+        .height('100%')
+        .backgroundColor(Color.Black)
+        .hitTestBehavior(HitTestMode.None)
       if (this.reels.length === 0) {
         Column({ space: 10 }) {
           if (this.busy) {
