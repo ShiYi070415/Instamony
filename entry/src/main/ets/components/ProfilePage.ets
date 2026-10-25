@@ -128,6 +128,21 @@ const FALLBACK_WIDTH_VP: number = 360;
  */
 const SEGMENT_BLOCK_HEIGHT: number = 60;
 /**
+ * Tabs 翻页的动画时长（毫秒，见 tabContent 里的 `Tabs.animationDuration`）。
+ *
+ * 取 220 和 Reels 页那条一致（见 pages/Index 的 REELS_SWITCH_MS）：灰底药丸自己的补间是
+ * 160ms（ProfileSegmentBar 的 SEGMENT_SLIDE_MS），页和药丸几乎同时落位，看不出谁先到。
+ */
+const SEGMENT_SWITCH_MS: number = 220;
+/**
+ * **内部分页的槽位数**（`PROFILE_TAB_*` 那四个）。
+ *
+ * 和"界面上有几段"不是一回事：别人主页只有 3 段（没有收藏，见 ProfileViewModel 的 order），
+ * 但内部分页号仍然是 0..3 —— 行数据源、滚动控制器这两组数组都按槽位数开，
+ * 具体用哪一份由 `vm.tabAtSegment(第几段)` / `vm.segmentOfTab(分页号)` 换算，不能写死段数。
+ */
+const PROFILE_TAB_SLOTS: number = 4;
+/**
  * 触底翻页的**提前量**（行）：末尾还剩这么多行没露出来就去拉下一页。
  *
  * 一行 3 格，2 行就是 6 条 —— 和搜索页瀑布流那个提前量同量级（官方《创建瀑布流》
@@ -290,11 +305,26 @@ export struct ProfilePage {
    * 和快拍托盘那套完全一致（见 StoriesTray.captureRect）。
    */
   private highlightRects: Map<string, StoryHeroRect> = new Map<string, StoryHeroRect>();
-  @State private posts: Array<ProfilePost> = [];
+  /*
+   * 上一版这里还有一个 `@State posts`（"当前分页的那一份帖子"）—— 收成 Tabs + 每页一份数据源
+   * 之后它没有读者了：网格读各自那条 `ProfileRowSource`，条数读 tabCounts，点格子读
+   * `vm.postsOfTab(tab)`。留着只会每次回调都白触发一次页面重建，所以删掉。
+   */
   @State private busy: boolean = false;
   @State private status: string = '';
   @State private refreshing: boolean = false;
-  @State private hasMore: boolean = true;
+  /**
+   * **每个分页自己的**"有几条 / 还有没有下一页"（下标 = `PROFILE_TAB_*`，见 applyPosts）。
+   *
+   * 为什么要按页存：内层改成 Tabs 之后几页同时挂在树上，每页末尾那条哨兵/空态得按**自己**
+   * 的条数判 —— 都读同一个"当前分页"的条数的话，切过去之前已经建好的那页会一直
+   * 显示"还没有帖子"。
+   *
+   * 为什么要 @State 数组而不是直接读数据源：`ProfileRowSource` 不是可观察对象，
+   * `if (条数 > 0)` 这种分支读它永远不会重建；这里整份重新赋值一次，框架才看得到变化。
+   */
+  @State private tabCounts: Array<number> = [0, 0, 0, 0];
+  @State private tabMores: Array<boolean> = [true, true, true, true];
   @State private screenWidthVp: number = FALLBACK_WIDTH_VP;
   /** 当前分页（见 PROFILE_TAB_*，和分段按钮的四段一一对应）。 */
   @State private tab: number = 0;
@@ -371,8 +401,34 @@ export struct ProfilePage {
   private screenHeightVp: number = 0;
   /** 外层滚动（头部 + 分段按钮）的控制器。 */
   private readonly pageScroller: Scroller = new Scroller();
-  /** 内层滚动（当前分页内容）的控制器。 */
-  private readonly listScroller: Scroller = new Scroller();
+  /**
+   * **每个分页各自的**滚动控制器（下标 = `PROFILE_TAB_*`）。
+   *
+   * 为什么不是一个：内层现在是 Tabs + 每个 TabContent 一条 `List`（见 tabContent），
+   * 几页同时活在树上 —— 共用一条 Scroller 的话 `scrollTo` / `currentOffset` 会让几条列表
+   * 互相改对方的位置（切页恢复位置时最明显：刚滚好的那一页被另一页顶回去）。
+   */
+  private readonly listScrollers: Array<Scroller> = [
+    new Scroller(), new Scroller(), new Scroller(), new Scroller()
+  ];
+  /**
+   * Tabs 的控制器：**程序化切段**只走它（见 moveToSegment）。
+   *
+   * 不给 `Tabs({ index })` 绑状态变量：官方说明"直接修改 index 跳页时切换动效不生效"，
+   * 而本页要的正是"页在滑、灰底药丸跟着滑"那条动画（见 tabContent 那段说明）。
+   */
+  private readonly tabsController: TabsController = new TabsController();
+  /**
+   * 进页面时 Tabs **初始**停在第几段（只在创建那一次读，见 tabContent）。
+   *
+   * 单独一个**普通字段**、不是 @State，也不是就地写 `vm.segmentOfTab(this.tab)`：
+   * `Tabs({ index })` 是**构建期**参数，一旦它依赖了会变的状态，重绘就会把 index 重新应用
+   * 一遍 —— 而"直接改 index 跳页没有动画"，等于把正在跑的切页动画当场掐掉。
+   * Reels 页踩过一模一样的坑（Swiper 的 `.index()` 版，见 ReelsPage 里那段实测记录：
+   * 每次翻页只剩 12~25ms）；那边现在的做法就是"不绑 index，只用控制器摆位"。
+   * 所以这里：初值在 aboutToAppear 算一次，之后的切段全部走 `tabsController.changeIndex`。
+   */
+  private initialSegment: number = 0;
   /**
    * 有待恢复的**内层**滚动位置（vp，<0 = 没有）。
    *
@@ -804,6 +860,8 @@ export struct ProfilePage {
     this.tab = this.vm.tabNow();
     this.pendingOffset = this.vm.offsetOf(this.tab);
     this.pendingOuter = this.vm.outerNow();
+    // Tabs 的第一帧就得停在恢复出来的那一段（之后只由 changeIndex/手势驱动，见 initialSegment）。
+    this.initialSegment = this.vm.segmentOfTab(this.tab);
     hilog.info(DOMAIN, TAG, 'PF enter tab=%{public}d inner=%{public}d outer=%{public}d',
       this.tab, this.pendingOffset, this.pendingOuter);
     /*
@@ -817,10 +875,19 @@ export struct ProfilePage {
     this.vm.addHeaderListener(this.onHeaderArrived);
     this.header = this.vm.headerNow();
     this.vm.onPosts = (posts: Array<ProfilePost>, hasMore: boolean): void => {
-      this.posts = posts;
-      // 行数据源也要换：LazyForEach 只认数据源，不认这个 @State（@State 只用来判断"空不空"）。
-      this.rowSource.apply(posts);
-      this.hasMore = hasMore;
+      /*
+       * **落到哪一页的数据源上，看视图模型当前那一页**（`syncFrom` / `setTab` 都只推当前分页，
+       * 见 ProfileViewModel）。
+       *
+       * 为什么不能用 `this.tab`：切页是"先让 Tabs 动、再让视图模型换内容"（见 selectTab），
+       * 两者之间有一小段不同步的窗口；这里以数据的主人（视图模型）为准最不容易错。
+       */
+      const tab: number = this.vm.tabNow();
+      this.applyPosts(tab, posts, hasMore);
+      if (tab !== this.tab) {
+        // 别的分页的数据（极少见）：只更新那一页的网格，不动当前页的滚动位置。
+        return;
+      }
       // 内容到位了：把切页时记下的滚动位置补上（见 pendingOffset 的说明）。
       this.restoreScroll();
     };
@@ -836,24 +903,26 @@ export struct ProfilePage {
     };
     this.highlights = this.vm.highlightsNow();
     /*
-     * 分页变了：这里做**唯一的**切页记账，然后广播给标题栏那条分段按钮。
+     * 分页变了：这里做**唯一的**切页记账，然后广播给别处（AppStorage 的 PROFILE_TAB）。
      *
-     * 为什么记账放在回调里而不是 selectTab 里：切页有两个入口 —— 页面里那条（未钉住）和
-     * **标题栏里那条**（钉住后，见 pages/Index 的 pinnedProfileBar）。后者直接调
-     * `profileVm.setTab`，走不到 ProfilePage 的方法；只有把记账挂在视图模型回调上，
-     * 两个入口才会做同一套事（记老分页的滚动位置、恢复新分页的位置）。
+     * 切页其实只有两个入口，但它们**不在一段代码里**：
+     *   · 分段按钮（在流那条 / 钉住后那条浮层）→ `selectTab`；
+     *   · **左右滑动 Tabs** → `onAnimationStart` / `onAnimationEnd` / `onChange`。
+     * 两边都汇到 `switchToTab`（见它的说明），这里再兜一次"视图模型被别人换了"的情况，
+     * 并把分页号广播出去。
      */
     this.vm.onTab = (tab: number): void => {
       if (tab !== this.tab) {
-        // 只记/恢复**内层**的位置：外层（分段按钮的位置）不因切页而变（需求）。
-        this.vm.rememberOffset(this.tab, this.listScroller.currentOffset().yOffset);
-        this.tab = tab;
-        this.pendingOffset = this.vm.offsetOf(tab);
-        // 换了内容、也换了滚动容器：把底栏动画那份增量记账清零，免得跨容器算出一个假增量。
-        this.scrollDelta.reset();
-        this.restoreScroll();
+        // 记账：记老分页的滚动位置、恢复新分页的位置（都按各自的容器，见 switchToTab）。
+        this.switchToTab(tab);
+        /*
+         * 走到这里说明**不是本页自己换的**（本页换之前就已经把 `this.tab` 改好了）：
+         * 那时下面的 Tabs 还停在旧那一段，得补推一次，别让网格和分段按钮各说各的。
+         * 目前没有别的调用方，留着是为了这条回调将来被别人复用时不出错。
+         */
+        this.moveToSegment(this.vm.segmentOfTab(tab));
       }
-      // 标题栏那条读这份全局事实来画选中态（见 AppSettings 的 PROFILE_TAB）。
+      // 分页号广播出去（AppSettings 的 PROFILE_TAB 是这个 App 里"当前分页"的公共事实）。
       AppStorage.setOrCreate(PROFILE_TAB, tab);
     };
     // 先把视图模型里已有的数据回填进来：切 tab 会**重建**这个组件，而取数结果留在
@@ -916,22 +985,75 @@ export struct ProfilePage {
       this.following = FollowState.resolve(
         this.vm.targetId(), FollowState.resolveName(header.username, header.followedByViewer));
     }
-    const posts: Array<ProfilePost> = this.vm.postsNow();
-    this.posts = posts;
-    this.rowSource.apply(posts);
-    this.hasMore = this.vm.hasMore();
+    /*
+     * **每一页都回填**（不再只填当前分页）。
+     *
+     * 为什么：内层改成 Tabs 之后几页同时活在树上，而 `vm.onPosts` 只推"当前那一页"
+     * （见 ProfileViewModel 的 syncFrom）—— 后台预取、或者别的分页在别处被翻了一页时，
+     * 那几页的网格拿不到通知，切过去就是空的（或者停在旧数据）。这里一次性把四份数据
+     * 各自灌进自己的数据源，切段时直接就有内容（也省掉一次"先白一下再铺"）。
+     */
+    for (let tab: number = 0; tab < PROFILE_TAB_SLOTS; tab++) {
+      this.applyPosts(tab, this.vm.postsOfTab(tab), this.vm.moreOfTab(tab));
+    }
     this.busy = this.vm.isBusy();
   }
 
   /**
-   * 内层网格的**行数据源**（`LazyForEach` 要的 `IDataSource`）。
+   * 把某一分页的帖子灌进**它自己**那条数据源（翻页、刷新、切页、回填都走这里）。
+   *
+   * 除了 `apply` 还要更新两样按页存的镜像：条数（空态/哨兵）与"还有没有下一页"（末尾措辞）。
+   * 两者都是 @State 数组，必须**整份换一份新的**才会被框架看见（原地改下标不触发刷新）。
+   */
+  private applyPosts(tab: number, posts: Array<ProfilePost>, hasMore: boolean): void {
+    if (tab < 0 || tab >= this.rowSources.length) {
+      return;
+    }
+    // 换一批帖子：`apply` 内部会按需 +1 代次并 notifyDataReload（见 ProfileRowSource）。
+    this.rowSources[tab].apply(posts);
+    const counts: Array<number> = this.tabCounts.slice(0);
+    counts[tab] = posts.length;
+    this.tabCounts = counts;
+    const mores: Array<boolean> = this.tabMores.slice(0);
+    mores[tab] = hasMore;
+    this.tabMores = mores;
+  }
+
+  /**
+   * 内层网格的**行数据源**：**每个分页一条**（下标 = `PROFILE_TAB_*`）。
    *
    * 为什么必须懒加载：原来这里是 `ForEach(this.rows(), …)` —— **所有行一次性建出来**，
    * 三十几条帖子就是三十几个 `Image` 节点同时开始下封面，"用户主页/我的页封面加载太慢"
    * 有一半是它（另一半是封面档位，见 core/NativeProfile 的 COVER_WIDTH）。懒加载之后
    * 只有可见的那几行（约两三屏）会去拉图，首屏自然就快了。
+   *
+   * 为什么**不能**几页共用一条（上一版就是一条）：`LazyForEach` 的数据源一换，挂在它上面的
+   * 那条列表就整块重铺 —— 几页共用时切一次页等于把所有页的网格全部换一遍，"几页都留在树上、
+   * 切段不重建"（需求）也就没意义了。各自一条之后，翻页/刷新只碰自己那一页（见 applyPosts）。
    */
-  private readonly rowSource: ProfileRowSource = new ProfileRowSource();
+  private readonly rowSources: Array<ProfileRowSource> = [
+    new ProfileRowSource(), new ProfileRowSource(), new ProfileRowSource(), new ProfileRowSource()
+  ];
+
+  /** 某个分页的行数据源（越界退回帖子那一份，别让构建期抛异常）。 */
+  private rowSourceOf(tab: number): ProfileRowSource {
+    return tab >= 0 && tab < this.rowSources.length ? this.rowSources[tab] : this.rowSources[0];
+  }
+
+  /** 某个分页的滚动控制器（越界同上）。 */
+  private listScrollerOf(tab: number): Scroller {
+    return tab >= 0 && tab < this.listScrollers.length ? this.listScrollers[tab] : this.listScrollers[0];
+  }
+
+  /** 某个分页现在有几条（哨兵/空态用，见 tabCounts）。 */
+  private pageCount(tab: number): number {
+    return tab >= 0 && tab < this.tabCounts.length ? this.tabCounts[tab] : 0;
+  }
+
+  /** 某个分页还有没有下一页（末尾那句提示的措辞看它，见 tabMores）。 */
+  private pageMore(tab: number): boolean {
+    return tab >= 0 && tab < this.tabMores.length ? this.tabMores[tab] : false;
+  }
 
   /** 格子宽度：等分屏宽（减去间隔），这样最后一行不满也不会被拉宽。 */
   private cellWidth(): number {
@@ -1077,7 +1199,7 @@ export struct ProfilePage {
 
   /** 帖子格子。 */
   @Builder
-  gridCell(post: ProfilePost) {
+  gridCell(post: ProfilePost, tab: number) {
     Stack({ alignContent: Alignment.TopEnd }) {
       if (post.hasUsableCover()) {
         Image(post.coverUrl)
@@ -1121,17 +1243,19 @@ export struct ProfilePage {
     .height(this.cellWidth() * GRID_ASPECT)
     .clip(true)
     .onClick((): void => {
-      // 点格子打开哪一页**看当前是哪一段**（需求）：
+      // 点格子打开哪一页**看它自己在哪一段**（需求）：
       //   视频那一段 → **Reels 页**（新页面，reels 模板，见 onOpenReels）；
       //   其余（帖子 / 收藏 / 被提及）→ 帖子页（feeds 流并定位到这一条）。
-      // 两个入口都拿不到下标/宿主没接时退回老行为（用网页打开帖子），
-      // 免得把"点了没反应"留给用户。
-      if (this.tab === PROFILE_TAB_REELS) {
-        this.onOpenReels(this.streamPosts(), post.shortcode, this.vm.moreOfTab(this.tab),
-          this.makeStreamLoader());
+      // 两个入口都拿不到下标/宿主没接时退回老行为（用网页打开帖子）。
+      //
+      // 判据用**格子所在那一段**（`tab`）而不是 `this.tab`：几页现在都活在树上，
+      // 滑动动画刚起那一刻两页都可见，用"当前分页"会把点到的视频格子当成帖子打开。
+      if (tab === PROFILE_TAB_REELS) {
+        this.onOpenReels(this.streamPosts(tab), post.shortcode, this.vm.moreOfTab(tab),
+          this.makeStreamLoader(tab));
         return;
       }
-      const index: number = this.indexOfPost(post);
+      const index: number = this.indexOfPost(post, tab);
       if (index >= 0) {
         /*
          * **整份分页按顺序铺成 feeds 流**（需求："收藏feeds流按照分页顺序展示，不用随机"、
@@ -1144,7 +1268,7 @@ export struct ProfilePage {
          * 早先收藏那一段试过"只带点中的那一条"，顺序就从"点中的那条"重新开始 —— 看起来就是
          * 乱序，已按需求改回来。
          */
-        this.onOpenStream(this.streamPosts(), index, this.makePostPageLoader());
+        this.onOpenStream(this.streamPosts(tab), index, this.makePostPageLoader(tab));
         return;
       }
       this.onOpen(post);
@@ -1154,7 +1278,7 @@ export struct ProfilePage {
   /**
    * 帖子页"再拉一页"的入口（闭包，交出去之后由帖子页在进页/触底时调用）。
    *
-   * 做法：让**当前分页**再取一页（数据仍然落在视图模型里，见 requestMoreForTab），
+   * 做法：让**指定分页**再取一页（数据仍然落在视图模型里，见 requestMoreForTab），
    * 等它长起来之后把**整份**最新的帖子列表 + "还有没有下一页"一起回给帖子页。
    *
    * 三条讲究（都是真机上踩出来的）：
@@ -1164,10 +1288,13 @@ export struct ProfilePage {
    *   2. 所以"催了一次但没长起来、而它确实还有下一页"时要**再催一次**（最多 STREAM_LOAD_TRIES
    *      次），而不是直接收手。
    *   3. 全程有上限（STREAM_LOAD_TIMEOUT_MS），网络卡住时帖子页不会一直转圈。
+   *
+   * `tab` 由**点开那一刻**的格子决定并闭包带下去：几页同时活在树上，帖子页翻页时
+   * 「当前分页」可能早就不是它了。
    */
-  private makeStreamLoader(): () => Promise<ProfileStreamPage> {
+  private makeStreamLoader(tab: number): () => Promise<ProfileStreamPage> {
     return (): Promise<ProfileStreamPage> => {
-      return this.pumpStream(this.tab, STREAM_LOAD_TRIES, false);
+      return this.pumpStream(tab, STREAM_LOAD_TRIES, false);
     };
   }
 
@@ -1181,10 +1308,12 @@ export struct ProfilePage {
    * 那正是这次要避免的事（一次要转几十张图的模型、还要给它们补详情）。
    *
    * Reels 页那条路仍然是全量语义（见 onOpenReels），两边不要混。
+   *
+   * `tab` 同上（由点开那一刻的格子闭包带下去，见 makeStreamLoader）。
    */
-  private makePostPageLoader(): () => Promise<ProfileStreamPage> {
+  private makePostPageLoader(tab: number): () => Promise<ProfileStreamPage> {
     return (): Promise<ProfileStreamPage> => {
-      return this.pumpStream(this.tab, STREAM_LOAD_TRIES, true);
+      return this.pumpStream(tab, STREAM_LOAD_TRIES, true);
     };
   }
 
@@ -1283,10 +1412,11 @@ export struct ProfilePage {
     }
   }
 
-  /** 某条帖子在当前分页里的下标（找不到给 -1）。 */
-  private indexOfPost(post: ProfilePost): number {
-    for (let index: number = 0; index < this.posts.length; index++) {
-      if (this.posts[index].shortcode === post.shortcode) {
+  /** 某条帖子在**这一分页**里的下标（找不到给 -1）。 */
+  private indexOfPost(post: ProfilePost, tab: number): number {
+    const posts: Array<ProfilePost> = this.vm.postsOfTab(tab);
+    for (let index: number = 0; index < posts.length; index++) {
+      if (posts[index].shortcode === post.shortcode) {
         return index;
       }
     }
@@ -1294,20 +1424,23 @@ export struct ProfilePage {
   }
 
   /**
-   * 当前分页的全部帖子 → 信息流卡片要的模型（见 ProfileMapper.toMediaPost）。
+   * **某一分页**的全部帖子 → 信息流卡片要的模型（见 ProfileMapper.toMediaPost）。
    *
    * 作者一并补上（见 ownerName 的说明）：**视频分页**那条数据本身没有作者。
    *
    * 但**收藏 / 被标注**那两段不能补：那两段的帖子是**别人**发的（收藏是别人的帖子、
    * 被标注是别人标注我的帖子），补成"这一页的主人"就成了张冠李戴（头像/名字都不是作者本人）。
    * 那两段宁可不设作者，也不要挂错人。
+   *
+   * 数据直接从视图模型按分页取（不是"当前分页那一份镜像"）：几页同时在树上，点哪一页就得按
+   * 哪一页铺，否则"从收藏点进去"会铺成帖子那一页的内容。
    */
-  private streamPosts(): Array<MediaPost> {
-    const own: boolean = this.tab === PROFILE_TAB_POSTS || this.tab === PROFILE_TAB_REELS;
-    const mapped: Array<MediaPost> = ProfilePage.toStreamPosts(this.posts,
+  private streamPosts(tab: number): Array<MediaPost> {
+    const own: boolean = tab === PROFILE_TAB_POSTS || tab === PROFILE_TAB_REELS;
+    const mapped: Array<MediaPost> = ProfilePage.toStreamPosts(this.vm.postsOfTab(tab),
       own ? this.ownerName() : '', own ? this.ownerAvatar() : '', own ? this.vm.targetId() : '');
     // 「收藏」那一段同上：这一份里的每条都是已收藏（见 streamPostsOfTab）。
-    if (this.tab === PROFILE_TAB_SAVED) {
+    if (tab === PROFILE_TAB_SAVED) {
       ProfilePage.markSaved(mapped);
     }
     return mapped;
@@ -1501,7 +1634,11 @@ export struct ProfilePage {
    *   - 外层滑到底之后**再滑不动**（范围就是头部那么高），于是手势自然落到**内层**：
    *     分页内容在里面滚（需求 3）。
    *   - 切分页只换内层的内容，外层偏移一动不动 —— 分段按钮**位置不受影响**（需求 2）。
-   *   - 未钉住时内层 `enableScrollInteraction(false)`，手势全归外层（需求 4）。
+   *   - 未钉住时内层不接手势、手势全归外层（需求 4）：这条现在由内层 List 上的
+   *     `nestedScroll(PARENT_FIRST / SELF_FIRST)` 静态保证，见 pageGrid 里那段说明
+   *     （上一版的 `enableScrollInteraction(false)` 会在钉住那一帧丢掉手势，已替换）。
+   *   - 内层的容器里是 **Tabs + 每页一条 List**（见 tabContent）：切段只是横向位移，
+   *     几页都留在树上，滚动位置/已加载的行/封面都不重来。
    */
   @Builder
   profileList() {
@@ -1643,7 +1780,7 @@ export struct ProfilePage {
         ListItem() {
           this.inFlowSegmentBar()
         }
-        // ---- 当前分页的内容：**固定高度的内层滚动容器**（见 profileList 的说明）----
+        // ---- 当前分页的内容：**固定高度的内层容器**（里面是 Tabs + 每页一条列表，见 tabContent）----
         ListItem() {
           this.tabContent()
         }
@@ -1673,21 +1810,128 @@ export struct ProfilePage {
   }
 
   /**
-   * 当前分页的内容：**固定高度**的内层滚动容器（高度 = 视口 − 分段条高）。
+   * 当前分页的内容：**固定高度**的内层容器（高度 = 视口 − 分段条高），里面是 Tabs。
    *
    * 固定高度是这套结构的关键：外层的内容高因此恒等于 `视口 + 头部高`，滑到底正好把分段按钮
    * 顶到标题栏下方 —— 分页只有 1 条也一样（需求 1），不需要"末尾补高"。
+   * 所以 Tabs 必须**撑满**这个容器（`100%` + `barHeight(0)`），一旦它有自己想法（比如按内容
+   * 撑高），外层那条"滚到底正好钉住"就不成立了。
+   *
+   * ## 为什么是 `Tabs` + `TabContent`（原来是**一条**会换内容的 List）
+   * 需求："把 Reels 页那套'灰底药丸 + TabContent'的逻辑套到分页上"。
+   * 一条 List + 换数据源的做法有个本质缺陷：切段等于**换掉整条列表的内容**，
+   * `LazyForEach` 的复用状态、滚动位置、已经下好的封面全丢（观感是"闪一下、从头开始"）。
+   * `TabContent` 的几页**都留在树上**，切段只是横向位移 —— 这正是需求要的。
+   * 而且页在自己那一格里滚，滑动切段和纵向滚动方向不同，互不抢手势（见 pageGrid 的说明）。
    */
   @Builder
   tabContent() {
-    List({ space: GRID_GAP, scroller: this.listScroller }) {
+    Column() {
+      Tabs({ barPosition: BarPosition.Start, index: this.initialSegment, controller: this.tabsController }) {
+        /*
+         * 段数不写死：本主页 4 段（帖子/视频/收藏/被标注）、别人主页 3 段（没有收藏），
+         * 由视图模型的 order 决定（见 ProfileViewModel.segmentCount）。ForEach 在 Tabs 里
+         * 是官方支持的写法（子组件仍然只有 TabContent）。
+         */
+        ForEach(this.segments(), (segment: number): void => {
+          TabContent() {
+            // 每一段是**它自己那一页**的网格：数据源、滚动控制器、条数各自一份（见 pageGrid）。
+            this.pageGrid(this.vm.tabAtSegment(segment))
+          }
+          .tabBar('')
+          /*
+           * **后面几页也得能画到外面**（和 pageGrid 里那条 `.clip(false)` 配套）。
+           *
+           * TabContent 默认 `clip = true`：不关掉的话，滚出网格上沿的那几行会被它裁在
+           * "当前分页的窗口"里 —— 需求里"分页帖子可以穿过分段按钮到屏幕顶层"当场失效
+           * （观感是内容在分段按钮下面被硬切一刀）。官方文档也写了：要扩到组件外显示
+           * 需要先关掉 clip。
+           */
+          .clip(false)
+        },
+        // 键里带上这一段的**内部分页号**：顺序（order）万一变了，缓存下来的那一格不能张冠李戴。
+        (segment: number): string => `profile-seg:${segment}:${this.vm.tabAtSegment(segment)}`)
+      }
+      // 系统那条页签栏不要：分段按钮是页面自己画的那条胶囊（见 ProfileSegmentBar）。
+      .barHeight(0)
+      // 需求：允许左右滑动切段（方向和网格的纵向滚动垂直，两者可以共存）。
+      .scrollable(true)
+      .animationDuration(SEGMENT_SWITCH_MS)
+      /*
+       * **边缘页不再能继续拖出背景**（和 Reels 页同一条要求）。
+       *
+       * 默认是 `EdgeEffect.Spring`：第一段往右、最后一段往左都能再拖出一截，把身后的底色/
+       * 其它内容拖出来 —— 观感就是"翻过头了"。`None` 之后到边就硬停。
+       */
+      .edgeEffect(EdgeEffect.None)
+      /*
+       * **滑动中只让灰底药丸跟着走**，不做任何"暂停/冻结"之类的事（这里没有视频可暂停）。
+       *
+       * `onAnimationStart` 里就把 `this.tab` 改成目标段：`ProfileSegmentBar` 那颗灰底自己带
+       * 补间（`.offset(...).animation(...)`，见那个文件），于是页在滑、药丸同时滑过去。
+       */
+      .onAnimationStart((index: number, targetIndex: number): void => {
+        // 页面落到哪一段，记账就记到哪一段（滑动这条路不经过 selectTab，见 switchToTab）。
+        this.settleSegment(targetIndex);
+        hilog.info(DOMAIN, TAG, 'PF tab anim %{public}d->%{public}d', index, targetIndex);
+      })
+      /*
+       * 动画结束：**兜底同步 + 记一次账**。
+       *
+       * 两件事：
+       *   1. `index` 是**落定**后的段号，按它再对一次 `this.tab`（`onAnimationStart` 在少数
+       *      手势下可能给的是中间值，也可能压根没来）；
+       *   2. 落定之后才恢复滚动位置：内容在这之前还没布局完，`scrollTo` 会被夹回顶部
+       *      （见 applyScroll 的说明）。
+       */
+      .onAnimationEnd((index: number): void => {
+        this.settleSegment(index);
+        this.settleScroll();
+      })
+      .onChange((index: number): void => {
+        // `onChange` 是"页已经换了"的通知，做兜底同步（`onAnimationEnd` 在少数手势下不来）。
+        this.settleSegment(index);
+      })
+      // 同上：Tabs 默认会裁内容，关掉才画得到分段按钮/标题栏底下。
+      .clip(false)
+      .width('100%')
+      .height('100%')
+    }
+    .width('100%')
+    .height(this.tabContentHeightVp())
+  }
+
+  /** Tabs 的段号表（本人 4 段 / 别人主页 3 段，直接从视图模型的 order 拿，不写死）。 */
+  private segments(): Array<number> {
+    const out: Array<number> = [];
+    const count: number = this.vm.segmentCount();
+    for (let index: number = 0; index < count; index++) {
+      out.push(index);
+    }
+    return out;
+  }
+
+  /**
+   * **一页**的网格（帖子 / 视频 / 收藏 / 被标注 各一份，互不干扰）。
+   *
+   * @param tab 内部分页号（`PROFILE_TAB_*`，不是"第几段"，两者之间隔着 order 那层映射）
+   *
+   * 三条讲究：
+   *   1. **每页一条 `List`**：纵向滚动只由它负责，不再套第二层（嵌套滚动会互相抢手势）；
+   *   2. **每页自己的 `Scroller` 和数据源**：几页同时在树上，共用一份会互相顶位置/换内容；
+   *   3. 未钉住时内层不抢手势这条规则**靠 nestedScroll 的优先级**（见下面那段说明），
+   *      所以横向滑动切段（Tabs 的手势）完全不受影响。
+   */
+  @Builder
+  pageGrid(tab: number) {
+    List({ space: GRID_GAP, scroller: this.listScrollerOf(tab) }) {
       // **LazyForEach**：只建可见的那几行（见 ProfileRowSource 的说明）。行内的格子仍然用
       // ForEach —— 一行最多三格，没必要再懒一层。
-      LazyForEach(this.rowSource, (row: Array<ProfilePost>, rowIndex: number): void => {
+      LazyForEach(this.rowSourceOf(tab), (row: Array<ProfilePost>, rowIndex: number): void => {
         ListItem() {
           Row({ space: GRID_GAP }) {
             ForEach(row, (post: ProfilePost): void => {
-              this.gridCell(post)
+              this.gridCell(post, tab)
             }, (post: ProfilePost): string => post.shortcode)
           }
           .width('100%')
@@ -1706,20 +1950,25 @@ export struct ProfilePage {
           const one: ProfilePost = row[at];
           signature += `${one.shortcode.length}.${one.coverUrl.length}.${one.isVideo ? 1 : 0}|`;
         }
-        return `g${this.rowSource.gen()}:row:${rowIndex}:${signature}`;
+        return `g${this.rowSourceOf(tab).gen()}:row:${rowIndex}:${signature}`;
       })
 
-      // ---- 触底哨兵：进到可见范围就翻页 ----
-      if (this.posts.length > 0) {
+      /*
+       * ---- 触底哨兵 / 空态：按**这一页自己**的条数判（见 tabCounts）----
+       *
+       * 不能读"当前分页那一条数"：几页同时在树上时，另外几页会一直显示
+       * "还没有帖子"（哪怕数据早就到了）。
+       */
+      if (this.pageCount(tab) > 0) {
         ListItem() {
           Row({ space: 8 }) {
-            if (this.busy && this.hasMore) {
+            if (this.busy && this.pageMore(tab)) {
               LoadingProgress()
                 .width(22)
                 .height(22)
                 .color($r('app.color.secondary_text'))
             }
-            Text(this.hasMore ? $r('app.string.profile_loading_more') : $r('app.string.profile_end'))
+            Text(this.pageMore(tab) ? $r('app.string.profile_loading_more') : $r('app.string.profile_end'))
               .fontSize(12)
               .fontColor($r('app.color.secondary_text'))
           }
@@ -1729,7 +1978,7 @@ export struct ProfilePage {
           .onAppear((): void => {
             // 哨兵只是**顺带**的一个触发点；真正可靠的是内层的 onReachEnd / onScrollIndex
             // （onAppear 只报一次，很容易在加载中被吞掉）。
-            this.askMore();
+            this.askMore(tab);
           })
         }
       } else if (!this.busy) {
@@ -1749,7 +1998,8 @@ export struct ProfilePage {
       }
     }
     .width('100%')
-    .height(this.tabContentHeightVp())
+    // 撑满 TabContent（TabContent 又撑满那个**固定高度**的内层容器，见 tabContent 的说明）。
+    .height('100%')
     .scrollBar(BarState.Off)
     .edgeEffect(EdgeEffect.Spring)
     /*
@@ -1763,10 +2013,13 @@ export struct ProfilePage {
      *     （头部滑回来、分段按钮松开）—— 正是需求："固定时下滑优先滚动内部容器，
      *     到顶部后才能滚动外部容器"。
      *
-     * 为什么**不再用 `enableScrollInteraction(this.barPinned)` 开关**（上一版那么写的）：
+     * 为什么**不用 `enableScrollInteraction(this.barPinned)` 开关**（上一版那么写的）：
      * 那个开关会在"钉住"那一帧**中途改掉内层的识别器**，正在滑的手势会被丢掉 ——
      * 表现就是"固定时无法继续滑动、卡手"（用户报的）。优先级是静态的，手势一路不断。
      * 未固定时内层之所以不抢：`PARENT_FIRST` 已经保证外层优先，外层没到底内层拿不到手势。
+     *
+     * 这条**每一页的 List 都照挂**（几页同时在树上，谁都不能抢）：它只约束**纵向**，
+     * 横向的切段手势归 Tabs，两个方向不同，互不影响。
      */
     .nestedScroll({
       scrollForward: NestedScrollMode.PARENT_FIRST,
@@ -1778,21 +2031,23 @@ export struct ProfilePage {
      * 触底翻页：挂两个**会反复触发**的判据（`onReachEnd` 真的到底了、`onScrollIndex` 还剩
      * 几条时提前拉），哨兵的 onAppear 只是顺带的一个触发点 —— 它只报一次，很容易在加载中
      * 被吞掉（那正是"收藏分页无法上滑继续加载"的原因，见 ProfileViewModel.requestMore）。
+     *
+     * 这里传的是**这一页**的分页号：几页同时在树上，谁触底就翻谁（`requestMoreForTab`）。
      */
     .onReachEnd((): void => {
-      this.askMore();
+      this.askMore(tab);
     })
     .onScrollIndex((start: number, end: number): void => {
       // 这个容器里只有网格行 + 末尾哨兵，下标从 0 开始。
-      const rows: number = Math.ceil(this.posts.length / GRID_COLUMNS);
+      const rows: number = Math.ceil(this.pageCount(tab) / GRID_COLUMNS);
       if (end + PROFILE_LOAD_AHEAD >= rows) {
-        this.askMore();
+        this.askMore(tab);
       }
     })
-    // 内层滚动：记这一分页的位置（切页要恢复）并上报给底栏动画。
+    // 内层滚动：记**这一页自己**的位置（切页要恢复）并上报给底栏动画。
     .onDidScroll((scrollOffset: number, scrollState: ScrollState): void => {
-      const y: number = this.listScroller.currentOffset().yOffset;
-      this.vm.rememberOffset(this.tab, y);
+      const y: number = this.listScrollerOf(tab).currentOffset().yOffset;
+      this.vm.rememberOffset(tab, y);
       // 用户还在滑：允许自动翻页（见 askMore）。程序化恢复位置也会走到这里，同样算"在动"，
       // 但那种情况只持续一两帧，不会把列表拉长。
       this.lastScrollMs = Date.now();
@@ -1823,8 +2078,8 @@ export struct ProfilePage {
   /**
    * 点了某一段：切分页（视图模型先把这一分页已有内容秒铺出来，再去补，见 ProfileViewModel.setTab）。
    *
-   * 这里**不做记账**：记老分页的位置、恢复新分页的位置都在 `vm.onTab` 那个回调里统一做
-   * （标题栏那条分段按钮走不到这个方法，见 aboutToAppear 的说明）。
+   * 这里**不做记账**：记老分页的位置、恢复新分页的位置都汇到 `switchToTab` 一个方法里
+   * （Tabs 左右滑动那条路也走它，见 aboutToAppear 的说明）。
    */
   private selectTab(segment: number): void {
     // 进来的是**第几段**（本人 4 段 / 别人主页 3 段），先映射成内部分页号（见 ProfileViewModel.order）。
@@ -1832,10 +2087,77 @@ export struct ProfilePage {
     if (index === this.tab) {
       return;
     }
+    // 先把状态挪过去（灰底药丸立刻开始补间），再让 Tabs 滑过去，最后让视图模型换内容 ——
+    // 三者都指向同一个目标段，中途 `onAnimationStart` 再来一次也是幂等的（见 switchToTab）。
+    this.switchToTab(index);
+    this.moveToSegment(segment);
     const own: string = this.header === null ? '' : this.header.username;
-    // **不要在这里清空 this.posts**：清空就等于每次切页都先白一下。新分页的内容由
-    // 视图模型同步回调铺出来（缓存命中时当帧就换，没有缓存时才是空的）。
+    // **不要把网格清空**：清了就等于每次切页都先白一下。新分页的内容由视图模型同步回调
+    // 铺出来（缓存命中时当帧就换，没有缓存时才是空的）。
     this.vm.setTab(index, own);
+  }
+
+  /** 请 Tabs 滑到第 segment 段（灰底药丸跟着它那条动画走，见 tabContent）。 */
+  private moveToSegment(segment: number): void {
+    try {
+      // `changeIndex` 只收一个参数（老版本有两个的时候多传会编译不过）。
+      this.tabsController.changeIndex(segment);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'PF changeIndex failed: %{public}s', (error as Error).message);
+    }
+  }
+
+  /**
+   * Tabs 的段号 → 分页号 → 记账。
+   *
+   * `onAnimationStart` / `onAnimationEnd` / `onChange` 三个回调都汇到这里：段号相同就是重复
+   * 通知（滑动一次会来好几个），`switchToTab` 自己会挡住。
+   */
+  private settleSegment(segment: number): void {
+    const tab: number = this.vm.tabAtSegment(segment);
+    this.switchToTab(tab);
+    if (this.vm.tabNow() !== tab) {
+      // 滑动切段不经过 selectTab，视图模型得在这里换（换完它的回调把分页号广播出去）。
+      const own: string = this.header === null ? '' : this.header.username;
+      this.vm.setTab(tab, own);
+    }
+  }
+
+  /**
+   * 落定之后把"待恢复的位置"再落实一次（见 applyScroll 的说明）。
+   *
+   * 为什么要专门在 `onAnimationEnd` 再补：切段时目标是**新那一页**的 List，它在动画开始那一刻
+   * 才被建出来、布局也没完成 —— 切页那一刻滚下去会被夹回顶部。这里比对一次实际偏移，
+   * 对不上才补，用户已经自己滑了就不会被拽回去。
+   */
+  private settleScroll(): void {
+    const want: number = this.vm.offsetOf(this.tab);
+    if (want <= 0) {
+      return;
+    }
+    if (Math.abs(this.innerOffsetNow() - want) > 1) {
+      this.applyScroll(want);
+    }
+  }
+
+  /**
+   * 切页记账：**唯一的**一处（记老分页的位置、取新分页的位置、换容器、恢复位置）。
+   *
+   * 两个入口（分段按钮 → selectTab、左右滑动 → settleSegment）都走它，目标段等于当前
+   * 分页时直接返回 —— 所以重复通知（一次滑动会连着来好几次回调）不会重复记账。
+   *
+   * 只记/恢复**内层**的位置：外层（分段按钮的位置）不因切页而变（需求）。
+   */
+  private switchToTab(target: number): void {
+    if (target < 0 || target === this.tab) {
+      return;
+    }
+    this.vm.rememberOffset(this.tab, this.innerOffsetNow());
+    this.tab = target;
+    this.pendingOffset = this.vm.offsetOf(target);
+    // 换了内容、也换了滚动容器：把底栏动画那份增量记账清零，免得跨容器算出一个假增量。
+    this.scrollDelta.reset();
+    this.restoreScroll();
   }
 
   /**
@@ -1856,14 +2178,19 @@ export struct ProfilePage {
   private applyScroll(target: number): void {
     const run: () => void = (): void => {
       try {
-        // 恢复的是**内层**（当前分页）的位置；外层的偏移（分段按钮的位置）不动。
-        this.listScroller.scrollTo({ xOffset: 0, yOffset: target, animation: false });
+        /*
+         * 恢复的是**当前这一页**那一条列表（每页一条 Scroller，见 listScrollers）。
+         *
+         * 每枪都重新取一次控制器：这中间的几帧里用户可能已经滑到别段去了，
+         * 那就该滚落定之后那一页，而不是把旧那一页顶回去。
+         */
+        this.listScrollerOf(this.tab).scrollTo({ xOffset: 0, yOffset: target, animation: false });
       } catch (error) {
       }
     };
     run();
-    hilog.info(DOMAIN, TAG, 'PF inner restore target=%{public}d now=%{public}d pinned=%{public}s posts=%{public}d',
-      target, this.innerOffsetNow(), `${this.barPinned}`, this.posts.length);
+    hilog.info(DOMAIN, TAG, 'PF inner restore tab=%{public}d target=%{public}d now=%{public}d pinned=%{public}s posts=%{public}d',
+      this.tab, target, this.innerOffsetNow(), `${this.barPinned}`, this.pageCount(this.tab));
     setTimeout((): void => {
       hilog.info(DOMAIN, TAG, 'PF inner +250ms now=%{public}d pinned=%{public}s',
         this.innerOffsetNow(), `${this.barPinned}`);
@@ -1878,7 +2205,7 @@ export struct ProfilePage {
   /** 当前内层偏移（诊断用，拿不到给 -1）。 */
   private innerOffsetNow(): number {
     try {
-      return this.listScroller.currentOffset().yOffset;
+      return this.listScrollerOf(this.tab).currentOffset().yOffset;
     } catch (error) {
       return -1;
     }
@@ -1952,16 +2279,18 @@ export struct ProfilePage {
    *      同步走进去会一路回调到页面里改 @State —— ArkUI 会报
    *      "State variable 'busy' has changed during render"（真机日志里抓到过）。
    */
-  private askMore(): void {
-    if (!this.hasMore || this.busy) {
+  private askMore(tab: number): void {
+    // 判据按**这一页**来（见 tabMores / tabCounts）：几页同时在树上，别拿当前页的条数去判别人。
+    if (this.busy || !this.pageMore(tab)) {
       return;
     }
     const recent: boolean = Date.now() - this.lastScrollMs < ASK_MORE_IDLE_MS;
-    if (!recent && this.posts.length >= AUTO_MORE_MIN_POSTS) {
+    if (!recent && this.pageCount(tab) >= AUTO_MORE_MIN_POSTS) {
       return;
     }
     setTimeout((): void => {
-      this.vm.requestMore();
+      // 指名道姓地翻**这一页**（requestMore() 只作用于"当前分页"，几页并存时会翻错）。
+      this.vm.requestMoreForTab(tab);
     }, 0);
   }
 
