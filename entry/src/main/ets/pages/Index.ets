@@ -1643,6 +1643,8 @@ struct Index {
    * 切换不再销毁重建（原来 `if/else` 的写法每切一次就重建整棵 ReelsPage）。
    */
   private readonly reelsTabsController: TabsController = new TabsController();
+  /** 分段页面滑动动画进行中（true = 暂停所有视频，但不销毁播放器）。 */
+  @State private reelsFreeze: boolean = false;
   /**
    * 原生页面栈。
    *
@@ -8642,6 +8644,8 @@ struct Index {
       vm: vm,
       // 标题栏那两颗按钮按**来源**取用（见 core/ReelsAction）：这是底栏那一页。
       source: ReelsAction.HOME,
+      // 分段滑动时冻结所有视频播放（见 ReelsPage.freeze 与 reelsTab 的 Tabs 回调）。
+      playbackFrozen: this.reelsFreeze,
       // 当前活动那条的封面 → 外壳给标题栏/底栏背后垫模糊背景（见 reelsCoverBackdrop）。
       onActiveCover: (coverUrl: string): void => {
         this.onReelsActiveCover(coverUrl);
@@ -8726,6 +8730,27 @@ struct Index {
     .barHeight(0)
     .scrollable(true)
     .animationDuration(REELS_SWITCH_MS)
+    /*
+     * **进入页面就把两段的内容都拉起来**（需求："进入页面后要触发加载所有 content"）。
+     *
+     * TabContent 是懒加载的：不滑过去就不会构建、也不会取数。这里在 Tabs 首次出现时
+     * 顺手把"关注"那段的数据先取一页，滑过去直接就是内容，不用等骨架屏。
+     */
+    .onAppear((): void => {
+      if (this.reelsFollowVm.list().length === 0) {
+        hilog.info(DOMAIN, TAG, 'preload reels segments -> follow');
+        this.reelsFollowVm.loadFirst().catch((): void => {
+        });
+      }
+    })
+    .onAnimationStart((index: number, targetIndex: number): void => {
+      this.reelsFreeze = true;
+      hilog.info(DOMAIN, TAG, 'reels tab anim start %{public}d->%{public}d', index, targetIndex);
+    })
+    .onAnimationEnd((index: number): void => {
+      this.reelsFreeze = false;
+      hilog.info(DOMAIN, TAG, 'reels tab anim end at %{public}d', index);
+    })
     .onChange((index: number): void => {
       if (index !== this.reelsSegment) {
         hilog.info(DOMAIN, TAG, 'reels tab swiped -> %{public}d', index);

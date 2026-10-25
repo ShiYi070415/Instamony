@@ -1211,6 +1211,14 @@ export struct ReelsPage {
    * Swiper 的 `onTouch` 上 —— 第一次 Move 一到就报（那一下一定早于翻页动画），
    * 而且**同一次触摸只报一次**（`swipeReported`）。
    */
+  /**
+   * **冻结播放**（分段页面滑动中为 true）。
+   *
+   * 需求："页面左右移动时暂停，移动完成后只播放当前页面的视频"。
+   * 由外壳在 Tabs 的动画开始/结束时置位（见 pages/Index.reelsTab）。冻结期间
+   * `playing` 一律 false，但**不销毁播放器**（表面还在，松开就立刻续播）。
+   */
+  playbackFrozen: boolean = false;
   onReelSwipe: () => void = (): void => {
   };
   /**
@@ -1557,7 +1565,7 @@ export struct ReelsPage {
          */
         ReelSlide({
           reel: reel,
-          playing: index === this.activeIndex,
+          playing: index === this.activeIndex && !this.playbackFrozen,
           // 预加载下一条：一直开着（原先按网络开关过，实测会影响切换观感；
           // 播放器的预下载缓冲已经收到 2 秒，这一项的开销有界）。
           preload: index === this.activeIndex + 1,
