@@ -1218,14 +1218,27 @@ export struct ReelsPage {
    * 由外壳在 Tabs 的动画开始/结束时置位（见 pages/Index.reelsTab）。冻结期间
    * `playing` 一律 false，但**不销毁播放器**（表面还在，松开就立刻续播）。
    */
-  @Prop playbackFrozen: boolean = false;
   /**
    * **这一段现在是不是可见的那一段**（探索 / 关注 只有一个为 true）。
    *
    * 为什么需要：两段现在都常驻在 `TabContent` 里，各自的 `activeIndex` 都会指向"当前条"，
    * 于是两页会**各播各的**。加上这个开关后：不可见的那一段一律不播（表面留着，切回来就续播）。
    */
-  @Prop segmentVisible: boolean = true;
+  /**
+   * 这一段是第几段（0 = 探索 / 1 = 关注）。由外壳传入，创建后不变。
+   */
+  segment: number = -1;
+  /**
+   * **全局播放开关**（AppStorage，不走 @Prop）。
+   *
+   * 为什么不用 @Prop：两段内容都在 ForEach 里，键值没变时 item builder 不重跑，
+   * 父组件传下来的 @Prop 更新不到已建好的节点 —— 上一版就是因此"仍然听得见另一页的声音"。
+   * @StorageLink 是组件级订阅：值一变本组件 build 一定重跑，playing 才会真的变。
+   *   · reels_frozen_all     = 正在做分段滑动动画 → 全部暂停；
+   *   · reels_active_segment = 当前可见段（另一段一律不播）。
+   */
+  @StorageLink('reels_frozen_all') frozenAll: boolean = false;
+  @StorageLink('reels_active_segment') activeSegment: number = 0;
   onReelSwipe: () => void = (): void => {
   };
   /**
@@ -1572,7 +1585,8 @@ export struct ReelsPage {
          */
         ReelSlide({
           reel: reel,
-          playing: index === this.activeIndex && !this.playbackFrozen && this.segmentVisible,
+          playing: index === this.activeIndex && !this.frozenAll
+          && (this.segment < 0 || this.segment === this.activeSegment),
           // 预加载下一条：一直开着（原先按网络开关过，实测会影响切换观感；
           // 播放器的预下载缓冲已经收到 2 秒，这一项的开销有界）。
           preload: index === this.activeIndex + 1,

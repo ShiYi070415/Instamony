@@ -8639,13 +8639,12 @@ struct Index {
    * （点赞/转发/关注这些回调漏一个就是"这页点了没反应"）。
    */
   @Builder
-  reelsStream(vm: ReelsViewModel, visible: boolean) {
+  reelsStream(vm: ReelsViewModel, segment: number) {
     ReelsPage({
       vm: vm,
       // 标题栏那两颗按钮按**来源**取用（见 core/ReelsAction）：这是底栏那一页。
       source: ReelsAction.HOME,
       // 分段滑动时冻结所有视频播放（见 ReelsPage.freeze 与 reelsTab 的 Tabs 回调）。
-      playbackFrozen: this.reelsFreeze,
       // 当前活动那条的封面 → 外壳给标题栏/底栏背后垫模糊背景（见 reelsCoverBackdrop）。
       onActiveCover: (coverUrl: string): void => {
         this.onReelsActiveCover(coverUrl);
@@ -8711,7 +8710,7 @@ struct Index {
     Tabs({ barPosition: BarPosition.Start, controller: this.reelsTabsController }) {
       TabContent() {
         Column() {
-          this.reelsStream(this.reelsVm, this.reelsSegment === 0)
+          this.reelsStream(this.reelsVm, 0)
         }
         .width('100%')
         .height('100%')
@@ -8720,7 +8719,7 @@ struct Index {
 
       TabContent() {
         Column() {
-          this.reelsStream(this.reelsFollowVm, this.reelsSegment === 1)
+          this.reelsStream(this.reelsFollowVm, 1)
         }
         .width('100%')
         .height('100%')
@@ -8749,16 +8748,19 @@ struct Index {
     })
     .onAnimationStart((index: number, targetIndex: number): void => {
       this.reelsFreeze = true;
+      AppStorage.setOrCreate('reels_frozen_all', true);
       hilog.info(DOMAIN, TAG, 'reels tab anim start %{public}d->%{public}d', index, targetIndex);
     })
     .onAnimationEnd((index: number): void => {
       this.reelsFreeze = false;
+      AppStorage.setOrCreate('reels_frozen_all', false);
       hilog.info(DOMAIN, TAG, 'reels tab anim end at %{public}d', index);
     })
     .onChange((index: number): void => {
       if (index !== this.reelsSegment) {
         hilog.info(DOMAIN, TAG, 'reels tab swiped -> %{public}d', index);
         this.reelsSegment = index;
+        AppStorage.setOrCreate('reels_active_segment', index);
       }
     })
     .width('100%')
