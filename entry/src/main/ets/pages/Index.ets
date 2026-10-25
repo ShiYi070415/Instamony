@@ -1636,8 +1636,6 @@ struct Index {
    * 切换不再销毁重建（原来 `if/else` 的写法每切一次就重建整棵 ReelsPage）。
    */
   private readonly reelsTabsController: TabsController = new TabsController();
-  /** 分段页面滑动动画进行中（true = 暂停所有视频，但不销毁播放器）。 */
-  @State private reelsFreeze: boolean = false;
   /**
    * 原生页面栈。
    *
@@ -8677,27 +8675,43 @@ struct Index {
         });
       }
     })
+    /*
+     * **边缘页不再能继续拖出背景**（需求）。
+     *
+     * 之前 `Tabs` 用的是默认 `EdgeEffect.Spring`：第一页往左、最后一页往右都能再拖一截，
+     * 把身后的底色/内容拖出来 —— 观感就是"翻过头了"，露出的东西也没人愿意看到。
+     * `None` 之后到边就硬停，拖动量与内容位移一一对应。
+     */
+    .edgeEffect(EdgeEffect.None)
+    /*
+     * **滑动过程中：只让药丸跟着走，不打断播放**（需求：别一松手就重播）。
+     *
+     * 原来这里在动画开始就 `freeze` 全部视频 —— 但 ReelsPage 的 `playing` 一变，
+     * ReelSlide 里那句 `if (playable && (playing || preload))` 就会把播放器**从树上摘掉**，
+     * 松手回来时是重新挂一个解码器、从头起播，所以"滑一下再回来"就变成"视频重播"。
+     * 现在什么都不冻：出去的那一页继续播，落定后才切"该播哪一段"。
+     */
     .onAnimationStart((index: number, targetIndex: number): void => {
-      this.reelsFreeze = true;
-      AppStorage.setOrCreate('reels_frozen_all', true);
+      if (targetIndex >= 0 && targetIndex < 2 && targetIndex !== this.reelsSegment) {
+        // 灰底药丸自己带补间（见 ProfileSegmentBar 的 .animation），跟着页一起滑过去。
+        this.reelsSegment = targetIndex;
+      }
       hilog.info(DOMAIN, TAG, 'reels tab anim start %{public}d->%{public}d', index, targetIndex);
     })
     .onAnimationEnd((index: number): void => {
-      this.reelsFreeze = false;
-      AppStorage.setOrCreate('reels_frozen_all', false);
-      hilog.info(DOMAIN, TAG, 'reels tab anim end at %{public}d', index);
+      // **页面落到哪一段，才允许哪一段出声**：播放闸门就在这一行之后生效
+      // （VideoSurface 自己订阅 reels_active_segment，见 wantsPlay）。
+      this.reelsSegment = index;
+      AppStorage.setOrCreate('reels_active_segment', index);
+      hilog.info(DOMAIN, TAG, 'reels tab settled at %{public}d', index);
     })
     .onChange((index: number): void => {
-      // 兜一层：快速连滑 / 手势被打断时 `onAnimationEnd` 可能不来，不兜就会
-      // 「画面永远冻着」（用户报的另一种形态）。落定即解冻，顺序无关紧要 ——
-      // 解冻后播放器会按 active + 自己所属分段重新算该不该播。
-      this.reelsFreeze = false;
-      AppStorage.setOrCreate('reels_frozen_all', false);
+      // `onChange` 是"页已经换了"的通知，做兜底同步（`onAnimationEnd` 在少数手势下不来）。
       if (index !== this.reelsSegment) {
         hilog.info(DOMAIN, TAG, 'reels tab swiped -> %{public}d', index);
         this.reelsSegment = index;
-        AppStorage.setOrCreate('reels_active_segment', index);
       }
+      AppStorage.setOrCreate('reels_active_segment', index);
     })
     .width('100%')
     .height('100%')

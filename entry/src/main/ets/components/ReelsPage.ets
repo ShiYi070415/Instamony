@@ -1229,8 +1229,9 @@ export struct ReelsPage {
    * 为什么不用 @Prop：两段内容都在 ForEach 里，键值没变时 item builder 不重跑，
    * 父组件传下来的 @Prop 更新不到已建好的节点 —— 上一版就是因此"仍然听得见另一页的声音"。
    * @StorageLink 是组件级订阅：值一变本组件 build 一定重跑，playing 才会真的变。
-   *   · reels_frozen_all     = 正在做分段滑动动画 → 全部暂停；
-   *   · reels_active_segment = 当前可见段（另一段一律不播）。
+   *   · reels_frozen_all     = 全局急停阀（当前没人置 true：滑动中间**不再**冻结播放，
+   *                           见 pages/Index 的 reelsTab 说明；留着是为了以后需要时能一键静音）；
+   *   · reels_active_segment = 当前可见段（**落定后**才更新；另一段一律不播）。
    */
   @StorageLink('reels_frozen_all') frozenAll: boolean = false;
   @StorageLink('reels_active_segment') activeSegment: number = 0;
