@@ -7499,10 +7499,7 @@ struct Index {
      * Reels 内容区上下留出的模糊背景带**在顶部被标题栏的黑底盖住**，看起来就是黑块。
      * 换成首页那套之后，标题栏背后是材质/透明，模糊背景就能透出来。
      */
-    if (this.currentTab() === AppTab.Home || this.currentTab() === AppTab.Reels) {
-      return this.feedTitleStyle();
-    }
-    return this.destinationTitleStyle();
+    return this.currentTab() === AppTab.Home ? this.feedTitleStyle() : this.destinationTitleStyle();
   }
 
   /**

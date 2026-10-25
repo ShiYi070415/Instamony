@@ -1533,8 +1533,12 @@ export struct ReelsPage {
         .width('100%')
         .height('100%')
         .objectFit(ImageFit.Fill)
-        .blur(25)
-        .brightness(1.35)
+        /*
+         * 用户反馈："亮度很高" → 去掉之前的 `brightness(1.35)`（那是为了让暗场景不像黑边，
+         * 代价就是亮场景发白）；"模糊程度调最高" → blur 拉到 120，再压一档透明度让它沉下去。
+         */
+        .blur(120)
+        .opacity(0.75)
         .hitTestBehavior(HitTestMode.None)
       // 画面盒子：**宽度铺满 + 高度按视频比例**，居中放在全屏背景上。
       //
