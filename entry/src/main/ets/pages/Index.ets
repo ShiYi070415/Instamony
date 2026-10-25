@@ -1636,6 +1636,14 @@ struct Index {
    */
   private tabsController: HdsTabsController = new HdsTabsController();
   /**
+   * Reels 两段（探索 / 好友）的 Tabs 控制器。
+   *
+   * 分段按钮在标题栏里（自绘），点它 → `changeIndex`；用户左右滑动也走同一个 Tabs，
+   * 状态由 `Tabs.onChange` 单向同步回 `reelsSegment`。这样两段都留在 `TabContent` 里，
+   * 切换不再销毁重建（原来 `if/else` 的写法每切一次就重建整棵 ReelsPage）。
+   */
+  private readonly reelsTabsController: TabsController = new TabsController();
+  /**
    * 原生页面栈。
    *
    * 通知页这类"整屏页面"走 NavDestination（见 destinationBuilder），而不是弹模态：
@@ -8610,12 +8618,16 @@ struct Index {
     this.reelsSwitchDir = index > this.reelsSegment ? 1 : -1;
     hilog.info(DOMAIN, TAG, 'reels segment %{public}d -> %{public}d',
       this.reelsSegment, index);
-    this.getUIContext().animateTo({
-      duration: REELS_SWITCH_MS,
-      curve: Curve.EaseInOut
-    }, () => {
-      this.reelsSegment = index;
-    });
+    /*
+     * **改由 Tabs 驱动切换**（两段现在都在 `TabContent` 里，不再重建）。
+     * 状态同步交给 `Tabs.onChange`，这里只推 controller —— 单向数据流，不会来回打架。
+     */
+    this.reelsSegment = index;
+    try {
+      this.reelsTabsController.changeIndex(index);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'reels changeIndex failed: %{public}s', (error as Error).message);
+    }
   }
 
   /**
@@ -8679,23 +8691,47 @@ struct Index {
   /** Reels 标签：探索 / 关注两页（见 reelsSegment）。 */
   @Builder
   reelsTab() {
-    Stack({ alignContent: Alignment.Center }) {
-      if (this.reelsSegment === 1) {
-        Column() {
-          this.reelsStream(this.reelsFollowVm)
-        }
-        .width('100%')
-        .height('100%')
-        .transition(this.reelsSwitch())
-      } else {
+    /*
+     * **两段用 Tabs + TabContent 承载**（原来是 `if/else + transition`）。
+     *
+     * 差别是本质的：`if/else` 会**销毁另一支**，于是每次切段整棵 ReelsPage 重建
+     * （Swiper 重新摆位、播放器重挂、列表重铺）→ 观感就是"闪一下、从头开始"。
+     * `TabContent` 的两支**都留着**，切换只是位移，状态（滚动位置/播放/已加载页）全保。
+     *
+     * 参数选择：
+     *   · `barHeight(0)`：系统那条 bar 不要，分段按钮是我们自绘的（标题栏里那条）；
+     *   · `scrollable(true)`：按你的要求允许左右滑动切段；
+     *   · `animationDuration` 对齐原来手写的 `REELS_SWITCH_MS`，手感不变但由系统驱动；
+     *   · `onChange` 只**同步状态**（给标题栏分段按钮用），不再反向调 controller，避免回环。
+     */
+    Tabs({ barPosition: BarPosition.Start, controller: this.reelsTabsController }) {
+      TabContent() {
         Column() {
           this.reelsStream(this.reelsVm)
         }
         .width('100%')
         .height('100%')
-        .transition(this.reelsSwitch())
       }
+      .tabBar('')
+
+      TabContent() {
+        Column() {
+          this.reelsStream(this.reelsFollowVm)
+        }
+        .width('100%')
+        .height('100%')
+      }
+      .tabBar('')
     }
+    .barHeight(0)
+    .scrollable(true)
+    .animationDuration(REELS_SWITCH_MS)
+    .onChange((index: number): void => {
+      if (index !== this.reelsSegment) {
+        hilog.info(DOMAIN, TAG, 'reels tab swiped -> %{public}d', index);
+        this.reelsSegment = index;
+      }
+    })
     .width('100%')
     .height('100%')
   }
