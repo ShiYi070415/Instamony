@@ -1218,7 +1218,14 @@ export struct ReelsPage {
    * 由外壳在 Tabs 的动画开始/结束时置位（见 pages/Index.reelsTab）。冻结期间
    * `playing` 一律 false，但**不销毁播放器**（表面还在，松开就立刻续播）。
    */
-  playbackFrozen: boolean = false;
+  @Prop playbackFrozen: boolean = false;
+  /**
+   * **这一段现在是不是可见的那一段**（探索 / 关注 只有一个为 true）。
+   *
+   * 为什么需要：两段现在都常驻在 `TabContent` 里，各自的 `activeIndex` 都会指向"当前条"，
+   * 于是两页会**各播各的**。加上这个开关后：不可见的那一段一律不播（表面留着，切回来就续播）。
+   */
+  @Prop segmentVisible: boolean = true;
   onReelSwipe: () => void = (): void => {
   };
   /**
@@ -1565,7 +1572,7 @@ export struct ReelsPage {
          */
         ReelSlide({
           reel: reel,
-          playing: index === this.activeIndex && !this.playbackFrozen,
+          playing: index === this.activeIndex && !this.playbackFrozen && this.segmentVisible,
           // 预加载下一条：一直开着（原先按网络开关过，实测会影响切换观感；
           // 播放器的预下载缓冲已经收到 2 秒，这一项的开销有界）。
           preload: index === this.activeIndex + 1,

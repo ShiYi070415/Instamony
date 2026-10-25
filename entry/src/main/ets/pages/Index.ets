@@ -8639,7 +8639,7 @@ struct Index {
    * （点赞/转发/关注这些回调漏一个就是"这页点了没反应"）。
    */
   @Builder
-  reelsStream(vm: ReelsViewModel) {
+  reelsStream(vm: ReelsViewModel, visible: boolean) {
     ReelsPage({
       vm: vm,
       // 标题栏那两颗按钮按**来源**取用（见 core/ReelsAction）：这是底栏那一页。
@@ -8711,7 +8711,7 @@ struct Index {
     Tabs({ barPosition: BarPosition.Start, controller: this.reelsTabsController }) {
       TabContent() {
         Column() {
-          this.reelsStream(this.reelsVm)
+          this.reelsStream(this.reelsVm, this.reelsSegment === 0)
         }
         .width('100%')
         .height('100%')
@@ -8720,7 +8720,7 @@ struct Index {
 
       TabContent() {
         Column() {
-          this.reelsStream(this.reelsFollowVm)
+          this.reelsStream(this.reelsFollowVm, this.reelsSegment === 1)
         }
         .width('100%')
         .height('100%')
@@ -8737,8 +8737,12 @@ struct Index {
      * 顺手把"关注"那段的数据先取一页，滑过去直接就是内容，不用等骨架屏。
      */
     .onAppear((): void => {
+      hilog.info(DOMAIN, TAG, 'preload both reels segments');
+      if (this.reelsVm.list().length === 0) {
+        this.reelsVm.loadFirst().catch((): void => {
+        });
+      }
       if (this.reelsFollowVm.list().length === 0) {
-        hilog.info(DOMAIN, TAG, 'preload reels segments -> follow');
         this.reelsFollowVm.loadFirst().catch((): void => {
         });
       }
