@@ -1518,6 +1518,24 @@ export struct ReelsPage {
   @Builder
   reelPage(reel: Reel, index: number) {
     Stack({ alignContent: Alignment.Center }) {
+      /*
+       * **每条视频自己的整屏模糊背景**（用户要求：背景与屏幕等高、逐条独立、滑动时跟着视频动）。
+       *
+       * 放在 `reelPage` 里的意义就在"跟手"：它是 Swiper 的**一页**，所以手指滑动时，
+       * 背景和画面一起横向移动；翻过去之后自然就是下一条的封面。
+       * 尺寸给 `100% × 100%`：铺满整页高度（不是跟着视频比例，也不理会封面原图比例）。
+       *
+       * 之前这一层"看不见"，根因不是位置、不是比例，而是**信息层 `ReelOverlay` 有一块不透明的黑底**
+       * （已在本轮改透明），所以现在能看到它了。
+       */
+      Image(reel.coverUrl.length > 0 ? reel.coverUrl : $r('app.media.startIcon'))
+        .draggable(false)
+        .width('100%')
+        .height('100%')
+        .objectFit(ImageFit.Fill)
+        .blur(25)
+        .brightness(1.35)
+        .hitTestBehavior(HitTestMode.None)
       // 画面盒子：**宽度铺满 + 高度按视频比例**，居中放在全屏背景上。
       //
       // 为什么这样做（而不是让播放器整屏 Cover）：Cover 是按"两个方向都要铺满"去裁的 ——
@@ -1664,25 +1682,10 @@ export struct ReelsPage {
          * （这正是你反馈的现象）。放在这里之后：背景不跟手，翻页完成那一刻才换成新那条。
          * 用 200ms 透明度过渡盖住这一下切换。
          */
-        if (this.activeCoverUrl().length > 0) {
-          /*
-           * **封面纵向拉伸铺满整屏 + 超高高斯模糊**（用户的要求与实测原因）。
-           *
-           * 之前用 `ImageFit.Cover`：封面本身是固定比例（通常 3:4 / 1:1），Cover 只保证
-           * "两个方向都铺到"，于是模糊层的高度其实**跟着封面比例走**，屏幕上下就露不出背景。
-           * 现在改成 `ImageFit.Fill` —— 纵向拉伸到满屏（模糊之后看不出变形），
-           * 再把模糊半径拉很高（120），彻底变成一层色雾。
-           */
-          Image(this.activeCoverUrl())
-            .draggable(false)
-            .width('100%')
-            .height('100%')
-            .objectFit(ImageFit.Fill)
-            .blur(120)
-            .opacity(0.7)
-            .backgroundColor(Color.Black)
-            .animation({ duration: 200, curve: Curve.EaseOut })
-        }
+        /*
+         * 注：整页的背景层已移到 `reelPage` 里（每条视频各自一层，滑动时跟手）。
+         * 这里不再画全局背景，避免两层叠在一起、也让"背景跟着视频动"成立。
+         */
         Swiper(this.swiperController) {
           ForEach(this.reels, (reel: Reel, index: number): void => {
             this.reelPage(reel, index)
