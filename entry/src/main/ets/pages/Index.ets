@@ -8642,6 +8642,12 @@ struct Index {
   reelsStream(vm: ReelsViewModel, segment: number) {
     ReelsPage({
       vm: vm,
+      // **本页属于哪一段**（0 = 探索 / 1 = 关注）。
+      //
+      // 必须传：播放器靠它判断「自己是不是当前分段」。不传就是 -1 =
+      // 「独立页，不参与分段闸门」，于是两段同时出声 —— 这条漏传
+      // 曾经让整套分段播放开关形同虚设（改了也没效果）。
+      segment: segment,
       // 标题栏那两颗按钮按**来源**取用（见 core/ReelsAction）：这是底栏那一页。
       source: ReelsAction.HOME,
       // 分段滑动时冻结所有视频播放（见 ReelsPage.freeze 与 reelsTab 的 Tabs 回调）。
@@ -8757,6 +8763,11 @@ struct Index {
       hilog.info(DOMAIN, TAG, 'reels tab anim end at %{public}d', index);
     })
     .onChange((index: number): void => {
+      // 兜一层：快速连滑 / 手势被打断时 `onAnimationEnd` 可能不来，不兜就会
+      // 「画面永远冻着」（用户报的另一种形态）。落定即解冻，顺序无关紧要 ——
+      // 解冻后播放器会按 active + 自己所属分段重新算该不该播。
+      this.reelsFreeze = false;
+      AppStorage.setOrCreate('reels_frozen_all', false);
       if (index !== this.reelsSegment) {
         hilog.info(DOMAIN, TAG, 'reels tab swiped -> %{public}d', index);
         this.reelsSegment = index;

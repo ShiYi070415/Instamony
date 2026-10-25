@@ -396,7 +396,11 @@ export struct VideoSurface {
   }
 
   /** playing / preload / url / cover 变了：重新评估该不该建播放器、该不该播。 */
+  /** 上一次记录过的闸门状态（只在变化时打日志，避免刷屏）。 */
+  private lastGateLog: string = '';
+
   private onPropChanged(): void {
+    this.logGate();
     if (!this.wanted()) {
       // 不再是"该播/该预加载"的这条：把解码器还回去（滚动时最常走这条路）。
       this.teardownPlayer();
@@ -417,6 +421,45 @@ export struct VideoSurface {
       this.pausePlayback();
     }
   }
+
+  /**
+
+   * 把「该不该播」的输入打出来（TAG 仍是 VideoSurface）。
+
+   *
+
+   * 为什么留一条：这条链上任何一环漏传（比如上游忘了把 segment 传进 ReelsPage）
+
+   * 都会表现成「改了没效果」；日志里 seg 是不是 -1 一眼就看出来。
+
+   */
+
+  private logGate(): void {
+
+    const on: boolean = this.wantsPlay();
+
+    const key: string = this.segment + '|' + this.activeSegment + '|' +
+
+      (this.frozenAll ? 1 : 0) + '|' + (this.playing ? 1 : 0) + '|' + (on ? 1 : 0);
+
+    if (key === this.lastGateLog) {
+
+      return;
+
+    }
+
+    this.lastGateLog = key;
+
+    hilog.info(DOMAIN, TAG,
+
+      'gate on=%{public}s seg=%{public}d active=%{public}d frozen=%{public}s prop=%{public}s',
+
+      on ? 'y' : 'n', this.segment, this.activeSegment,
+
+      this.frozenAll ? 'y' : 'n', this.playing ? 'y' : 'n');
+
+  }
+
 
   private pausePlayback(): void {
     const player: media.AVPlayer | null = this.player;
