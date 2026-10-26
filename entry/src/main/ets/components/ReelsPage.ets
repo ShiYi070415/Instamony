@@ -291,6 +291,14 @@ struct ReelSlide {
   segment: number = -1;
   /** 提前 prepare 下一条。 */
   @Prop preload: boolean = false;
+  /**
+   * **宿主（页面）层面的暂停**：用户单击画面切换的那个开关。
+   *
+   * 为什么不把它折进 `playing`：`playing` 同时决定"要不要挂播放器"（见下面的 if），
+   * 一暂停就把 `VideoSurface` 从树上摘掉 → 播放器销毁 → 恢复播放时**从头开始**（用户报的）。
+   * 单独一路传进来，只影响"播不播"，不影响"挂不挂"。
+   */
+  @Prop hostPaused: boolean = false;
   /** 静音（全局开关）。 */
   @Prop muted: boolean = false;
   /**
@@ -429,7 +437,7 @@ struct ReelSlide {
 
   /** 画面此刻该不该真的在播（父组件说"是当前页" && 用户没暂停 && 不在长按暂停中）。 */
   private wantsPlayNow(): boolean {
-    return this.playing && !this.userPaused && !this.holdPaused;
+    return this.playing && !this.userPaused && !this.holdPaused && !this.hostPaused;
   }
 
   /** 换条 / 变成当前页：进度归零、临时态清干净（需求："切到下一条视频时进度归零"）。 */
@@ -937,7 +945,7 @@ struct ReelSlide {
        * 而且节点不在树上时**不占触摸**（常驻改 opacity 的话它虽然看不见，照样要小心命中区域）。
        * 它自己不吃触摸（见 pauseButton 的说明），点它 = 点画面 = 继续播放。
        */
-      if (this.playing && this.reel.playable() && (this.userPaused || this.holdPaused)) {
+      if (this.playing && this.reel.playable() && (this.userPaused || this.holdPaused || this.hostPaused)) {
         this.pauseButton()
       }
 
@@ -2444,7 +2452,8 @@ export struct ReelsPage {
         ReelSlide({
           reel: reel,
           segment: this.segment,
-          playing: index === this.activeIndex && !this.frozenAll && !this.pagePaused,
+          playing: index === this.activeIndex && !this.frozenAll,
+          hostPaused: this.pagePaused,
           // 预加载下一条：一直开着（原先按网络开关过，实测会影响切换观感；
           // 播放器的预下载缓冲已经收到 2 秒，这一项的开销有界）。
           preload: index === this.activeIndex + 1,
