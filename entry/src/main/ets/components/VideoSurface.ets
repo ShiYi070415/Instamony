@@ -118,6 +118,14 @@ export struct VideoSurface {
    */
   @Prop @Watch('onSeekRequested') seekMs: number = -1;
   /**
+   * **直连的 seek 目标**（毫秒，AppStorage）。
+   *
+   * 为什么还要这一条：`seekMs` 走 prop 差分 + `prepared` 判断，真机上出现过"松手后
+   * 进度条又回到原位置"——即 seek 被静默丢掉。这条通道不参与差分，收到就试着 seek，
+   * 播放器还没准备好就先记进 pendingSeekMs（见 applySeek）。
+   */
+  @StorageLink('reels_seek_target') @Watch('onSeekCommand') seekCommand: number = -1;
+  /**
    * 播放倍速（1 = 原速，2 = 长按左右两侧时的 2 倍速）。
    *
    * 只在 prepared 及之后才设得上（接口文档：setSpeed 只允许 prepared/playing/paused/completed），
@@ -644,6 +652,16 @@ export struct VideoSurface {
   /** `speed` 变了：长按侧边开始 / 松手（见 speed 的说明）。 */
   private onSpeedChanged(): void {
     this.applySpeed();
+  }
+
+  /** 收到直连 seek 指令：立刻尝试 seek（未准备好则记进 pending）。 */
+  private onSeekCommand(): void {
+    const target: number = this.seekCommand;
+    if (target < 0) {
+      return;
+    }
+    this.pendingSeekMs = target;
+    this.applySeek();
   }
 
   private onPropChanged(): void {

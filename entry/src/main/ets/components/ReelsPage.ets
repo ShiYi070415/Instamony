@@ -171,6 +171,8 @@ const INFO_BOTTOM: number = 112;
 /** 横滑 seek 的指令通道：cmd（1 开始 / 2 拖动 / 3 松手 / 4 取消）与 dx（vp）。 */
 export const REELS_SEEK_CMD: string = 'reels_seek_cmd';
 export const REELS_SEEK_DX: string = 'reels_seek_dx';
+/** 松手时要跳到的位置（毫秒）。直连播放器用，见 VideoSurface 的 seekTarget。 */
+export const REELS_SEEK_TARGET: string = 'reels_seek_target';
 export const REELS_CHROME_HIDDEN: string = 'reels_chrome_hidden';
 
 /**
@@ -692,6 +694,9 @@ struct ReelSlide {
     // 同一个毫秒值重复写不会触发 @Watch，所以这里保证每次都是"新值"：
     // 目标没变时加减 1ms（人眼完全看不出来，但能保证这次拖动一定落到播放器上）。
     this.seekMs = target === this.seekMs ? target + 1 : target;
+    // **再走一条直连通道**：只靠 prop 差分 + prepared 判断时，真机上 seek 会被静默丢掉
+    // （松手后进度条又回到原位置就是这个现象）。这条通道让播放器直接收到目标位置。
+    AppStorage.setOrCreate(REELS_SEEK_TARGET, target);
     hilog.info(DOMAIN, TAG, 'seek %{public}d/%{public}d code=%{public}s',
       target, this.durationMs, this.reel.shortcode);
   }
