@@ -67,7 +67,7 @@ interface ReelCacheDto {
   /** 转发数（动作区那颗转发下面的数字）。 */
   rp?: number;
   /**
-   * 分享数 / 收藏数（动作区那颗 `paperplane` / `bookmark` 下面的数字）。
+   * 分享数 / 收藏数（动作区那颗 `share` / `bookmark` 下面的数字）。
    *
    * 缩写 `sc` = share count、`sv` = save count（`sc` 没给短码用掉了：短码是 `c`）。
    * 0 / 缺省 = 载荷没说 → 界面那一颗数字**整颗不画**（见 model/Reel.shareCount）。

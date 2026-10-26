@@ -2437,7 +2437,7 @@ export function reelsScript(cfgJson: string, varsJson: string): string {
     // 转发数（动作区那颗转发下面的数字）。
     'reposts:m.media_repost_count||0,' +
     /*
-     * 分享数 / 收藏数（动作区那颗 paperplane / bookmark 下面的数字）。
+     * 分享数 / 收藏数（动作区那颗 share / bookmark 下面的数字）。
      *
      * 字段名不确定（clips 这条查询的媒体对象稀疏，且 IG 时常改名），所以在**有界深度内
      * 按名字找**：分享认 `share_count` / `shares_count` / `media_share_count`，

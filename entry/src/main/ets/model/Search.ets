@@ -137,13 +137,24 @@ export class SearchPost {
    * 所以直接用 `FeedMediaItemDto`，再由 `FeedMapper.slidesFromItems` 转成 `MediaSlide[]`。
    */
   readonly mediaItems: Array<FeedMediaItemDto>;
+  /**
+   * 分享 / 收藏数（`share_count` / `save_count` 等；**0 = 载荷没说**）。
+   *
+   * 为什么必须在这一层就带上：首页「为你推荐」那一段与搜索推荐流都是把 `SearchPost`
+   * 转成 `MediaPost`（见 pages/Index.searchPostsToMedia）—— 这一层丢了，后面 UI 读到的
+   * 就永远是 0，列表里那颗分享数**无论载荷给不给都画不出来**。
+   * 界面对 0 的处理是"整颗数字不画"（见 components/FeedList 的 PostActions）。
+   */
+  readonly shareCount: number;
+  readonly saveCount: number;
 
   constructor(code: string, coverUrl: string, width: number, height: number, isVideo: boolean,
               mediaId: string = '', videoUrl: string = '', originalVideoUrl: string = '',
               ownerUsername: string = '', ownerAvatarUrl: string = '', ownerId: string = '',
               caption: string = '', likeCount: number = 0, commentCount: number = 0,
               repostCount: number = 0, liked: boolean = false, following?: boolean,
-              takenAt: number = 0, mediaItems: Array<FeedMediaItemDto> = []) {
+              takenAt: number = 0, mediaItems: Array<FeedMediaItemDto> = [],
+              shareCount: number = 0, saveCount: number = 0) {
     this.code = code;
     this.coverUrl = coverUrl;
     this.width = width;
@@ -163,6 +174,8 @@ export class SearchPost {
     this.following = following;
     this.takenAt = takenAt > 0 ? takenAt : 0;
     this.mediaItems = mediaItems;
+    this.shareCount = shareCount > 0 ? shareCount : 0;
+    this.saveCount = saveCount > 0 ? saveCount : 0;
   }
 
   /**

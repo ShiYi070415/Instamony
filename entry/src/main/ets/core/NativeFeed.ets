@@ -15,6 +15,8 @@ import { NativeTimeline, NativeTimelineParser } from './NativeTimelineParser';
 import { MobileFeedPage, MobileFeedTimeline } from './mobileapi/MobileFeedTimeline';
 // "关注流已看完"这个状态要落盘（见 markCaughtUp）。
 import { FeedCache } from './FeedCache';
+// 分享数取证（落盘 `files/Instarmony_share_probe.txt`，见那个文件的头注释）。
+import { ShareProbe } from './ShareProbe';
 import { QualityProfile } from './MediaQuality';
 import { parseFeedTask } from '../workers/FeedParseTask';
 
@@ -360,6 +362,13 @@ export class NativeFeed {
     if (page === null) {
       return null;
     }
+    /*
+     * **分享数取证**（见 core/ShareProbe）：把这一页响应的键名与"分享类键有没有"落盘。
+     *
+     * 必须在这里做（而不是解析之后）：要回答的问题正是"解析之前载荷里到底有没有 share_count"，
+     * 解析完之后就只剩我们自己的模型了。只取第一页一次，开销是一次字符串扫描 + 一次 JSON 解析。
+     */
+    ShareProbe.noteBody('feed/timeline', page.body);
     /*
      * **解析丢进 TaskPool**（见 workers/FeedParseTask）：`feed/timeline/` 一页 300~400 KB，
      * 正好压在"骨架屏换成真内容"那一帧。

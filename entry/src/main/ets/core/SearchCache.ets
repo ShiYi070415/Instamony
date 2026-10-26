@@ -66,6 +66,9 @@ interface StoredPost {
   rp?: number;
   /** 本机点过赞没有 */
   lkd?: boolean;
+  /** 分享 / 收藏数（同 ReelsCache 的 `sc` / `sv`：缓存铺出来的那版也要有这两颗数字） */
+  sc?: number;
+  sv?: number;
 }
 
 /** 落盘的第一页。 */
@@ -142,7 +145,8 @@ export class SearchCache {
         }
         posts.push(new SearchPost(code, url, one.w ?? 0, one.h ?? 0, one.m === true,
           one.id ?? '', one.vu ?? '', one.ov ?? '', one.au ?? '', one.av ?? '', one.uid ?? '',
-          one.cap ?? '', one.lk ?? 0, one.cm ?? 0, one.rp ?? 0, one.lkd === true));
+          one.cap ?? '', one.lk ?? 0, one.cm ?? 0, one.rp ?? 0, one.lkd === true,
+          undefined, 0, [], one.sc ?? 0, one.sv ?? 0));
       }
       if (posts.length === 0) {
         return null;
@@ -170,7 +174,7 @@ export class SearchCache {
           m: post.isVideo, id: post.mediaId, vu: post.videoUrl, ov: post.originalVideoUrl,
           au: post.ownerUsername, av: post.ownerAvatarUrl, uid: post.ownerId,
           cap: post.caption, lk: post.likeCount, cm: post.commentCount,
-          rp: post.repostCount, lkd: post.liked });
+          rp: post.repostCount, lkd: post.liked, sc: post.shareCount, sv: post.saveCount });
       }
       const payload: StoredPage = {
         v: FORMAT, at: Date.now(), cursor: cursor, more: hasMore, posts: out

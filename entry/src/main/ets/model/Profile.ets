@@ -332,6 +332,14 @@ export class ProfilePost {
    * 权威顺序仍是"会话覆盖表 > 这里"，见 ProfileMapper.toMediaPost。
    */
   readonly liked: boolean;
+  /**
+   * 分享数（候选名 `share_count` / `shares_count` / `media_share_count`；**0 = 载荷没说**）。
+   *
+   * 和 `repostCount` 同一个来路（见 core/NativeProfile.postOf）：网格里用不到，但"个人主页
+   * 四个分页 → feeds 页 / reels 页"的卡片要用 —— 这里不带上，转成 `MediaPost` 时那颗数字
+   * 就永远是 0（`ProfileMapper.toMediaPost` 以前是**写死 0** 的，那颗分享数因此永远画不出来）。
+   */
+  readonly shareCount: number;
 
   constructor(shortcode: string, isVideo: boolean, coverUrl: string, width: number, height: number,
               likeCount: number, commentCount: number, displayUrl: string = '',
@@ -339,7 +347,8 @@ export class ProfilePost {
               videoUrl: string = '', originalVideoUrl: string = '', caption: string = '',
               ownerUsername: string = '', ownerAvatarUrl: string = '', ownerId: string = '',
               ownerFollowing: boolean = false, takenAtMs: number = 0, mediaId: string = '',
-              imageAspectMin: number = 0, repostCount: number = 0, liked: boolean = false) {
+              imageAspectMin: number = 0, repostCount: number = 0, liked: boolean = false,
+              shareCount: number = 0) {
     this.shortcode = shortcode;
     this.mediaId = mediaId.length > 0 ? mediaId : shortcode;
     this.isVideo = isVideo;
@@ -362,6 +371,7 @@ export class ProfilePost {
     this.imageAspectMin = imageAspectMin;
     this.repostCount = repostCount;
     this.liked = liked;
+    this.shareCount = shareCount > 0 ? shareCount : 0;
   }
 
   /** 真实宽高比；没给尺寸就退回正方形（网格用固定 4:5 裁切，这个值留给详情页用）。 */
@@ -418,7 +428,7 @@ export class ProfilePost {
       this.likeCount, this.commentCount, display, images, this.originalImageUrls,
       this.videoUrl, this.originalVideoUrl, this.caption, this.ownerUsername,
       this.ownerAvatarUrl, this.ownerId, this.ownerFollowing, this.takenAtMs,
-      this.mediaId, this.imageAspectMin, this.repostCount, this.liked);
+      this.mediaId, this.imageAspectMin, this.repostCount, this.liked, this.shareCount);
   }
 }
 
@@ -500,10 +510,16 @@ export class ProfileMapper {
       reposted: EngageState.repostedOfByCode(post.shortcode,
         EngageState.repostedOf(post.mediaId, false)),
       repostCount: post.repostCount,
-      // 分享 / 收藏数：个人主页（网格 / 收藏 / 视频分页）那几条载荷里都没有这两个数字
-      // （见 NativeProfile 只读到了 `media_repost_count`），所以这里是 0 ——
-      // 界面按 0 不画那一颗数字，不会显示 "0"。
-      shareCount: 0,
+      /*
+       * 分享数：**载荷给了就带上**（见 ProfilePost.shareCount / core/NativeProfile.postOf）。
+       *
+       * 以前这里是**写死 0** 的，理由是"个人主页那几条载荷里没有这个数字"。但那是猜的：
+       * 转发数（`media_repost_count`）就是同一批载荷里读出来的，分享数一族有没有只能实测
+       * （见 core/ShareProbe 落的那份 files/Instarmony_share_probe.txt）。
+       * 所以改成"有就带上，没有就是 0"—— 0 时界面照样不画那颗数字，行为不变。
+       */
+      shareCount: post.shareCount,
+      // 收藏数：这几条载荷里确实没有（见 core/NativeProfile 只读转发/分享两族）。
       saveCount: 0,
       mediaWidth: post.width,
       mediaHeight: post.height,

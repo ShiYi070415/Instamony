@@ -10728,6 +10728,14 @@ struct Index {
         mediaHeight: post.height,
         originalVideoUrl: post.originalVideoUrl,
         repostCount: post.repostCount,
+        /*
+         * 分享 / 收藏数：**这一行以前漏了**，于是探索流 / 搜索推荐流那批帖子（首页「为你推荐」
+         * 那一段就是它们）在 feeds 里永远显示不出分享数 —— 载荷给了也在这一层被清成 0。
+         * `MediaPost` 的默认值同样是 0（那颗数字整颗不画），所以只传"有就传"，
+         * 载荷没说的时候界面依旧只有图标（见 PostUi.shareCount）。
+         */
+        shareCount: post.shareCount,
+        saveCount: post.saveCount,
         thumbUrl: post.coverUrl
       }));
     }

@@ -21,6 +21,8 @@ import { MobileClips } from './mobileapi/MobileClips';
 // 主页 Reels 分页（`clips/user/{pk}/`）—— 补货池用它，见 fetchAuthorPage。
 import { MobileProfile, MobileGridPage } from './mobileapi/MobileProfile';
 import { EngageState } from './NativeEngage';
+// 分享数取证（落盘 `files/Instarmony_share_probe.txt`，见那个文件的头注释）。
+import { ShareProbe } from './ShareProbe';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeReels';
@@ -102,7 +104,7 @@ interface IgClipsMedia {
   /** 转发数（右侧动作区那颗转发下面的数字）。 */
   media_repost_count?: number | null;
   /**
-   * 分享数（右侧动作区那颗 `paperplane` 下面的数字）。
+   * 分享数（右侧动作区那颗 `share` 下面的数字）。
    *
    * 真机上 clips 这条查询**不一定给**，字段名也不稳定（和"不给头像 / 不给 taken_at"
    * 是同一类稀疏），所以这里列几个候选名，按顺序取第一个有值的：
@@ -609,6 +611,8 @@ export class NativeReels {
     if (body.length === 0) {
       return null;
     }
+    // 分享数取证（见 core/ShareProbe）：`clips/*` 这一族响应里到底有没有分享数，落盘一次就够。
+    ShareProbe.noteBody('clips', body);
     let root: Record<string, Object>;
     try {
       root = JSON.parse(body) as Record<string, Object>;

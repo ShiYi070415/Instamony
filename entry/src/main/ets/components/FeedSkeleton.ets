@@ -47,11 +47,11 @@ const MORE_BTN: number = 40;
 /** 动作区：按钮高 40、整行左右内缩 8（同 PostActions）。 */
 const ACTION_ROW_H: number = 40;
 const ACTION_ROW_PAD: number = 8;
-/** 动作区图标字号（同 FeedList 的 ICON_HEART / ICON_MESSAGE / ICON_TRANSFER / ICON_PLANE / ICON_BOOKMARK）。 */
+/** 动作区图标字号（同 FeedList 的 ICON_HEART / ICON_MESSAGE / ICON_TRANSFER / ICON_SHARE / ICON_BOOKMARK）。 */
 const ICON_HEART: number = 24;
 const ICON_MESSAGE: number = 27;
 const ICON_TRANSFER: number = 25;
-const ICON_PLANE: number = 24;
+const ICON_SHARE: number = 24;
 const ICON_BOOKMARK: number = 27;
 /** 正文：字号 14、左右内缩 12、上 6（同 FeedList.CAPTION_FONT_SIZE / CAPTION_SIDE_PADDING）。 */
 const CAPTION_FONT: number = 14;
@@ -168,7 +168,7 @@ export struct FeedSkeleton {
       this.actionItem(ICON_HEART)
       this.actionItem(ICON_MESSAGE)
       this.actionItem(ICON_TRANSFER)
-      this.actionItem(ICON_PLANE)
+      this.actionItem(ICON_SHARE)
       Blank()
       // 收藏：真实那颗是 40×40 的方按钮、图标 27
       Column()

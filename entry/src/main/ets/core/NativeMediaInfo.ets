@@ -27,6 +27,8 @@ import { MediaQuality, PickedMedia } from './MediaQuality';
 import { MobileRequest, MobileResult, MobileOptions } from './mobileapi/MobileRequest';
 import { ApiThrottle } from './ApiThrottle';
 import { MobileEngage } from './mobileapi/MobileEngage';
+// 分享数取证（落盘 files/Instarmony_share_probe.txt，见那个文件的头注释）。
+import { ShareProbe } from './ShareProbe';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeMediaInfo';
@@ -276,6 +278,11 @@ export class NativeMediaInfo {
           id, result.summary());
         return null;
       }
+      /*
+       * 分享数取证（见 core/ShareProbe）：`media/{pk}/info/` 是"单条媒体最全的一份载荷"，
+       * 如果分享数在哪个接口里出现，多半也会在这里 —— 顺手落一次盘，作为第四个证据点。
+       */
+      ShareProbe.noteBody('media/info', result.body);
       out = NativeMediaInfo.parse(result.body);
     } catch (error) {
       NativeMediaInfo.detail = `throw:${(error as Error).message ?? '-'}`.substring(0, 60);

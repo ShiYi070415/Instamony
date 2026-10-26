@@ -1927,7 +1927,7 @@ export struct StoryViewer {
       /*
        * ② 功能区：在**媒体区外面**、卡片下面（需求："媒体区外底部是功能区"）。
        *
-       *   [输入框("发消息"，占满剩余宽)] [❤] [💬] [✈]，四者**统一间隔**（Row 的 space）。
+       *   [输入框("发消息"，占满剩余宽)] [❤] [💬] [分享]，四者**统一间隔**（Row 的 space）。
        * 宽度和媒体区一样（`cardW()`），左右与卡片对齐 = 需求里的"媒体区和功能区统一宽度"。
        * 它是独立一层（不在卡片的 clip 里），所以媒体区不用为它让出圆角。
        * 同样只在动画结束后挂上来，所以收起/展开时不会在屏幕上乱飘。
@@ -1946,7 +1946,9 @@ export struct StoryViewer {
 
           this.actionButton($r('sys.symbol.heart'), 'like')
           this.actionButton($r('sys.symbol.message'), 'comment')
-          this.actionButton($r('sys.symbol.paperplane'), 'share')
+          // 分享：图标用系统那朵 `share`（与 FeedList / ReelsPage 动作区那颗同一个）——
+          // 纸飞机是"发私信"的语义，快拍底下这一颗干的是"把这条快拍分享出去"。
+          this.actionButton($r('sys.symbol.share'), 'share')
         }
         .width(this.cardW())
         .height(ACTION_H)

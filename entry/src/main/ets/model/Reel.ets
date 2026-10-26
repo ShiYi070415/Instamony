@@ -115,7 +115,7 @@ export class Reel {
    */
   repostCount: number;
   /**
-   * **分享数**（动作区那颗 `paperplane` 下面的数字）。
+   * **分享数**（动作区那颗 `share` 下面的数字）。
    *
    * 数据源给了就填，拿不到就是 **0** —— 那时界面上那一颗数字**整颗不画**（见
    * components/ReelsPage 的 actionColumn）。为什么不显示 "0"：IG 自己的界面在计数为 0 时

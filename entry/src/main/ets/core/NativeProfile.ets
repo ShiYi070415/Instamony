@@ -908,6 +908,20 @@ export class NativeProfile {
     if (repostCount <= 0) {
       repostCount = NativeProfile.numOf(node, 'repost_count');
     }
+    /*
+     * 分享数：候选名与信息流 / reels 那边**同一套**（IG 会改名，取第一个有值的）。
+     *
+     * 以前这条路根本不读它，`ProfileMapper.toMediaPost` 又写死 0 —— 于是"从我的主页点进
+     * feeds 页 / reels 页"的那些卡片永远没有分享数（用户报的"看不到分享数量"里也有这一段）。
+     * 取不到就是 0，界面按 0 把那颗数字整颗不画，不会挂一个 "0"。
+     */
+    let shareCount: number = NativeProfile.numOf(node, 'share_count');
+    if (shareCount <= 0) {
+      shareCount = NativeProfile.numOf(node, 'shares_count');
+    }
+    if (shareCount <= 0) {
+      shareCount = NativeProfile.numOf(node, 'media_share_count');
+    }
     // 媒体数字 id：见 `mediaIdOfNode`（这里最容易出"点赞打到不存在的媒体"那个坑）。
     const mediaId: string = NativeProfile.mediaIdOfNode(node);
     /*
@@ -1001,14 +1015,14 @@ export class NativeProfile {
           originalList.length > 0 ? originalList : displayList,
           firstVideo, firstVideoOriginal,
           caption, username, avatar, ownerId, following, takenAt, mediaId,
-          displayList.length > 1 ? minAspect : 0, repostCount, liked);
+          displayList.length > 1 ? minAspect : 0, repostCount, liked, shareCount);
       }
     }
     return new ProfilePost(code, isVideoNode, cover, width, height,
       NativeProfile.numOf(node, 'like_count'), NativeProfile.numOf(node, 'comment_count'),
       display.url, displayImages, original.url.length > 0 ? [original.url] : displayImages,
       displayVideo, originalVideo, caption, username, avatar, ownerId, following, takenAt,
-      mediaId, 0, repostCount, liked);
+      mediaId, 0, repostCount, liked, shareCount);
   }
 
   /**

@@ -32,6 +32,8 @@ import { MobileFeedPage, MobileFeedTimeline } from './mobileapi/MobileFeedTimeli
 import { SearchPost, SearchUser } from '../model/Search';
 // 轮播帖的逐页媒体（与时间线那份 DTO 同形，见 readPost / carouselPage）。
 import { FeedMediaItemDto } from '../model/FeedDto';
+// 分享数取证（落盘 `files/Instarmony_share_probe.txt`，见那个文件的头注释）。
+import { ShareProbe } from './ShareProbe';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeSearch';
@@ -356,6 +358,8 @@ export class NativeSearch {
     if (code.length === 0) {
       return null;
     }
+    // 分享数取证（见 core/ShareProbe）：只记第一条媒体节点的键名与分享类键的命中情况。
+    ShareProbe.noteMedia('explore', node);
     const images: Record<string, Object> | null = JsonRead.recordOf(node, 'image_versions2');
     const candidates: Array<Object> = images === null ? [] : JsonRead.arrayOf(images, 'candidates');
     const urls: Array<string> = [];
@@ -471,10 +475,41 @@ export class NativeSearch {
         mediaItems.push(one);
       }
     }
+    /*
+     * 分享 / 收藏数：**和转发数一样"有就收"**。
+     *
+     * 这两颗数字以前在探索流这条路上压根没读，于是"搜索推荐流点进 Reels 页 / 首页为你推荐
+     * 那一段"永远显示不出分享数 —— 即使载荷里给了（用户报的"feeds 与 reels 看不到分享数量"，
+     * 这一条是**映射层**的断点，不是数据源的）。
+     * 候选名与 core/NativeTimelineParser / core/NativeReels 保持同一套（IG 会改名）；
+     * 一个都没命中就是 0，界面按 0 把那颗数字整颗不画（见 model/MediaPost.shareCount）。
+     */
+    const shareCount: number = NativeSearch.firstCount(node, ['share_count', 'shares_count',
+      'media_share_count']);
+    const saveCount: number = NativeSearch.firstCount(node, ['save_count', 'saves_count',
+      'media_save_count']);
     return new SearchPost(code, picked.url, picked.width, picked.height, videos.length > 0,
       `${rawId}`.trim(), display.url, original.url, username, avatar, authorId, caption,
       JsonRead.numOf(node, 'like_count'), JsonRead.numOf(node, 'comment_count'),
-      JsonRead.numOf(node, 'media_repost_count'), liked, following, takenAt, mediaItems);
+      JsonRead.numOf(node, 'media_repost_count'), liked, following, takenAt, mediaItems,
+      shareCount, saveCount);
+  }
+
+  /**
+   * 按候选键名取第一个**正**的计数（字段名不定时用；都取不到就是 0）。
+   *
+   * 判据与 `NativeTimelineParser.firstCount` / `NativeReels.firstCount` 一致：
+   * 数字直接认，`JsonRead.numOf` 顺带把 "1234" 这种字符串数字也转过来。
+   * 只认 > 0 的值 —— 0 的语义是"载荷没说"，不能拿它覆盖掉别的候选名。
+   */
+  private static firstCount(node: Record<string, Object>, names: Array<string>): number {
+    for (let index: number = 0; index < names.length; index++) {
+      const value: number = JsonRead.numOf(node, names[index]);
+      if (value > 0) {
+        return Math.round(value);
+      }
+    }
+    return 0;
   }
 
   /**

@@ -29,6 +29,8 @@ import { FeedCache } from '../core/FeedCache';
 import { NativeSearch } from '../core/NativeSearch';
 import { NativeReels, REELS_SOURCE_EXPLORE } from '../core/NativeReels';
 import { ReelsCache } from '../core/ReelsCache';
+// 分享数取证（落盘 files/Instarmony_share_probe.txt，见那个文件的头注释）。
+import { ShareProbe } from '../core/ShareProbe';
 // 快拍托盘的落盘缓存（冷启动先画上次那排头像，见 core/TrayCache）。
 import { TrayCache } from '../core/TrayCache';
 import { RepostState } from '../core/RepostState';
@@ -162,6 +164,12 @@ export default class EntryAbility extends UIAbility {
       // reels 第一页的落盘缓存（见 core/ReelsCache）：clips 那条查询被 IG 限流时，
       // 视频标签靠它"至少还能看上次那批"，而不是一片空白。
       ReelsCache.init(this.context);
+      /*
+       * **分享数取证**（见 core/ShareProbe）：把每条取数响应的键名与"分享类键有没有"落盘到
+       * `files/Instarmony_share_probe.txt`。真机 hilog 抓不住（chromium 把环形缓冲冲掉），
+       * 所以走文件。这里只交出 `filesDir`，不读不写任何账号数据；开关在 ShareProbe 里。
+       */
+      ShareProbe.init(this.context);
       /*
        * 限时快拍托盘的落盘缓存（见 core/TrayCache）：冷启动时托盘那一排先铺上次那份，
        * 网络那份（213 条 / 425KB / 3~6 秒）回来再替换 —— 用户不用再对着灰色骨架等

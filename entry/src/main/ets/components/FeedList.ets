@@ -619,11 +619,18 @@ struct PostActions {
       .onClick((): void => {
         this.onRepost();
       })
-      // 分享：图标 + 计数并排
+      /*
+       * 分享：图标 + 计数并排。
+       *
+       * 图标是**系统那朵"分享"符号**（`sys.symbol.share`）—— 全工程"分享"这一个动作只用它，
+       * 不再用 `paperplane`：纸飞机在 iOS/HarmonyOS 里是「发送/私信」，而这一颗干的是
+       * "把这条帖子分享出去"（打开帖子页去分享），语义对不上。私信相关的地方
+       * （底部私信标签、私信空态）仍然用 `paperplane` —— 那里才是"发消息"。
+       */
       Button() {
         Row({ space: 4 }) {
-          SymbolGlyph($r('sys.symbol.paperplane'))
-            .fontSize(ICON_PLANE)
+          SymbolGlyph($r('sys.symbol.share'))
+            .fontSize(ICON_SHARE)
             .fontWeight(FontWeight.Medium)
             .fontColor([$r('app.color.primary_text')])
             .flexShrink(0)
@@ -697,7 +704,8 @@ const ICON_TRANSFER: number = 25;
  * 所以无论有没有对勾，图标的中心都不动。
  */
 const ICON_TRANSFER_CHECK: number = 13;
-const ICON_PLANE: number = 24;
+/** 分享（`sys.symbol.share`）的字号；原来这颗是纸飞机（`paperplane`）的位置。 */
+const ICON_SHARE: number = 24;
 const ICON_BOOKMARK: number = 27;
 
 @Component

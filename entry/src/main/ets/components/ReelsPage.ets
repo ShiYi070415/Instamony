@@ -895,7 +895,7 @@ struct ReelOverlay {
    *   - 点赞：`heart` / 已赞 `heart_fill` + `like_active` 色；
    *   - 评论：`message`；
    *   - 转发：`transfer_station`，已转发时**正中叠一个对勾**（同 FeedList 的 PostActions）；
-   *   - 转发给好友：`paperplane`；
+   *   - 转发给好友：`share`（系统那朵分享图标，与 FeedList 动作区那颗**同一个**；
    *   - 更多：`sort`（就是信息流资料行右上角那颗「更多」用的图标，见 FeedList.profileRow）。
    *
    * 计数与图标**直接读 `this.reel`**（不经过 @Builder 的值参数）：@Builder 按值传参时参数的
@@ -976,9 +976,11 @@ struct ReelOverlay {
       // 计数的样式与上面三颗**完全一致**（11sp 白字 + OVERLAY_TEXT_SHADOW、单行、千分位/万缩写
       // 走同一个 countText）；**为 0 时整颗不画** —— 载荷不给这个数时那一栏就只有图标，
       // 不会挂一个 "0"（见 model/Reel.shareCount）。
+      // 图标用 `sys.symbol.share`（和 FeedList 动作区那颗分享**同一个符号**）：纸飞机在系统
+      // 语义里是"发送/私信"，而这一颗是"把这条分享出去"，两者不能混用。
       Column({ space: 2 }) {
         MaterialIconButton({ autoInvert: false,
-          symbol: $r('sys.symbol.paperplane'),
+          symbol: $r('sys.symbol.share'),
           isOn: false,
           tint: '',
           buttonSize: ACTION_BUTTON_SIZE,
