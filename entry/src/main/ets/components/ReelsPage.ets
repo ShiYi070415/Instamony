@@ -861,8 +861,7 @@ struct ReelSlide {
             // **不影响播放器挂不挂**（挂载条件还是上面那句 `playing || preload`）。
             playing: this.wantsPlayNow(),
             segment: this.segment,
-            // **暂停期间仍然挂着播放器**（否则 `wanted()` 为假 → teardown → 恢复时从头播）。
-            preload: this.preload || this.hostPaused || this.hostHold,
+            preload: this.preload,
             muted: this.muted,
             // 长按左右两侧时 2 倍速，松手回 1 倍速（见 VideoSurface.speed，失败静默降级）。
             speed: (this.speedBoost || this.hostSpeed) ? SPEED_2X : 1,
@@ -1992,6 +1991,8 @@ export struct ReelsPage {
   @State private pageSpeed: boolean = false;
   /** 单击延迟执行的句柄（-1 = 没有）。 */
   private singleTapTimer: number = -1;
+  /** 这一次触摸里长按已经成立过 → 抬手时那一下单击要吞掉（否则长按松手会顺带暂停）。 */
+  private holdFired: boolean = false;
 
   /**
    * 右侧动作栏 / 作者行那几个动作 —— **功能由宿主实现**（HTTP 直发在 pages/Index），
@@ -2737,7 +2738,8 @@ export struct ReelsPage {
     const fingers: Array<FingerInfo> = event.fingerList;
     const x: number = fingers.length > 0 ? fingers[0].globalX : -1;
     const width: number = this.screenWidthVp;
-    const side: boolean = x >= 0 && width > 0 && (x < width * 0.2 || x > width * 0.8);
+    const side: boolean = x >= 0 && width > 0 && (x < width * 0.05 || x > width * 0.95);
+    this.holdFired = true;
     if (side) {
       this.pageSpeed = true;
       return;
@@ -2760,6 +2762,11 @@ export struct ReelsPage {
   }
 
   private scheduleSingleTap(): void {
+    // 长按松手时系统常会补一次单击：这里把那一口吞掉，否则长按结束会顺带暂停。
+    if (this.holdFired) {
+      this.holdFired = false;
+      return;
+    }
     if (this.singleTapTimer >= 0) {
       clearTimeout(this.singleTapTimer);
       this.singleTapTimer = -1;

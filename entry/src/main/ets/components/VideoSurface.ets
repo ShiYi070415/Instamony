@@ -75,6 +75,14 @@ export struct VideoSurface {
   /** 现在是不是"该播这一条"。 */
   @Prop @Watch('onPropChanged') playing: boolean = false;
   /**
+   * **只是暂停**（用户单击 / 长按 / 页面级暂停）：与 `playing` 分开传。
+   *
+   * 为什么不能用 playing=false 表达暂停：playing 一变就会走 `onPropChanged` → `applyUrl()`，
+   * 那条路会把播放器 `reset()`，于是「暂停后再播」从第 0 帧开始（用户报的现象）。
+   * 暂停只改 `paused`，url/playing 都不动，播放器停在当前位置。
+   */
+  @Prop @Watch('onPropChanged') paused: boolean = false;
+  /**
    * 本页所属分段（0 = 探索 / 1 = 关注 / -1 = 独立页）。创建后不变。
    */
   segment: number = -1;
@@ -147,7 +155,7 @@ export struct VideoSurface {
    * 只暂停、不销毁（销毁了就回到「黑一下」的老问题）。
    */
   private wantsPlay(): boolean {
-    if (!this.playing || this.frozenAll) {
+    if (!this.playing || this.paused || this.frozenAll) {
       return false;
     }
     if (this.segment >= 0 && this.segment !== this.activeSegment) {
