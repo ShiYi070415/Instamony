@@ -75,7 +75,8 @@ const CARD_GAP_VP: number = 10;
 /**
  * 卡片圆角（vp）：比评论面板（22）小一号，一眼能看出它是"面板里的一张卡"。
  */
-const CARD_RADIUS_VP: number = 20;
+/** 卡片圆角：与全 app 统一为 16（见 SettingsPanel 里 CARD_RADIUS 的三档口径）。 */
+const CARD_RADIUS_VP: number = 16;
 /**
  * 卡片高度上限（占屏幕高度的比例）。
  *

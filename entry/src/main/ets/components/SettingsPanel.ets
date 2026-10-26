@@ -87,7 +87,18 @@ const MENU_OFFSET_Y: number = 6;
  */
 const PAGE_PADDING: number = 12;
 const CARD_ROW_PADDING: number = 14;
-const CARD_RADIUS: number = 20;
+/**
+ * 卡片圆角（vp）。
+ *
+ * 统一口径（全 app）：
+ *   · **胶囊 / 按钮** = 高度 ÷ 2；
+ *   · **卡片** = 16；
+ *   · **半模态面板** = 28（系统原生面板自带，我们不覆盖）。
+ * 之前在 16/20/12 之间混用，同一屏里几种圆角并排会显得"没对齐"。
+ */
+const CARD_RADIUS: number = 16;
+/** 代理输入框高度（vp；圆角=高/2 走胶囊那一档）。 */
+const PROXY_FIELD_HEIGHT: number = 42;
 const CARD_BORDER: number = 1;
 
 /**
