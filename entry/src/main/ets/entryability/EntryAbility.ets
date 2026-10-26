@@ -15,6 +15,9 @@
 
 import { AbilityConstant, Configuration, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+// 身份落盘（见 dumpIdentity）：设备字段 + 文件写入。
+import { deviceInfo } from '@kit.BasicServicesKit';
+import { fileIo } from '@kit.CoreFileKit';
 import { window, uiMaterial } from '@kit.ArkUI';
 import { AppLifecycle } from '../core/AppLifecycle';
 // 点私信通知要直接进那条会话：这里只负责把 want 里的会话 id 交给 core/NotifyRoute。
@@ -93,6 +96,24 @@ export default class EntryAbility extends UIAbility {
     // 打这一行就能判定"是代码问题还是设备档位不支持"，出问题时凭它定位。
     // `uiMaterial` 是 API 26 起才有的模块：低版本设备上**连问都不能问**，所以先判能力。
     hilog.info(DOMAIN, TAG_MATERIAL, 'platform %{public}s', PlatformCap.describe());
+    /*
+     * **这台机器对外报什么身份**（UA）：日志里打一次。
+     *
+     * 为什么放在冷启动：UA 是 WebView 与网页登录请求的唯一身份，IG 的「登录设备 / 新登录
+     * 邮件」全是拿它解析出来的。之前型号是写死的 Pixel 8，光看邮件根本推不出"代码里哪一段
+     * 在报这个名"，只能靠翻源码；有这一行就能直接对：读到的型号名和 IG 那边显示的是否一致。
+     * 顺带把 `DeviceTruth` 的缓存预热掉（它内部只读一次设备信息）。
+     */
+    hilog.info(DOMAIN, TAG_MATERIAL, 'identity ua=%{public}s', AppConfig.webUserAgent());
+    /*
+     * 同一份身份**再落一次盘**：`files/Instarmony_identity.txt`。
+     *
+     * 为什么要文件：真机上 ArkTS 的 hilog 有时抓不到（这次就是这样 —— 进程在跑、
+     * chromium 的日志一大堆，但 app 域一条都没有），而"型号名到底读成了什么"必须能看。
+     * 落盘之后 `hdc shell run-as`/`hdc file recv` 就能拿走，不依赖日志系统。
+     * 只写几行、只在冷启动写一次；失败不影响任何功能。
+     */
+    this.dumpIdentity();
     if (PlatformCap.hasArkMaterial()) {
       try {
         const info: uiMaterial.MaterialInfo = uiMaterial.getMaterialInfo();
@@ -278,6 +299,35 @@ export default class EntryAbility extends UIAbility {
    * 每次都打一行日志（连"没带任何东西"也打）：这样"点了没反应"到底是
    * **want 没到** 还是 **到了但没参数**，日志里一眼能分。
    */
+  /**
+   * 把"这台机器对外报的身份"写进 `files/Instarmony_identity.txt`（见调用处的说明）。
+   *
+   * 内容：最终 UA + 逐个原始字段（brand / marketName / productModel / productSeries），
+   * 目的是**一眼看出型号名取的是哪一项** —— 万一 systems 上 marketName 是空的（部分机型），
+   * 这里能立刻发现它退化成了 productModel 的代号。
+   *
+   * 只在冷启动写一次、只有几行；任何一步失败都静默（诊断不能影响启动）。
+   */
+  private dumpIdentity(): void {
+    try {
+      const lines: Array<string> = [];
+      lines.push(`ua=${AppConfig.webUserAgent()}`);
+      lines.push(`brand=${deviceInfo.brand}`);
+      lines.push(`marketName=${deviceInfo.marketName}`);
+      lines.push(`productModel=${deviceInfo.productModel}`);
+      lines.push(`productSeries=${deviceInfo.productSeries}`);
+      lines.push(`osFullName=${deviceInfo.osFullName}`);
+      lines.push(`sdkApiVersion=${deviceInfo.sdkApiVersion}`);
+      const path: string = `${this.context.filesDir}/Instarmony_identity.txt`;
+      const file: fileIo.File = fileIo.openSync(path,
+        fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
+      fileIo.writeSync(file.fd, `${lines.join('\n')}\n`);
+      fileIo.closeSync(file);
+    } catch (err) {
+      hilog.warn(DOMAIN, TAG_MATERIAL, 'identity dump failed: %{public}s', JSON.stringify(err));
+    }
+  }
+
   private stashNotifyRoute(want: Want, from: string): void {
     const parameters: Record<string, Object> | undefined =
       want === undefined ? undefined : want.parameters;
