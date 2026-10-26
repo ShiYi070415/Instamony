@@ -16,6 +16,8 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { display } from '@kit.ArkUI';
+// 反色开关落盘诊断（见 ReelOverlay.onBackdropTone）：真机 hilog 抓不到，只能写文件。
+import { fileIo } from '@kit.CoreFileKit';
 import { Reel, ReelStreamVm } from '../model/Reel';
 import { ReelsViewModel } from '../viewmodel/ReelsViewModel';
 import { VideoSurface } from './VideoSurface';
@@ -328,15 +330,36 @@ struct ReelOverlay {
    * 正好是需求要的那两组对立色（白↔黑、灰↔浅灰），而不是跟主题走（主题是"界面底色"的事，
    * 这里压着的是一张随时在变的视频画面）。
    */
-  @StorageProp(SETTING_OVERLAY_BACKDROP_LIGHT) backdropLight: boolean = false;
+  @StorageProp(SETTING_OVERLAY_BACKDROP_LIGHT) @Watch('onBackdropTone') backdropLight: boolean = false;
 
   /**
    * 正文/次要文字的前景色（反色）。
    *
-   * **边界**（需求）：只用于**没被沉浸光感组件包裹**的文本 —— 也就是资讯区那条正文
-   * （作者名/关注按钮那些在材质里，颜色交给材质自己；动作区图标下面的计数也归动作区，
-   * 不走反色）。否则观感是"同一个动作区里字和图标各反各的"，很乱。
+   * **边界**（需求，最终版）：
+   *   · 资讯区正文（含"… 展开 / 收起"那个尾巴）→ 反色；
+   *   · 动作区图标下面的**计数** → 反色（它们是裸文本，没被材质包着）；
+   *   · 沉浸光感组件（动作区按钮、作者行、关注按钮）→ **系统级禁用反色**
+   *     （`autoInvert: false`，见 MaterialSurface 的 SurfaceModifier），
+   *     不再让材质跟着背景翻颜色。
    */
+  /**
+   * 反色开关一变就落一次盘（`files/Instarmony_tone.txt`）。
+   *
+   * 为什么：真机上 ArkTS 的 hilog 抓不到（见 EntryAbility.dumpIdentity 的说明），
+   * 而"正文到底有没有反色"取决于 BackdropTone 有没有真的把结论翻过来 ——
+   * 没有这一行就只能靠猜。只追加时间戳 + 结论，体量极小。
+   */
+  private onBackdropTone(): void {
+    try {
+      const path: string = `${getContext(this).filesDir}/Instarmony_tone.txt`;
+      const file: fileIo.File = fileIo.openSync(path,
+        fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.APPEND);
+      fileIo.writeSync(file.fd, `${Date.now()} light=${this.backdropLight ? 1 : 0}\n`);
+      fileIo.closeSync(file);
+    } catch (error) {
+    }
+  }
+
   private primaryInk(): ResourceColor {
     return this.backdropLight ? '#000000' : '#FFFFFF';
   }
@@ -795,7 +818,7 @@ struct ReelOverlay {
       // 比"因为少一个 id 就整颗按钮不出现"好得多（用户报的"没看到关注按钮"就是这个）。
       // 例外：**作者就是我自己**时不画（关注自己没有意义，见 ownAuthor）。
       if (this.reel.author.length > 0 && !this.isOwnAuthor()) {
-        MaterialLabelButton({
+        MaterialLabelButton({ autoInvert: false,
           labelRes: this.following
             ? $r('app.string.action_following') : $r('app.string.action_follow'),
           // 字色**始终走主题色（深色下就是白）**：需求"已关注字体颜色保持白色" ——
@@ -987,7 +1010,7 @@ struct ReelOverlay {
     Column({ space: ACTION_GAP }) {
       // 点赞：图标 + 计数（图标自带"点赞弹一下"动画，见 AnimatedIcons.LikeIcon）。
       Column({ space: 2 }) {
-        MaterialIconButton({
+        MaterialIconButton({ autoInvert: false,
           symbol: this.reel.liked ? $r('sys.symbol.heart_fill') : $r('sys.symbol.heart'),
           isOn: this.reel.liked,
           // 带动画的图标自己管颜色（已赞红、未赞主题色），这里不需要再给 tint。
@@ -1001,7 +1024,7 @@ struct ReelOverlay {
         if (this.reel.likeCount > 0) {
           Text(this.countText(this.reel.likeCount))
             .fontSize(11)
-            .fontColor(Color.White)
+            .fontColor(this.primaryInk())
             .maxLines(1)
         }
       }
@@ -1009,7 +1032,7 @@ struct ReelOverlay {
 
       // 评论：图标 + 计数。
       Column({ space: 2 }) {
-        MaterialIconButton({
+        MaterialIconButton({ autoInvert: false,
           symbol: $r('sys.symbol.message'),
           isOn: false,
           tint: '',
@@ -1022,7 +1045,7 @@ struct ReelOverlay {
         if (this.reel.commentCount > 0) {
           Text(this.countText(this.reel.commentCount))
             .fontSize(11)
-            .fontColor(Color.White)
+            .fontColor(this.primaryInk())
             .maxLines(1)
         }
       }
@@ -1031,7 +1054,7 @@ struct ReelOverlay {
       // 转发：图标（已转发时正中叠对勾）+ 计数。
       // 图标自带两个动画：外层循环箭头转 360° 镜像旋转、内层对勾一笔画出来（见 AnimatedIcons.RepostIcon）。
       Column({ space: 2 }) {
-        MaterialIconButton({
+        MaterialIconButton({ autoInvert: false,
           symbol: $r('sys.symbol.transfer_station'),
           isOn: this.reel.reposted,
           animated: 'repost',
@@ -1044,14 +1067,14 @@ struct ReelOverlay {
         if (this.reel.repostCount > 0) {
           Text(this.countText(this.reel.repostCount))
             .fontSize(11)
-            .fontColor(Color.White)
+            .fontColor(this.primaryInk())
             .maxLines(1)
         }
       }
       .alignItems(HorizontalAlign.Center)
 
       // 转发给好友。
-      MaterialIconButton({
+      MaterialIconButton({ autoInvert: false,
         symbol: $r('sys.symbol.paperplane'),
         isOn: false,
         tint: '',
@@ -1069,7 +1092,7 @@ struct ReelOverlay {
        * 收藏那一刻由小到大弹一下（见 AnimatedIcons.SaveIcon）。
        * 没有计数：IG 的书签下面本来也不显示数字。
        */
-      MaterialIconButton({
+      MaterialIconButton({ autoInvert: false,
         symbol: $r('sys.symbol.bookmark'),
         isOn: this.saved,
         animated: 'save',
@@ -1081,7 +1104,7 @@ struct ReelOverlay {
       })
 
       // 更多。
-      MaterialIconButton({
+      MaterialIconButton({ autoInvert: false,
         symbol: $r('sys.symbol.sort'),
         isOn: false,
         tint: '',
