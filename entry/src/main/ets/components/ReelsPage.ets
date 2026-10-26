@@ -168,6 +168,9 @@ const INFO_BOTTOM: number = 112;
  * 命名/取值和 `reels_frozen_all` / `reels_active_segment` 同一套（那两个也是 AppStorage 键，
  * 见 VideoSurface 的说明）：字符串常量写在一处，别的地方 import 它，避免打错字导致"点了没反应"。
  */
+/** 横滑 seek 的指令通道：cmd（1 开始 / 2 拖动 / 3 松手 / 4 取消）与 dx（vp）。 */
+export const REELS_SEEK_CMD: string = 'reels_seek_cmd';
+export const REELS_SEEK_DX: string = 'reels_seek_dx';
 export const REELS_CHROME_HIDDEN: string = 'reels_chrome_hidden';
 
 /**
@@ -412,6 +415,9 @@ struct ReelSlide {
   private rawDownX: number = -1;
   private rawDownY: number = -1;
   private rawSeeking: boolean = false;
+  /** 页面级横滑手势 → 本条 seek 的桥（见 REELS_SEEK_CMD 的说明）。 */
+  @StorageLink(REELS_SEEK_CMD) @Watch('onSeekBridge') seekBridgeCmd: number = 0;
+  @StorageLink(REELS_SEEK_DX) seekBridgeDx: number = 0;
   private rawHoldFired: boolean = false;
   private rawHoldTimer: number = -1;
   /** 长按中间之前，全局控件本来就是藏着的吗（松手要恢复成"原来那样"，见 onHoldEnd）。 */
@@ -697,6 +703,31 @@ struct ReelSlide {
    * 只判两件事：单击（暂停/播放）与长按（暂停 + 隐藏全局控件，松手恢复）。
    * 拖动进度的判定仍留给原来的横向手势 —— 两套不冲突：onTouch 只在"没怎么移动"时下结论。
    */
+  /**
+   * 页面级横滑手势转过来的 seek 指令（1=开始 2=拖动 3=松手 4=取消）。
+   *
+   * 为什么走 AppStorage：手势必须挂在页面那一层才收得到事件（画面里的 XComponent 会吃掉），
+   * 而时长/进度只有本条 ReelSlide 知道 —— 一条单向的指令桥正好把两边接上。
+   */
+  private onSeekBridge(): void {
+    const cmd: number = this.seekBridgeCmd;
+    if (cmd === 1) {
+      this.onSeekStart();
+      return;
+    }
+    if (cmd === 2) {
+      this.onSeekMoveBy(this.seekBridgeDx);
+      return;
+    }
+    if (cmd === 3) {
+      this.onSeekEnd();
+      return;
+    }
+    if (cmd === 4) {
+      this.onSeekCancel();
+    }
+  }
+
   private onRawTouch(event: TouchEvent): void {
     if (event.type === TouchType.Down) {
       // 横向拖动的起点（见 Move 分支）。
@@ -2867,6 +2898,28 @@ export struct ReelsPage {
         })
         .onActionCancel((): void => {
           this.pageHoldEnd();
+        }),
+      /**
+       * **左右滑 = 拖播放进度**（需求）。挂在这一层的原因：单击/长按就是挂在这里才生效的，
+       * 而画面内部的触摸被 XComponent 吃掉了（踩过很多次）。
+       *
+       * 这里不直接算进度（页面这一层没有时长/进度），只把"开始/位移/结束"通过
+       * AppStorage 传给当前那条的 ReelSlide（键见 REELS_SEEK_*）。
+       */
+      PanGesture({ direction: PanDirection.Horizontal, distance: 18 })
+        .onActionStart((): void => {
+          AppStorage.setOrCreate(REELS_SEEK_DX, 0);
+          AppStorage.setOrCreate(REELS_SEEK_CMD, 1);
+        })
+        .onActionUpdate((event: GestureEvent): void => {
+          AppStorage.setOrCreate(REELS_SEEK_DX, event.offsetX);
+          AppStorage.setOrCreate(REELS_SEEK_CMD, 2);
+        })
+        .onActionEnd((): void => {
+          AppStorage.setOrCreate(REELS_SEEK_CMD, 3);
+        })
+        .onActionCancel((): void => {
+          AppStorage.setOrCreate(REELS_SEEK_CMD, 4);
         })
     ))
   }
