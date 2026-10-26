@@ -907,7 +907,11 @@ struct ReelSlide {
             url: this.reel.videoUrl,
             // `wantsPlayNow()` 而不是 `playing`：用户单击暂停 / 长按暂停都只影响"播不播"，
             // **不影响播放器挂不挂**（挂载条件还是上面那句 `playing || preload`）。
-            playing: this.wantsPlayNow(),
+            // **playing 不再被暂停参与**：暂停走 paused 通道。
+            // 探针证据（files/Instarmony_video.txt）：playing 一变 false，VideoSurface 的
+            // wanted() 为假 → teardownPlayer → 播放器与表面重建 → 从 0 播。
+            // 这里让它恒等于「是不是当前这一条」，暂停只通过 paused 表达。
+            playing: this.playing,
             segment: this.segment,
             preload: this.preload,
             muted: this.muted,
