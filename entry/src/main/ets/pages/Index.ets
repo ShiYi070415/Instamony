@@ -933,6 +933,17 @@ struct UserProfileRoute {
   onFeedScroll: (deltaY: number, offsetY: number, scrollState: ScrollState) => void =
     (deltaY: number, offsetY: number, scrollState: ScrollState): void => {
     };
+  /**
+   * 点**精选快拍** → 快拍播放页（别人主页也要能看，和"我的"页面同一套）。
+   *
+   * 之前这里没有这个属性：内部 ProfilePage 虽然给每颗高光都挂好了 onClick，
+   * 但回调落在空实现上 —— 表现就是"高光画出来了，点下去没反应"。
+   */
+  onOpenHighlight: (items: Array<ProfileHighlight>, index: number, rect: StoryHeroRect,
+    rects: Map<string, StoryHeroRect>) => void =
+    (items: Array<ProfileHighlight>, index: number, rect: StoryHeroRect,
+      rects: Map<string, StoryHeroRect>): void => {
+    };
 
   aboutToAppear(): void {
     const parts: Array<string> = `${this.param}`.split('|');
@@ -978,6 +989,11 @@ struct UserProfileRoute {
       },
       onFeedScroll: (deltaY: number, offsetY: number, scrollState: ScrollState): void => {
         this.onFeedScroll(deltaY, offsetY, scrollState);
+      },
+      // 精选快拍：转发给外壳（见 onOpenHighlight 的说明）。别人主页也要能点开。
+      onOpenHighlight: (items: Array<ProfileHighlight>, index: number, rect: StoryHeroRect,
+        rects: Map<string, StoryHeroRect>): void => {
+        this.onOpenHighlight(items, index, rect, rects);
       }
     })
   }
