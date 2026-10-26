@@ -742,18 +742,19 @@ struct ReelSlide {
   @Builder
   progressBar() {
     Stack({ alignContent: Alignment.Start }) {
-      // 轨道：半透明白（压在亮画面上也读得出来）。
-      Row()
-        .width('100%')
-        .height(PROGRESS_HEIGHT)
-        .borderRadius(PROGRESS_HEIGHT / 2)
-        .backgroundColor(PROGRESS_TRACK_COLOR)
-      // 已播放：实白。宽度按比例给字符串百分比（0..1 → '0%'..'100%'）。
+      /*
+       * **只有一条填充线**（需求："移除背景条"）。
+       *
+       * 原来底下还铺了一条半透明"轨道"，压在视频上会多出一层灰；现在只画已播放那一段。
+       * 宽度补间用**线性** 180ms：播放器上报 position 是 120ms 一拍的离散值，
+       * 直接跳变看起来就是一格一格；补间把两拍之间连起来，观感连续。
+       */
       Row()
         .width(`${this.progressNow() * 100}%`)
         .height(PROGRESS_HEIGHT)
         .borderRadius(PROGRESS_HEIGHT / 2)
         .backgroundColor(PROGRESS_FILL_COLOR)
+        .animation({ duration: 180, curve: Curve.Linear })
     }
     .width('100%')
     .height(PROGRESS_HEIGHT)
@@ -853,7 +854,8 @@ struct ReelSlide {
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Contain)
-        if (this.reel.playable() && (this.playing || this.preload)) {
+        if (this.reel.playable()
+          && (this.playing || this.preload || this.hostPaused || this.hostHold)) {
           // 播放器换成 AVPlayer + XComponent 的共用组件，理由见 VideoSurface 的说明：
           // 它能在 prepare 阶段就把首帧送到表面上（showFirstFrameOnPrepare），
           // 所以下面那层封面是在"首帧真的上屏"之后才撤的，不再有黑闪。
@@ -923,24 +925,24 @@ struct ReelSlide {
        * 整层 `HitTestMode.None`：它只显示，不能吃掉"点画面暂停"和"横滑 seek"。
        */
       Column({ space: SPEED_PILL_GAP }) {
-        // 2 倍速胶囊：长按左右侧期间出现，**保持在卡片顶部适当距离**（需求）。
-        if (this.speedBoost || this.hostSpeed) {
-          this.speedPill()
-        }
-        // 撑开剩余空间：把下面的进度条压到卡片底边（需求：进度条移到底部）。
-        Blank()
+        // 进度条：**回到卡片顶部**（需求），满宽、贴边。
         Column() {
           this.progressBar()
         }
         .width('100%')
         .padding({ left: PROGRESS_SIDE_PAD, right: PROGRESS_SIDE_PAD })
+
+        // 2 倍速胶囊：长按左右侧期间出现，紧跟在进度条下方（顶部适当距离）。
+        if (this.speedBoost || this.hostSpeed) {
+          this.speedPill()
+        }
+        Blank()
       }
       .width('100%')
       .height('100%')
       .alignItems(HorizontalAlign.Center)
       .justifyContent(FlexAlign.Start)
-      // 顶部留白只给倍速胶囊，进度条由 Blank 压到底部。
-      .padding({ top: SPEED_PILL_TOP_GAP })
+      .padding({ top: PROGRESS_TOP_GAP })
       .hitTestBehavior(HitTestMode.None)
 
       /*
