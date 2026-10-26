@@ -672,6 +672,13 @@ export class ProfileViewModel {
      * （那里可能刚刚 reset 过，代次已经变了）。
      */
     let gen: number = this.generation;
+    /*
+     * **高光提前发**：它走的是另一条私有接口、和帖子/头部没有依赖关系，
+     * 以前排在首屏之后（首屏 1~3 秒），于是一排高光要等"帖子回来了再排队发"才出现。
+     * 放到最前面与其它请求并行，用户会先看到快拍、再看到网格。
+     */
+    this.loadHighlights().catch((): void => {
+    });
     try {
       // 本人：网格请求体的目标键也要回正（见 ensureOwnName），所以发请求前先落实"我是谁"。
       // 同样先确认这份本人状态属于当前账号（换账号后必须作废，见 ensureSelfScope）。
@@ -777,9 +784,7 @@ export class ProfileViewModel {
       this.prefetchOthersSequential().catch((): void => {
       });
       this.prefetchNext(tab);
-      // 精选快拍（高光）单独一发：拿不到就空着，不影响页面其它部分。
-      this.loadHighlights().catch((): void => {
-      });
+      // 精选快拍（高光）：首屏之后的那一发保留（缓存未命中时这里才真正走网络）。
     } catch (error) {
       // 这里必须吞掉并记下来：异常一旦从这里跑出去，页面上的 aboutToAppear 是
       // "发了就不管"的调用，用户只会看到永远空白的页，日志里也什么都没有。
@@ -1410,6 +1415,14 @@ export class ProfileViewModel {
   onHighlights: (items: Array<ProfileHighlight>) => void = (items: Array<ProfileHighlight>): void => {
   };
   private highlightItems: Array<ProfileHighlight> = [];
+  /**
+   * 高光的**内存缓存**（按主人 id）。
+   *
+   * 为什么必须有：这一发走的是移动端私有接口，实测 1~3 秒才回来；而"切回同一个主页"
+   * 在 IG 里是高频操作（关注列表来回点）。缓存之后第二次进是**当帧出图**，
+   * 网络那一发只在缓存缺失时才发。
+   */
+  private highlightCache: Map<string, Array<ProfileHighlight>> = new Map<string, Array<ProfileHighlight>>();
   private highlightsFor: string = '';
   /** 已经从网页侧拉过歌的账号名（见 fillMusicFromWeb：只试一次）。 */
   private musicTriedFor: string = '';
@@ -1433,7 +1446,20 @@ export class ProfileViewModel {
      * 永远没有高光（界面那一排是空的）。
      */
     const uid: string = this.highlightsOwnerId();
-    if (uid.length === 0 || this.highlightsFor === uid) {
+    if (uid.length === 0) {
+      return;
+    }
+    // **缓存命中：当帧就给出去**（不再等网络，也不再受 highlightsFor 去重影响）。
+    const cached: Array<ProfileHighlight> | undefined = this.highlightCache.get(uid);
+    if (cached !== undefined) {
+      this.highlightItems = cached;
+      this.onHighlights(cached);
+      // 有缓存就不必每次重发：只有"上次没拉到"时才补一发（见下面的空结果分支）。
+      if (cached.length > 0) {
+        return;
+      }
+    }
+    if (this.highlightsFor === uid) {
       return;
     }
     this.highlightsFor = uid;
@@ -1443,6 +1469,8 @@ export class ProfileViewModel {
         return;
       }
       this.highlightItems = list;
+      // 写进缓存（空结果也写：下次进来当帧就知道"这里没有高光"，不必再等 2 秒空白）。
+      this.highlightCache.set(uid, list);
       hilog.info(DOMAIN, TAG, 'highlights n=%{public}d', list.length);
       this.onHighlights(list);
     } catch (error) {
