@@ -512,15 +512,21 @@ export struct VideoSurface {
   private applySeek(): void {
     VideoProbe.log('applySeek ms=' + this.seekMs + ' prepared=' + this.prepared
       + (this.player === null ? ' player=null' : ' pos=' + this.player.currentTime));
-    if (this.seekMs < 0) {
+    /*
+     * **目标位置从两处取**：直连通道写的是 `pendingSeekMs`，prop 通道写的是 `seekMs`。
+     * 之前这里只读 `seekMs`，于是直连指令进来后 applySeek 用的还是旧值（甚至 -1 直接返回）——
+     * 松手"回到原位"就是这个原因。
+     */
+    const desired: number = this.pendingSeekMs >= 0 ? this.pendingSeekMs : this.seekMs;
+    if (desired < 0) {
       return;
     }
     const player: media.AVPlayer | null = this.player;
     if (player === null || !this.prepared) {
-      this.pendingSeekMs = this.seekMs;
+      this.pendingSeekMs = desired;
       return;
     }
-    let target: number = this.seekMs;
+    let target: number = desired;
     const total: number = this.playerDurationMs();
     if (total > 0 && target > total - SEEK_TAIL_GUARD_MS) {
       // 别跳到"片子最后一毫秒"：那会立刻 completed、循环重播（观感就是"一松手视频从头开始了"）。
