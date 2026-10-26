@@ -469,6 +469,7 @@ export struct PostCardPanel {
     .backgroundColor(Color.Transparent)
     // 选中态透明：Toggle 默认选中色是主题强调色，点一下整颗会变蓝（同 MaterialSurface）。
     .selectedColor(Color.Transparent)
+    .hoverEffect(HoverEffect.None)
     // 资讯栏仍然是材质（需求："用户资讯栏保持材质不变"）；autoInvert 传 false 同 Reels 作者行。
     .attributeModifier(new SurfaceModifier(this.thickness, false))
     .onChange((): void => {
@@ -619,7 +620,6 @@ export struct PostCardPanel {
         .alignItems(HorizontalAlign.Start)
       }
       .width('100%')
-      .constraintSize({ maxHeight: this.cardMaxH })
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.None)
       // 内容裁圆角：长正文滚动时不能溢出到卡片角上（材质那层自己也是同一个半径）。
@@ -653,12 +653,7 @@ export struct PostCardPanel {
      *   interactive=false  **关掉交互形变**（需求："不要拖拽/按压形变"）→ 静态玻璃
      */
     .attributeModifier(new SurfaceModifier(this.thickness, false, true, false, false, false))
-    /*
-     * 极轻的一圈边框：材质生效时系统会接管底色/边框/阴影（官方：设了材质后
-     * backgroundColor / borderColor / shadow 都不再生效），**只有在降级分支**（API < 26，
-     * 见 SurfaceModifier 的兜底）才看得到这一圈 —— 那时它替卡片兜住轮廓。
-     */
-    .border({ width: 1, color: $r('app.color.divider') })
+    
     .onChange((): void => {
       // 卡片本身没有选中态：点空白处不该有任何动作，功能都在里面的胶囊/按钮上。
     })
