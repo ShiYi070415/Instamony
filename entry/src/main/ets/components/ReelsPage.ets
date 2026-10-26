@@ -912,6 +912,12 @@ struct ReelSlide {
             // wanted() 为假 → teardownPlayer → 播放器与表面重建 → 从 0 播。
             // 这里让它恒等于「是不是当前这一条」，暂停只通过 paused 表达。
             playing: this.playing,
+            /*
+             * **暂停只走这一条**：播放器不销毁（`playing` 恒等于"是不是当前这一条"），
+             * 只是 `pause()`；恢复时 `play()`，位置因此不会回到 0。
+             * 用户单击 / 长按 / 页面级暂停四个来源在这里汇总。
+             */
+            paused: this.userPaused || this.holdPaused || this.hostPaused || this.hostHold,
             segment: this.segment,
             preload: this.preload,
             muted: this.muted,
