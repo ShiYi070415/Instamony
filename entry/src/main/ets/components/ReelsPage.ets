@@ -643,7 +643,7 @@ struct ReelSlide {
    * 只判两件事：单击（暂停/播放）与长按（暂停 + 隐藏全局控件，松手恢复）。
    * 拖动进度的判定仍留给原来的横向手势 —— 两套不冲突：onTouch 只在"没怎么移动"时下结论。
    */
-  private onRawTouch(event: TouchEvent): void {
+  private onRawTouchUnused(event: TouchEvent): void {
     if (event.type === TouchType.Down) {
       this.rawDownMs = Date.now();
       this.rawHoldFired = false;
@@ -966,7 +966,7 @@ struct ReelSlide {
          * 判据（都在 onRawTouch 里）：位移 < 10vp 且时长 < 400ms → 单击；不动且时长 ≥ 400ms → 长按。
          */
         .onTouch((event: TouchEvent): void => {
-          this.onRawTouch(event);
+          this.onRawTouchUnused(event);
         })
         .parallelGesture(
       GestureGroup(GestureMode.Parallel,
@@ -976,7 +976,7 @@ struct ReelSlide {
             this.onVideoTap(event);
           }),
         // ② 长按中间 40% → 暂停 + 隐藏全局控件，松手恢复（需求第 5 条）。
-        LongPressGesture({ repeat: false, duration: LONG_PRESS_CENTER_MS })
+        LongPressGesture(LONG_PRESS_CENTER_MS)
           .onAction((event: GestureEvent): void => {
             this.onHoldStart(event, false);
           })
@@ -1971,6 +1971,12 @@ export struct ReelsPage {
   @StorageLink(REELS_CHROME_HIDDEN) chromeHidden: boolean = false;
   /** 双击点赞那颗放大爱心的瞬时状态（整页一个，见 build 里的 LikeBurst）。 */
   @State private burst: LikeBurstState = new LikeBurstState();
+  /** 用户手动暂停（单击画面切换；见 scheduleSingleTap）。整页一份，翻页时清掉。 */
+  @State private pagePaused: boolean = false;
+  /** 长按暂停（松手恢复，见 holdOn / holdOff）。 */
+  @State private pageHold: boolean = false;
+  /** 单击延迟执行用的句柄与"已经来了第二下"的记号。 */
+  private singleTapTimer: number = -1;
 
   /**
    * 右侧动作栏 / 作者行那几个动作 —— **功能由宿主实现**（HTTP 直发在 pages/Index），
@@ -2440,7 +2446,7 @@ export struct ReelsPage {
         ReelSlide({
           reel: reel,
           segment: this.segment,
-          playing: index === this.activeIndex && !this.frozenAll,
+          playing: index === this.activeIndex && !this.frozenAll && !this.pagePaused && !this.pageHold,
           // 预加载下一条：一直开着（原先按网络开关过，实测会影响切换观感；
           // 播放器的预下载缓冲已经收到 2 秒，这一项的开销有界）。
           preload: index === this.activeIndex + 1,
@@ -2669,6 +2675,31 @@ export struct ReelsPage {
           const y: number = fingers.length > 0 ? fingers[0].localY : -1;
           playLikeBurst(this.burst, REELS_BURST_KEY, x, y);
           this.doubleTapLike();
+        }),
+      /*
+       * **单击 / 长按**（需求第 3、5 条）。
+       *
+       * 为什么挂在这里：这条 `parallelGesture` 是**页面根节点**上的，双击点赞就是靠它生效的
+       * （真机验证过）。之前把手势挂到画面卡片内部（连压在 XComponent 之上的命中层都试过）
+       * 一律收不到事件 —— 画面这一支的触摸被原生表面吃光了。所以走"唯一被验证可用"的位置：
+       * 和双击同一层，用同一套并行识别。
+       *
+       * 排他：双击（count 2）与单击（count 1）在同一组并行识别里会**都成立**，
+       * 所以单击延迟一个双击窗口再执行，见到第二下就作废（见 toggleSingleTap）。
+       */
+      TapGesture({ count: 1 })
+        .onAction((): void => {
+          this.scheduleSingleTap();
+        }),
+      LongPressGesture(LONG_PRESS_CENTER_MS)
+        .onAction((): void => {
+          this.holdOn();
+        })
+        .onActionEnd((): void => {
+          this.holdOff();
+        })
+        .onActionCancel((): void => {
+          this.holdOff();
         })
     )
   }
@@ -2678,6 +2709,38 @@ export struct ReelsPage {
    *
    * 已经赞过就什么都不做（不再发请求）。点赞本身仍走 tapLike 那套乐观 + 回滚。
    */
+  /**
+   * 单击 → 暂停 / 继续。延迟一个双击窗口再执行：双击点赞与单击在**同一组并行识别**里
+   * 会同时成立，不延迟的话双击会顺带把播放也暂停掉。
+   */
+  private scheduleSingleTap(): void {
+    if (this.singleTapTimer >= 0) {
+      clearTimeout(this.singleTapTimer);
+      this.singleTapTimer = -1;
+      // 第二下来了 = 双击（点赞），这一下不算单击。
+      return;
+    }
+    this.singleTapTimer = setTimeout((): void => {
+      this.singleTapTimer = -1;
+      this.pagePaused = !this.pagePaused;
+    }, SINGLE_TAP_DELAY_MS);
+  }
+
+  /** 长按：暂停 + 隐藏全局控件（松手恢复，见 holdOff）。 */
+  private holdOn(): void {
+    this.pageHold = true;
+    AppStorage.setOrCreate(REELS_CHROME_HIDDEN, true);
+  }
+
+  /** 长按松手：只做恢复，不额外切播放。 */
+  private holdOff(): void {
+    if (!this.pageHold) {
+      return;
+    }
+    this.pageHold = false;
+    AppStorage.setOrCreate(REELS_CHROME_HIDDEN, false);
+  }
+
   private doubleTapLike(): void {
     /*
      * **双击点赞以"落定那一条"为准，不用 `activeIndex`**（审计 B1）。
