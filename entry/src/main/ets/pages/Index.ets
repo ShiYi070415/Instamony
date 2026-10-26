@@ -6212,6 +6212,11 @@ struct Index {
         return;
       }
       this.commentsPrefetch.set(key, payload);
+      // 同时落一份盘（C1）：冷启动第一次点开也能秒出。
+      try {
+        AppSettings.saveCommentsFirst(key, JSON.stringify(payload));
+      } catch (saveError) {
+      }
       // 只留最近 8 条（Map 保持插入序，超了删最早的）。
       while (this.commentsPrefetch.size > 8) {
         const oldest: string | undefined = this.commentsPrefetch.keys().next().value;
@@ -6235,6 +6240,25 @@ struct Index {
       this.commentsMediaId = mediaId;
       return cached;
     }
+    /*
+     * **落盘缓存**（C1）：冷启动时内存是空的，但上次看过的首屏还在盘上 ——
+     * 先用它把面板铺开（秒出），网络那一发回来再覆盖（覆盖由 readCommentsNative 的
+     * 正常流程负责，这里只负责"先有东西可看"）。
+     */
+    try {
+      const raw: string = AppSettings.loadCommentsFirst(mediaId);
+      if (raw.length > 2) {
+        const disk: CommentsPayload = JSON.parse(raw) as CommentsPayload;
+        if (disk.state === 'ok' && (disk.items ?? []).length > 0) {
+          hilog.info(DOMAIN, TAG, 'comments src=disk n=%{public}d', (disk.items ?? []).length);
+          this.commentsMediaId = mediaId;
+          // 顺手放进内存，后续同一进程内直接命中。
+          this.commentsPrefetch.set(mediaId, disk);
+          return disk;
+        }
+      }
+    } catch (diskError) {
+    }
     const payload: CommentsPayload | null = await NativeComments.fetch(mediaId, '');
     if (payload === null || payload.state !== 'ok') {
       hilog.info(DOMAIN, TAG, 'comments native skip state=%{public}s detail=%{public}s',
@@ -6243,6 +6267,12 @@ struct Index {
     }
     // 记下媒体 id：评论点赞那条私有 API 候选要用（见 likeComment）。
     this.commentsMediaId = mediaId;
+    // 回写落盘缓存（C1）：下次（含冷启动）点开就是最新的首屏。
+    try {
+      this.commentsPrefetch.set(mediaId, payload);
+      AppSettings.saveCommentsFirst(mediaId, JSON.stringify(payload));
+    } catch (saveError) {
+    }
     return payload;
   }
 

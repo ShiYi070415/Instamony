@@ -337,6 +337,27 @@ export class AppSettings {
     AppSettings.write(`profile_header_${uid}`, json);
   }
 
+  /**
+   * **评论首屏的落盘快照**（C1 批次，按 mediaId 分开）。
+   *
+   * 为什么不只放内存：内存缓存重启就没了，而"点开评论要转 1~2 秒"是最高频的抱怨之一。
+   * 评论首屏（约 20 条）变化不快，落一份盘之后冷启动第一次点开也能秒出，网络回来再覆盖。
+   */
+  static saveCommentsFirst(mediaId: string, json: string): void {
+    if (mediaId.length === 0 || json.length < 2) {
+      return;
+    }
+    AppSettings.write(`comments_first_${mediaId}`, json);
+  }
+
+  /** 取某条媒体的评论首屏快照（没有给空串）。 */
+  static loadCommentsFirst(mediaId: string): string {
+    if (mediaId.length === 0) {
+      return '';
+    }
+    return AppSettings.readString(`comments_first_${mediaId}`, '');
+  }
+
   /** 取某个账号上次的头部快照（没有给空串）。 */
   static loadProfileHeader(uid: string): string {
     if (uid.length === 0) {
