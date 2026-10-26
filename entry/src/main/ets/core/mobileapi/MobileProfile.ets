@@ -27,6 +27,9 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ApiThrottle } from '../ApiThrottle';
+// 解析丢线程池（见 parseAsync 与 workers/ProfileParseTask）。
+import { taskpool } from '@kit.ArkTS';
+import { parseProfileGrid } from '../../workers/ProfileParseTask';
 import { MobileRequest, MobileResult, MobileOptions } from './MobileRequest';
 import { MobileSession, MobileIdentity } from './MobileSession';
 import { ProfileHighlight } from '../../model/Profile';
@@ -159,7 +162,7 @@ export class MobileProfile {
         kind, endpoint, result.summary());
       return null;
     }
-    const page: MobileGridPage | null = MobileProfile.gridOf(result, kind, started);
+    const page: MobileGridPage | null = await MobileProfile.gridOf(result, kind, started);
     MobileProfile.noteUsable(kind, page !== null);
     return page;
   }
@@ -238,14 +241,32 @@ export class MobileProfile {
         kind, `${signed}`, result.summary());
       return null;
     }
-    const page: MobileGridPage | null = MobileProfile.gridOf(result, kind, started);
+    const page: MobileGridPage | null = await MobileProfile.gridOf(result, kind, started);
     MobileProfile.noteUsable(kind, page !== null);
     return page;
   }
 
   /** 网格响应 → 一页（`items` + 游标 + 还有没有）。 */
-  private static gridOf(result: MobileResult, kind: string, started: number): MobileGridPage | null {
-    const parsed: Record<string, Object> | null = MobileProfile.parse(result.body);
+  /**
+   * **解析走线程池**（A1 批次·个人页）：只把 `JSON.parse` 递出去，摘字段仍在主线程。
+   *
+   * 个人页四个分页一页 100~300KB，解析在主线程会压住"切段那一帧"。线程池失败就退回
+   * 主线程解析（行为不变，只是慢）。
+   */
+  private static async parseAsync(body: string): Promise<Record<string, Object> | null> {
+    let parsed: Record<string, Object> | null = null;
+    try {
+      parsed = await taskpool.execute(parseProfileGrid, body) as Record<string, Object> | null;
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'profile parse taskpool failed: %{public}s → main thread',
+        (error as Error).message);
+    }
+    return parsed === null ? MobileProfile.parse(body) : parsed;
+  }
+
+  private static async gridOf(result: MobileResult, kind: string,
+                              started: number): Promise<MobileGridPage | null> {
+    const parsed: Record<string, Object> | null = await MobileProfile.parseAsync(result.body);
     if (parsed === null) {
       hilog.info(DOMAIN, TAG, 'tab[%{public}s] non-json bytes=%{public}d', kind, result.bytes);
       return null;
