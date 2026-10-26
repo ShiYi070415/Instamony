@@ -13,6 +13,9 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { Reel } from '../model/Reel';
 import { MediaQuality, PickedMedia } from './MediaQuality';
+// 解析丢线程池（见 parseMobileAsync 与 workers/ReelsParseTask）。
+import { taskpool } from '@kit.ArkTS';
+import { parseReelsItems } from '../workers/ReelsParseTask';
 import { ApiThrottle } from './ApiThrottle';
 import { JsonRead } from './JsonRead';
 import { MobileDiscover, MobileMediaPage } from './mobileapi/MobileDiscover';
@@ -83,7 +86,7 @@ interface IgClipsMetadata {
   original_sound_info?: IgSoundInfo | null;
 }
 
-interface IgClipsMedia {
+export interface IgClipsMedia {
   code?: string | null;
   /** 字符串形式的媒体 id（19 位数字的精确形式，见 mediaId 的说明）。 */
   strong_id__?: string | null;
@@ -171,6 +174,17 @@ interface IgClipsResponse {
 }
 
 /** 原生取好的一页 reels。 */
+/**
+ * **跨线程回传的纯数据**（A1 批次）。
+ *
+ * 线程池里只能回传"纯字段对象"，所以这里显式声明一个类，而不是回传带方法的页面对象。
+ */
+export class ReelsPageRaw {
+  media: Array<IgClipsMedia> = [];
+  cursor: string = '';
+  more: boolean = false;
+}
+
 export class NativeReelsPage {
   readonly reels: Array<Reel>;
   readonly nextCursor: string;
@@ -338,7 +352,7 @@ export class NativeReels {
     if (body === null) {
       return null;
     }
-    const page: NativeReelsPage | null = NativeReels.parseMobile(body, Date.now() - started);
+    const page: NativeReelsPage | null = await NativeReels.parseMobileAsync(body, Date.now() - started);
     if (page === null) {
       hilog.info(DOMAIN, TAG, 'friends unparsable bytes=%{public}d', body.length);
       return null;
@@ -425,7 +439,7 @@ export class NativeReels {
     if (body === null) {
       return null;
     }
-    const page: NativeReelsPage | null = NativeReels.parseMobile(body, Date.now() - started);
+    const page: NativeReelsPage | null = await NativeReels.parseMobileAsync(body, Date.now() - started);
     if (page === null) {
       hilog.info(DOMAIN, TAG, 'connected unparsable bytes=%{public}d', body.length);
       return null;
@@ -449,7 +463,7 @@ export class NativeReels {
     if (body === null) {
       return null;
     }
-    const page: NativeReelsPage | null = NativeReels.parseMobile(body, Date.now() - started);
+    const page: NativeReelsPage | null = await NativeReels.parseMobileAsync(body, Date.now() - started);
     if (page === null) {
       hilog.info(DOMAIN, TAG, 'clips unparsable bytes=%{public}d diag=%{public}s',
         body.length, NativeReels.diagnose(body));
@@ -609,6 +623,47 @@ export class NativeReels {
    * 与 `parse`（网页 GraphQL 那套 `data.<conn>.edges[].node.media`）是**两个形状**，
    * 所以单独一个函数，而不是硬塞进 `parse` 里判断。
    */
+  /**
+   * **把解析丢进 TaskPool**（A1 批次）。
+   *
+   * 只有 `JSON.parse` + "摘 items[].media / paging_info" 这一段搬出去 —— 它是整条链里
+   * 最贵的一段（200~330KB，真机 100~200ms），而且**不需要** AppStorage / 会话状态。
+   * 逐条映射（`toReel`：要读 EngageState / 画质档 / 打诊断）仍在主线程做。
+   *
+   * 线程池失败就退回主线程的 `parseMobile`（行为与以前一致，只是慢）。
+   */
+  static async parseMobileAsync(body: string, ms: number): Promise<NativeReelsPage | null> {
+    if (body.length === 0) {
+      return null;
+    }
+    // 分享数取证要读 AppStorage，必须在主线程、**派发之前**做（见 core/ShareProbe）。
+    ShareProbe.noteBody('clips', body);
+    let raw: ReelsPageRaw | null = null;
+    try {
+      raw = await taskpool.execute(parseReelsItems, body) as ReelsPageRaw | null;
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'reels taskpool failed: %{public}s → main thread',
+        (error as Error).message);
+    }
+    if (raw === null) {
+      return NativeReels.parseMobile(body, ms);
+    }
+    if (raw.media.length === 0) {
+      return null;
+    }
+    const reels: Array<Reel> = [];
+    for (let index: number = 0; index < raw.media.length; index++) {
+      const reel: Reel | null = NativeReels.toReel(raw.media[index]);
+      if (reel !== null) {
+        reels.push(reel);
+      }
+    }
+    if (reels.length === 0) {
+      return null;
+    }
+    return new NativeReelsPage(reels, raw.cursor, raw.more, ms);
+  }
+
   static parseMobile(body: string, ms: number): NativeReelsPage | null {
     if (body.length === 0) {
       return null;
