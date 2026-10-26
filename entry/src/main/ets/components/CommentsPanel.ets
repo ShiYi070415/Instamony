@@ -24,6 +24,7 @@ import { display } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS } from '../core/AppSettings';
 import { SurfaceModifier } from './MaterialSurface';
+import { PostCardPanel } from './PostCardPanel';
 import { TranslateLabel } from './TranslateLabel';
 import { Translator } from '../core/Translator';
 
@@ -223,14 +224,34 @@ export struct CommentsPanel {
   /**
    * 帖子作者、配文与作者头像（宿主一直在传）。
    *
-   * 上一版这里有一张"置顶帖子卡片"（作者 + 配文 + 发布时间 + 查看翻译），后来需求改成
-   * **独立面板**（点 Reels 正文才出现，见 components/PostCardPanel），卡片就整块搬走了 ——
-   * 本面板回到"标题 + 评论列表"的原样，这三个字段因此暂时不参与渲染。
-   * 字段保留是为了不动宿主的调用形状（见 pages/Index.commentsOverlay）。
+   * 上一版这里有一张"置顶帖子卡片"（作者 + 配文 + 发布时间 + 查看翻译），后来需求把它抽成
+   * 独立组件（components/PostCardPanel），本面板回到"标题 + 评论列表"的原样；
+   * 现在需求又要求**卡片回到评论面板里**，靠 `showPostCard` 决定画不画 ——
+   * 于是这三个字段重新参与渲染（作为卡片的入参，见 build 里插入的那一块）。
    */
   @Prop ownerUsername: string = '';
   @Prop caption: string = '';
   @Prop ownerAvatar: string = '';
+  /**
+   * **要不要在标题下方画那张置顶帖子卡片**（需求："点 Reels 正文 → 带卡片；
+   * 点动作栏评论图标 → 不带卡片，与以前完全一致"）。
+   *
+   * 开关由宿主给（见 pages/Index 的 `commentsWithCard`），面板自己不判断来源 ——
+   * 面板是"同一张嘴、两种内容"，来源分流放在宿主那一层。
+   */
+  @Prop showPostCard: boolean = false;
+  /** 卡片上那条帖子的**作者数字 id**（关注按钮要用）与**发布时刻**（毫秒；0 = 不画时间那截）。 */
+  @Prop ownerId: string = '';
+  @Prop createdAtMs: number = 0;
+  /** **我自己的账号名**：卡片据此不画"关注自己"那颗按钮（同 ReelsPage 的判据）。 */
+  @Prop ownAuthor: string = '';
+  /**
+   * 卡片里的关注按钮（宿主实现，HTTP 直发 + 网页兜底都在 pages/Index.followUser）。
+   *
+   * 参数里带上 `userId`：卡片自己只知道当前这条的作者，而关注接口要的是 id + 账号名。
+   */
+  onFollow: (userId: string, username: string, follow: boolean) => Promise<boolean> =
+    (userId: string, username: string, follow: boolean): Promise<boolean> => Promise.resolve(false);
   /**
    * 网页侧的结构摘要。
    *
@@ -1098,8 +1119,39 @@ export struct CommentsPanel {
             })
         )
 
-        // 「帖子的作者/配文」整块**不在这里画**了：它已经抽成独立面板（点 Reels 正文才出现，
-        // 见 components/PostCardPanel）。本面板回到需求的原样：小横条 + 「评论」标题 + 评论列表。
+        // 「帖子的作者/配文」整块**只在这里画**（需求："点正文 → 评论面板里带那张置顶卡片"）：
+        // 位置就是「评论」标题下方、第一条评论上方；卡片本体是现成组件（components/PostCardPanel），
+        // 这里只负责摆位置 —— 左右白和评论行一致（SIDE_PADDING），卡片边缘才和评论头像/正文对得上。
+        //
+        // 为什么不给它挂面板的拖动手势：卡片里有一条自己的 Scroll（长正文）和两颗材质按钮，
+        // 再叠一层 PAN 会把手势抢乱；从卡片上开始拖不调档，代价可以接受。
+        if (this.showPostCard) {
+          Column() {
+            PostCardPanel({
+              ownerUsername: this.ownerUsername,
+              ownerAvatar: this.ownerAvatar,
+              caption: this.caption,
+              ownerId: this.ownerId,
+              createdAtMs: this.createdAtMs,
+              ownAuthor: this.ownAuthor,
+              // 关注走宿主那条路（HTTP 优先 / 网页兜底，见 pages/Index.followUser）。
+              onFollow: (follow: boolean): Promise<boolean> => {
+                return this.onFollow(this.ownerId, this.ownerUsername, follow);
+              },
+              // 点头像 / 账号名 → TA 的主页（和评论行同一个回调，见 openUserFromComments）。
+              onUserTap: (username: string, userId: string): void => {
+                this.onUserTap(username, userId);
+              },
+              // 翻译失败：卡片自己已经把状态退回原文了，这里只转给宿主弹一句。
+              onTranslateFailed: (): void => {
+                this.onTranslateFailed();
+              }
+            })
+          }
+          .width('100%')
+          .padding({ left: SIDE_PADDING, right: SIDE_PADDING, bottom: 8 })
+        }
+
         if (this.loading) {
         Row() {
           LoadingProgress()

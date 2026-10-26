@@ -340,8 +340,11 @@ function isVerticalDrag(event: BaseGestureEvent): boolean {
  *
  * 注意：**它是按钮 4-way-lock 的一半**（另一半是外层容器上面的 holdsScroll 否决），
  * 所以不管 holdsScroll 怎么判，这条手势都原样留着 —— 4-way-lock 本身不受影响。
+ *
+ * 导出给"自绘的材质容器"用（目前是 PostCardPanel 里那条用户资讯栏胶囊）：它和这里几颗按钮
+ * 是同一套内容（透明 Toggle + 材质），4-way lock 也得是同一套，不能再各写一份。
  */
-function consumePan(): void {
+export function consumePan(): void {
 }
 
 /**

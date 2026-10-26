@@ -53,7 +53,6 @@ import {
   TIMELINE_PROBE_SCRIPT
 } from '../bridge/WebScripts';
 import { CommentsPanel, CommentsListController, COMMENTS_DRAG_ZONE_VP } from '../components/CommentsPanel';
-import { PostCardPanel } from '../components/PostCardPanel';
 import { NotificationsPanel } from '../components/NotificationsPanel';
 import { FeedList } from '../components/FeedList';
 import { FEED_START_OFFSET } from '../components/FeedList';
@@ -1314,13 +1313,9 @@ struct Index {
      */
     const depth: number = this.navDepthNow();
     if (depth > this.navDepth) {
+      // 评论面板（**带卡片时也是同一个面板**，见 commentsWithCard）让位给它：挂起而不是关掉，
+      // 返回时连卡片一起原样回来（见 resumeCommentsAfterProfile）。
       this.suspendCommentsForPages();
-      /*
-       * **帖子卡片浮层同样要让位**（见 postCardOverlay）：它也在根 Stack 里、层号比评论还高，
-       * NavDestination 压不住它。这里不给它"挂起/恢复"那套（卡片没有列表状态要保），
-       * 直接关掉最省事：回来时用户想看再点一次正文。
-       */
-      this.closeReelPostCard();
     }
     this.navDepth = depth;
     this.topPage = name;
@@ -1545,19 +1540,25 @@ struct Index {
   /** 作者头像（信息流里就有，直接用，省得评论面板自己再去找）。 */
   @State commentsAvatar: string = '';
   /*
-   * ---- 帖子卡片浮层（点 Reels 正文才出现，见 PostCardPanel）----
+   * ---- 评论面板里那张**置顶帖子卡片**（见 components/PostCardPanel）----
    *
-   * 数据来源和上一轮那张"评论面板顶部卡片"完全同一条链路（Reels 那条 `Reel` 自带的
-   * 作者 / 头像 / 配文 / 作者 id），只是它现在**归自己这一层**管：
-   * 卡片是独立面板，不该再去改评论面板的那几个 @State（两层面板互不影响）。
-   * 发布时刻沿用上一轮的结论：reels 载荷不带 `taken_at`，所以这里是 0，卡片上那一截不画。
+   * 需求："点 Reels 正文 → 打开评论面板**并且带**那张卡片；点动作栏评论图标 → 打开评论面板
+   * **不带**卡片（与以前完全一致）"。所以卡片不再是一个独立浮层，而是评论面板的一个开关：
+   *   · `commentsWithCard` = 这次打开的面板要不要画卡片（只有点正文那条置 true）；
+   *   · 卡片的数据直接走面板已有的 `commentsOwner / commentsCaption / commentsAvatar`，
+   *     只有"作者数字 id"和"发布时刻"是面板原来不关心的，补两个字段。
+   * 关闭面板时一起清掉（见 closeComments），下次打开由入口自己重新决定带不带。
    */
-  @State private postCardVisible: boolean = false;
-  @State private postCardOwner: string = '';
-  @State private postCardCaption: string = '';
-  @State private postCardAvatar: string = '';
-  @State private postCardOwnerId: string = '';
-  @State private postCardCreatedAtMs: number = 0;
+  @State private commentsWithCard: boolean = false;
+  /** 卡片上那条帖子的作者数字 id（关注按钮要用，见 followUser）。 */
+  @State private commentsOwnerId: string = '';
+  /**
+   * 卡片上那条帖子的发布时刻（毫秒）。
+   *
+   * reels 载荷不带 `taken_at`，所以从 Reels 那条路进来时是 0 —— 卡片据此**不画**"x小时前"那一截
+   * （不猜、也不显示 "0"），其余（头像 / 账号名 / 正文 / 查看翻译 / 关注）照常。
+   */
+  @State private commentsTakenAtMs: number = 0;
   /** 网页结构摘要，读不到评论时显示出来便于定位。 */
   @State commentsDiag: string = '';
   /**
@@ -2139,11 +2140,24 @@ struct Index {
   }
 
   /**
-   * Reels 页的「评论」：把这一条转成一条最小的 `MediaPost` 交给已有的评论面板
+   * Reels 页的「评论」（**动作栏那颗气泡**）：把这一条转成一条最小的 `MediaPost` 交给已有的评论面板
    * （那条面板只认 shortcode 与作者，见 openComments）。
+   *
+   * **不带卡片**（需求："点动作栏评论图标 → 打开评论面板，不带卡片，与以前完全一致"）：
+   * 这里给 `withCard = false`，同一个打开函数。
    */
   private openReelComments(reel: Reel): void {
-    this.openComments(new MediaPost({
+    this.openComments(this.reelAsPost(reel), false);
+  }
+
+  /**
+   * Reel → 评论面板认的那条最小 `MediaPost`（两条入口共用：动作栏评论 / 点正文）。
+   *
+   * 为什么不复制两份：两个入口拿到的是**同一条 reel**，字段一旦各写一遍，迟早有一边忘了跟
+   * （比如"发布时刻"以后真有值了只改了一处）。
+   */
+  private reelAsPost(reel: Reel): MediaPost {
+    return new MediaPost({
       id: reel.mediaId.length > 0 ? reel.mediaId : `reel-${reel.shortcode}`,
       shortcode: reel.shortcode,
       caption: reel.caption,
@@ -2151,57 +2165,31 @@ struct Index {
       displayUrl: reel.coverUrl,
       likeCount: reel.likeCount,
       commentCount: reel.commentCount,
-      // reels 这条载荷**不带发布时刻**（见 model/Reel）：卡片那一截因此不画（takenAtMs = 0），
+      // reels 这条载荷**不带发布时刻**（见 model/Reel）：卡片那一截因此不画（createdAtMs = 0），
       // 其余（头像/账号名/正文/查看翻译/关注）照常。
       takenAtMs: 0,
       ownerUsername: reel.author,
       ownerAvatarUrl: reel.avatarUrl,
       ownerId: reel.authorId,
       videoUrl: reel.videoUrl
-    }));
+    });
   }
 
   /**
-   * Reels 页点**正文**（含结尾的省略号）→ 打开**帖子卡片面板**（见 components/PostCardPanel）。
+   * Reels 页点**正文**（含结尾的省略号）→ 打开评论面板，**并且带那张置顶帖子卡片**
+   * （需求："点 Reels 正文 → 打开评论面板，并且带那张卡片"）。
    *
-   * 和「点评论」是两条路（需求："只有点击 Reels 正文才显示这个面板；评论面板仍是原来的样子"）：
-   * 这条**不碰任何评论状态**，也不去拉评论数据 —— 卡片要的数据 Reel 自己就带齐了
-   * （作者 / 头像 / 配文 / 作者 id），发布时间这条载荷没有，于是 `createdAtMs = 0`，
-   * 卡片上那一截不画（不猜、也不显示 "0"）。
-   *
-   * 先把数据写好、再置 `postCardVisible`：面板的 `aboutToAppear` 里就要按作者算关注状态，
-   * 反过来的话第一帧是"空作者"（关注按钮会闪一下才出来）。
+   * 和「点评论」走的是**同一个** `openComments`，只差 `withCard = true` ——
+   * 两条路的区别只有"面板里画不画卡片"，面板本身、数据链路、入场动画、返回键行为完全一致。
+   * 卡片本体是现成组件（components/PostCardPanel），由 CommentsPanel 在标题下方渲染。
    */
   private openReelPostCard(reel: Reel): void {
     if (reel.author.length === 0 && reel.caption.length === 0) {
       hilog.info(DOMAIN, TAG, 'post card skipped: empty author & caption');
       return;
     }
-    this.postCardOwner = reel.author;
-    this.postCardOwnerId = reel.authorId;
-    this.postCardCaption = reel.caption;
-    this.postCardAvatar = reel.avatarUrl;
-    // reels 载荷不带 `taken_at`（见 model/Reel）：0 = 卡片不画"x小时前"那一截。
-    this.postCardCreatedAtMs = 0;
-    this.postCardVisible = true;
+    this.openComments(this.reelAsPost(reel), true);
     hilog.info(DOMAIN, TAG, 'post card open author=%{public}s', reel.author);
-  }
-
-  /**
-   * 关掉帖子卡片面板（点遮罩 / 返回键 / 点了作者头像都走这里）。
-   *
-   * 数据立即清掉：面板节点本身就没了，下次打开会重新写一遍（不存在"残留上一条"的问题）。
-   */
-  private closeReelPostCard(): void {
-    if (!this.postCardVisible) {
-      return;
-    }
-    this.postCardVisible = false;
-    this.postCardOwner = '';
-    this.postCardCaption = '';
-    this.postCardAvatar = '';
-    this.postCardOwnerId = '';
-    this.postCardCreatedAtMs = 0;
   }
 
   aboutToAppear(): void {
@@ -5955,6 +5943,10 @@ struct Index {
   /**
    * 打开评论。
    *
+   * @param withCard 这次打开的面板要不要在标题下方画那张**置顶帖子卡片**（见 components/PostCardPanel）。
+   *   Reels 页有两条入口：点动作栏评论图标 = false（和以前完全一致）；
+   *   点正文 = true（见 openReelComments / openReelPostCard）。其余调用点一律走默认 false。
+   *
    * 三条路，从快到慢：
    *   0) **原生 HTTP**（`GET /api/v1/media/{id}/comments/`，见 core/NativeComments）：
    *      不碰隐藏网页、一次往返就回来 —— 只要手上这条有媒体数字 id 就先试它。
@@ -5968,10 +5960,16 @@ struct Index {
    * 后面两条留着：原生那条要媒体 id（少数数据源给不出），而且它也可能被限流/换形状；
    * 第 2 条是最后兜底。
    */
-  private async openComments(post: MediaPost): Promise<void> {
+  private async openComments(post: MediaPost, withCard: boolean = false): Promise<void> {
     if (this.navigating || post.shortcode.length === 0) {
       return;
     }
+    /*
+     * 这次要不要画卡片，**必须在下面写数据之前定下来**：CommentsPanel 的 `showPostCard`
+     * 直接绑这个字段，而卡片一建起来就按作者算关注状态 —— 顺序反了的话第一帧是"空作者"，
+     * 关注按钮会闪一下才出来。
+     */
+    this.commentsWithCard = withCard;
     /*
      * 用户**主动**开评论：把"为整屏页面挂起"的记账清掉（见 suspendCommentsForPages）。
      *
@@ -6033,6 +6031,9 @@ struct Index {
     this.commentsOwner = post.ownerUsername;
     this.commentsCaption = post.caption;
     this.commentsAvatar = post.ownerAvatarUrl;
+    // 卡片要的另外两个字段：作者 id 给关注按钮用，发布时刻给"x小时前"用（0 = 不画那一截）。
+    this.commentsOwnerId = post.ownerId;
+    this.commentsTakenAtMs = post.takenAtMs;
     // 记下这条帖子：评论点赞的网页驱动兜底要导航到它（见 likeCommentOnWeb）。
     this.commentsPost = post;
     this.commentsShortcode = post.shortcode;
@@ -6600,6 +6601,13 @@ struct Index {
       this.commentsOwner = '';
       this.commentsCaption = '';
       this.commentsAvatar = '';
+      /*
+       * 卡片那三个字段也一起清（需求）：`commentsWithCard` 是**每一次打开**由入口决定的，
+       * 留着 true 的话，下一次"点动作栏评论图标"也会把卡片带出来 —— 那就不是"与以前完全一致"了。
+       */
+      this.commentsWithCard = false;
+      this.commentsOwnerId = '';
+      this.commentsTakenAtMs = 0;
       // ④ 面板收完了，再把底栏放回来（需求流程最后一步）。
       this.restoreBarAfterComments();
       if (after !== undefined) {
@@ -6654,11 +6662,6 @@ struct Index {
    * @returns true = 这次返回被吃掉了（不 pop 页面）。
    */
   private handleDestinationBack(): boolean {
-    // 帖子卡片浮层（点 Reels 正文弹出来的那一层）压在这一页上面：先收它，别 pop 页面。
-    if (this.postCardVisible) {
-      this.closeReelPostCard();
-      return true;
-    }
     /*
      * **挂起中的面板不算"开着"**：用户主页压在上面、评论面板正为它让位（见
      * suspendCommentsForPages），这时返回键该关掉这一页，而不是去关一层看不见的面板
@@ -8675,7 +8678,7 @@ struct Index {
       onOpenUser: (reel: Reel): void => {
         this.openReelAuthor(reel);
       },
-      // 点**正文**（含结尾的省略号）→ 帖子卡片面板（和下面那颗评论气泡分流，见 ReelOverlay.onOpenPostCard）。
+      // 点**正文**（含结尾的省略号）→ 评论面板**带**卡片（和下面那颗只开评论的气泡分流，见 ReelOverlay.onOpenPostCard）。
       onOpenPostCard: (reel: Reel): void => {
         this.openReelPostCard(reel);
       },
@@ -9887,11 +9890,7 @@ struct Index {
       this.requestStoryClose();
       return true;
     }
-    // 帖子卡片浮层比评论浮层高一档（zIndex 72 > 70），所以返回键**先收它**。
-    if (this.postCardVisible) {
-      this.closeReelPostCard();
-      return true;
-    }
+    // 评论面板（点正文进来时它里面还带着那张帖子卡片）比快拍低一档，快拍收完之后收它。
     if (this.commentsVisible) {
       this.closeComments();
       return true;
@@ -10377,7 +10376,7 @@ struct Index {
         onOpenUser: (reel: Reel): void => {
           this.openReelAuthor(reel);
         },
-        // 点正文 → 帖子卡片面板（和评论气泡分流，见 ReelOverlay.onOpenPostCard）。
+        // 点正文 → 评论面板**带**卡片（和评论气泡分流，见 ReelOverlay.onOpenPostCard）。
         onOpenPostCard: (reel: Reel): void => {
           this.openReelPostCard(reel);
         },
@@ -10397,9 +10396,10 @@ struct Index {
       // 只提示一句，不假装发布成功。
       // 提示走**系统 toast**（不是 setLocalStatus）：那条横幅画在主页外壳里，而这一页是整屏
       // NavDestination，横幅根本露不出来 —— 用户会以为"点了没反应"（同 toast 的说明）。
-      // 评论面板 / 帖子卡片面板打开时**收起**这条：否则两层的输入框/内容会和它打架。
+      // 评论面板打开时（点正文进来时它里面还带着那张帖子卡片）**收起**这条：否则两层的输入框
+      // 会和它打架。
       // 用 transition 而不是 animateTo —— 插入/移除自带动画，面板开关代码一行都不用改。
-      if (!this.commentsVisible && !this.postCardVisible) {
+      if (!this.commentsVisible) {
         CommentInputBar({
           onSend: (text: string): void => {
             this.toast($r('app.string.comment_pending'));
@@ -11468,11 +11468,21 @@ struct Index {
           loadingMore: this.commentsLoadingMore,
           hasMore: this.commentsHasMore,
           state: this.commentsState,
-          // 作者 / 配文 / 头像：面板这一版**不再渲染**它们（那张帖子卡片已经抽成独立面板，
-          // 见 postCardOverlay / components/PostCardPanel），但宿主照旧传，免得调用形状来回变。
+          // 作者 / 配文 / 头像：面板把它们交给那张**置顶帖子卡片**（见 components/PostCardPanel）。
+          // 卡片画不画由 showPostCard 决定：点 Reels 正文进来 = 画，点动作栏评论图标进来 = 不画。
           ownerUsername: this.commentsOwner,
           caption: this.commentsCaption,
           ownerAvatar: this.commentsAvatar,
+          showPostCard: this.commentsWithCard,
+          // 卡片额外的两个字段：关注按钮要作者 id，"x小时前"要发布时刻（0 = 不画那一截）。
+          ownerId: this.commentsOwnerId,
+          createdAtMs: this.commentsTakenAtMs,
+          // 我自己是谁：作者是我自己时卡片不画关注按钮（同 Reels 信息层的判据）。
+          ownAuthor: this.profileVm.ownAccountName(),
+          // 卡片里的关注走和 Reels 作者行同一条路（HTTP 优先 / 网页兜底，见 followUser）。
+          onFollow: (userId: string, username: string, follow: boolean): Promise<boolean> => {
+            return this.followUser(userId, username, follow);
+          },
           diag: this.commentsDiag,
           // 列表控制器：面板把它的 Scroller 接上来（读偏移用）。
           listCtl: this.commentsList,
@@ -11556,55 +11566,15 @@ struct Index {
     })
   }
 
-  /**
-   * **帖子卡片浮层**（点 Reels 正文时出现，见 components/PostCardPanel）。
-   *
-   * 为什么挂在页面根 Stack 里、而不是塞进 Reels 页内部：Reels 页有两处是 NavDestination
-   * 里的整屏页面（「我的」的视频分页 / 搜索结果点进来的那一路），浮层要是画在页面内部，
-   * 就会被页面的裁剪/层级吃掉；根 Stack 这一层和评论浮层是同一套坐标（见 commentsOverlay）。
-   *
-   * 层级：**比评论浮层（70）高、比快拍（80）低**。两者本来就不会同时出现（点正文时屏幕上
-   * 不会有评论浮层的遮罩挡着），这个顺序只是兜底：万一真叠上了，卡片在评论面板上面，
-   * 返回键也会**先收卡片**（见 onBackPress / handleDestinationBack）。
-   *
-   * 入场/出场：`if` 挂载 + transition（淡入 + 轻微上移），和 reels 底部那条输入条同一套做法 ——
-   * 不需要自己管计时器，插入/移除自带补间。
+  /*
+   * **上一版那个"帖子卡片独立浮层"整块已经删掉了**（`postCardVisible` / `postCardOverlay()` /
+   * `closeReelPostCard` / 返回键里那条分支）。需求现在要求卡片**回到评论面板里**：
+   *   · 点 Reels 正文   → 评论面板 + 卡片（`commentsWithCard = true`，见 openReelPostCard）；
+   *   · 点动作栏评论图标 → 评论面板，不带卡片（`commentsWithCard = false`，见 openReelComments）。
+   * 卡片本体仍在 components/PostCardPanel，由 CommentsPanel 在「评论」标题下方渲染 ——
+   * 于是"卡片在哪、怎么关、返回键怎么走"三件事都跟着评论面板走，这里不用再各记一份状态，
+   * 也就不会出现"两层浮层谁在上面、返回键先收谁"那套顺序问题了。
    */
-  @Builder
-  postCardOverlay() {
-    PostCardPanel({
-      ownerUsername: this.postCardOwner,
-      ownerAvatar: this.postCardAvatar,
-      caption: this.postCardCaption,
-      ownerId: this.postCardOwnerId,
-      createdAtMs: this.postCardCreatedAtMs,
-      // 作者是我自己时不画关注按钮（和 reels 信息层同一个判据）。
-      ownAuthor: this.profileVm.ownAccountName(),
-      // 关注和 Reels 作者行走同一条路（HTTP 优先，网页兜底，见 followUser）。
-      onFollow: (follow: boolean): Promise<boolean> => {
-        return this.followUser(this.postCardOwnerId, this.postCardOwner, follow);
-      },
-      // 点头像 / 账号名 → 先收起卡片，再推 TA 的主页（卡片是浮层，不关会压在主页上面）。
-      onUserTap: (username: string, userId: string): void => {
-        this.closeReelPostCard();
-        this.openUserProfile(username, userId);
-      },
-      // 点遮罩 / 返回键 → 收起。
-      onClose: (): void => {
-        this.closeReelPostCard();
-      },
-      // 翻译失败：弹一句（面板自己已经把状态退回去了）。
-      onTranslateFailed: (): void => {
-        this.toast($r('app.string.translate_failed'));
-      }
-    })
-      .width('100%')
-      .height('100%')
-      .zIndex(72)
-      .transition(TransitionEffect.OPACITY
-        .combine(TransitionEffect.translate({ y: 60 }))
-        .animation({ duration: 240, curve: curves.springMotion(0.4, 0.9) }))
-  }
 
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
@@ -11793,14 +11763,9 @@ struct Index {
 
       // ---- 评论浮层（自己画的一层，见 commentsOverlay）----
       // 放在最后一个兄弟节点 + zIndex(70)：要盖住标题栏、底栏层和 NavDestination。
+      // 点 Reels 正文时它里面还会多一张置顶帖子卡片（见 commentsWithCard），同一层、同一个开关。
       if (this.commentsVisible) {
         this.commentsOverlay()
-      }
-
-      // ---- 帖子卡片浮层（点 Reels 正文才出现，见 components/PostCardPanel）----
-      // 层级 72（见 postCardOverlay 的说明）：压在评论浮层之上、快拍之下。
-      if (this.postCardVisible) {
-        this.postCardOverlay()
       }
 
       // ---- 限时快拍播放浮层（见 components/StoryViewer）----
