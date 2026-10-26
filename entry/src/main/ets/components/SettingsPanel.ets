@@ -180,7 +180,7 @@ export struct SettingsPanel {
   @Builder
   proxySection() {
     Column({ space: 10 }) {
-      Toggle({ type: ToggleType.Button, isOn: false }) {
+      Column() {
         Row() {
           Text($r('app.string.settings_proxy_enable'))
             .fontSize(16)
@@ -201,19 +201,12 @@ export struct SettingsPanel {
             })
         }
         .width('100%')
-        .padding({ left: 16, right: 16 })
+        .height(SIGN_OUT_HEIGHT)
+        .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING })
       }
       .width('100%')
-      .height(SIGN_OUT_HEIGHT)
-      .padding(0)
-      .borderRadius(16)
-      .attributeModifier(new SurfaceModifier(this.materialThickness, true))
-      .backgroundColor($r('sys.color.comp_background_secondary'))
-      .onChange((): void => {
-        // 行本身不响应点击，开关自己处理（见上面那颗 Switch）。
-      })
 
-      Toggle({ type: ToggleType.Button, isOn: false }) {
+      Column() {
         Row({ space: 12 }) {
           Text($r('app.string.settings_proxy_saved'))
             .fontSize(16)
@@ -237,19 +230,15 @@ export struct SettingsPanel {
             })
         }
         .width('100%')
-        .padding({ left: 16, right: 8 })
+        .height(SIGN_OUT_HEIGHT)
+        .padding({ left: CARD_ROW_PADDING, right: 8 })
       }
       .width('100%')
-      .height(SIGN_OUT_HEIGHT)
-      .padding(0)
-      .borderRadius(16)
-      .attributeModifier(new SurfaceModifier(this.materialThickness, true))
-      .backgroundColor($r('sys.color.comp_background_secondary'))
-      .onChange((): void => {
-      })
     }
     .width('100%')
-    .bindSheet($$this.proxySheet, this.proxyAddSheet(), {
+    // 整块用本页统一的卡片边框包裹（需求：和其它设置项一样用 border，不用沉浸光感）。
+    .cardStyle()
+    .bindSheet($this.proxySheet, this.proxyAddSheet(), {
       height: SheetSize.MEDIUM,
       dragBar: false,
       showClose: true,
