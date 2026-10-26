@@ -880,48 +880,24 @@ struct ReelSlide {
       if (this.playing && this.reel.playable() && (this.userPaused || this.holdPaused)) {
         this.pauseButton()
       }
-    }
-    .width('100%')
-    .height('100%')
-    /*
-     * 按下那一刻把"长按吞单击"的记号清掉。
-     *
-     * 为什么需要：`longPressFired` 是给"长按抬手时系统还会补一次单击"用的。如果这一下长按
-     * 之后手指是**划走**的（长按成立后继续拖，tap 不会成立），那个记号就没人清 —— 于是
-     * 下一次真正的单击会被误吞（用户会报"点一下没反应，要再点一下"）。Down 一定是每一次
-     * 新手势的第一个事件，在这里清最稳。
-     */
-    .onTouch((event: TouchEvent): void => {
-      if (event.type === TouchType.Down) {
-        this.longPressFired = false;
-      }
-    })
-    // 量一次画面自己的宽度：拖动进度按"位移 ÷ 画面宽"换算比例（见 cardWidthVp）。
-    // 用布局量出来的值而不是"屏宽 − 32"：卡片宽度写的是 `calc(100% - 32vp)`，两者本该相同，
-    // 但真机上卡片还可能被 maxHeight 那一条约束反推窄一点，量到的才是真的。
-    .onAreaChange((oldArea: Area, newArea: Area): void => {
-      const width: number = typeof newArea.width === 'number' ? newArea.width as number : 0;
-      if (width > 0 && Math.abs(width - this.measuredWidthVp) > 0.5) {
-        this.measuredWidthVp = width;
-      }
-    })
-    /*
-     * 手势全挂在**画面这一层**（= 卡片内部，见类头）：需求第 1 条要求"起点落在视频画面内的
-     * 左右滑动 = 拖进度"，所以横滑手势必须只覆盖画面，不能覆盖左右 16vp 留白 ——
-     * 那里要留给外面 Tabs 的"左右滑切段"。
-     *
-     * 用 `GestureGroup(GestureMode.Parallel)` 装四条手势（单击 / 两条长按 / 横滑），原因见
-     * onVideoTap 的注释（串行会把单击排在长按后面，互斥又不保证 onActionEnd 一定来）。
-     *
-     * 为什么这里**不该**影响上下翻页：Swiper 的内建 PAN 是本组件的**祖先**，方向也限定在竖向；
-     * 这里的横滑用 `PanDirection.Horizontal`，竖向滑动根本不会让这条手势成立。
-     */
-    /*
-     * **用 parallelGesture 而不是 gesture**：画面是 `XComponent`（视频表面），它自己会消费
-     * 触摸事件；普通 `.gesture()` 挂在祖先节点上会被它截断 —— 真机表现就是"手势完全无效"。
-     * `parallelGesture` 允许与子节点的手势并行识别，单击/长按/横滑才收得到。
-     */
-    .parallelGesture(
+
+      /*
+       * **触摸命中层**（最后一张牌，也是唯一正确的位置）。
+       *
+       * 为什么必须在这里：画面本体是 `XComponent`（原生视频表面），它会**消费整条触摸流** ——
+       * 挂在它的祖先节点上的 `.gesture()` / `.parallelGesture()` 都收不到事件
+       * （真机实测：单击、长按、横滑全部无反应）。唯一稳定生效的位置是"压在它上面的一层节点"：
+       * 透明、默认命中模式，只有它收到手势后再转给下面那些方法。
+       *
+       * 为什么不会挡住下面的东西：这层只覆盖**卡片区域**，而且卡片里除了画面没有别的可点控件
+       * （暂停按钮自己挂了 `HitTestMode.None`、进度条同理），信息层/作者行/动作区都在
+       * 卡片之外的 `ReelOverlay` 里，层级更高、不受影响。
+       */
+      Column()
+        .width('100%')
+        .height('100%')
+        .backgroundColor(Color.Transparent)
+        .parallelGesture(
       GestureGroup(GestureMode.Parallel,
         // ① 单击 → 暂停 / 继续（需求第 3 条）。
         TapGesture({ count: 1, distanceThreshold: VIDEO_TAP_DISTANCE_VP })
@@ -966,6 +942,50 @@ struct ReelSlide {
           })
       )
     )
+    }
+    .width('100%')
+    .height('100%')
+    /*
+     * 按下那一刻把"长按吞单击"的记号清掉。
+     *
+     * 为什么需要：`longPressFired` 是给"长按抬手时系统还会补一次单击"用的。如果这一下长按
+     * 之后手指是**划走**的（长按成立后继续拖，tap 不会成立），那个记号就没人清 —— 于是
+     * 下一次真正的单击会被误吞（用户会报"点一下没反应，要再点一下"）。Down 一定是每一次
+     * 新手势的第一个事件，在这里清最稳。
+     */
+    .onTouch((event: TouchEvent): void => {
+      if (event.type === TouchType.Down) {
+        this.longPressFired = false;
+      }
+    })
+    // 量一次画面自己的宽度：拖动进度按"位移 ÷ 画面宽"换算比例（见 cardWidthVp）。
+    // 用布局量出来的值而不是"屏宽 − 32"：卡片宽度写的是 `calc(100% - 32vp)`，两者本该相同，
+    // 但真机上卡片还可能被 maxHeight 那一条约束反推窄一点，量到的才是真的。
+    .onAreaChange((oldArea: Area, newArea: Area): void => {
+      const width: number = typeof newArea.width === 'number' ? newArea.width as number : 0;
+      if (width > 0 && Math.abs(width - this.measuredWidthVp) > 0.5) {
+        this.measuredWidthVp = width;
+      }
+    })
+    /*
+     * 手势全挂在**画面这一层**（= 卡片内部，见类头）：需求第 1 条要求"起点落在视频画面内的
+     * 左右滑动 = 拖进度"，所以横滑手势必须只覆盖画面，不能覆盖左右 16vp 留白 ——
+     * 那里要留给外面 Tabs 的"左右滑切段"。
+     *
+     * 用 `GestureGroup(GestureMode.Parallel)` 装四条手势（单击 / 两条长按 / 横滑），原因见
+     * onVideoTap 的注释（串行会把单击排在长按后面，互斥又不保证 onActionEnd 一定来）。
+     *
+     * 为什么这里**不该**影响上下翻页：Swiper 的内建 PAN 是本组件的**祖先**，方向也限定在竖向；
+     * 这里的横滑用 `PanDirection.Horizontal`，竖向滑动根本不会让这条手势成立。
+     */
+    /*
+     * **用 parallelGesture 而不是 gesture**：画面是 `XComponent`（视频表面），它自己会消费
+     * 触摸事件；普通 `.gesture()` 挂在祖先节点上会被它截断 —— 真机表现就是"手势完全无效"。
+     * `parallelGesture` 允许与子节点的手势并行识别，单击/长按/横滑才收得到。
+     */
+    // 手势**不挂在根节点上**：画面是 XComponent，它会把触摸流吃掉，祖先上的
+    // 手势识别器收不到事件（真机实测：单击/长按/横滑全部无反应）。手势改挂到
+    // "画面最上层的一层透明命中层"上，见下面 overlayHitLayer()。
   }
 }
 
