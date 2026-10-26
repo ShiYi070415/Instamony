@@ -740,10 +740,13 @@ struct ReelSlide {
     if (paused) {
       return;
     }
-    if (this.lastPosMs > 0) {
-      // +1 保证值一定变化（@Watch 只在值变化时触发，seekMs 相同会被忽略）。
-      this.seekMs = this.lastPosMs + 1;
-    }
+    /*
+     * **什么也不做**（保留方法是因为两个 @Watch 还指向它）。
+     *
+     * 这里原本在恢复播放时把记住的位置塞回 seekMs，用来兜"播放器被重建"。
+     * 现在暂停只走 paused、播放器不再销毁（见 VideoSurface 的 playing/paused 拆分），
+     * 那次多余的 seek 反而让画面往前跳一帧，所以拆掉。
+     */
   }
 
   private onSeekCancel(): void {
