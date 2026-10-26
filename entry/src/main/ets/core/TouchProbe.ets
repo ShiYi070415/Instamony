@@ -12,7 +12,7 @@ import { fileIo } from '@kit.CoreFileKit';
 
 export class TouchProbe {
   /** 调试开关：排查完改成 false 即可全部停写。 */
-  static ON: boolean = true;
+  static ON: boolean = false;
   /** 文件行数上限（避免一直点把文件写爆）。 */
   private static lines: number = 0;
 
