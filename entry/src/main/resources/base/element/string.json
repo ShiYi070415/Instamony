@@ -940,5 +940,12 @@
     {"name": "settings_proxy_pass", "value": "密码"},
     {"name": "settings_proxy_apply", "value": "应用"},
     {"name": "settings_proxy_off", "value": "关闭代理"}
+,
+    {"name": "settings_proxy_enable", "value": "启用代理"},
+    {"name": "settings_proxy_saved", "value": "已保存的代理"},
+    {"name": "settings_proxy_none", "value": "暂无代理"},
+    {"name": "settings_proxy_add_title", "value": "添加代理"},
+    {"name": "settings_proxy_name", "value": "代理名称"},
+    {"name": "settings_proxy_add", "value": "添加"}
 ]
 }

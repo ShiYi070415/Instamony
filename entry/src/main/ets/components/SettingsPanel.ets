@@ -48,7 +48,7 @@ import {
 } from '../core/AppSettings';
 import { MATERIAL_PILL_HEIGHT, SelectSurfaceModifier, SurfaceModifier } from './MaterialSurface';
 // 应用级代理（设置页的数据与生效逻辑，见 core/AppProxy）。
-import { AppProxy, AppProxyConfig } from '../core/AppProxy';
+import { AppProxy, ProxyEntry } from '../core/AppProxy';
 import { PlatformCap } from '../core/PlatformCap';
 import { StoryDiag } from '../core/StoryDiag';
 import { StoryTray } from '../model/Story';
@@ -112,13 +112,16 @@ const MATERIAL_THICKNESS_ORDER: string[] = [
 
 @Component
 export struct SettingsPanel {
-  /** 代理设置：开关 + 四个输入（本地草稿，点 应用 才真正生效）。 */
+  /** 代理：总开关 / 已保存列表 / 当前选中 / 添加面板草稿。 */
   @State private proxyOn: boolean = false;
-  @State private proxyDraftHost: string = '';
-  @State private proxyDraftPort: string = '';
-  @State private proxyDraftUser: string = '';
-  @State private proxyDraftPass: string = '';
-  @State private proxyStatus: string = '';
+  @State private proxyNames: Array<string> = [];
+  @State private proxyActive: number = -1;
+  @State private proxySheet: boolean = false;
+  @State private draftName: string = '';
+  @State private draftHost: string = '';
+  @State private draftPort: string = '';
+  @State private draftUser: string = '';
+  @State private draftPass: string = '';
   /** 点「退出登录」。 */
   onSignOut: () => void = (): void => {
   };
@@ -166,121 +169,214 @@ export struct SettingsPanel {
    * 沙箱里的文件他们根本看不到 —— 必须由 App 自己把文件送到"能被分享出去"的地方。
    */
   /**
-   * **代理设置区**（需求：设置里加代理，参考 HarmonyX；保存即生效、不用重启）。
+   * **代理设置区**：
+   *   · 行 1：启用代理 + 开关（没有代理时打开会先触发添加）
+   *   · 行 2：已保存的代理 + 下拉（无数据 → "暂无代理"；选单最后固定「添加代理」，选项用别名）
+   *   · 半模态：代理名称 / 主机 / 端口 / 用户名 / 密码 + 「添加」，右上角关闭
    *
-   * 材质规范：输入框本身不是材质"生效范围"里的组件（官方只对 Toggle/Slider/Select/弹窗），
-   * 所以这一区里**用 Toggle 承载材质**做"应用"按钮与每行的底（和"退出登录"那颗同款写法），
-   * 输入框放在材质底之上、自己保持透明 —— 观感统一，又不假装输入框能带光源。
+   * 材质规范：官方材质的生效范围只有 Toggle / Slider / Select / 弹窗，所以**整行容器用
+   * Toggle(Button) 承载材质**（同"退出登录"那颗），下拉用 Select；输入框自身透明、垫中性底。
    */
   @Builder
   proxySection() {
     Column({ space: 10 }) {
-      Text($r('app.string.settings_proxy_title'))
+      Toggle({ type: ToggleType.Button, isOn: false }) {
+        Row() {
+          Text($r('app.string.settings_proxy_enable'))
+            .fontSize(16)
+            .fontColor($r('app.color.primary_text'))
+          Blank()
+          Toggle({ type: ToggleType.Switch, isOn: this.proxyOn })
+            .onChange((on: boolean): void => {
+              if (!on) {
+                this.proxyOn = false;
+                AppProxy.setEnabled(false);
+                return;
+              }
+              if (this.proxyNames.length === 0) {
+                this.openProxySheet();
+                return;
+              }
+              this.proxyOn = AppProxy.setEnabled(true);
+            })
+        }
+        .width('100%')
+        .padding({ left: 16, right: 16 })
+      }
+      .width('100%')
+      .height(SIGN_OUT_HEIGHT)
+      .padding(0)
+      .borderRadius(16)
+      .attributeModifier(new SurfaceModifier(this.materialThickness, true))
+      .backgroundColor($r('sys.color.comp_background_secondary'))
+      .onChange((): void => {
+        // 行本身不响应点击，开关自己处理（见上面那颗 Switch）。
+      })
+
+      Toggle({ type: ToggleType.Button, isOn: false }) {
+        Row({ space: 12 }) {
+          Text($r('app.string.settings_proxy_saved'))
+            .fontSize(16)
+            .fontColor($r('app.color.primary_text'))
+          Blank()
+          Select(this.proxyOptions())
+            .selected(this.proxyActive)
+            .value(this.proxyActive >= 0 && this.proxyActive < this.proxyNames.length
+              ? this.proxyNames[this.proxyActive]
+              : $r('app.string.settings_proxy_none'))
+            .font({ size: 14 })
+            .onSelect((index: number, value: string): void => {
+              if (index === this.proxyNames.length) {
+                // 选单最后固定是「添加代理」。
+                this.openProxySheet();
+                return;
+              }
+              if (AppProxy.select(index)) {
+                this.proxyActive = index;
+              }
+            })
+        }
+        .width('100%')
+        .padding({ left: 16, right: 8 })
+      }
+      .width('100%')
+      .height(SIGN_OUT_HEIGHT)
+      .padding(0)
+      .borderRadius(16)
+      .attributeModifier(new SurfaceModifier(this.materialThickness, true))
+      .backgroundColor($r('sys.color.comp_background_secondary'))
+      .onChange((): void => {
+      })
+    }
+    .width('100%')
+    .bindSheet($$this.proxySheet, this.proxyAddSheet(), {
+      height: SheetSize.MEDIUM,
+      dragBar: false,
+      showClose: true,
+      backgroundColor: Color.Transparent
+    })
+    .onAppear((): void => {
+      this.refreshProxyNames();
+    })
+  }
+
+  /** 下拉选项：别名 + 末尾固定的「添加代理」。 */
+  private proxyOptions(): Array<SelectOption> {
+    const out: Array<SelectOption> = [];
+    for (let i: number = 0; i < this.proxyNames.length; i++) {
+      const one: SelectOption = { value: this.proxyNames[i] };
+      out.push(one);
+    }
+    const addOne: SelectOption = { value: $r('app.string.settings_proxy_add') };
+    out.push(addOne);
+    return out;
+  }
+
+  private refreshProxyNames(): void {
+    const list: Array<ProxyEntry> = AppProxy.list();
+    const names: Array<string> = [];
+    for (let i: number = 0; i < list.length; i++) {
+      names.push(list[i].name.length > 0 ? list[i].name : list[i].summary());
+    }
+    this.proxyNames = names;
+    this.proxyActive = AppProxy.activeIndex();
+    this.proxyOn = AppProxy.enabled();
+  }
+
+  private openProxySheet(): void {
+    this.refreshProxyNames();
+    this.draftName = '';
+    this.draftHost = '';
+    this.draftPort = '';
+    this.draftUser = '';
+    this.draftPass = '';
+    this.proxySheet = true;
+  }
+
+  /** 半模态：添加代理（标题 + 右上角关闭 + 交叉排布的文本/输入 + 添加）。 */
+  @Builder
+  proxyAddSheet() {
+    Column({ space: 12 }) {
+      Text($r('app.string.settings_proxy_add_title'))
+        .fontSize(17)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.primary_text'))
+        .width('100%')
+        .textAlign(TextAlign.Start)
+
+      this.proxyInput($r('app.string.settings_proxy_name'), this.draftName, 'name')
+      this.proxyInput($r('app.string.settings_proxy_host'), this.draftHost, 'host')
+      this.proxyInput($r('app.string.settings_proxy_port'), this.draftPort, 'port')
+      this.proxyInput($r('app.string.settings_proxy_user'), this.draftUser, 'user')
+      this.proxyInput($r('app.string.settings_proxy_pass'), this.draftPass, 'pass')
+
+      Toggle({ type: ToggleType.Button, isOn: false }) {
+        Text($r('app.string.settings_proxy_add'))
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.accent'))
+      }
+      .width('100%')
+      .height(SIGN_OUT_HEIGHT)
+      .padding(0)
+      .borderRadius(SIGN_OUT_RADIUS)
+      .attributeModifier(new SurfaceModifier(this.materialThickness, true))
+      .backgroundColor($r('sys.color.comp_background_secondary'))
+      .onChange((): void => {
+        this.submitProxy();
+      })
+    }
+    .width('100%')
+    .padding({ left: 16, right: 16, top: 16, bottom: 20 })
+  }
+
+  /** 一行输入：标题在上、输入框在下（"文本 / 输入框"交叉排布）。 */
+  @Builder
+  proxyInput(label: ResourceStr, value: string, which: string) {
+    Column({ space: 6 }) {
+      Text(label)
         .fontSize(13)
         .fontColor($r('app.color.secondary_text'))
         .width('100%')
-
-      // 开关：承载材质的一行。
-      Toggle({ type: ToggleType.Switch, isOn: this.proxyOn })
-        .width('100%')
-        .height(SIGN_OUT_HEIGHT)
-        .attributeModifier(new SurfaceModifier(this.materialThickness, true))
-        .onChange((on: boolean): void => {
-          this.proxyOn = on;
-        })
-
-      if (this.proxyOn) {
-        this.proxyField($r('app.string.settings_proxy_host'), this.proxyDraftHost, 'host')
-        this.proxyField($r('app.string.settings_proxy_port'), this.proxyDraftPort, 'port')
-        this.proxyField($r('app.string.settings_proxy_user'), this.proxyDraftUser, 'user')
-        this.proxyField($r('app.string.settings_proxy_pass'), this.proxyDraftPass, 'pass')
-
-        // 应用：Toggle 承载材质（点击即调 AppProxy.save，立即生效）。
-        Toggle({ type: ToggleType.Button, isOn: false }) {
-          Text($r('app.string.settings_proxy_apply'))
-            .fontSize(15)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.accent'))
-        }
-        .width('100%')
-        .height(SIGN_OUT_HEIGHT)
-        .padding(0)
-        .borderRadius(SIGN_OUT_RADIUS)
-        .attributeModifier(new SurfaceModifier(this.materialThickness, true))
-        .backgroundColor($r('sys.color.comp_background_secondary'))
-        .onChange((): void => {
-          this.applyProxy();
-        })
-
-        Toggle({ type: ToggleType.Button, isOn: false }) {
-          Text($r('app.string.settings_proxy_off'))
-            .fontSize(15)
-            .fontColor($r('app.color.secondary_text'))
-        }
-        .width('100%')
-        .height(SIGN_OUT_HEIGHT)
-        .padding(0)
-        .borderRadius(SIGN_OUT_RADIUS)
-        .attributeModifier(new SurfaceModifier(this.materialThickness, true))
-        .backgroundColor($r('sys.color.comp_background_secondary'))
-        .onChange((): void => {
-          this.proxyOn = false;
-          AppProxy.disable();
-          this.proxyStatus = AppProxy.config().summary();
-        })
-      }
-
-      if (this.proxyStatus.length > 0) {
-        Text(this.proxyStatus)
-          .fontSize(12)
-          .fontColor($r('app.color.secondary_text'))
-          .width('100%')
-      }
-    }
-    .width('100%')
-  }
-
-  /** 一行输入：标签 + TextInput（透明底，靠外层留白对齐）。 */
-  @Builder
-  proxyField(label: ResourceStr, value: string, which: string) {
-    Row({ space: 8 }) {
-      Text(label)
-        .fontSize(14)
-        .fontColor($r('app.color.primary_text'))
-        .width(84)
+        .textAlign(TextAlign.Start)
       TextInput({ text: value })
-        .layoutWeight(1)
-        .height(40)
-        .fontSize(14)
-        .backgroundColor(Color.Transparent)
+        .width('100%')
+        .height(42)
+        .fontSize(15)
+        .borderRadius(12)
+        .backgroundColor($r('sys.color.comp_background_secondary'))
         .onChange((text: string): void => {
-          if (which === 'host') {
-            this.proxyDraftHost = text;
+          if (which === 'name') {
+            this.draftName = text;
+          } else if (which === 'host') {
+            this.draftHost = text;
           } else if (which === 'port') {
-            this.proxyDraftPort = text;
+            this.draftPort = text;
           } else if (which === 'user') {
-            this.proxyDraftUser = text;
+            this.draftUser = text;
           } else {
-            this.proxyDraftPass = text;
+            this.draftPass = text;
           }
         })
     }
     .width('100%')
-    .padding({ left: 12, right: 12 })
-    .borderRadius(12)
-    .backgroundColor($r('sys.color.comp_background_secondary'))
   }
 
-  /** 把草稿落到 AppProxy（保存即生效，不需要重启）。 */
-  private applyProxy(): void {
-    const config: AppProxyConfig = new AppProxyConfig();
-    config.host = this.proxyDraftHost.trim();
-    const port: number = Number.parseInt(this.proxyDraftPort.trim(), 10);
-    config.port = Number.isNaN(port) ? 0 : port;
-    config.username = this.proxyDraftUser.trim();
-    config.password = this.proxyDraftPass;
-    const ok: boolean = AppProxy.save(config);
-    this.proxyStatus = ok ? AppProxy.config().summary() : '应用失败（地址或端口不合法）';
+  /** 添加：入库并打开总开关（保存即生效，不需要重启 App）。 */
+  private submitProxy(): void {
+    const entry: ProxyEntry = new ProxyEntry();
+    entry.name = this.draftName.trim().length > 0 ? this.draftName.trim() : this.draftHost.trim();
+    entry.host = this.draftHost.trim();
+    const port: number = Number.parseInt(this.draftPort.trim(), 10);
+    entry.port = Number.isNaN(port) ? 0 : port;
+    entry.username = this.draftUser.trim();
+    entry.password = this.draftPass;
+    if (!AppProxy.add(entry)) {
+      return;
+    }
+    this.proxySheet = false;
+    this.refreshProxyNames();
+    this.proxyOn = AppProxy.setEnabled(true);
   }
   @Builder
   actionRow(label: ResourceStr, action: () => void) {
@@ -948,6 +1044,12 @@ export struct SettingsPanel {
       ListItem() {
         this.groupHeader($r('app.string.settings_group_diag'))
       }
+      // 代理：放在**诊断模块上方**（需求）。
+      ListItem() {
+        this.proxySection()
+      }
+      .padding({ left: PAGE_PADDING, right: PAGE_PADDING, top: 20, bottom: 8 })
+
       ListItem() {
         Column({ space: 0 }) {
           this.actionRow($r('app.string.settings_export_diag'), (): void => {
@@ -1005,11 +1107,6 @@ export struct SettingsPanel {
       // 不生效 —— 官方「生效范围」那条限制里，全页面只有弹窗类组件/接口与 Slider、Toggle、Select；
       // 所以这颗按钮改成 **Toggle 承载材质**（`ToggleType.Button` 可以带子组件），
       // 交互形变与光源效果随之在设置页也能用上，和全 app 其它按钮一致（见 MaterialSurface）。
-      ListItem() {
-        this.proxySection()
-      }
-      .padding({ left: PAGE_PADDING, right: PAGE_PADDING, top: 20 })
-
       ListItem() {
         Toggle({ type: ToggleType.Button, isOn: false }) {
           Text($r('app.string.sign_out'))
