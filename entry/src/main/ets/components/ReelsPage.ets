@@ -299,6 +299,8 @@ struct ReelSlide {
    * 单独一路传进来，只影响"播不播"，不影响"挂不挂"。
    */
   @Prop hostPaused: boolean = false;
+  /** 宿主层面的 2 倍速（长按左右两侧，见 ReelPage.pageHoldStart）。 */
+  @Prop hostSpeed: boolean = false;
   /** 静音（全局开关）。 */
   @Prop muted: boolean = false;
   /**
@@ -860,7 +862,7 @@ struct ReelSlide {
             preload: this.preload,
             muted: this.muted,
             // 长按左右两侧时 2 倍速，松手回 1 倍速（见 VideoSurface.speed，失败静默降级）。
-            speed: this.speedBoost ? SPEED_2X : 1,
+            speed: (this.speedBoost || this.hostSpeed) ? SPEED_2X : 1,
             // 拖动进度条松手那一下写进来（见 onSeekEnd）。
             seekMs: this.seekMs,
             // 盒子比例已经等于视频比例，所以用 FIT（完整显示）就正好铺满这个盒子；
@@ -924,7 +926,7 @@ struct ReelSlide {
         .padding({ left: PROGRESS_SIDE_PAD, right: PROGRESS_SIDE_PAD })
 
         // 2 倍速胶囊：只在长按侧边期间出现（出现/消失淡入淡出 ~150ms）。
-        if (this.speedBoost) {
+        if (this.speedBoost || this.hostSpeed) {
           this.speedPill()
         }
       }
@@ -1981,6 +1983,10 @@ export struct ReelsPage {
   @State private burst: LikeBurstState = new LikeBurstState();
   /** 用户手动暂停（单击画面切换，见 scheduleSingleTap）。 */
   @State private pagePaused: boolean = false;
+  /** 长按（中间）：暂停 + 隐藏全局控件，松手恢复（见 pageHoldStart/End）。 */
+  @State private pageHold: boolean = false;
+  /** 长按（左右两侧）：2 倍速，松手恢复（见 pageHoldStart/End）。 */
+  @State private pageSpeed: boolean = false;
   /** 单击延迟执行的句柄（-1 = 没有）。 */
   private singleTapTimer: number = -1;
 
@@ -2453,7 +2459,8 @@ export struct ReelsPage {
           reel: reel,
           segment: this.segment,
           playing: index === this.activeIndex && !this.frozenAll,
-          hostPaused: this.pagePaused,
+          hostPaused: this.pagePaused || this.pageHold,
+          hostSpeed: this.pageSpeed,
           // 预加载下一条：一直开着（原先按网络开关过，实测会影响切换观感；
           // 播放器的预下载缓冲已经收到 2 秒，这一项的开销有界）。
           preload: index === this.activeIndex + 1,
@@ -2687,11 +2694,24 @@ export struct ReelsPage {
             /* 单击 → 暂停/继续（需求第 3 条）。挂在这一层是因为双击点赞就挂在这里、真机验证可用；
              * 卡片内部（含压在 XComponent 上的命中层）收不到事件。延迟一个双击窗口再执行，
              * 否则双击会顺带把播放暂停掉（见 scheduleSingleTap）。 */
-            TapGesture({ count: 1 })
-              .onAction((): void => {
-                this.scheduleSingleTap();
-              })
-          ))
+      TapGesture({ count: 1 })
+        .onAction((): void => {
+          this.scheduleSingleTap();
+        }),
+      /**
+       * **长按**：中间 = 暂停 + 隐藏控件，左右两侧 = 2 倍速（分域在 pageHoldStart 里按坐标判）。
+       */
+      LongPressGesture({ repeat: false, duration: LONG_PRESS_CENTER_MS })
+        .onAction((event: GestureEvent): void => {
+          this.pageHoldStart(event);
+        })
+        .onActionEnd((): void => {
+          this.pageHoldEnd();
+        })
+        .onActionCancel((): void => {
+          this.pageHoldEnd();
+        })
+    ))
   }
 
   /**
@@ -2702,6 +2722,39 @@ export struct ReelsPage {
   /**
    * 单击 → 暂停/继续；**延迟一个双击窗口**再执行，见到第二下就作废（那是双击点赞）。
    */
+  /**
+   * **长按**（需求第 5、6 条）：按按下的横坐标分两侧/中间。
+   *   · 左右两侧各 30% → 2 倍速（松手回 1 倍速）；
+   *   · 中间 40% → 暂停 + 隐藏全局控件（松手恢复）。
+   * 用一次长按 + 坐标判分域，而不是两条长按进并行组：并行组里两条都会成立，
+   * 还得再写一套"谁优先"的排他逻辑，反而更容易出错。
+   */
+  private pageHoldStart(event: GestureEvent): void {
+    const fingers: Array<FingerInfo> = event.fingerList;
+    const x: number = fingers.length > 0 ? fingers[0].globalX : -1;
+    const width: number = this.screenWidthVp;
+    const side: boolean = x >= 0 && width > 0 && (x < width * 0.3 || x > width * 0.7);
+    if (side) {
+      this.pageSpeed = true;
+      return;
+    }
+    this.pageHold = true;
+    AppStorage.setOrCreate(REELS_CHROME_HIDDEN, true);
+  }
+
+  /** 长按松手：只做恢复，不额外切播放（原来在播就继续播）。 */
+  private pageHoldEnd(): void {
+    if (this.pageSpeed) {
+      this.pageSpeed = false;
+      return;
+    }
+    if (!this.pageHold) {
+      return;
+    }
+    this.pageHold = false;
+    AppStorage.setOrCreate(REELS_CHROME_HIDDEN, false);
+  }
+
   private scheduleSingleTap(): void {
     if (this.singleTapTimer >= 0) {
       clearTimeout(this.singleTapTimer);
