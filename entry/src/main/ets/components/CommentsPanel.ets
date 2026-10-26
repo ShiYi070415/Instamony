@@ -24,6 +24,8 @@ import { display } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS } from '../core/AppSettings';
 import { SurfaceModifier } from './MaterialSurface';
+// 全局富文本：评论里的 @用户 / #话题 变蓝标可点（见 components/RichText）。
+import { RichTextView } from './RichText';
 import { PostCardPanel } from './PostCardPanel';
 import { TranslateLabel } from './TranslateLabel';
 import { Translator } from '../core/Translator';
@@ -263,6 +265,12 @@ export struct CommentsPanel {
    * 一眼就能看出是「没等到请求」还是「拿到了但结构不认」。
    */
   @Prop diag: string = '';
+  /** 点评论里的 @用户：交给宿主开主页（见 components/RichText）。 */
+  onMentionTap: (username: string) => void = (username: string): void => {
+  };
+  /** 点评论里的 #话题：交给宿主跳搜索。 */
+  onHashtagTap: (tag: string) => void = (tag: string): void => {
+  };
   /**
    * **从页面那条输入框带过来的草稿**（reels 页底部那条）。面板里的输入框用它初始化，
    * 用户在页面里写了字点「评论」，内容不会丢（见 CommentInputBar.initialDraft）。
@@ -690,11 +698,16 @@ export struct CommentsPanel {
         // ② 正文（没有正文又没贴图的图片评论给一句灰字交代，见 photoHint）。
         //    「翻译」跟在正文后面（需求：评论"回复"文本旁那颗，见下面 ④）；显示了译文就用译文。
         if (body.length > 0) {
-          Text(this.isTranslationShown(body) ? this.translatedBody(body) : body)
-            .fontSize(14)
-            .lineHeight(19)
-            .fontColor($r('app.color.primary_text'))
-            .textAlign(TextAlign.Start)
+          RichTextView({
+          text: this.isTranslationShown(body) ? this.translatedBody(body) : body,
+          fontSize: 14,
+          onMention: (name: string): void => {
+            this.onMentionTap(name);
+          },
+          onHashtag: (tag: string): void => {
+            this.onHashtagTap(tag);
+          }
+        })
             .width('100%')
         } else if (imageUrl.length === 0 && this.photoHint.length > 0) {
           Text(this.photoHint)

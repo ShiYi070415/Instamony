@@ -4420,6 +4420,22 @@ struct Index {
    * @param userId   目标用户的数字 id（头部/视频/被提及那三条查询用它；拿不到时头部就不发，
    *                 不会把我自己的资料画上去，见 ProfileViewModel.loadHeader）。
    */
+  /**
+   * 点 #话题：**直接跳到搜索页并以该 tag 为关键词搜索**（需求）。
+   *
+   * 复用搜索页现成的那条路：先切到搜索 tab（selectTab 会同步可见性闸门），
+   * 再把关键词交给视图模型（它会走和手动搜索完全一样的取数链路）。
+   */
+  private openHashtagSearch(tag: string): void {
+    const keyword: string = tag.trim();
+    if (keyword.length === 0) {
+      return;
+    }
+    hilog.info(DOMAIN, TAG, 'hashtag search #%{public}s', keyword);
+    this.selectTab(AppTab.Search);
+    this.searchVm.search(keyword);
+  }
+
   private openUserProfile(username: string, userId: string): void {
     const name: string = username.trim();
     if (name.length === 0) {
@@ -11771,6 +11787,13 @@ struct Index {
       Column() {
         // 评论详情面板（占满输入条以上的空间）。
         CommentsPanel({
+        // 评论里的 @用户 / #话题：@ → 开主页；# → 直接去搜索页搜这个 tag。
+        onMentionTap: (name: string): void => {
+          this.openUserProfile(name, '');
+        },
+        onHashtagTap: (tag: string): void => {
+          this.openHashtagSearch(tag);
+        },
           comments: this.comments,
           loading: this.commentsLoading,
           loadingMore: this.commentsLoadingMore,
