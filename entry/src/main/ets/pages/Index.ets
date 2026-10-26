@@ -10295,6 +10295,17 @@ struct Index {
                         loadMore: () => Promise<ProfileStreamPage>): void => {
             this.openProfileReels(posts, shortcode, hasMore, loadMore);
           },
+          /*
+           * **别人主页的精选快拍也要能点开**（需求：和"我的"页面一样）。
+           *
+           * 这里不能漏：组件内部给每颗高光都挂好了 onClick，回调没接时它落在默认空实现上，
+           * 表现就是"高光画出来了、点下去没反应"。用的是和本人主页同一个入口
+           * （openProfileHighlight：同一套转场、高光之间可连续浏览）。
+           */
+          onOpenHighlight: (items: Array<ProfileHighlight>, index: number, rect: StoryHeroRect,
+                            rects: Map<string, StoryHeroRect>): void => {
+            this.openProfileHighlight(items, index, rect, rects);
+          },
           // 别人主页那一行的「关注 / 已关注」（需求：显示状态 + 支持关注、取关）。
           onFollowUser: (id: string, username: string, follow: boolean): Promise<boolean> => {
             return this.followUser(id, username, follow);
