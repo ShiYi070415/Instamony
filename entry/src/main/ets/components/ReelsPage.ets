@@ -2746,7 +2746,7 @@ export struct ReelsPage {
     .width('100%')
     .height('100%')
     .backgroundColor(Color.Black)
-    .parallelGesture(GestureGroup(GestureMode.Parallel,
+    .gesture(GestureGroup(GestureMode.Parallel,
       
       // distanceThreshold 同信息流：不设的话默认"手指没划出组件就算一次点击"，
       // 快速上下滑两下会被凑成一次双击、直接点赞（见 FeedList 的 LIKE_TAP_DISTANCE_VP）。
@@ -2761,7 +2761,7 @@ export struct ReelsPage {
             /* 单击 → 暂停/继续（需求第 3 条）。挂在这一层是因为双击点赞就挂在这里、真机验证可用；
              * 卡片内部（含压在 XComponent 上的命中层）收不到事件。延迟一个双击窗口再执行，
              * 否则双击会顺带把播放暂停掉（见 scheduleSingleTap）。 */
-      TapGesture({ count: 1 })
+      TapGesture({ count: 1, distanceThreshold: DOUBLE_TAP_DISTANCE_VP })
         .onAction((): void => {
           this.scheduleSingleTap();
         }),
