@@ -22,6 +22,14 @@ export struct TranslateLabel {
   @Prop showing: boolean = false;
   /** 字号（跟各个位置自己的小字对齐：评论/时间 12、正文 13…）。 */
   @Prop fontSize: number = 12;
+  /**
+   * 左内边距（vp，默认 6 = 原来那颗"指头热区"）。
+   *
+   * 为什么要能改：它默认是**紧跟在时间后面**排的（那颗内边距正好是"时间与翻译之间的间隙"），
+   * 但在"左对齐的卡片"里（见 components/PostCardPanel）它必须和正文/时间同一条左边界，
+   * 传 0 就能把文字自己对到左边界上（右/上下那点内边距保留，热区不至于缩没）。
+   */
+  @Prop padLeft: number = 6;
   /** 点击：`showTranslated` = 点完之后该显示译文吗。 */
   onToggle: (showTranslated: boolean) => void = (showTranslated: boolean): void => {
   };
@@ -35,7 +43,7 @@ export struct TranslateLabel {
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.secondary_text'))
         // 点它是"切换"，不是"跳转"：给点内边距让手指好按，但别把行高撑起来。
-        .padding({ left: 6, right: 2, top: 2, bottom: 2 })
+        .padding({ left: this.padLeft, right: 2, top: 2, bottom: 2 })
         .onClick((): void => {
           this.onToggle(!this.showing);
         })

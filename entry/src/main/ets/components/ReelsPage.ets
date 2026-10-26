@@ -29,7 +29,7 @@ import { SaveState } from '../core/SaveState';
 import { NativeFollow } from '../core/NativeFollow';
 import { LikeBurst, LikeBurstState, playLikeBurst } from './AnimatedIcons';
 import {
-  CAPTION_LESS, CAPTION_MORE, CAPTION_TAIL_SAFETY_VP, CaptionFit
+  CAPTION_TAIL_SAFETY_VP, CaptionFit
 } from '../core/CaptionFit';
 
 /** 打日志用的域 / tag（切页动画时长这类关键数字都从这里看）。 */
@@ -74,6 +74,14 @@ const CAPTION_LINE_HEIGHT: number = 19;
  */
 const CAPTION_MAX_LINES: number = 1;
 /**
+ * 折叠态正文**结尾那颗省略号**（需求："折叠态正文 = 第一行内容裁掉尾部空白，然后接 ' ...'"）。
+ *
+ * 它**不再是"展开"的入口**（展开/收起那一套已经整块删掉）：Reels 正文不再有展开态，
+ * 点它和点正文一样 —— 打开这张帖子的卡片面板（见 ReelOverlay.onOpenPostCard）。
+ * 为什么连短正文也画：它现在表达的是"这里还有一张帖子卡片可以看"，不是"字被截断了"。
+ */
+const CAPTION_TAIL: string = ' ...';
+/**
  * **压在画面上的文字阴影**（正文 / 动作区计数共用）。
  *
  * 为什么用阴影而不是反色：反色要靠采样画面亮度（`componentSnapshot` 拍不到视频表面，
@@ -101,9 +109,6 @@ const ACTION_RIGHT_PADDING: number = 4;
 const DOUBLE_TAP_DISTANCE_VP: number = 12;
 /** 放大爱心的 key：整页只有一个爱心节点，用一个常量即可（见 build 里的 LikeBurst）。 */
 const REELS_BURST_KEY: string = 'reels';
-/** 正文展开/收起的过渡时长与位移（毫秒 / vp）。 */
-const CAPTION_ANIM_MS: number = 220;
-const CAPTION_SLIDE_VP: number = 6;
 /** 点赞/转发的"处理中"最长锁多久（毫秒）：宿主拖太久也不能让按钮一直点不动。 */
 const ACTION_BUSY_MAX_MS: number = 12000;
 
@@ -348,8 +353,6 @@ struct ReelOverlay {
   @StorageLink(FOLLOW_VERSION_KEY) @Watch('onFollowVersion') followVersion: number = 0;
   /** 这一条的作者我关注了没有。 */
   @State private following: boolean = false;
-  /** 正文**展开着没有**（需求：超过一行折叠，展开后文末显示" 收起"）。 */
-  @State private captionExpanded: boolean = false;
   /** 按**文本**缓存的折叠前缀（见 prefixOfText）。 */
   private textFits: Map<string, string> = new Map<string, string>();
   /** 关注 / 点赞 / 转发正在请求中（防连点）。 */
@@ -393,6 +396,15 @@ struct ReelOverlay {
   };
   /** 点评论：打开这一条的评论（宿主实现，老路径是原生评论面板）。 */
   onComments: (reel: Reel) => void = (reel: Reel): void => {
+  };
+  /**
+   * 点**正文**（含结尾的省略号）：打开这一条的**帖子卡片面板**（需求：卡片抽成独立面板，
+   * 只在点正文时出现，见 components/PostCardPanel）。
+   *
+   * 和 `onComments` **分流成两个回调**：这条路上不再有"展开正文"，也不再开评论 ——
+   * 评论只由动作区那颗气泡进（宿主那边分别接到 pages/Index 的两个浮层）。
+   */
+  onOpenPostCard: (reel: Reel) => void = (reel: Reel): void => {
   };
   /** 转发给好友 / 更多：这一版宿主只弹一句"还没接入"。 */
   onShare: (reel: Reel) => void = (reel: Reel): void => {
@@ -488,19 +500,17 @@ struct ReelOverlay {
   }
 
   /**
-   * 正文的**折叠前缀**（超过一行就截断，尾巴上留出" ... 展开"的位置，见 core/CaptionFit）。
+   * 折叠态的**第一行内容**（需求："折叠态正文 = 第一行内容裁掉尾部空白，然后接 ' ...'"）。
    *
-   * 和 `prefixOfText` 是同一套算法、同一份缓存：正文的前缀本来就是"这段原文按一行量出来的前缀"。
-   * 以前另按 shortcode 存一份，是因为译文那条路（已删）要按"任意文本"量行 —— 两种缓存现在完全
-   * 重合，留一份即可（按文本缓存，切条来回也不重量）。
+   * 两步：
+   *   ① 按"一行 + 结尾的 `CAPTION_TAIL`"量出最长前缀（见 core/CaptionFit 的 `more` 参数）——
+   *      量的时候就把省略号的宽度算进去了，所以接上去之后仍然是一行；
+   *   ② 裁掉尾部空白（免得出现"正文␣ ..."这种双空格），末尾那颗省略号由调用方单独画（要灰色）。
+   *
+   * 前缀**按文本缓存**（见 prefixOfText）：切条来回不重复量（`measureTextSize` 是同步 IPC）。
    */
-  private captionPrefix(): string {
-    return this.prefixOfText(this.reel.caption);
-  }
-
-  /** 这条的正文被截断了吗（截断了才画" ... 展开"、才响应展开点击）。 */
-  private captionTruncated(): boolean {
-    return this.textTruncated(this.reel.caption);
+  private captionLine(): string {
+    return this.prefixOfText(this.reel.caption).replace(/[\s\u3000]+$/, '');
   }
 
   /**
@@ -508,8 +518,8 @@ struct ReelOverlay {
    *
    * 左边只有 `SIDE_PADDING` 一处留白，右边还要给动作栏让出整栏宽度（见 ReelOverlay.build 里
    * 资讯层的 `padding.right`）—— 量的时候不扣这一截，量出来的前缀就比实际能放的长，
-   * 一行正文会被 `maxLines` 再切一道省略号，和结尾的" ... 展开"接不上（收成一行之后这点更明显）。
-   * 末尾再减 `CAPTION_TAIL_SAFETY_VP`，免得提示正好卡在行尾被裁。
+   * 一行正文会被 `maxLines` 再切一道省略号，和结尾的" ..."接不上。
+   * 末尾再减 `CAPTION_TAIL_SAFETY_VP`，免得省略号正好卡在行尾被裁。
    */
   private captionAvailVp(): number {
     return this.screenWidthVp - SIDE_PADDING - ACTION_COLUMN_WIDTH - CAPTION_TAIL_SAFETY_VP;
@@ -518,8 +528,8 @@ struct ReelOverlay {
   /**
    * **任意文本**的折叠前缀（按文本本身缓存）。
    *
-   * 参数里带 `CAPTION_MAX_LINES`（= 1，这一页收成一行，见那个常量的说明）；宽度用
-   * `captionAvailVp()`，和真正渲染出来的那一行等宽。
+   * 参数里带 `CAPTION_MAX_LINES`（= 1，这一页收成一行，见那个常量的说明）与 `CAPTION_TAIL`
+   * （量的时候把结尾省略号算进宽度）；宽度用 `captionAvailVp()`，和真正渲染出来的那一行等宽。
    */
   private prefixOfText(text: string): string {
     if (text.length === 0) {
@@ -531,15 +541,11 @@ struct ReelOverlay {
     }
     const availVp: number = this.captionAvailVp();
     const prefix: string = availVp > 0
-      ? CaptionFit.prefix(this.getUIContext(), text, availVp, CAPTION_FONT_SIZE, CAPTION_MAX_LINES)
+      ? CaptionFit.prefix(this.getUIContext(), text, availVp, CAPTION_FONT_SIZE, CAPTION_MAX_LINES,
+        CAPTION_TAIL)
       : text;
     this.textFits.set(text, prefix);
     return prefix;
-  }
-
-  /** 这段文本放不放进两行（放不下才给" ... 展开"、才响应点击）。 */
-  private textTruncated(text: string): boolean {
-    return text.length > 0 && this.prefixOfText(text) !== text;
   }
 
   /** 计数文案：上万折成"x.x万"（和「我的」页那份一致，免得两处写法不一样）。 */
@@ -806,109 +812,64 @@ struct ReelOverlay {
 
   /**
    * **正文**（需求："在用户资讯组件下方显示正文，不需要叠加背景，结构采用 feeds 的正文部分，
-   * **限制到一行**、以 ' ... 展开' 显示，展开后显示 ' 收起'"）。
+   * **限制到一行**"）。
    *
    * 不叠任何材质/底色：直接白字压在画面上（和 IG 一致）；折叠判据与信息流那份**同一套**
    * （见 core/CaptionFit），只有折叠行数这一页收成一行（见 CAPTION_MAX_LINES）。
    *
-   * **点击归属**（"点正文开评论"与"… 展开管展开"这两件事要同时成立）：
-   *   · 结尾那颗「 ... 展开 / 收起」是**独立节点**，点它只做展开/收起；
-   *   · 其余正文区域点击 = 开这一条的评论（走宿主已有的 `onComments`，与右侧动作区那颗
-   *     气泡完全同一条路，见 pages/Index.openReelComments）。
-   * 为什么拆成兄弟节点而不是用一个 Text + Span 判位置：ArkUI 的 `Span` **没有自己的点击事件**
-   * （挂在 Text 上就整段只有一个回调），那样只能二选一 —— 要么吃掉"点正文开评论"，要么吃掉
-   * 展开。拆开之后两件事各归各的节点，手势不会互相抢。宽度上也不打架：`captionPrefix()` 量
-   * 前缀时就把「 ... 展开」的宽度算进去了（见 CaptionFit），正文占 `layoutWeight`、提示条自己
-   * 按文字宽度排，正好落在同一行的右端（需求："… 展开也要在这一行里"）。
+   * **只有一种形态了**（需求："不要再出现'… 展开'这种展开入口"）：一行正文 + 结尾的 `" ..."`。
+   * 展开/收起那一整套（`captionExpanded`、`toggleCaption`、两态节点的 transition）**已经删掉** ——
+   * Reels 正文不再有展开态，看全文是"点开帖子卡片面板"那件事（见 PostCardPanel）。
    *
-   * **展开/收起带动画**（需求："给 reels 页的文本展开添加动画"）：折行是 `maxLines` 控制的，
-   * 而 `maxLines` 不可补间，所以走"两态节点 + 过渡"：切换包在 `animateTo` 里，
-   * 两个分支各自挂 `.transition`（淡入 + 轻微上移），观感是"正文长出来/收回去"，
-   * 而不是硬切一下。
+   * **点击归属**：整块（正文 + 结尾省略号）**只有一个 Text 节点、一个 onClick** —— 点哪里
+   * 都打开卡片面板。为什么不再拆"正文 / 省略号"两个兄弟节点：那两颗之前是为了让"点正文开评论"
+   * 和"点省略号展开"各归各的；现在两件事并成了一件（都开卡片），拆开反而要维护两份命中区域。
+   * `Span` 没有自己的命中区域也无所谓 —— 两段都在同一颗 Text 里，手势覆盖整段文字。
+   *
+   * 手势冲突：这颗 Text 只吃"点"（Click），竖向滑动仍由外层 Swiper 的 Pan 手势裁决 ——
+   * 手指一移动，Click 自动作废，翻页照旧（信息层整体 `hitTestBehavior(Transparent)`，见 build）。
    */
   @Builder
   captionBlock() {
-    if (this.reel.caption.length > 0) {
-      if (this.captionExpanded) {
-        /*
-         * 展开态：全文 + 结尾灰色的" 收起"。行数不设限 —— 展开就是为了看全。
-         * 展开之后正文是多行的，硬把" 收起"塞在同一行会落成"右侧悬着一颗字"，
-         * 所以让它另起一行、左对齐贴着正文末行（一眼能看出这是收起的入口）。
-         */
-        Column({ space: 2 }) {
-          Text(this.reel.caption)
-            .fontSize(CAPTION_FONT_SIZE)
-            .lineHeight(CAPTION_LINE_HEIGHT)
-            .textShadow(OVERLAY_TEXT_SHADOW)
-            .fontColor(Color.White)
-            .width('100%')
-            .textAlign(TextAlign.Start)
-            .onClick((): void => {
-              this.openComments();
-            })
-          Text(CAPTION_LESS)
-            .fontSize(CAPTION_FONT_SIZE)
-            .lineHeight(CAPTION_LINE_HEIGHT)
-            .textShadow(OVERLAY_TEXT_SHADOW)
-            .fontColor('#BFBFBF')
-            .onClick((): void => {
-              this.toggleCaption();
-            })
-        }
-        .width('100%')
-        .alignItems(HorizontalAlign.Start)
-        .transition(TransitionEffect.opacity(0).combine(
-          TransitionEffect.translate({ y: CAPTION_SLIDE_VP })))
-      } else {
-        // 折叠态：**一行**正文 + 同一行右端灰色的" ... 展开"（见 CAPTION_MAX_LINES）。
-        Row({ space: 0 }) {
-          Text(this.captionPrefix())
-            .fontSize(CAPTION_FONT_SIZE)
-            .lineHeight(CAPTION_LINE_HEIGHT)
-            .textShadow(OVERLAY_TEXT_SHADOW)
-            .fontColor(Color.White)
-            .maxLines(CAPTION_MAX_LINES)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .layoutWeight(1)
-            .textAlign(TextAlign.Start)
-            .onClick((): void => {
-              this.openComments();
-            })
-          if (this.captionTruncated()) {
-            Text(CAPTION_MORE)
-              .fontSize(CAPTION_FONT_SIZE)
-              .lineHeight(CAPTION_LINE_HEIGHT)
-              .textShadow(OVERLAY_TEXT_SHADOW)
-              .fontColor('#BFBFBF')
-              .maxLines(1)
-              .onClick((): void => {
-                this.toggleCaption();
-              })
-          }
-        }
-        .width('100%')
-        .alignItems(VerticalAlign.Center)
-        .transition(TransitionEffect.opacity(0).combine(
-          TransitionEffect.translate({ y: -CAPTION_SLIDE_VP })))
+    if (this.reel.caption.length > 0 && this.captionLine().length > 0) {
+      /*
+       * 一个 Text 装两段：正文（白）+ 结尾省略号（灰）。
+       *
+       * 为什么这样还是"点哪里都进卡片"：**Span 没有自己的 onClick**（挂在 Text 上整段只有一个
+       * 回调），所以整颗 Text 才是那颗命中区域 —— 点正文、点省略号走的都是同一个 `.onClick`。
+       * 早就量好的前缀保证这两段加起来正好一行（见 captionLine）。
+       * Span 支持 `textShadow` 且会从父 Text 继承（官方文档：API 10 起 Span 继承
+       * fontColor/fontSize/fontStyle/fontWeight/decoration/letterSpacing/textCase/fontFamily/
+       * textShadow），所以阴影只需要在 Text 上写一次。
+       */
+      Text() {
+        Span(this.captionLine())
+          .fontColor(Color.White)
+        Span(CAPTION_TAIL)
+          .fontColor('#BFBFBF')
       }
+      .fontSize(CAPTION_FONT_SIZE)
+      .lineHeight(CAPTION_LINE_HEIGHT)
+      .textShadow(OVERLAY_TEXT_SHADOW)
+      .maxLines(CAPTION_MAX_LINES)
+      .textOverflow({ overflow: TextOverflow.Ellipsis })
+      .width('100%')
+      .textAlign(TextAlign.Start)
+      .onClick((): void => {
+        this.openPostCard();
+      })
     }
   }
 
   /**
-   * 点正文 → 开这一条的评论。
+   * 点正文（含结尾的省略号）→ 打开**这一条的帖子卡片面板**。
    *
-   * 直接走宿主那条已有的入口（`onComments` → pages/Index.openReelComments → 评论面板），
-   * 不另开一条路：动作区那颗气泡调的是同一个回调，两边行为天然一致。
+   * 注意这里**不再走 `onComments`**：动作区那颗气泡才是"开评论"（需求："评论面板仍是原来的
+   * 样子（点动作栏评论图标进评论面板）"）。两条路在 ReelsPage 这一层就分开，免得宿主那边
+   * 还要靠参数分辨。
    */
-  private openComments(): void {
-    this.onComments(this.reel);
-  }
-
-  /** 切换正文的展开态（**必须在 animateTo 里改状态**，否则上面那两个 transition 不会走）。 */
-  private toggleCaption(): void {
-    animateTo({ duration: CAPTION_ANIM_MS, curve: Curve.EaseOut }, (): void => {
-      this.captionExpanded = !this.captionExpanded;
-    });
+  private openPostCard(): void {
+    this.onOpenPostCard(this.reel);
   }
 
   /**
@@ -1159,6 +1120,9 @@ export struct ReelsPage {
   onOpenUser: (reel: Reel) => void = (reel: Reel): void => {
   };
   onComments: (reel: Reel) => void = (reel: Reel): void => {
+  };
+  /** 点正文 → 帖子卡片面板（和 onComments 分流，见 ReelOverlay.onOpenPostCard）。 */
+  onOpenPostCard: (reel: Reel) => void = (reel: Reel): void => {
   };
   onShare: (reel: Reel) => void = (reel: Reel): void => {
   };
@@ -1624,6 +1588,7 @@ export struct ReelsPage {
         onFollow: this.onFollow,
         onOpenUser: this.onOpenUser,
         onComments: this.onComments,
+        onOpenPostCard: this.onOpenPostCard,
         onShare: this.onShare,
         onMore: this.onMore
       })

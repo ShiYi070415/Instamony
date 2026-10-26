@@ -23,11 +23,9 @@ import { CommentItem } from '../model/Comment';
 import { display } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS } from '../core/AppSettings';
-import { MaterialLabelButton, SurfaceModifier, trackMaterialTouch } from './MaterialSurface';
+import { SurfaceModifier } from './MaterialSurface';
 import { TranslateLabel } from './TranslateLabel';
 import { Translator } from '../core/Translator';
-import { FollowState, FOLLOW_VERSION_KEY } from '../core/FollowState';
-import { NativeFollow } from '../core/NativeFollow';
 
 const DOMAIN = 0xFF00;
 const TAG = 'InstarmonyCommentsPanel';
@@ -63,28 +61,6 @@ const AGO_YEAR_MS: number = 365 * AGO_DAY_MS;
 /** 展开/收起回复的过渡时长（ms）与进场位移（vp）。 */
 const REPLY_ANIM_MS: number = 220;
 const REPLY_SLIDE_VP: number = 8;
-/**
- * **顶部帖子卡片**的几个尺寸（vp）。
- *
- * 版式（需求）：用户名资讯栏（头像 + 账号名）+ 关注按钮 → 正文 → 发布时间 → 「查看翻译」。
- * 头像用 `COMMENT_AVATAR_SIZE` 那档（32），和评论行同一个尺度；卡片圆角比面板小一号，
- * 看起来才是"面板里的一张卡"而不是第二层面板。
- */
-const POST_CARD_RADIUS_VP: number = 16;
-const POST_CARD_INNER_VP: number = 12;
-const POST_CARD_AVATAR_SIZE: number = 32;
-/**
- * 账号名胶囊的高度（vp）：和全 app 的材质按钮对齐（40，见 MaterialSurface 的
- * `MATERIAL_BUTTON_SIZE` / `MATERIAL_PILL_HEIGHT`）—— 资讯栏、关注按钮在一条线上才不显歪。
- */
-const POST_CARD_NAME_H: number = 40;
-/**
- * 卡片里正文最多几行。
- *
- * 面板在小屏上只有半屏高，正文不设限会把评论列表挤没；三行是"看得出这是一段配文、
- * 又不吃掉列表"的折中，超出的交给省略号（点开完整正文不在这一版的需求里）。
- */
-const POST_CARD_CAPTION_LINES: number = 3;
 /**
  * 顶部那条"可以拖的小横条"所占的高度（vp）：热区高度，横条本体只有 4vp。
  *
@@ -245,30 +221,16 @@ export struct CommentsPanel {
    */
   @Prop state: string = '';
   /**
-   * 帖子作者、配文与作者头像 —— 顶部那张**帖子卡片**用（见 postCard）。
+   * 帖子作者、配文与作者头像（宿主一直在传）。
    *
-   * 曾经有过一版把这块信息删掉（需求："评论中的帖子文本和作者资讯去除"），后来又要回来了，
-   * 但换了个位置：不再是"面板顶部一行作者 + 配文"，而是一张**沉浸光感的卡片**，
-   * 位置在「评论」标题下方、第一条评论上方。字段名没变，宿主不用改调用形状。
+   * 上一版这里有一张"置顶帖子卡片"（作者 + 配文 + 发布时间 + 查看翻译），后来需求改成
+   * **独立面板**（点 Reels 正文才出现，见 components/PostCardPanel），卡片就整块搬走了 ——
+   * 本面板回到"标题 + 评论列表"的原样，这三个字段因此暂时不参与渲染。
+   * 字段保留是为了不动宿主的调用形状（见 pages/Index.commentsOverlay）。
    */
-  @Prop @Watch('onOwnerChanged') ownerUsername: string = '';
+  @Prop ownerUsername: string = '';
   @Prop caption: string = '';
   @Prop ownerAvatar: string = '';
-  /**
-   * 作者的**数字 id** 与这条的**发布时刻**（毫秒；0 = 未知）。
-   *
-   * 卡片上那颗「关注」要 id 才点得动（见 NativeFollow），"3小时前"要时刻才算得出。
-   * 拿不到（空串 / 0）时对应那截不画 —— 不猜、也不显示 "0"。
-   */
-  @Prop @Watch('onOwnerChanged') ownerId: string = '';
-  @Prop createdAtMs: number = 0;
-  /**
-   * **我自己的账号名**（宿主传进来）。
-   *
-   * 作者就是我自己时不画关注按钮（关注自己没有意义），和 reels 信息层同一个判据
-   * （见 ReelsPage 的 ReelOverlay.isOwnAuthor）。
-   */
-  @Prop ownAuthor: string = '';
   /**
    * 网页侧的结构摘要。
    *
@@ -406,12 +368,6 @@ export struct CommentsPanel {
     }
     // 初始方向按当前档位算一次（置中档=All）。
     this.syncPanDirection();
-    /*
-     * 顶部帖子卡片：先把关注状态按覆盖表算出来，覆盖表里没有再去问一次真实状态
-     * （见 syncFollow / ensureFollowState）。
-     */
-    this.syncFollow();
-    this.ensureFollowState();
   }
   /**
    * 点某一条右侧那颗心（参数是它在列表里的下标）。
@@ -479,116 +435,6 @@ export struct CommentsPanel {
   /** 翻译失败（宿主弹提示用）。 */
   onTranslateFailed: () => void = (): void => {
   };
-  /**
-   * 卡片上那颗「关注 / 已关注」（宿主实现：HTTP 直发 + 网页兜底，见 pages/Index.followUser）。
-   *
-   * 返回 Promise<boolean>：true = 成功；false 时本组件自己把乐观状态翻回去。
-   */
-  onFollowOwner: (follow: boolean) => Promise<boolean> =
-    (follow: boolean): Promise<boolean> => Promise.resolve(false);
-  /**
-   * 关注状态是**会话级覆盖表**说了算（在别处点过也要跟着变，见 core/FollowState）。
-   *
-   * 面板是浮层，可能一直开着，所以这里盯 `FOLLOW_VERSION_KEY`：用户在别的页面（或卡片上）
-   * 点了关注，这一格会自己刷成"已关注"。
-   */
-  @StorageLink(FOLLOW_VERSION_KEY) @Watch('onFollowVersion') followVersion: number = 0;
-  /** 卡片作者我关注了没有。 */
-  @State private following: boolean = false;
-  /** 关注请求进行中（防连点）。 */
-  @State private followBusy: boolean = false;
-  /** 这次面板问过"关注状态"没有（见 ensureFollowState）。 */
-  private followAsked: boolean = false;
-  /**
-   * 卡片作者是不是**我自己**（是就不画关注按钮，见 ownAuthor）。
-   */
-  private ownerIsMe(): boolean {
-    return this.ownAuthor.length > 0
-      && this.ownerUsername.length > 0
-      && this.ownerUsername.toLowerCase() === this.ownAuthor.toLowerCase();
-  }
-
-  /**
-   * 关注状态以**覆盖表**为准（本地点过的以本地为准），覆盖表里没有时按名字再问一次 ——
-   * 和 ReelsPage 的 ReelOverlay.syncFollow 同一套判据，这样面板上显示的状态和视频页一致。
-   */
-  private syncFollow(): void {
-    this.following = this.ownerUsername.length > 0
-      && FollowState.resolve(this.ownerId,
-        FollowState.resolveName(this.ownerUsername, false));
-  }
-
-  /** 别处改过关注状态：重新算一次（见 FOLLOW_VERSION_KEY 的说明）。 */
-  private onFollowVersion(): void {
-    this.syncFollow();
-  }
-
-  /**
-   * 卡片对应的作者变了（宿主换了一条帖子的数据）：关注状态跟着重算 + 重新问一次。
-   *
-   * 为什么要 @Watch：`aboutToAppear` 只在面板**创建那一刻**跑一次，而宿主是"先把面板弹出来、
-   * 紧接着才写这条帖子的作者/配文"（见 pages/Index.openComments）—— 少了这一步，卡片上的
-   * 关注状态会一直停在创建那一刻的值（已经关注了的人显示成「关注」）。
-   */
-  private onOwnerChanged(): void {
-    this.syncFollow();
-    this.ensureFollowState();
-  }
-
-  /**
-   * 覆盖表里**没有**这位作者的记录时，单独问一次真实状态（`friendships/show_many`）。
-   *
-   * 为什么要问：面板里没有"数据源给的 following"（MediaPost 不带这个字段），不问的话
-   * 已经关注过的人在这里会显示成「关注」，点一下反而变成"取关"。
-   * 覆盖表里有时不问 —— 从 reels 点进来时信息层刚刚问过同一个人（见 ReelOverlay.ensureFollowState）。
-   */
-  private ensureFollowState(): void {
-    if (this.followAsked || this.ownerIsMe()) {
-      return;
-    }
-    if (this.ownerId.length === 0 || this.ownerUsername.length === 0) {
-      return;
-    }
-    if (FollowState.has(this.ownerId)) {
-      return;
-    }
-    this.followAsked = true;
-    NativeFollow.statesFor([this.ownerId]).then((states: Map<string, boolean>): void => {
-      const known: boolean | undefined = states.get(this.ownerId);
-      if (known === undefined) {
-        return;
-      }
-      hilog.info(DOMAIN, TAG, 'post card follow looked up user=%{public}s following=%{public}s',
-        this.ownerId, `${known}`);
-      // 写进覆盖表即可：`@StorageLink` 会把这一格刷过来（不用自己再改 following）。
-      FollowState.remember(this.ownerId, this.ownerUsername, known);
-    }).catch((): void => {
-    });
-  }
-
-  /**
-   * 点卡片上那颗关注：乐观翻转 + 失败回滚（同 ReelsPage.tapFollow）。
-   *
-   * 成功之后由宿主写覆盖表（见 pages/Index.followUser 里的 FollowState.remember），
-   * 于是视频页/信息流上的同一个人也会跟着变。
-   */
-  private tapFollow(): void {
-    if (this.followBusy || this.ownerUsername.length === 0) {
-      return;
-    }
-    const next: boolean = !this.following;
-    this.followBusy = true;
-    this.following = next;
-    this.onFollowOwner(next).then((ok: boolean): void => {
-      this.followBusy = false;
-      if (!ok) {
-        this.following = !next;
-      }
-    }).catch((): void => {
-      this.followBusy = false;
-      this.following = !next;
-    });
-  }
 
   /**
    * 哪些评论/回复现在显示的是**译文**（键 = 原文本身）。
@@ -1132,142 +978,6 @@ export struct CommentsPanel {
     }
   }
 
-  /**
-   * **顶部帖子卡片**（需求："评论面板顶部新增一张沉浸光感卡片"，位置：「评论」标题文本下方、
-   * 第一条评论上方）。
-   *
-   * 版式固定为：用户名资讯栏（头像 + 账号名）+ 关注按钮 → 正文 → 发布时间 → 「查看翻译」。
-   *
-   * 卡片的"沉浸光感"由**一颗透明 Toggle 承载材质**（`SurfaceModifier`），和面板背景、底部输入条
-   * 完全同一条路：官方《沉浸光感–功耗优化》里，内容区只有 Toggle / Slider / Select 拿得到材质
-   * （见 MaterialSurface 的文件头），普通容器挂上去不生效。所以这里是"Toggle 当卡片底色、
-   * 内容放里面"，而不是自己画一个圆角矩形。
-   *
-   * 资讯栏与关注按钮也都是既有那套：资讯栏 = 头像 + 账号名的材质容器（同 FeedList.profileRow /
-   * ReelsPage.authorRow），关注按钮 = `MaterialLabelButton`。
-   *
-   * 译文**就地**显示在正文那一格（同一段文字按原文当键走现有的翻译缓存，
-   * 见 isTranslationShown / toggleTranslation），所以"查看翻译"点下去正文原地变译文、再点回原文。
-   */
-  @Builder
-  postCard() {
-    if (this.ownerUsername.length > 0 || this.caption.length > 0) {
-      // 外层只管左右留白：Toggle 自己给 `width('100%')`，再叠 margin 会溢出父容器（本项目踩过）。
-      Column() {
-        Toggle({ type: ToggleType.Button, isOn: false }) {
-          Column({ space: 6 }) {
-            // ① 用户名资讯栏（头像 + 账号名）+ 关注按钮。
-            Row({ space: 10 }) {
-              Toggle({ type: ToggleType.Button, isOn: false }) {
-                Row({ space: 8 }) {
-                  this.avatar(this.ownerAvatar, POST_CARD_AVATAR_SIZE)
-                  Text(this.ownerUsername.length > 0 ? this.ownerUsername : 'instagram')
-                    .fontSize(14)
-                    .fontWeight(FontWeight.Bold)
-                    .fontColor($r('app.color.primary_text'))
-                    .maxLines(1)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
-                    .constraintSize({ maxWidth: 150 })
-                }
-              }
-              .height(POST_CARD_NAME_H)
-              .padding({ left: 2, right: 10 })
-              .borderRadius(POST_CARD_NAME_H / 2)
-              .backgroundColor(Color.Transparent)
-              // 选中态透明：Toggle 默认选中色是主题强调色，点一下整颗会变蓝（同 MaterialSurface）。
-              .selectedColor(Color.Transparent)
-              .attributeModifier(new SurfaceModifier(this.thickness, false))
-              .onChange((): void => {
-                // 纯材质容器，功能由下面的 onClick 接。
-              })
-              .onClick((): void => {
-                this.onUserTap(this.ownerUsername, this.ownerId);
-              })
-              // 按住它时"咬住"面板拖动（判据见 MaterialSurface 的 holdsScroll）。
-              .onTouch(trackMaterialTouch)
-
-              // 关注按钮：作者是我自己时不画（关注自己没有意义，见 ownAuthor）。
-              // 宽高走 MaterialLabelButton 的默认值（72 × 40，和资讯栏胶囊等高）。
-              if (!this.ownerIsMe()) {
-                MaterialLabelButton({
-                  labelRes: this.following
-                    ? $r('app.string.action_following') : $r('app.string.action_follow'),
-                  fontSize: 13,
-                  onTap: (): void => {
-                    this.tapFollow();
-                  }
-                })
-              }
-            }
-            .width('100%')
-            .alignItems(VerticalAlign.Center)
-            .justifyContent(FlexAlign.SpaceBetween)
-
-            // ② 正文（这条帖子的 caption；显示译文时就地换成译文）。
-            if (this.caption.length > 0) {
-              Text(this.isTranslationShown(this.caption)
-                ? this.translatedBody(this.caption) : this.caption)
-                .fontSize(14)
-                .lineHeight(19)
-                .fontColor($r('app.color.primary_text'))
-                .textAlign(TextAlign.Start)
-                .width('100%')
-                .maxLines(POST_CARD_CAPTION_LINES)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-            }
-
-            // ③ 发布时间（相对时间，复用评论那套 `posted_ago_*` 文案，见 agoText）。
-            if (this.createdAtMs > 0) {
-              Text(this.agoText(Math.floor(this.createdAtMs / 1000)))
-                .fontSize(12)
-                .fontColor($r('app.color.comment_muted'))
-                .width('100%')
-                .textAlign(TextAlign.Start)
-            }
-
-            // ④ 「查看翻译」：只有非中文正文才会真的画出来（见 TranslateLabel）。
-            if (this.caption.length > 0) {
-              Row() {
-                TranslateLabel({
-                  source: this.caption,
-                  showing: this.isTranslationShown(this.caption),
-                  fontSize: 12,
-                  onToggle: (show: boolean): void => {
-                    this.toggleTranslation(this.caption, show);
-                  }
-                })
-              }
-              .width('100%')
-              .justifyContent(FlexAlign.Start)
-            }
-          }
-          .width('100%')
-          .alignItems(HorizontalAlign.Start)
-          .padding({
-            left: POST_CARD_INNER_VP,
-            right: POST_CARD_INNER_VP,
-            top: POST_CARD_INNER_VP,
-            bottom: POST_CARD_INNER_VP
-          })
-        }
-        .width('100%')
-        .borderRadius(POST_CARD_RADIUS_VP)
-        .backgroundColor(Color.Transparent)
-        .selectedColor(Color.Transparent)
-        // 玻璃底；低版本设备自动退化成"低透明度中性底 + 背景模糊"（见 SurfaceModifier）。
-        .attributeModifier(new SurfaceModifier(this.thickness, false))
-        .onChange((): void => {
-          // 卡片本身不是一个按钮：点击交给里面的资讯栏 / 关注按钮 / 视图原文。
-        })
-        .onClick((): void => {
-        })
-        .onTouch(trackMaterialTouch)
-      }
-      .width('100%')
-      .padding({ left: SIDE_PADDING, right: SIDE_PADDING, top: 6, bottom: 8 })
-    }
-  }
-
   /** 列表底部那一行：加载中转圈 / 到底了给个交代。 */
   @Builder
   footerRow() {
@@ -1388,11 +1098,8 @@ export struct CommentsPanel {
             })
         )
 
-        // 需求："评论中的帖子文本和作者资讯去除" —— 那一版把「作者头像 + 用户名 + 配文」整块删了。
-        // 现在它回来了，但换了位置与形态：一张**沉浸光感卡片**，就在「评论」标题下方、
-        // 第一条评论上方（见 postCard）。宿主拿不到作者/配文时（空串）这张卡整块不画。
-        this.postCard()
-
+        // 「帖子的作者/配文」整块**不在这里画**了：它已经抽成独立面板（点 Reels 正文才出现，
+        // 见 components/PostCardPanel）。本面板回到需求的原样：小横条 + 「评论」标题 + 评论列表。
         if (this.loading) {
         Row() {
           LoadingProgress()
