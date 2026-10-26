@@ -1758,14 +1758,7 @@ export struct ProfilePage {
           .width('100%')
           .alignItems(HorizontalAlign.Start)
           .padding({ left: 16, right: 16, top: 12, bottom: 14 })
-          // 量一下这一块的高度：它就是"分段按钮什么时候顶到标题栏下方"的那条线（见 barPinned）。
-          .onAreaChange((oldArea: Area, newArea: Area): void => {
-            const height: number = typeof newArea.height === 'number'
-              ? newArea.height as number : 0;
-            if (height > 0 && Math.abs(height - this.headerBlockVp) > 0.5) {
-              this.headerBlockVp = height;
-            }
-          })
+          // 高度统一由**外层那个 Column**（含精选快拍那一排）量，见下面的 onAreaChange。
 
             // ---- 精选快拍区：满屏宽的一排（左右留白在它自己行内，见 highlightsRow）----
             if (this.isSelfPage()) {
@@ -1773,6 +1766,22 @@ export struct ProfilePage {
             }
           }
           .width('100%')
+          /*
+           * **量"整个头部块"的高度**（个人信息 + 精选快拍，可能还有关注行）。
+           *
+           * 这条线就是"分段按钮顶到标题栏下方"的判定线（见 barPinned / updatePinned）：
+           * 外层 List 滚 offsetY 时，分段按钮的顶边位置 = 头部块高度。
+           * 以前量的是**里面那一小块**（只有个人信息、不含精选快拍那排）→ 算出的高度偏小，
+           * 于是按钮还没顶到标题栏就被交接过去了（用户："还是太早了"）。挂在外层才与它真正的
+           * 位置一致，交接才是"滑到哪儿就在哪儿换"。
+           */
+          .onAreaChange((oldArea: Area, newArea: Area): void => {
+            const height: number = typeof newArea.height === 'number'
+              ? newArea.height as number : 0;
+            if (height > 0 && Math.abs(height - this.headerBlockVp) > 0.5) {
+              this.headerBlockVp = height;
+            }
+          })
         }
 
         // ---- 关注 / 发消息：**分段按钮上方那一行**（只有别人主页有，见 followRow）----
