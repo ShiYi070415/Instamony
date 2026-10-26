@@ -240,6 +240,8 @@ const SINGLE_TAP_DELAY_MS: number = 240;
  */
 const LONG_PRESS_CENTER_MS: number = 400;
 /** 原生触摸判"长按"的门槛（毫秒）与"划走就不算长按"的门槛（见 onRawTouch）。 */
+/** 横向拖动多少 vp 后判为“拖进度”（太小会和点击/纵向滑动误判）。 */
+const RAW_SEEK_START_VP: number = 18;
 const RAW_LONG_PRESS_MS: number = 400;
 /** 右侧动作栏热区宽度（vp）与"资讯区从屏幕多低开始"（比例）——长按排除用。 */
 const ACTION_COLUMN_ZONE_VP: number = 88;
@@ -406,6 +408,10 @@ struct ReelSlide {
   private mountedOnce: boolean = false;
   /** 原生触摸：按下时刻（毫秒）、长按是否已成立、长按定时器句柄（见 onRawTouch）。 */
   private rawDownMs: number = 0;
+  /** 原生触摸：横向拖动 seek 的起点与状态（见 onRawTouch 的 Move 分支）。 */
+  private rawDownX: number = -1;
+  private rawDownY: number = -1;
+  private rawSeeking: boolean = false;
   private rawHoldFired: boolean = false;
   private rawHoldTimer: number = -1;
   /** 长按中间之前，全局控件本来就是藏着的吗（松手要恢复成"原来那样"，见 onHoldEnd）。 */
@@ -639,11 +645,24 @@ struct ReelSlide {
 
   /** 拖动中：按位移换算预览进度。**这里不 seek**（需求："松手才生效"）。 */
   private onSeekMove(event: GestureEvent): void {
+    this.onSeekMoveBy(event.offsetX);
+  }
+
+  /**
+   * 按**横向位移**（vp）换算预览进度。**这里不 seek**（需求："松手才生效"）。
+   *
+   * 抽出来的原因：原生 onTouch 那套拿不到 GestureEvent 的 offsetX，只能自己算位移；
+   * 两条输入路径共用这一份换算，避免两处比例算法写出分叉。
+   */
+  private onSeekMoveBy(dx: number): void {
     if (!this.dragging) {
       return;
     }
     const width: number = this.cardWidthVp();
-    const next: number = this.baseProgress + event.offsetX / width;
+    if (width <= 0) {
+      return;
+    }
+    const next: number = this.baseProgress + dx / width;
     this.dragProgress = next < 0 ? 0 : (next > 1 ? 1 : next);
   }
 
@@ -680,6 +699,11 @@ struct ReelSlide {
    */
   private onRawTouch(event: TouchEvent): void {
     if (event.type === TouchType.Down) {
+      // 横向拖动的起点（见 Move 分支）。
+      const touchesAtDown: TouchObject[] = event.touches;
+      this.rawDownX = touchesAtDown.length > 0 ? touchesAtDown[0].x : -1;
+      this.rawDownY = touchesAtDown.length > 0 ? touchesAtDown[0].y : -1;
+      this.rawSeeking = false;
       this.rawDownMs = Date.now();
       this.rawHoldFired = false;
       if (this.rawHoldTimer >= 0) {
@@ -696,11 +720,32 @@ struct ReelSlide {
       return;
     }
     if (event.type === TouchType.Move) {
-      // 手指划走了 = 不是长按：撤掉定时器（翻页/拖进度照常走各自的手势）。
+      // 手指划走了 = 不是长按：撤掉定时器。
       if (this.rawHoldTimer >= 0 && Date.now() - this.rawDownMs > RAW_MOVE_CANCEL_MS) {
         clearTimeout(this.rawHoldTimer);
         this.rawHoldTimer = -1;
       }
+      /*
+       * **左右滑 = 拖播放进度**（需求：滑动绑定进度条，松手才生效）。
+       *
+       * 判据：横向位移超过阈值、且横向明显大于纵向（否则那是上下翻页，交给 Swiper）。
+       * 进入拖动后进度条立刻跟手（progressNow() 在 dragging 时读 dragProgress）。
+       */
+      const touchesNow: TouchObject[] = event.touches;
+      if (this.rawDownX < 0 || touchesNow.length === 0) {
+        return;
+      }
+      const dx: number = touchesNow[0].x - this.rawDownX;
+      const dy: number = touchesNow[0].y - this.rawDownY;
+      if (!this.rawSeeking) {
+        if (Math.abs(dx) < RAW_SEEK_START_VP || Math.abs(dx) <= Math.abs(dy)) {
+          return;
+        }
+        this.rawSeeking = true;
+        // 起点是"按下那一刻"的进度（onSeekStart 记基线）。
+        this.onSeekStart();
+      }
+      this.onSeekMoveBy(dx);
       return;
     }
     if (event.type !== TouchType.Up && event.type !== TouchType.Cancel) {
@@ -709,6 +754,13 @@ struct ReelSlide {
     if (this.rawHoldTimer >= 0) {
       clearTimeout(this.rawHoldTimer);
       this.rawHoldTimer = -1;
+    }
+    // 拖动结束：这才是真正 seek 的时机（见 onSeekEnd）。
+    if (this.rawSeeking) {
+      this.rawSeeking = false;
+      this.rawDownX = -1;
+      this.onSeekEnd();
+      return;
     }
     if (this.rawHoldFired) {
       // 长按松手：恢复成"按之前那样"（这里只做恢复，不额外切播放）。
