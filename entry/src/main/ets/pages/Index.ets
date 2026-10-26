@@ -7614,7 +7614,15 @@ struct Index {
      * Reels 内容区上下留出的模糊背景带**在顶部被标题栏的黑底盖住**，看起来就是黑块。
      * 换成首页那套之后，标题栏背后是材质/透明，模糊背景就能透出来。
      */
-    return this.currentTab() === AppTab.Home ? this.feedTitleStyle() : this.destinationTitleStyle();
+    /*
+     * **Reels 页也用 feedTitleStyle**（方案 A，用户确认）。
+     *
+     * 原因：`destinationTitleStyle()` 是 HDS 封装的静态板，它的模糊层压到内容区顶部，
+     * 会把卡片顶部的进度条糊掉（我们改不到那层的高度）。`feedTitleStyle()` 是动态背景那套，
+     * 透明度跟着滚动绑定，观感也不会在进度条上叠一层。
+     */
+    return (this.currentTab() === AppTab.Home || this.currentTab() === AppTab.Reels)
+      ? this.feedTitleStyle() : this.destinationTitleStyle();
   }
 
   /**

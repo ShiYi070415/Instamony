@@ -28,6 +28,8 @@
 
 import { media } from '@kit.MediaKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+// 播放器生命周期探针（排查「暂停后重头播」，见 core/VideoProbe）。
+import { VideoProbe } from '../core/VideoProbe';
 import { BusinessError } from '@kit.BasicServicesKit';
 // 前后台信号：切后台要把解码器还回去（见 appForeground 的说明）。
 import { AppLifecycle, VisibilityHandler } from '../core/AppLifecycle';
@@ -249,6 +251,7 @@ export struct VideoSurface {
 
   /** 建播放器并挂状态机；策略在 setMediaSource 时就带上（那是最早能带的时机）。 */
   private createPlayer(): void {
+    VideoProbe.log('createPlayer');
     if (this.player !== null || this.creating || this.destroyed || !this.wanted()) {
       return;
     }
@@ -319,6 +322,7 @@ export struct VideoSurface {
 
   /** 释放播放器（组件消失、或这条已经不需要播/预加载了）。 */
   private teardownPlayer(): void {
+    VideoProbe.log('teardownPlayer');
     const player: media.AVPlayer | null = this.player;
     this.player = null;
     this.prepared = false;
@@ -722,6 +726,7 @@ export struct VideoSurface {
 
 
   private pausePlayback(): void {
+    VideoProbe.log('pausePlayback pos=' + (this.player === null ? -1 : this.player.currentTime));
     const player: media.AVPlayer | null = this.player;
     if (player === null) {
       return;
