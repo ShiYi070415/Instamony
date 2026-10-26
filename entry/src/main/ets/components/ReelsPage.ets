@@ -1932,12 +1932,6 @@ struct ReelOverlay {
        * 观感就是"卡"。所以隐藏期间位移只取 CHROME_SHIFT_VP，忽略 overlaySink。
        */
       .translate({ y: this.chromeHidden ? CHROME_SHIFT_VP : this.overlaySink })
-      /*
-       * **空长按占位**：材质按钮是 Toggle + PanGesture，没有长按识别器，
-       * 于是长按会落到页面根节点那条长按上（用户："长按按钮还是会触发手势"）。
-       * 给这一层挂一个什么都不做的长按，子节点优先，父节点那条就不会成立。
-       */
-      .gesture(LongPressGesture({ repeat: false, duration: 300 }))
       // 隐藏全局控件：整块淡出（透明度由 @State + animateTo 补间）。
       .opacity(this.chromeAlpha)
       // 文字不吃手势：竖向滑动照旧交给 Swiper。
@@ -1972,12 +1966,6 @@ struct ReelOverlay {
        * 观感就是"卡"。所以隐藏期间位移只取 CHROME_SHIFT_VP，忽略 overlaySink。
        */
       .translate({ y: this.chromeHidden ? CHROME_SHIFT_VP : this.overlaySink })
-      /*
-       * **空长按占位**：材质按钮是 Toggle + PanGesture，没有长按识别器，
-       * 于是长按会落到页面根节点那条长按上（用户："长按按钮还是会触发手势"）。
-       * 给这一层挂一个什么都不做的长按，子节点优先，父节点那条就不会成立。
-       */
-      .gesture(LongPressGesture({ repeat: false, duration: 300 }))
       // 隐藏全局控件：整块淡出（和左边资讯区同一条曲线，见 onChromeHiddenChanged）。
       .opacity(this.chromeAlpha)
       // 不吃手势（按钮自己要能点，见 actionColumn 里的材质按钮）。
