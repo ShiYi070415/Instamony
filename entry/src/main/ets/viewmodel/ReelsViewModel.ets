@@ -95,6 +95,7 @@ export class ReelsViewModel implements ReelStreamVm {
     this.busy = false;
     this.pending = [];
     this.shown.clear();
+    this.shownAuthors.clear();
     this.nativeQueue = [];
     this.nativeCursor = '';
     /*
@@ -118,6 +119,17 @@ export class ReelsViewModel implements ReelStreamVm {
   private diag: string = '-';
   /** 已经上屏的短码（去重只有这一份真相，见 ingestPage）。 */
   private shown: Set<string> = new Set<string>();
+  /**
+   * **已经上过屏的作者**：同一个作者整份列表最多出现一条。
+   *
+   * 需求（按 Instagram 客户端的行为）：reels 不会连着推同一个人的视频。
+   * 现有的"按作者打散"只在**缓冲里还有别人**时才有用 —— 缓冲里只剩一个作者时它会"认了"直接铺
+   * （见 drainInterleaved 的第 ③ 步），于是翻几页之后仍然是一串同一个人。
+   * 这里改成硬规则：作者出现过就不再上屏，那几条直接被丢弃（不是延后），
+   * 然后继续补货 —— 宁可这一页少几条，也不破坏"一人一条"。
+   * 注：作者的 id 拿不到（空串）时不做限制，否则会误杀整页。
+   */
+  private shownAuthors: Set<string> = new Set<string>();
   /**
    * **取到手、还没上屏**的条目（见 drainInterleaved）。
    *
@@ -302,6 +314,20 @@ export class ReelsViewModel implements ReelStreamVm {
     if (this.pending.length === 0) {
       return 0;
     }
+    /*
+     * **一人一条**（硬规则，见 shownAuthors 的说明）：
+     * 先把"作者已经上过屏"的条目从缓冲里剔掉，后面的打散逻辑就只在"新作者"之间挑。
+     * 剔完缓冲空了就返回 0 —— 调用方（补货那条路）会继续取下一页，不会就此停住。
+     */
+    for (let index: number = this.pending.length - 1; index >= 0; index--) {
+      const authorId: string = this.pending[index].authorId;
+      if (authorId.length > 0 && this.shownAuthors.has(authorId)) {
+        this.pending.splice(index, 1);
+      }
+    }
+    if (this.pending.length === 0) {
+      return 0;
+    }
     const out: Array<Reel> = [];
     const size: number = this.reels.length;
     let last: string = size > 0 ? this.reels[size - 1].authorId : '';
@@ -339,6 +365,9 @@ export class ReelsViewModel implements ReelStreamVm {
         continue;
       }
       this.shown.add(one.shortcode);
+      if (one.authorId.length > 0) {
+        this.shownAuthors.add(one.authorId);
+      }
       prev = last;
       last = one.authorId;
       out.push(one);
@@ -360,6 +389,7 @@ export class ReelsViewModel implements ReelStreamVm {
     // 首屏 = **整体替换**：旧列表、旧去重表、旧缓冲一起清掉。
     this.reels = [];
     this.shown.clear();
+    this.shownAuthors.clear();
     this.pending = [];
     this.ingestPage(page);
     return this.drainInterleaved(page.reels.length + 1, false);
