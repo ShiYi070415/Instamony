@@ -118,6 +118,17 @@ export class Translator {
     return true;
   }
 
+  /**
+   * 文本里有没有**日文假名**（平假名/片假名，含长音符 `ー`）。
+   *
+   * 为什么要单独判：日文是"假名 + 漢字"混排，而下面的 `hasChinese` 把整个 CJK 表意区
+   * （\u4e00-\u9fff）都算成中文 —— 于是一句 "今日はいい天気ですね" 被判成中文，
+   * 翻译按钮直接不出现（用户报的就是这个）。有假名就一定是日文，轮不到"含中文"那条判据。
+   */
+  static hasKana(text: string): boolean {
+    return /[\u3040-\u30ff\u31f0-\u31ff]/.test(text);
+  }
+
   /** 文本里有没有中文（有 → 不给翻译按钮，需求："只有非中文文本才显示该按钮"）。 */
   static hasChinese(text: string): boolean {
     return /[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]/.test(text);
@@ -134,7 +145,15 @@ export class Translator {
       return false;
     }
     const trimmed: string = text.trim();
-    if (trimmed.length < 2 || Translator.hasChinese(trimmed)) {
+    /*
+     * 顺序很重要：**先看假名**，再看"含中文"。
+     * 日文必然带漢字，若先走 `hasChinese` 就会被当成中文、按钮永不出现（日语用户报的 bug）；
+     * 而中文从不含假名，所以"有假名 → 是日文"这条判据不会误伤中文。
+     */
+    if (trimmed.length < 2) {
+      return false;
+    }
+    if (!Translator.hasKana(trimmed) && Translator.hasChinese(trimmed)) {
       return false;
     }
     const letters: RegExpMatchArray | null =

@@ -40,7 +40,9 @@ export struct TranslateLabel {
         ? $r('app.string.translate_show_original')
         : $r('app.string.translate_action'))
         .fontSize(this.fontSize)
-        .fontWeight(FontWeight.Medium)
+        // **粗体**（需求：评论面板里的"查看翻译"要加粗）。这颗小字全 app 一份，
+        // 统一加粗就不会出现"同一句话在别处不粗"的不一致。
+        .fontWeight(FontWeight.Bold)
         .fontColor($r('app.color.secondary_text'))
         // 点它是"切换"，不是"跳转"：给点内边距让手指好按，但别把行高撑起来。
         .padding({ left: this.padLeft, right: 2, top: 2, bottom: 2 })
