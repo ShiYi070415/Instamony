@@ -339,6 +339,8 @@ export struct SettingsPanel {
      * 面板关掉时把开关回正：用户点了"开"但没添加成功（或直接取消），界面不能一直显示"开"。
      * 添加成功那条路由 submitProxy 里的 setEnabled(true) 落实，这里只做兜底。
      */
+    // **标题走 HDS 标题样式**（半模态自带的 title 区域），比自绘 Text 更贴规范。
+    options.title = { title: $r('app.string.settings_proxy_add_title') };
     options.onDisappear = (): void => {
       this.proxyOn = AppProxy.enabled();
     };
@@ -357,13 +359,7 @@ export struct SettingsPanel {
   @Builder
   proxyAddSheet() {
     Column({ space: 12 }) {
-      Text($r('app.string.settings_proxy_add_title'))
-        // 面板标题：加大一档 + 粗体（官方半模态标题层级）。
-        .fontSize(20)
-        .fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.primary_text'))
-        .width('100%')
-        .textAlign(TextAlign.Start)
+      // 标题交给半模态自己画（SheetOptions.title，走 HDS 标题样式），这里不再重复。
 
       this.proxyInput($r('app.string.settings_proxy_name'), this.draftName, 'name')
       this.proxyInput($r('app.string.settings_proxy_host'), this.draftHost, 'host')
@@ -402,17 +398,18 @@ export struct SettingsPanel {
         .width('100%')
         .textAlign(TextAlign.Start)
       /*
-       * **沉浸光感胶囊**：材质只能由 Toggle 承载（官方生效范围），所以输入框套在
-       * Toggle(Button) 里、自身透明 —— 胶囊的圆角/材质由外层给。
+       * **输入框不要底色**（需求）：既不要自己那层填充，也不要外面那层材质胶囊 ——
+       * 只留文字、光标与一条细下划线，输入区因此和背景融为一体。
        */
-      Toggle({ type: ToggleType.Button, isOn: false }) {
-        TextInput({ text: value })
-          .width('100%')
-          .height(42)
-          .fontSize(15)
-          .padding({ left: 14, right: 14 })
-          .backgroundColor(Color.Transparent)
-          .onChange((text: string): void => {
+      TextInput({ text: value })
+        .width('100%')
+        .height(42)
+        .fontSize(15)
+        .padding({ left: 0, right: 0 })
+        .backgroundColor(Color.Transparent)
+        .borderRadius(0)
+        .border({ width: { bottom: 1 }, color: $r('app.color.divider') })
+        .onChange((text: string): void => {
           if (which === 'name') {
             this.draftName = text;
           } else if (which === 'host') {
@@ -424,15 +421,7 @@ export struct SettingsPanel {
             } else {
               this.draftPass = text;
             }
-          })
-      }
-      .width('100%')
-      .height(42)
-      .padding(0)
-      .borderRadius(21)
-      .attributeModifier(new SurfaceModifier(this.materialThickness, true))
-      .onChange((): void => {
-      })
+        })
     }
     .width('100%')
   }
