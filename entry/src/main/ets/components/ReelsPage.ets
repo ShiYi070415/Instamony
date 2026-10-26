@@ -192,9 +192,9 @@ const PAUSE_FADE_MS: number = 150;
  * 位置在卡片内顶部再留 GAP：贴边会跟着卡片圆角被裁掉两头，看着像"断了一截"；
  * 左右也各留 PAD，理由相同（圆角把内宽吃掉了）。高度 3vp 是"看得出来、又不喧宾夺主"的一档。
  */
-const PROGRESS_TOP_GAP: number = 10;
+const PROGRESS_TOP_GAP: number = 0;
 const PROGRESS_HEIGHT: number = 5;
-const PROGRESS_SIDE_PAD: number = 14;
+const PROGRESS_SIDE_PAD: number = 0;
 /** 轨道底色（半透明白）与已播放色（实白）—— 压在任意画面上都读得出来。 */
 const PROGRESS_TRACK_COLOR: string = '#4DFFFFFF';
 const PROGRESS_FILL_COLOR: string = '#FFFFFFFF';
@@ -203,7 +203,7 @@ const PROGRESS_FILL_COLOR: string = '#FFFFFFFF';
 const SPEED_PILL_GAP: number = 8;
 const SPEED_PILL_HEIGHT: number = 26;
 const SPEED_PILL_WIDTH: number = 58;
-const SPEED_PILL_FONT: number = 13;
+const SPEED_PILL_FONT: number = 17;
 /** 胶囊上的文案（需求："显示胶囊「2.0x」"）。 */
 const SPEED_PILL_TEXT: string = '2.0x';
 /** 2 倍速的倍率（见 VideoSurface.speed）。 */
@@ -301,6 +301,8 @@ struct ReelSlide {
   @Prop hostPaused: boolean = false;
   /** 宿主层面的 2 倍速（长按左右两侧，见 ReelPage.pageHoldStart）。 */
   @Prop hostSpeed: boolean = false;
+  /** 长按暂停（不显示正中按钮，所以和 hostPaused 分开）。 */
+  @Prop hostHold: boolean = false;
   /** 静音（全局开关）。 */
   @Prop muted: boolean = false;
   /**
@@ -439,7 +441,7 @@ struct ReelSlide {
 
   /** 画面此刻该不该真的在播（父组件说"是当前页" && 用户没暂停 && 不在长按暂停中）。 */
   private wantsPlayNow(): boolean {
-    return this.playing && !this.userPaused && !this.holdPaused && !this.hostPaused;
+    return this.playing && !this.userPaused && !this.holdPaused && !this.hostPaused && !this.hostHold;
   }
 
   /** 换条 / 变成当前页：进度归零、临时态清干净（需求："切到下一条视频时进度归零"）。 */
@@ -859,7 +861,8 @@ struct ReelSlide {
             // **不影响播放器挂不挂**（挂载条件还是上面那句 `playing || preload`）。
             playing: this.wantsPlayNow(),
             segment: this.segment,
-            preload: this.preload,
+            // **暂停期间仍然挂着播放器**（否则 `wanted()` 为假 → teardown → 恢复时从头播）。
+            preload: this.preload || this.hostPaused || this.hostHold,
             muted: this.muted,
             // 长按左右两侧时 2 倍速，松手回 1 倍速（见 VideoSurface.speed，失败静默降级）。
             speed: (this.speedBoost || this.hostSpeed) ? SPEED_2X : 1,
@@ -947,7 +950,7 @@ struct ReelSlide {
        * 而且节点不在树上时**不占触摸**（常驻改 opacity 的话它虽然看不见，照样要小心命中区域）。
        * 它自己不吃触摸（见 pauseButton 的说明），点它 = 点画面 = 继续播放。
        */
-      if (this.playing && this.reel.playable() && (this.userPaused || this.holdPaused || this.hostPaused)) {
+      if (this.playing && this.reel.playable() && (this.userPaused || this.hostPaused)) {
         this.pauseButton()
       }
 
@@ -2459,7 +2462,8 @@ export struct ReelsPage {
           reel: reel,
           segment: this.segment,
           playing: index === this.activeIndex && !this.frozenAll,
-          hostPaused: this.pagePaused || this.pageHold,
+          hostPaused: this.pagePaused,
+          hostHold: this.pageHold,
           hostSpeed: this.pageSpeed,
           // 预加载下一条：一直开着（原先按网络开关过，实测会影响切换观感；
           // 播放器的预下载缓冲已经收到 2 秒，这一项的开销有界）。
@@ -2733,7 +2737,7 @@ export struct ReelsPage {
     const fingers: Array<FingerInfo> = event.fingerList;
     const x: number = fingers.length > 0 ? fingers[0].globalX : -1;
     const width: number = this.screenWidthVp;
-    const side: boolean = x >= 0 && width > 0 && (x < width * 0.3 || x > width * 0.7);
+    const side: boolean = x >= 0 && width > 0 && (x < width * 0.2 || x > width * 0.8);
     if (side) {
       this.pageSpeed = true;
       return;
