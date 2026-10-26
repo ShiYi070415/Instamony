@@ -245,7 +245,7 @@ export struct SettingsPanel {
     .width('100%')
     // 整块用本页统一的卡片边框包裹（需求：和其它设置项一样用 border，不用沉浸光感）。
     .cardStyle()
-    .bindSheet($$$this.proxySheet, this.proxyAddSheet(), {
+    .bindSheet($$this.proxySheet, this.proxyAddSheet(), {
       height: SheetSize.MEDIUM,
       dragBar: false,
       showClose: true,
@@ -286,7 +286,7 @@ export struct SettingsPanel {
     this.draftPort = '';
     this.draftUser = '';
     this.draftPass = '';
-    this$.proxySheet = true;
+    this.proxySheet = true;
   }
 
   /** 半模态：添加代理（标题 + 右上角关闭 + 交叉排布的文本/输入 + 添加）。 */
@@ -370,7 +370,7 @@ export struct SettingsPanel {
     if (!AppProxy.add(entry)) {
       return;
     }
-    this$.proxySheet = false;
+    this.proxySheet = false;
     this.refreshProxyNames();
     this.proxyOn = AppProxy.setEnabled(true);
   }
