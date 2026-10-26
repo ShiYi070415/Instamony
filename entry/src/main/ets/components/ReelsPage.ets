@@ -241,6 +241,9 @@ const SINGLE_TAP_DELAY_MS: number = 240;
 const LONG_PRESS_CENTER_MS: number = 400;
 /** 原生触摸判"长按"的门槛（毫秒）与"划走就不算长按"的门槛（见 onRawTouch）。 */
 const RAW_LONG_PRESS_MS: number = 400;
+/** 右侧动作栏热区宽度（vp）与"资讯区从屏幕多低开始"（比例）——长按排除用。 */
+const ACTION_COLUMN_ZONE_VP: number = 88;
+const INFO_AREA_BOTTOM_RATIO: number = 0.72;
 const RAW_MOVE_CANCEL_MS: number = 260;
 const LONG_PRESS_SIDE_MS: number = 300;
 /**
@@ -2179,6 +2182,7 @@ export struct ReelsPage {
     try {
       const dsp: display.Display = display.getDefaultDisplaySync();
       this.screenWidthVp = this.getUIContext().px2vp(dsp.width);
+      this.screenHeightVp = this.getUIContext().px2vp(dsp.height);
       // 高度只给"手势热区"用（信息层护栏 / 左右两侧的长按热区），拿不到就留兜底值。
       this.screenHeightVp = this.getUIContext().px2vp(dsp.height);
     } catch (error) {
@@ -2812,6 +2816,27 @@ export struct ReelsPage {
     const x: number = fingers.length > 0 ? fingers[0].globalX : -1;
     const width: number = this.screenWidthVp;
     const side: boolean = x >= 0 && width > 0 && (x < width * 0.1 || x > width * 0.9);
+    /*
+     * **资讯区 / 动作区上的长按不算画面手势**（需求）。
+     *
+     * 按钮自己已经用 `swallowLongPress` 吞掉了，但资讯区里那些文字与空白没有任何手势，
+     * 长按仍会冒到页面这一层。这里按坐标把它们排除：
+     *   · 右侧一条（动作栏，宽约 88vp）→ 右侧热区交给动作栏；
+     *   · 屏幕底部一段（作者行 + 正文 + 底栏）→ 资讯区。
+     * 两个阈值都取保守值，宁可少触发也不要误触发（画面主体仍在大片区域里）。
+     */
+    const fingersForZone: FingerInfo[] = event.fingerList;
+    if (fingersForZone.length > 0) {
+      const gx: number = fingersForZone[0].globalX;
+      const gy: number = fingersForZone[0].globalY;
+      const inActionColumn: boolean = this.screenWidthVp > 0
+        && gx > this.screenWidthVp - ACTION_COLUMN_ZONE_VP;
+      const inInfoArea: boolean = this.screenHeightVp > 0
+        && gy > this.screenHeightVp * INFO_AREA_BOTTOM_RATIO;
+      if (inActionColumn || inInfoArea) {
+        return;
+      }
+    }
     this.holdFired = true;
     if (side) {
       this.pageSpeed = true;
