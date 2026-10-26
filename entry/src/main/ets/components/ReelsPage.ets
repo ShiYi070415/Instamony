@@ -1025,7 +1025,9 @@ struct ReelSlide {
              * 只是 `pause()`；恢复时 `play()`，位置因此不会回到 0。
              * 用户单击 / 长按 / 页面级暂停四个来源在这里汇总。
              */
-            paused: this.userPaused || this.holdPaused || this.hostHold,
+            // hostPaused（页面级）继续参与**播放**：它保证单击能立刻停住；
+            // 但**按钮显示**只看本地的 userPaused，避免同步到别的视频。
+            paused: this.userPaused || this.holdPaused || this.hostPaused || this.hostHold,
             segment: this.segment,
             preload: this.preload,
             muted: this.muted,
@@ -3073,9 +3075,16 @@ export struct ReelsPage {
   }
 
   private resetTransientPlayState(): void {
+    /*
+     * 滑走即**永久解除**暂停（需求）。
+     *
+     * 页面级暂停与指令值要一起清：只清 pagePaused 而留着 reels_paused=true 的话，
+     * 下一条上单击的第一下会因为取反而变成"继续"而不是"暂停"。
+     */
     this.pagePaused = false;
     this.pageHold = false;
     this.pageSpeed = false;
+    AppStorage.setOrCreate(REELS_PAUSED, false);
   }
 
   private doubleTapLike(): void {
