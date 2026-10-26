@@ -28,10 +28,8 @@ import { FollowState, FOLLOW_VERSION_KEY } from '../core/FollowState';
 import { SaveState } from '../core/SaveState';
 import { NativeFollow } from '../core/NativeFollow';
 import { LikeBurst, LikeBurstState, playLikeBurst } from './AnimatedIcons';
-import { TranslateLabel } from './TranslateLabel';
-import { Translator } from '../core/Translator';
 import {
-  CAPTION_COLLAPSED_MAX_LINES, CAPTION_LESS, CAPTION_MORE, CAPTION_TAIL_SAFETY_VP, CaptionFit
+  CAPTION_LESS, CAPTION_MORE, CAPTION_TAIL_SAFETY_VP, CaptionFit
 } from '../core/CaptionFit';
 
 /** 打日志用的域 / tag（切页动画时长这类关键数字都从这里看）。 */
@@ -67,6 +65,14 @@ const AUTHOR_FOLLOW_GAP: number = 10;
 /** 正文的字号与行高（vp）。 */
 const CAPTION_FONT_SIZE: number = 14;
 const CAPTION_LINE_HEIGHT: number = 19;
+/**
+ * **Reels 正文折叠成一行**（需求："正文限制到一行，'… 展开'也要在这一行里"）。
+ *
+ * 为什么不直接把 core/CaptionFit 里的 `CAPTION_COLLAPSED_MAX_LINES` 改成 1：那是信息流卡片
+ * 和这一页**共用**的判据（同一个人的同一段正文在两处折行要一致），信息流那边仍然是两行。
+ * 所以"这次只有 Reels 收成一行"这件事用参数传下去（见 captionPrefix / prefixOfText）。
+ */
+const CAPTION_MAX_LINES: number = 1;
 /**
  * **压在画面上的文字阴影**（正文 / 动作区计数共用）。
  *
@@ -131,7 +137,10 @@ function commitReelLike(reel: Reel, next: boolean,
  * 左下那一块（作者行 + 正文）离屏幕底边的高度（vp）。
  *
  * 这一页底部还压着一层评论输入框（整屏 Reels 页才有，见 pages/Index.reelsBody），
- * 所以留得比它高一些，两者不打架。动作区用同一个值，两块一起上下移动（需求："整体 ui 下移 20vp"）。
+ * 所以留得比它高一些，两者不打架。
+ *
+ * **右侧动作区读的是同一个值**（见 ReelOverlay.build）：两块都是钉在底部的浮层，底白一致，
+ * 底边才会落在同一条线上（需求："正文区底边高度与动作区底边高度统一"）。
  */
 const INFO_BOTTOM: number = 112;
 
@@ -339,16 +348,10 @@ struct ReelOverlay {
   @StorageLink(FOLLOW_VERSION_KEY) @Watch('onFollowVersion') followVersion: number = 0;
   /** 这一条的作者我关注了没有。 */
   @State private following: boolean = false;
-  /** 正文**展开着没有**（需求：超过两行折叠，展开后文末显示" 收起"）。 */
+  /** 正文**展开着没有**（需求：超过一行折叠，展开后文末显示" 收起"）。 */
   @State private captionExpanded: boolean = false;
-  /** 正文现在显示的是不是译文 / 译文本身（需求："reels 正文最后"那颗翻译）。 */
-  @State private captionTranslated: boolean = false;
-  @State private captionTranslation: string = '';
-  /** 按**文本**缓存的折叠前缀（译文也用它，见 prefixOfText）。 */
+  /** 按**文本**缓存的折叠前缀（见 prefixOfText）。 */
   private textFits: Map<string, string> = new Map<string, string>();
-  /** 翻译失败（宿主弹提示）。 */
-  onTranslateFailed: () => void = (): void => {
-  };
   /** 关注 / 点赞 / 转发正在请求中（防连点）。 */
   @State private followBusy: boolean = false;
   @State private likeBusy: boolean = false;
@@ -363,8 +366,6 @@ struct ReelOverlay {
    */
   @State private saved: boolean = false;
   @State private saveBusy: boolean = false;
-  /** 正文折叠前缀的缓存（按 shortcode；量一次就够，切条来回不重复量）。 */
-  private captionLines: Map<string, string> = new Map<string, string>();
   /** 这条作者的关注状态**单独问过**没有（见 ensureFollowState）。 */
   private followAsked: boolean = false;
 
@@ -409,7 +410,11 @@ struct ReelOverlay {
    *
    * 载荷给了 `has_saved` 就用它当兜底值，没给就是 false（真机上基本都没给）。
    */
-  /** 信息层底部留白：宿主给了就用它，没给用默认值（见 infoBottomVp）。 */
+  /**
+   * 信息层（作者行 / 关注按钮 / 正文）的**底部留白**：宿主给了就用它，没给用默认值。
+   *
+   * 资讯层与动作区**共用这一个值**，底边才会齐（见 build 里那两处 padding 的说明）。
+   */
   private infoPadding(): number {
     return this.infoBottomVp > 0 ? this.infoBottomVp : INFO_BOTTOM;
   }
@@ -482,34 +487,39 @@ struct ReelOverlay {
       && this.reel.author.toLowerCase() === this.ownAuthor.toLowerCase();
   }
 
-  /** 正文的**折叠前缀**（超过两行就截断，尾巴上留出" ... 展开"的位置，见 core/CaptionFit）。 */
+  /**
+   * 正文的**折叠前缀**（超过一行就截断，尾巴上留出" ... 展开"的位置，见 core/CaptionFit）。
+   *
+   * 和 `prefixOfText` 是同一套算法、同一份缓存：正文的前缀本来就是"这段原文按一行量出来的前缀"。
+   * 以前另按 shortcode 存一份，是因为译文那条路（已删）要按"任意文本"量行 —— 两种缓存现在完全
+   * 重合，留一份即可（按文本缓存，切条来回也不重量）。
+   */
   private captionPrefix(): string {
-    const text: string = this.reel.caption;
-    if (text.length === 0) {
-      return '';
-    }
-    const cached: string | undefined = this.captionLines.get(this.reel.shortcode);
-    if (cached !== undefined) {
-      return cached;
-    }
-    const availVp: number = this.screenWidthVp - SIDE_PADDING * 2 - CAPTION_TAIL_SAFETY_VP;
-    const prefix: string = availVp > 0
-      ? CaptionFit.prefix(this.getUIContext(), text, availVp, CAPTION_FONT_SIZE)
-      : text;
-    this.captionLines.set(this.reel.shortcode, prefix);
-    return prefix;
+    return this.prefixOfText(this.reel.caption);
   }
 
-  /** 这条的正文被截断了吗（截断了才追加" ... 展开"、才响应点击）。 */
+  /** 这条的正文被截断了吗（截断了才画" ... 展开"、才响应展开点击）。 */
   private captionTruncated(): boolean {
-    return this.reel.caption.length > 0 && this.captionPrefix() !== this.reel.caption;
+    return this.textTruncated(this.reel.caption);
   }
 
   /**
-   * **任意文本**的折叠前缀（译文也走它）。
+   * 正文折叠时**正文那一行真正能占的宽度**（vp），量行数用它。
    *
-   * 原来的 `captionPrefix()` 按 shortcode 缓存；译文不是 reel 自带的，所以按**文本本身**缓存 ——
-   * "点了翻译之后仍然能展开/收起"用的就是同一套量行逻辑（见 captionBlock 的译文分支）。
+   * 左边只有 `SIDE_PADDING` 一处留白，右边还要给动作栏让出整栏宽度（见 ReelOverlay.build 里
+   * 资讯层的 `padding.right`）—— 量的时候不扣这一截，量出来的前缀就比实际能放的长，
+   * 一行正文会被 `maxLines` 再切一道省略号，和结尾的" ... 展开"接不上（收成一行之后这点更明显）。
+   * 末尾再减 `CAPTION_TAIL_SAFETY_VP`，免得提示正好卡在行尾被裁。
+   */
+  private captionAvailVp(): number {
+    return this.screenWidthVp - SIDE_PADDING - ACTION_COLUMN_WIDTH - CAPTION_TAIL_SAFETY_VP;
+  }
+
+  /**
+   * **任意文本**的折叠前缀（按文本本身缓存）。
+   *
+   * 参数里带 `CAPTION_MAX_LINES`（= 1，这一页收成一行，见那个常量的说明）；宽度用
+   * `captionAvailVp()`，和真正渲染出来的那一行等宽。
    */
   private prefixOfText(text: string): string {
     if (text.length === 0) {
@@ -519,9 +529,9 @@ struct ReelOverlay {
     if (cached !== undefined) {
       return cached;
     }
-    const availVp: number = this.screenWidthVp - SIDE_PADDING * 2 - CAPTION_TAIL_SAFETY_VP;
+    const availVp: number = this.captionAvailVp();
     const prefix: string = availVp > 0
-      ? CaptionFit.prefix(this.getUIContext(), text, availVp, CAPTION_FONT_SIZE)
+      ? CaptionFit.prefix(this.getUIContext(), text, availVp, CAPTION_FONT_SIZE, CAPTION_MAX_LINES)
       : text;
     this.textFits.set(text, prefix);
     return prefix;
@@ -796,10 +806,20 @@ struct ReelOverlay {
 
   /**
    * **正文**（需求："在用户资讯组件下方显示正文，不需要叠加背景，结构采用 feeds 的正文部分，
-   * 超过两行以 ' ... 展开' 显示，展开后文末显示 ' 收起'"）。
+   * **限制到一行**、以 ' ... 展开' 显示，展开后显示 ' 收起'"）。
    *
    * 不叠任何材质/底色：直接白字压在画面上（和 IG 一致）；折叠判据与信息流那份**同一套**
-   * （见 core/CaptionFit），所以同一段正文在两处的折行位置一致。
+   * （见 core/CaptionFit），只有折叠行数这一页收成一行（见 CAPTION_MAX_LINES）。
+   *
+   * **点击归属**（"点正文开评论"与"… 展开管展开"这两件事要同时成立）：
+   *   · 结尾那颗「 ... 展开 / 收起」是**独立节点**，点它只做展开/收起；
+   *   · 其余正文区域点击 = 开这一条的评论（走宿主已有的 `onComments`，与右侧动作区那颗
+   *     气泡完全同一条路，见 pages/Index.openReelComments）。
+   * 为什么拆成兄弟节点而不是用一个 Text + Span 判位置：ArkUI 的 `Span` **没有自己的点击事件**
+   * （挂在 Text 上就整段只有一个回调），那样只能二选一 —— 要么吃掉"点正文开评论"，要么吃掉
+   * 展开。拆开之后两件事各归各的节点，手势不会互相抢。宽度上也不打架：`captionPrefix()` 量
+   * 前缀时就把「 ... 展开」的宽度算进去了（见 CaptionFit），正文占 `layoutWeight`、提示条自己
+   * 按文字宽度排，正好落在同一行的右端（需求："… 展开也要在这一行里"）。
    *
    * **展开/收起带动画**（需求："给 reels 页的文本展开添加动画"）：折行是 `maxLines` 控制的，
    * 而 `maxLines` 不可补间，所以走"两态节点 + 过渡"：切换包在 `animateTo` 里，
@@ -809,142 +829,82 @@ struct ReelOverlay {
   @Builder
   captionBlock() {
     if (this.reel.caption.length > 0) {
-      if (this.captionTranslated) {
+      if (this.captionExpanded) {
         /*
-         * **译文态**：正文换成译文，但**展开/收起照旧可用**（需求："点击翻译后需要保留展开功能"，
-         * 并且要"也加入 reels 里"）。截断按**译文自己**量（`prefixOfText`），
-         * 不能拿原文的截断位置套上去。
+         * 展开态：全文 + 结尾灰色的" 收起"。行数不设限 —— 展开就是为了看全。
+         * 展开之后正文是多行的，硬把" 收起"塞在同一行会落成"右侧悬着一颗字"，
+         * 所以让它另起一行、左对齐贴着正文末行（一眼能看出这是收起的入口）。
          */
-        if (this.captionExpanded) {
-          Text() {
-            Span(this.captionTranslation.length > 0 ? this.captionTranslation : this.reel.caption)
-              .fontColor(Color.White)
-            Span(CAPTION_LESS)
-              .fontColor('#BFBFBF')
-          }
-          .fontSize(CAPTION_FONT_SIZE)
-          .lineHeight(CAPTION_LINE_HEIGHT)
-          .textShadow(OVERLAY_TEXT_SHADOW)
-          .width('100%')
-          .textAlign(TextAlign.Start)
-          .transition(TransitionEffect.opacity(0).combine(
-            TransitionEffect.translate({ y: CAPTION_SLIDE_VP })))
-          .onClick((): void => {
-            this.toggleCaption();
-          })
-        } else {
-          Text() {
-            Span(this.prefixOfText(this.captionTranslation.length > 0
-              ? this.captionTranslation : this.reel.caption))
-              .fontColor(Color.White)
-            if (this.textTruncated(this.captionTranslation.length > 0
-              ? this.captionTranslation : this.reel.caption)) {
-              Span(CAPTION_MORE)
-                .fontColor('#BFBFBF')
-            }
-          }
-          .fontSize(CAPTION_FONT_SIZE)
-          .lineHeight(CAPTION_LINE_HEIGHT)
-          .textShadow(OVERLAY_TEXT_SHADOW)
-          .maxLines(CAPTION_COLLAPSED_MAX_LINES)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
-          .textAlign(TextAlign.Start)
-          .transition(TransitionEffect.opacity(0).combine(
-            TransitionEffect.translate({ y: -CAPTION_SLIDE_VP })))
-          .onClick((): void => {
-            if (this.textTruncated(this.captionTranslation.length > 0
-              ? this.captionTranslation : this.reel.caption)) {
-              this.toggleCaption();
-            }
-          })
-        }
-      } else if (this.captionExpanded) {
-        // 展开态：全文 + 结尾灰色的" 收起"。行数不设限 —— 展开就是为了看全。
-        Text() {
-          Span(this.reel.caption)
+        Column({ space: 2 }) {
+          Text(this.reel.caption)
+            .fontSize(CAPTION_FONT_SIZE)
+            .lineHeight(CAPTION_LINE_HEIGHT)
+            .textShadow(OVERLAY_TEXT_SHADOW)
             .fontColor(Color.White)
-          Span(CAPTION_LESS)
+            .width('100%')
+            .textAlign(TextAlign.Start)
+            .onClick((): void => {
+              this.openComments();
+            })
+          Text(CAPTION_LESS)
+            .fontSize(CAPTION_FONT_SIZE)
+            .lineHeight(CAPTION_LINE_HEIGHT)
+            .textShadow(OVERLAY_TEXT_SHADOW)
             .fontColor('#BFBFBF')
+            .onClick((): void => {
+              this.toggleCaption();
+            })
         }
-        .fontSize(CAPTION_FONT_SIZE)
-        .lineHeight(CAPTION_LINE_HEIGHT)
-          .textShadow(OVERLAY_TEXT_SHADOW)
         .width('100%')
-        .textAlign(TextAlign.Start)
+        .alignItems(HorizontalAlign.Start)
         .transition(TransitionEffect.opacity(0).combine(
           TransitionEffect.translate({ y: CAPTION_SLIDE_VP })))
-        .onClick((): void => {
-          this.toggleCaption();
-        })
       } else {
-        // 折叠态：正文（最多两行）+ 结尾灰色的" ... 展开"。
-        Text() {
-          Span(this.captionPrefix())
+        // 折叠态：**一行**正文 + 同一行右端灰色的" ... 展开"（见 CAPTION_MAX_LINES）。
+        Row({ space: 0 }) {
+          Text(this.captionPrefix())
+            .fontSize(CAPTION_FONT_SIZE)
+            .lineHeight(CAPTION_LINE_HEIGHT)
+            .textShadow(OVERLAY_TEXT_SHADOW)
             .fontColor(Color.White)
+            .maxLines(CAPTION_MAX_LINES)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1)
+            .textAlign(TextAlign.Start)
+            .onClick((): void => {
+              this.openComments();
+            })
           if (this.captionTruncated()) {
-            Span(CAPTION_MORE)
+            Text(CAPTION_MORE)
+              .fontSize(CAPTION_FONT_SIZE)
+              .lineHeight(CAPTION_LINE_HEIGHT)
+              .textShadow(OVERLAY_TEXT_SHADOW)
               .fontColor('#BFBFBF')
+              .maxLines(1)
+              .onClick((): void => {
+                this.toggleCaption();
+              })
           }
         }
-        .fontSize(CAPTION_FONT_SIZE)
-        .lineHeight(CAPTION_LINE_HEIGHT)
-          .textShadow(OVERLAY_TEXT_SHADOW)
-        .maxLines(CAPTION_COLLAPSED_MAX_LINES)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
         .width('100%')
-        .textAlign(TextAlign.Start)
+        .alignItems(VerticalAlign.Center)
         .transition(TransitionEffect.opacity(0).combine(
           TransitionEffect.translate({ y: -CAPTION_SLIDE_VP })))
-        .onClick((): void => {
-          if (this.captionTruncated()) {
-            this.toggleCaption();
-          }
-        })
       }
-      /*
-       * 「翻译」**跟在正文最后**（需求："reels 正文最后"），只有非中文正文才会画出来。
-       * 放在正文下面一行而不是塞进 Span：正文是折叠/展开/译文三种形态，行内塞进去会跟着变。
-       */
-      Row() {
-        TranslateLabel({
-          source: this.reel.caption,
-          showing: this.captionTranslated,
-          fontSize: 13,
-          onToggle: (show: boolean): void => {
-            this.toggleCaptionTranslation(show);
-          }
-        })
-      }
-      .width('100%')
-      .justifyContent(FlexAlign.Start)
-      .margin({ top: 2 })
     }
   }
 
-  /** 点「翻译 / 显示原文」：先切状态（立刻有反应），译文第一次再补网络。 */
-  private toggleCaptionTranslation(show: boolean): void {
-    const text: string = this.reel.caption;
-    if (text.length === 0 || show === this.captionTranslated) {
-      return;
-    }
-    this.captionTranslated = show;
-    if (!show || this.captionTranslation.length > 0) {
-      return;
-    }
-    Translator.translate(text).then((translated: string | null): void => {
-      if (translated === null || translated.length === 0) {
-        hilog.warn(0xFF00, 'ReelsPage', 'translate failed why=%{public}s', Translator.lastDetail());
-        this.onTranslateFailed();
-        // 失败退回原文态，别让按钮写着"显示原文"而正文还是原文。
-        this.captionTranslated = false;
-        return;
-      }
-      this.captionTranslation = translated;
-    });
+  /**
+   * 点正文 → 开这一条的评论。
+   *
+   * 直接走宿主那条已有的入口（`onComments` → pages/Index.openReelComments → 评论面板），
+   * 不另开一条路：动作区那颗气泡调的是同一个回调，两边行为天然一致。
+   */
+  private openComments(): void {
+    this.onComments(this.reel);
   }
 
-  /** 切换正文的展开态（**必须在 animateTo 里改状态**，否则下面那两个 transition 不会走）。 */
+  /** 切换正文的展开态（**必须在 animateTo 里改状态**，否则上面那两个 transition 不会走）。 */
   private toggleCaption(): void {
     animateTo({ duration: CAPTION_ANIM_MS, curve: Curve.EaseOut }, (): void => {
       this.captionExpanded = !this.captionExpanded;
@@ -1093,6 +1053,7 @@ struct ReelOverlay {
       // 右边给动作栏让出位置（两者都在底部，重叠起来会互相压住）。
       .width('100%')
       .alignItems(HorizontalAlign.Start)
+      // 底边留白：和右边动作区**用同一个值**（见 infoPadding 的说明）。
       .padding({ left: SIDE_PADDING, right: ACTION_COLUMN_WIDTH, bottom: this.infoPadding() })
       // 跟着底栏下沉（需求："动作区和资讯区跟随 tabbar 下沉"）：整块往下挪，和栏同一条曲线。
       .translate({ y: this.overlaySink })
@@ -1112,7 +1073,15 @@ struct ReelOverlay {
       .height('100%')
       .justifyContent(FlexAlign.End)
       .alignItems(VerticalAlign.Bottom)
-      .padding({ right: ACTION_RIGHT_PADDING, bottom: INFO_BOTTOM })
+      /*
+       * 底边留白**必须和左边资讯层同一个值**（需求："正文区底边高度与动作区底边高度统一"）。
+       *
+       * 两块都是"钉在屏幕底部、再各留一段底白"的浮层：只要底白相同，右边最下面那颗按钮的底边
+       * 就落在左边正文最后一行的底边上。原来这里写的是常量 `INFO_BOTTOM`，而左边读的是
+       * `infoPadding()`（宿主会按底部评论输入框的实际高度传一个值进来，见 infoBottomVp）——
+       * 一旦宿主传了非 0 的值，两块就错开一截，正是用户看到的那条"底边不齐"。
+       */
+      .padding({ right: ACTION_RIGHT_PADDING, bottom: this.infoPadding() })
       // 和左边那块同一个位移：一起沉、一起回来（见 overlaySink）。
       .translate({ y: this.overlaySink })
       // 不吃手势（按钮自己要能点，见 actionColumn 里的材质按钮）。
@@ -1194,9 +1163,6 @@ export struct ReelsPage {
   onShare: (reel: Reel) => void = (reel: Reel): void => {
   };
   onMore: (reel: Reel) => void = (reel: Reel): void => {
-  };
-  /** 正文翻译失败（宿主弹提示；见 ReelOverlay.onTranslateFailed）。 */
-  onTranslateFailed: () => void = (): void => {
   };
   private readonly swiperController: SwiperController = new SwiperController();
   /*
@@ -1659,9 +1625,7 @@ export struct ReelsPage {
         onOpenUser: this.onOpenUser,
         onComments: this.onComments,
         onShare: this.onShare,
-        onMore: this.onMore,
-        // 正文翻译失败：交给外壳那页弹提示（见 ReelsPage.onTranslateFailed）。
-        onTranslateFailed: this.onTranslateFailed
+        onMore: this.onMore
       })
         .width('100%')
         .height('100%')

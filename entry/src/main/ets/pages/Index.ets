@@ -1537,6 +1537,15 @@ struct Index {
   @State commentsCaption: string = '';
   /** 作者头像（信息流里就有，直接用，省得评论面板自己再去找）。 */
   @State commentsAvatar: string = '';
+  /**
+   * 作者的**数字 id** 与这条的**发布时刻**（毫秒）—— 给评论面板顶部那张帖子卡片用。
+   *
+   * 卡片上有一颗「关注」（要 id 才点得动，见 followUser）和一截"3小时前"（要时刻才算得出）。
+   * 拿不到就传空串 / 0，面板那边对应区域不画（reels 那条载荷没有发布时刻，
+   * 见 openReelComments 里构造 MediaPost 的地方）。
+   */
+  @State commentsOwnerId: string = '';
+  @State commentsCreatedAtMs: number = 0;
   /** 网页结构摘要，读不到评论时显示出来便于定位。 */
   @State commentsDiag: string = '';
   /**
@@ -2130,6 +2139,8 @@ struct Index {
       displayUrl: reel.coverUrl,
       likeCount: reel.likeCount,
       commentCount: reel.commentCount,
+      // reels 这条载荷**不带发布时刻**（见 model/Reel）：面板顶部那张卡片因此不画"x小时前"那一截，
+      // 其余（头像/账号名/正文/查看翻译/关注）照常。
       takenAtMs: 0,
       ownerUsername: reel.author,
       ownerAvatarUrl: reel.avatarUrl,
@@ -5967,6 +5978,9 @@ struct Index {
     this.commentsOwner = post.ownerUsername;
     this.commentsCaption = post.caption;
     this.commentsAvatar = post.ownerAvatarUrl;
+    // 面板顶部那张帖子卡片要的另两样：作者 id（关注按钮）与发布时刻（"3小时前"）。
+    this.commentsOwnerId = post.ownerId;
+    this.commentsCreatedAtMs = post.takenAtMs;
     // 记下这条帖子：评论点赞的网页驱动兜底要导航到它（见 likeCommentOnWeb）。
     this.commentsPost = post;
     this.commentsShortcode = post.shortcode;
@@ -6534,6 +6548,8 @@ struct Index {
       this.commentsOwner = '';
       this.commentsCaption = '';
       this.commentsAvatar = '';
+      this.commentsOwnerId = '';
+      this.commentsCreatedAtMs = 0;
       // ④ 面板收完了，再把底栏放回来（需求流程最后一步）。
       this.restoreBarAfterComments();
       if (after !== undefined) {
@@ -8612,10 +8628,6 @@ struct Index {
       },
       onMore: (reel: Reel): void => {
         this.toast($r('app.string.feature_pending'));
-      },
-      // 正文翻译失败：弹一句（页面自己退回原文态）。
-      onTranslateFailed: (): void => {
-        this.toast($r('app.string.translate_failed'));
       }
     })
   }
@@ -10308,10 +10320,6 @@ struct Index {
         },
         onMore: (reel: Reel): void => {
           this.toast($r('app.string.feature_pending'));
-        },
-        // 正文翻译失败：弹一句（页面自己退回原文态）。
-        onTranslateFailed: (): void => {
-          this.toast($r('app.string.translate_failed'));
         }
       })
       // 底部评论输入框（沉浸光感，见 CommentInputBar）。
@@ -11394,6 +11402,12 @@ struct Index {
           ownerUsername: this.commentsOwner,
           caption: this.commentsCaption,
           ownerAvatar: this.commentsAvatar,
+          // 顶部那张帖子卡片另外要的：作者 id（关注按钮）与发布时刻（"x小时前"）。
+          // 拿不到就是空串 / 0，卡片上对应那截不画（见 openReelComments 的说明）。
+          ownerId: this.commentsOwnerId,
+          createdAtMs: this.commentsCreatedAtMs,
+          // 作者就是我自己时不画关注按钮（和 reels 信息层同一个判据，见 ReelOverlay.ownAuthor）。
+          ownAuthor: this.profileVm.ownAccountName(),
           diag: this.commentsDiag,
           // 列表控制器：面板把它的 Scroller 接上来（读偏移用）。
           listCtl: this.commentsList,
@@ -11433,6 +11447,10 @@ struct Index {
           // 用户碰过列表了：自动补页不再设上限（见 canLoadCommentsMore）。
           onUserTouch: (): void => {
             this.commentsTouched = true;
+          },
+          // 卡片上那颗「关注」：和 reels 信息层/信息流走同一条路（HTTP 优先，网页兜底）。
+          onFollowOwner: (follow: boolean): Promise<boolean> => {
+            return this.followUser(this.commentsOwnerId, this.commentsOwner, follow);
           },
           // 评论正文翻译失败：弹一句（面板自己把状态退回去了）。
           onTranslateFailed: (): void => {
