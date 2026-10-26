@@ -1778,13 +1778,15 @@ export struct ProfilePage {
           // 高度统一由**外层那个 Column**（含精选快拍那一排）量，见下面的 onAreaChange。
 
             /*
-             * ---- 精选快拍区 ----
+             * ---- 精选快拍区（本人页）----
              *
-             * **本人和别人主页都画**（需求：其他用户主页也要有 highlight 列表）。
-             * 差别只在「+ 新」那一颗：那是"往自己主页挂东西"的入口，别人主页不出现
-             * （见 highlightsRow 里的 isSelfPage 判断）。
+             * 本人页：紧跟个人信息，和以前一样。
+             * 别人页：**要排在"关注 / 发消息"下面**（需求），所以在下面那个 ListItem 里画，
+             * 见 followRow 那一段。
              */
-            this.highlightsRow()
+            if (this.isSelfPage()) {
+              this.highlightsRow()
+            }
           }
           .width('100%')
           /*
@@ -1808,7 +1810,18 @@ export struct ProfilePage {
         // ---- 关注 / 发消息：**分段按钮上方那一行**（只有别人主页有，见 followRow）----
         if (!this.isSelfPage()) {
           ListItem() {
-            this.followRow()
+            Column() {
+              this.followRow()
+              /*
+               * **别人主页的精选快拍排在"关注 / 发消息"下面**（需求）。
+               * 放在同一个 ListItem 里有两个好处：
+               *   · 顺序天然正确；
+               *   · 下面那个 onAreaChange 量到的就是"关注行 + 高光排"的合计高度 ——
+               *     分段按钮的交接线正好需要这个和。
+               */
+              this.highlightsRow()
+            }
+            .width('100%')
           }
           /*
            * 量「关注 / 发消息」这一行的高度：它是分段按钮上面多出来的那一段，
