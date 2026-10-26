@@ -15,7 +15,7 @@
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { display } from '@kit.ArkUI';
+import { curves, display } from '@kit.ArkUI';
 // 触摸探针（排查为什么手势收不到事件，见 core/TouchProbe）。
 import { TouchProbe } from '../core/TouchProbe';
 import { Reel, ReelStreamVm } from '../model/Reel';
@@ -2489,7 +2489,15 @@ export struct ReelsPage {
      * 包一层 animateTo（摩擦曲线）之后，那两条属性变化就有了"回弹"的收尾，
      * 而不是线性淡出。
      */
-    animateTo({ duration: 260, curve: Curve.Friction }, (): void => {
+    /*
+     * **和底栏同一条弹簧曲线**（批次 4：动效统一）。
+     *
+     * 底栏下沉/隐藏走的是外壳的 `curves.springMotion()`；信息层这两块以前用
+     * 260ms + `Curve.Friction` 手工凑时长，两边收尾不同步 —— 一边先停、一边还在回弹，
+     * 观感就是"各弹各的"。改成同一条曲线后，`springMotion` 的时长由曲线参数决定
+     * （不需要也不敢再传 duration，传了反而不生效）。
+     */
+    animateTo({ curve: curves.springMotion() }, (): void => {
       this.toggleChromeNow();
     });
   }
