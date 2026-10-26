@@ -502,6 +502,8 @@ export struct VideoSurface {
    * 能差好几秒，手指明明滑到 50% 却跳到 42%，观感是"跳不准"）。
    */
   private applySeek(): void {
+    VideoProbe.log('applySeek ms=' + this.seekMs + ' prepared=' + this.prepared
+      + (this.player === null ? ' player=null' : ' pos=' + this.player.currentTime));
     if (this.seekMs < 0) {
       return;
     }
@@ -645,6 +647,8 @@ export struct VideoSurface {
   }
 
   private onPropChanged(): void {
+    VideoProbe.log('propChanged paused=' + this.paused + ' playing=' + this.playing
+      + ' seekMs=' + this.seekMs + (this.player === null ? ' player=null' : ' pos=' + this.player.currentTime));
     this.logGate();
     if (!this.wanted()) {
       // 不再是"该播/该预加载"的这条：把解码器还回去（滚动时最常走这条路）。
