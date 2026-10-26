@@ -243,10 +243,21 @@ export struct SettingsPanel {
     // 整块用本页统一的卡片边框包裹（需求：和其它设置项一样用 border，不用沉浸光感）。
     .cardStyle()
     .bindSheet($$this.proxySheet, this.proxyAddSheet(), {
+      /*
+       * **交回系统原生半模态外观**（"华为那种"）。
+       *
+       * 之前为了让面板"深色模糊 + 自绘关闭按钮"，把 showClose 关掉、内容上自己铺了一层
+       * backgroundColor + backgroundBlurStyle —— 那是"自绘面板"，和系统面板的圆角、拖拽条、
+       * 遮罩、动效都不一致。这里全部交回系统：
+       *   · dragBar = true      → 顶部那条可拖拽指示条（原生标志）；
+       *   · showClose = true    → 系统右上角关闭按钮；
+       *   · 底色/模糊/圆角/遮罩 → 用系统默认，不再覆盖。
+       * 代价：系统关闭按钮加不了沉浸光感材质（材质只对 Toggle/Slider/Select 生效），
+       * 这是"要原生外观"必然的取舍。
+       */
       height: SheetSize.MEDIUM,
-      dragBar: false,
-      // **关闭按钮自己画**（要用沉浸光感，系统那颗没法加材质）。
-      showClose: false
+      dragBar: true,
+      showClose: true
     })
     .onAppear((): void => {
       this.refreshProxyNames();
@@ -290,26 +301,12 @@ export struct SettingsPanel {
   @Builder
   proxyAddSheet() {
     Column({ space: 12 }) {
-      Row() {
-        Text($r('app.string.settings_proxy_add_title'))
-          .fontSize(17)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.primary_text'))
-        Blank()
-        // 右上角关闭：沉浸光感图标按钮（点它收起半模态）。
-        MaterialIconButton({
-          symbol: $r('sys.symbol.xmark'),
-          isOn: false,
-          autoInvert: false,
-          buttonSize: 36,
-          iconSize: 18,
-          onTap: (on: boolean): void => {
-            this.proxySheet = false;
-          }
-        })
-      }
-      .width('100%')
-      .alignItems(VerticalAlign.Center)
+      Text($r('app.string.settings_proxy_add_title'))
+        .fontSize(17)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.primary_text'))
+        .width('100%')
+        .textAlign(TextAlign.Start)
 
       this.proxyInput($r('app.string.settings_proxy_name'), this.draftName, 'name')
       this.proxyInput($r('app.string.settings_proxy_host'), this.draftHost, 'host')
@@ -335,14 +332,6 @@ export struct SettingsPanel {
     }
     .width('100%')
     .padding({ left: 16, right: 16, top: 16, bottom: 20 })
-    /*
-     * **深色高斯模糊底**（原来透明，面板和背后的列表糊在一起看不清层级）。
-     * 写在内容容器上而不是 SheetOptions 里：当前 SDK 的 SheetOptions 不接受
-     * backgroundColor / backgroundBlurStyle 这两个字段。
-     */
-    .backgroundColor('#CC121212')
-    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-    .borderRadius({ topLeft: 20, topRight: 20 })
   }
 
   /** 一行输入：标题在上、输入框在下（"文本 / 输入框"交叉排布）。 */
