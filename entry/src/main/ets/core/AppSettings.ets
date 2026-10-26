@@ -89,15 +89,15 @@ export const MEDIA_QUALITY_ORDER: Array<string> = [
 ];
 /** AppStorage 键：当前界面是不是深色（由 refreshTheme 写入）。 */
 export const SETTING_DARK_UI: string = 'isDarkUi';
-/**
- * AppStorage 键：**实测**叠字背后那一块是不是浅色（由 core/BackdropTone 连续侦测后写入）。
+/*
+ * **叠字反色那一套键已经删掉**（原 `SETTING_OVERLAY_BACKDROP_LIGHT` / `SETTING_OVERLAY_TOP` /
+ * `SETTING_OVERLAY_BOTTOM`）。
  *
- * 只服务于"叠在视频上的那行字"：底栏图标的反色交给系统材质的 colorInvert，不走这里。
+ * 需求"取消视频沉浸式标题反色效果，包括文字"之后，叠在视频上的那行字统一走主题正文色，
+ * 不再按画面明暗翻色；于是这三个键的**唯一写入方**（core/BackdropTone 的连续快照 +
+ * FeedList 的位置上报）和**唯一读取方**（FeedList.overlayTextColor）一起失去意义 ——
+ * 而那个采样是"整层快照 + GPU 回读"，正是后台最重的一项开销（见 BackdropTone 的删除说明）。
  */
-export const SETTING_OVERLAY_BACKDROP_LIGHT: string = 'overlayBackdropLight';
-/** AppStorage 键：叠字行的上/下边界（屏幕高度的比例，由 FeedList 报上来）。 */
-export const SETTING_OVERLAY_TOP: string = 'overlayTop';
-export const SETTING_OVERLAY_BOTTOM: string = 'overlayBottom';
 /**
  * AppStorage 键：视频是否静音（媒体区那颗喇叭键控制的**全局**开关）。
  *
@@ -208,8 +208,6 @@ export class AppSettings {
     // 这一支，正好等价于下沉，见 BAR_HIDE_SINK）。
     AppStorage.setOrCreate(SETTING_BAR_HIDE,
       AppSettings.readString(SETTING_BAR_HIDE, BAR_HIDE_SINK));
-    AppStorage.setOrCreate(SETTING_OVERLAY_TOP, 0);
-    AppStorage.setOrCreate(SETTING_OVERLAY_BOTTOM, 0);
     // 静音默认关（有声音）：布尔值单独读一次（readString 那套只处理字符串）。
     AppStorage.setOrCreate(SETTING_VIDEO_MUTED, AppSettings.readBool(SETTING_VIDEO_MUTED, false));
     // 图片/视频清晰度：默认**自适应**（按网络类型自己挑，见 core/MediaQuality）。
@@ -278,29 +276,6 @@ export class AppSettings {
     AppSettings.write(SETTING_BAR_HIDE, mode);
   }
 
-  /** 叠字行的上边界（屏幕高度比例）；没有叠字时是 0。 */
-  static overlayTop(): number {
-    const value: number | undefined = AppStorage.get<number>(SETTING_OVERLAY_TOP);
-    return value === undefined ? 0 : value;
-  }
-
-  /** 叠字行的下边界（屏幕高度比例）。 */
-  static overlayBottom(): number {
-    const value: number | undefined = AppStorage.get<number>(SETTING_OVERLAY_BOTTOM);
-    return value === undefined ? 0 : value;
-  }
-
-  /**
-   * 报告叠字行的位置（屏幕高度比例）。
-   *
-   * 由 FeedList 里那一行在 onAreaChange 里调：BackdropTone 靠它知道该去快照的哪一块
-   * 取"文字背后的颜色"。传 0/0 表示当前没有叠字（比如切到别的页）。
-   */
-  static setOverlayBand(top: number, bottom: number): void {
-    AppStorage.setOrCreate(SETTING_OVERLAY_TOP, top);
-    AppStorage.setOrCreate(SETTING_OVERLAY_BOTTOM, bottom);
-  }
-
   /**
    * 重新判定"当前界面是不是深色"并发布。
    *
@@ -321,9 +296,7 @@ export class AppSettings {
       dark = true;
     }
     AppStorage.setOrCreate(SETTING_DARK_UI, dark);
-    // 叠字的"背景明暗"在侦测出结果之前先按深色算（浅色字）：BackdropTone 一两百毫秒内
-    // 就会用真实像素覆盖它，这里只是别让第一帧的文字跟画面完全糊在一起。
-    AppStorage.setOrCreate(SETTING_OVERLAY_BACKDROP_LIGHT, false);
+    // 叠字反色（SETTING_OVERLAY_BACKDROP_LIGHT 那一套）已随功能取消一并删除，见文件头的说明。
   }
 
   /**

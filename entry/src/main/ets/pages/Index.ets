@@ -92,7 +92,6 @@ import {
 } from '../core/AppSettings';
 // 沉浸光感材质：验证弹窗的外观（见 showChallengeDialog）与首页胶囊共用同一套档位。
 import { immersiveMaterial } from '../components/MaterialSurface';
-import { BackdropTone } from '../core/BackdropTone';
 // 沉浸光感的档位/类型换算（设定页里的字符串 → hdsMaterial 的枚举，含设备能力降级）。
 import { BarChromeModifier, immersiveLevel, immersiveMaterialType, titleScrollEffectType } from '../core/ImmersiveLight';
 import { PlatformCap } from '../core/PlatformCap';
@@ -185,7 +184,6 @@ import { IrisState, MobileRealtime, RealtimeEvent } from '../core/mobileapi/Mobi
 // 实时私信补丁 → 「某条会话多了条消息」（见 onRealtimeMessage）。
 import { DirectRealtime, RealtimeMessage } from '../core/DirectRealtime';
 import { MobileDirect } from '../core/mobileapi/MobileDirect';
-import { MainThreadWatchdog } from '../core/MainThreadWatchdog';
 import { PROFILE_TAB_POSTS, PROFILE_TAB_REELS, PROFILE_TAB_TAGGED, ProfileViewModel } from '../viewmodel/ProfileViewModel';
 import { DirectViewModel } from '../viewmodel/DirectViewModel';
 import { DirectThreadViewModel } from '../viewmodel/DirectThreadViewModel';
@@ -526,9 +524,11 @@ const COMMENT_CAPTURE_MIN_INTERVAL_MS: number = 8000;
 /** 底部 tab 图标大小（fp）。图标之间的间隔不靠它调，靠栏宽 BAR_WIDTH。 */
 const TAB_ICON_SIZE: number = 25;
 /**
- * 内容层的组件 id：BackdropTone 定时给它拍低分辨率快照，用来侦测底栏/叠字背后的明暗。
+ * 内容层的组件 id。
  *
- * 拍**内容层**而不是整页：底栏自己也在整页里，拍整页会把栏本身算进"背景"。
+ * 原来（BackdropTone 采样那段）它还被用来给内容层拍低分辨率快照；那个采样已经删掉，
+ * 现在它只是内容层一个**稳定的节点 id**（排查时 `getRectangleById` 能直接量到内容层，
+ * `id` 本身不产生任何布局/测量开销）。
  */
 const SHELL_CONTENT_ID: string = 'instarmonyShellContent';
 
@@ -2382,16 +2382,30 @@ struct Index {
       // 媒体预下载（幂等）：把缓存下载的下载信息表开大一点，信息流封面命中率才高。
       MediaPrefetch.init();
     }
-    // 开始连续侦测**叠字**背后的画面明暗（沉浸式视频里的文字颜色靠它，见 overlayTextColor）。
-    BackdropTone.start(SHELL_CONTENT_ID);
     /*
-     * **主线程卡顿看门狗**（见 core/MainThreadWatchdog）。
+     * **叠字反色的连续快照采样已经停掉**（原 `BackdropTone.start(SHELL_CONTENT_ID)`）。
      *
-     * 用户报的「经常 appfreeze」= 主线程被占住 6 秒以上，而事后无处可查（faultlog 读不到）。
-     * 它挂一个 100ms 心跳，哪一拍迟到就把"被占住多久"打进日志 —— 下一次卡顿时，
-     * 这条时间和同时段的业务日志一对，就能定位到具体那一段同步代码。
+     * 证据链（三截全断，说明它现在纯耗电）：
+     *   ① 它的产物是 AppStorage 的 `SETTING_OVERLAY_BACKDROP_LIGHT`；
+     *   ② 那个键的**唯一读取方**是 FeedList.overlayTextColor()；
+     *   ③ 而 overlayTextColor() 在"取消视频沉浸式标题反色效果，包括文字"之后**没有任何调用点**
+     *      （资料行/账号名统一 `$r('app.color.primary_text')`）。
+     * 也就是说每隔 700ms~2.2s 给整层拍一张快照（`componentSnapshot.get` 是整层快照 + GPU 回读）、
+     * 取出平均亮度、再写一次 AppStorage —— 结果没有任何像素会因此改变。
+     *
+     * 所以采样、FeedList 里的位置上报与那个 @StorageProp 一起删除（实现文件
+     * core/BackdropTone.ets 也一并删掉）。底栏图标的自动反色**不受影响**：那是系统材质的
+     * colorInvert 干的（见 barFloatingStyle）。
      */
-    MainThreadWatchdog.start();
+    /*
+     * **主线程卡顿看门狗：默认不再启动**（见 core/MainThreadWatchdog）。
+     *
+     * 它的产物只有 hilog 里那几行 `main blocked Nms`，没有任何界面/逻辑读它 —— 属于
+     * "诊断工具"而不是功能，而它是一条 **100ms 心跳**（10Hz 的定时器唤醒），在发布版里
+     * 是实打实的常态开销。需要排 AppFreeze 时把它手工打开即可（文件里保留了完整实现）：
+     *     MainThreadWatchdog.start();   // aboutToAppear
+     *     MainThreadWatchdog.stop();    // aboutToDisappear
+     */
     /*
      * 一次性实验：首页时间线能不能走移动端（见 core/mobileapi/MobileFeedProbe）。
      * 结果弹到屏幕上（这台设备日志偶发整进程无输出）。验完就删这一段。
@@ -2604,7 +2618,10 @@ struct Index {
   }
 
   /**
-   * 页面销毁：停掉背景侦测的定时快照，并把评论浮层的两个定时器清干净。
+   * 页面销毁：把评论浮层的两个定时器清干净。
+   *
+   * （原本这里还要 `BackdropTone.stop()` / `MainThreadWatchdog.stop()` —— 那两个后台任务
+   * 已经不再启动，见 aboutToAppear 里的说明，所以也没有东西要停了。）
    *
    * 评论那两个（审计 G5）：`commentsExitTimer` 是收起动画结束后的收尾，
    * `commentsSettleTimer` 是拖动松手后的吸附 —— 都是"到点改状态"的。
@@ -2613,8 +2630,6 @@ struct Index {
    * 这里清掉句柄并把两个过程标志复位（`commentsVisible`/数据不动：回来时面板该是什么样还是什么样）。
    */
   aboutToDisappear(): void {
-    BackdropTone.stop();
-    MainThreadWatchdog.stop();
     // 验证弹窗跟着页面走：页面销毁时关掉它，别留一个悬着的 modal。
     this.closeChallengeDialog();
     if (this.commentsExitTimer >= 0) {
@@ -7174,9 +7189,9 @@ struct Index {
    * （标题栏由外层的 HdsNavigation 提供，见 nativeShell）。
    *
    * 为什么是两层、而不是把内容塞进 TabContent：
-   *   内容层要按 `selectedIndex` 切页、并且要被 BackdropTone 单独拍快照，而 HDS 的悬浮栏
-   *   画在 Tabs 内部、拿不出来。所以让它单独待在一层里：这一层只装得下栏，内容层是它的
-   *   兄弟节点 —— 栏的动效不会碰到内容。
+   *   内容层要按 `selectedIndex` 切页（原来还要被 BackdropTone 单独拍快照取色，见 SHELL_CONTENT_ID），
+   *   而 HDS 的悬浮栏画在 Tabs 内部、拿不出来。所以让它单独待在一层里：这一层只装得下栏，
+   *   内容层是它的兄弟节点 —— 栏的动效不会碰到内容。
    *
    * 栏本身是**官方那条**：HdsTabs + barFloatingStyle，材质走 systemMaterialEffect
    * （等级与标题栏同源，见 immersiveLevel），只有里面的项是自己画的（要图标不要文字，见 tabBarItem）。
@@ -7273,8 +7288,8 @@ struct Index {
         }
         .width('100%')
         .layoutWeight(1)
-        // 给一个 id：BackdropTone 要定时给**这一层**拍低分辨率快照，用来侦测底栏/叠字
-        // 背后的画面明暗（不含底栏本身，所以拍它而不是拍整页）。
+        // 内容层的稳定节点 id（见 SHELL_CONTENT_ID 的说明：原来给 BackdropTone 拍快照用，
+        // 采样已停用，这里只留一个可按 id 取矩形的句柄）。
         .id(SHELL_CONTENT_ID)
       }
       .width('100%')

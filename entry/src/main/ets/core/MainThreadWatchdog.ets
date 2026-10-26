@@ -18,6 +18,14 @@
  * 主线程被占住的时长（误差是调度抖动，几十毫秒量级，远小于我们关心的秒级）。
  *
  * 另外**不要把它当成修复**：它只是让下一次卡顿变成一条可读的证据。真凶要靠这条证据去定位。
+ *
+ * ## ⚠️ 现在默认**不启动**
+ * 它的产物只有 hilog 里那几行 `main blocked Nms`：没有任何界面/逻辑读它，属于"诊断工具"。
+ * 而它是一条 **100ms 心跳**（10Hz 的定时器唤醒），常驻在发布版里就是纯开销 ——
+ * 用户反馈"有点卡"时，先把它从启动路径上摘掉了（见 pages/Index.aboutToAppear 的说明）。
+ * 要排查 AppFreeze 时手工打开两行即可：
+ *     MainThreadWatchdog.start();   // 页面 aboutToAppear
+ *     MainThreadWatchdog.stop();    // 页面 aboutToDisappear
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';

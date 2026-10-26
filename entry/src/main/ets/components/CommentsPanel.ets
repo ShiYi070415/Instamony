@@ -233,8 +233,12 @@ export struct CommentsPanel {
   @Prop caption: string = '';
   @Prop ownerAvatar: string = '';
   /**
-   * **要不要在标题下方画那张置顶帖子卡片**（需求："点 Reels 正文 → 带卡片；
+   * **要不要把那张"帖子卡片"画成评论列表的第一项**（需求："点 Reels 正文 → 带卡片；
    * 点动作栏评论图标 → 不带卡片，与以前完全一致"）。
+   *
+   * 位置：它是 List 里的第一个 `ListItem`（见 build 里的 List / postCardItem）——
+   * 需求要它"跟着评论一起滚"，所以**不能**像上一版那样摆在 List 外面。
+   * 只有加载中 / 空列表这两档没有 List，那里才退回"标题下方"的老位置。
    *
    * 开关由宿主给（见 pages/Index 的 `commentsWithCard`），面板自己不判断来源 ——
    * 面板是"同一张嘴、两种内容"，来源分流放在宿主那一层。
@@ -1051,6 +1055,48 @@ export struct CommentsPanel {
     .padding({ left: 20, right: 20, top: 30, bottom: 30 })
   }
 
+  /**
+   * **帖子卡片那一块**（需求："点 Reels 正文 → 评论面板里带那张置顶卡片"）。
+   *
+   * 卡片本体是现成组件（components/PostCardPanel），这里只管摆位置与左右留白 ——
+   * 留白和评论行一致（SIDE_PADDING），卡片边缘才和评论头像/正文对得上。
+   *
+   * 为什么抽成一个 @Builder（而不是写两遍）：它现在有两个落点 ——
+   *   · 有评论时：作为 **List 的第一项**（`ListItem`），跟着评论一起滚（需求）；
+   *   · 加载中 / 空列表时：那里没有 List，只能照旧摆在标题下方（见 build 里的条件）。
+   * 两个落点必须长得一模一样，抽出来才不会改一处漏一处。
+   *
+   * 为什么不给它挂面板的拖动手势：卡片里有一条自己的 Scroll（长正文）和两颗材质按钮，
+   * 再叠一层 PAN 会把手势抢乱；从卡片上开始拖不调档，代价可以接受。
+   */
+  @Builder
+  postCardItem() {
+    Column() {
+      PostCardPanel({
+        ownerUsername: this.ownerUsername,
+        ownerAvatar: this.ownerAvatar,
+        caption: this.caption,
+        ownerId: this.ownerId,
+        createdAtMs: this.createdAtMs,
+        ownAuthor: this.ownAuthor,
+        // 关注走宿主那条路（HTTP 优先 / 网页兜底，见 pages/Index.followUser）。
+        onFollow: (follow: boolean): Promise<boolean> => {
+          return this.onFollow(this.ownerId, this.ownerUsername, follow);
+        },
+        // 点头像 / 账号名 → TA 的主页（和评论行同一个回调，见 openUserFromComments）。
+        onUserTap: (username: string, userId: string): void => {
+          this.onUserTap(username, userId);
+        },
+        // 翻译失败：卡片自己已经把状态退回原文了，这里只转给宿主弹一句。
+        onTranslateFailed: (): void => {
+          this.onTranslateFailed();
+        }
+      })
+    }
+    .width('100%')
+    .padding({ left: SIDE_PADDING, right: SIDE_PADDING, bottom: 8 })
+  }
+
   build() {
     /*
      * **背景 = 沉浸光感材质**（需求："背景采用沉浸光感组件"）。
@@ -1119,37 +1165,18 @@ export struct CommentsPanel {
             })
         )
 
-        // 「帖子的作者/配文」整块**只在这里画**（需求："点正文 → 评论面板里带那张置顶卡片"）：
-        // 位置就是「评论」标题下方、第一条评论上方；卡片本体是现成组件（components/PostCardPanel），
-        // 这里只负责摆位置 —— 左右白和评论行一致（SIDE_PADDING），卡片边缘才和评论头像/正文对得上。
-        //
-        // 为什么不给它挂面板的拖动手势：卡片里有一条自己的 Scroll（长正文）和两颗材质按钮，
-        // 再叠一层 PAN 会把手势抢乱；从卡片上开始拖不调档，代价可以接受。
-        if (this.showPostCard) {
-          Column() {
-            PostCardPanel({
-              ownerUsername: this.ownerUsername,
-              ownerAvatar: this.ownerAvatar,
-              caption: this.caption,
-              ownerId: this.ownerId,
-              createdAtMs: this.createdAtMs,
-              ownAuthor: this.ownAuthor,
-              // 关注走宿主那条路（HTTP 优先 / 网页兜底，见 pages/Index.followUser）。
-              onFollow: (follow: boolean): Promise<boolean> => {
-                return this.onFollow(this.ownerId, this.ownerUsername, follow);
-              },
-              // 点头像 / 账号名 → TA 的主页（和评论行同一个回调，见 openUserFromComments）。
-              onUserTap: (username: string, userId: string): void => {
-                this.onUserTap(username, userId);
-              },
-              // 翻译失败：卡片自己已经把状态退回原文了，这里只转给宿主弹一句。
-              onTranslateFailed: (): void => {
-                this.onTranslateFailed();
-              }
-            })
-          }
-          .width('100%')
-          .padding({ left: SIDE_PADDING, right: SIDE_PADDING, bottom: 8 })
+        /*
+         * **加载中 / 空列表**这两档没有 List（也就谈不上"跟着滚"），卡片照旧摆在
+         * 「评论」标题下方；有评论时它已经挪进 List 的第一项了（见下面的 List）。
+         *
+         * 为什么这两档仍然要画：从 Reels 正文点进来时，评论往往要等一两秒才回来 ——
+         * 那段时间卡片要是消失，看起来就像"点进来没反应"。
+         *
+         * 条件里的 `loading || comments.length === 0` 是**互斥**于下面那个 List 分支的
+         * （List 分支的条件正是"不 loading 且有评论"），所以卡片不会画两遍。
+         */
+        if (this.showPostCard && (this.loading || this.comments.length === 0)) {
+          this.postCardItem()
         }
 
         if (this.loading) {
@@ -1201,6 +1228,24 @@ export struct CommentsPanel {
         )
       } else {
         List({ scroller: this.listScroller }) {
+          /*
+           * **卡片是列表的第一项**（需求："帖子卡片放进评论列表，跟着评论一起滚"）。
+           *
+           * 结构上就是一个普通的 `ListItem`，排在 `ForEach` 之前 —— 没有用 ListItemGroup，
+           * 也没有动评论项自己的键（键仍按评论内容算，见下面那串键值），所以：
+           *   · 卡片的插入/移除不会让任何一条评论重新挂载；
+           *   · `showPostCard=false`（点评论图标进来）时这个 if 直接不成立，List 的结构
+           *     与以前**完全一致**（首项就是第一条评论）。
+           *
+           * 为什么用 `if` 而不是 `visibility`：`if` 不成立时节点根本不存在，不占高度、也不参与
+           * 布局；`visibility` 会留一块空白 —— 那就是"点评论图标进来，顶上莫名空一截"。
+           */
+          if (this.showPostCard) {
+            ListItem() {
+              this.postCardItem()
+            }
+          }
+
           ForEach(this.comments, (comment: CommentItem, index: number): void => {
             ListItem() {
               // 一条评论 = 评论行 + 它下面的回复区（"查看另外 n 条回复" / 展开后的回复）。

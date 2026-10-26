@@ -11,16 +11,13 @@ import { display } from '@kit.ArkUI';
 import { FeedMapper } from '../model/FeedMapper';
 import { MediaPost } from '../model/MediaPost';
 import {
-  AppSettings,
   FEED_POSTER_READY,
   MATERIAL_THICKNESS_ULTRA_THIN,
   SETTING_DARK_UI,
   SETTING_MATERIAL_THICKNESS,
-  SETTING_OVERLAY_BACKDROP_LIGHT,
   SETTING_VIDEO_MUTED
 } from '../core/AppSettings';
 import { MediaPrefetch } from '../core/MediaPrefetch';
-import { BackdropTone } from '../core/BackdropTone';
 import { PosterCache } from '../core/PosterCache';
 import { FollowState, FOLLOW_VERSION_KEY } from '../core/FollowState';
 import { SaveState } from '../core/SaveState';
@@ -160,10 +157,14 @@ const FOCUS_SCROLL_THROTTLE_MS: number = 120;
 const FOCUS_MIN_MOVE_VP: number = 8;
 /** 焦点重算的心跳（毫秒）：慢速微调攒不够位移时，也必须至少这么久收敛一次。 */
 const FOCUS_HEARTBEAT_MS: number = 320;
-/** 叠字行组件的 id 前缀（见 overlayRowId）。 */
+/**
+ * 叠字行组件的 id 前缀（见 overlayRowId）。
+ *
+ * 它原来只服务 BackdropTone（按这一行的位置去快照里取"文字背后的颜色"）。采样已经停用，
+ * 这个 id 保留下来当**稳定的节点句柄**（排查时可以用 `getRectangleById` 直接量这一行），
+ * 不占布局、也不触发任何计算。
+ */
 const OVERLAY_ROW_ID_PREFIX: string = 'overlayRow-';
-/** 滚动时叠字行位置的重测间隔（毫秒）。 */
-const OVERLAY_BAND_SYNC_MS: number = 200;
 /**
  * 媒体区最高占屏幕高度的比例。
  *
@@ -910,16 +911,14 @@ export struct FeedList {
    */
   @State expandedCaptionKey: string = '';
   /**
-   * 当前界面是不是深色（兜底用）；叠字颜色以**实测**的背景明暗为准，见 overlayBackdropLight。
+   * 当前界面是不是深色（兜底用）。
+   *
+   * 这里原来还有一个 `overlayBackdropLight`（BackdropTone 连续快照测出来的"叠字背后亮不亮"），
+   * 只给"沉浸式视频里那行字自动翻色"用。需求取消了那个反色效果之后，那个 @StorageProp 唯一的
+   * 读取方（`overlayTextColor`）也没人调用了 —— 于是它和整条采样链一起删掉（见
+   * core/BackdropTone 的删除说明）。叠字现在统一用主题正文色。
    */
   @StorageProp(SETTING_DARK_UI) isDarkUi: boolean = true;
-  /**
-   * 叠字背后那一块实际是不是浅色（由 core/BackdropTone 连续快照侦测后写入）。
-   *
-   * 需求：只有当**这段文字背后的部分确实是白/浅色**时才反色 —— 深色主题下白字遇到
-   * 白底视频会糊在一起，这时才需要转成深色字；背景是深色时保持白字。
-   */
-  @StorageProp(SETTING_OVERLAY_BACKDROP_LIGHT) overlayBackdropLight: boolean = false;
   /** 视频静音（全局开关，媒体区右下角那颗喇叭键改它，见 MediaActionButtons）。 */
   @StorageProp(SETTING_VIDEO_MUTED) videoMuted: boolean = false;
   /** 沉浸光感材质的厚薄（设定页四档之一）：沉浸式标题区那个容器的材质读它。 */
@@ -946,8 +945,6 @@ export struct FeedList {
    * 这时不做截断、也不追加"展开"，宁可交给 Text 自己省略。
    */
   private screenWidthPx: number = 0;
-  /** 上一次给 BackdropTone 上报叠字行位置的时刻（节流用，见 syncOverlayBandThrottled）。 */
-  private lastBandSyncMs: number = 0;
   /**
    * 正文截断结果缓存：post key → 显示用的那一行。
    *
@@ -1852,9 +1849,6 @@ export struct FeedList {
     }
     this.focusKey = nextFocusKey;
 
-    // 焦点换了：叠字行的采样窗口跟着换（BackdropTone 用它的位置去取"文字背后的颜色"）。
-    this.syncOverlayBand();
-
     // 焦点落在视频上才播；落在图片帖（或没有焦点）就停。
     let nextKey: string = '';
     let focusIsVideo: boolean = false;
@@ -2097,9 +2091,6 @@ export struct FeedList {
     if (delta === 0) {
       return;
     }
-    // 滚动会让叠字行在屏幕上移动：顺手把它的新位置节流报一次，
-    // BackdropTone 才能一直在"文字真正盖住的那块画面"上取色。
-    this.syncOverlayBandThrottled();
     /*
      * **滚动中也要重算焦点**（节流，见 refreshFocusThrottled）。
      *
@@ -2307,9 +2298,13 @@ export struct FeedList {
     // 不放开的话，视频顶部这 52vp 里的双击点赞会失效。Transparent = 自己不阻塞兄弟，
     // 子节点的点击照常能收到（两个图标按钮要能点）。
     .hitTestBehavior(HitTestMode.Transparent)
-    // 给一个 id：BackdropTone 要按这一行的位置去快照里取"文字背后的颜色"，
-    // 位置由 syncOverlayBand 用 componentUtils 量（滚动不会触发 onAreaChange，
-    // 所以不能靠它，见 cardSpan 的说明）。
+    /*
+     * 给这一行一个**稳定的节点 id**（原来给 BackdropTone 按位置取色用）。
+     *
+     * 采样已经停用（见上面 syncOverlayBand 的说明），这个 id 现在**不参与任何计算** ——
+     * 保留它是因为排查"叠字行到底落在哪"时可以直接 `getRectangleById(overlayRow-…)`，
+     * 而 `id` 本身不产生布局/测量开销。
+     */
     .id(this.overlayRowId(post))
   }
 
@@ -2486,40 +2481,14 @@ export struct FeedList {
     return `${OVERLAY_ROW_ID_PREFIX}${FeedMapper.keyOf(post)}`;
   }
 
-  /**
-   * 把"正在看的那条帖子"的叠字行位置报给 BackdropTone。
+  /*
+   * **`syncOverlayBand` 已删**（原：把焦点卡片叠字行的位置报给 BackdropTone）。
    *
-   * 只报**焦点卡片**（focusKey，见 refreshFocus）的叠字行：屏幕上可能同时有两条沉浸式视频
-   * 的叠字行，只按最后一次上报的算，所以必须指定是"用户正在看的那条"，否则取到的
-   * 是别的画面的颜色。焦点不是沉浸式视频（图片帖、普通卡片）时报 0/0，让侦测跳过叠字那块。
+   * 需求取消"叠字自动反色"之后，这个位置的**唯一消费者**是 BackdropTone 的快照取样窗口；
+   * 采样本身已经停掉（见 pages/Index 里 BackdropTone.start 的说明 + core/BackdropTone 已删除），
+   * 再每 200ms 量一次 `getRectangleById` 并写两次 AppStorage 就纯属白干 —— 滚动时它还是
+   * 一次跨模块调用 + 一次节点测量，正好落在最不该加活的滚动路径上。
    */
-  private syncOverlayBand(): void {
-    const index: number = this.focusIndexOf(this.focusKey);
-    if (index < 0 || !this.immersiveVideo(this.posts[index])) {
-      AppSettings.setOverlayBand(0, 0);
-      return;
-    }
-    const screenHeightPx: number = this.screenBottom;
-    if (screenHeightPx <= 0) {
-      return;
-    }
-    try {
-      const info = this.getUIContext().getComponentUtils()
-        .getRectangleById(this.overlayRowId(this.posts[index]));
-      const top: number = info.windowOffset.y / screenHeightPx;
-      const bottom: number = (info.windowOffset.y + info.size.height) / screenHeightPx;
-      if (bottom > top) {
-        AppSettings.setOverlayBand(top, bottom);
-        // 画面（焦点视频）刚换过：把叠字亮度侦测拉回密集采样（见 BackdropTone.kick）。
-        BackdropTone.kick();
-        return;
-      }
-    } catch (err) {
-      // 节点还没布局出来：这一拍先不报，下一拍量到再说。
-      return;
-    }
-    AppSettings.setOverlayBand(0, 0);
-  }
 
   /** 这条视频帖的首帧出来没有（决定封面叠层撤不撤）。 */
   private isVideoReady(key: string): boolean {
@@ -2563,32 +2532,14 @@ export struct FeedList {
     this.readyVideoKeys = next.length > 12 ? next.slice(next.length - 12) : next;
   }
 
-  /** 滚动过程中的节流上报（每 200ms 最多量一次，够跟得上画面）。 */
-  private syncOverlayBandThrottled(): void {
-    const now: number = Date.now();
-    if (now - this.lastBandSyncMs < OVERLAY_BAND_SYNC_MS) {
-      return;
-    }
-    this.lastBandSyncMs = now;
-    this.syncOverlayBand();
-  }
-
-  /**
-   * 沉浸式视频里，叠在视频上的文字/图标用什么颜色。
+  /*
+   * **`syncOverlayBandThrottled` / `overlayTextColor` 已删**（见上面 syncOverlayBand 的说明）。
    *
-   * 这一行没有底色（需求：资料背景透明），所以只能靠文字自己跟画面拉开对比。
-   * 颜色不是按主题猜的，而是**实测**的：BackdropTone 每 700ms 给内容层拍一张低分辨率
-   * 快照，取这一行所占的那块区域的平均亮度 —— 那块明显是浅色（白）时才把文字翻成深色，
-   * 否则就用当前主题该有的那一档（深色主题 → 浅色字）。
-   *
-   * 只有沉浸式视频会用到它；普通卡片里这一行画在页面底色上，照旧用资源色。
+   * `overlayTextColor()` 曾经是 `SETTING_OVERLAY_BACKDROP_LIGHT` 的**唯一读取方**；需求取消
+   * 叠字反色后它已经没有任何调用点（`authorName` / 资料行统一用 `$r('app.color.primary_text')`），
+   * 于是"快照 → 写 storage → 重绘"这条链彻底断了三截：无人采样、无人写入、无人读取。
+   * 叠字颜色现在只由主题决定（深色主题浅色字 / 浅色主题深色字）。
    */
-  private overlayTextColor(): string {
-    if (this.overlayBackdropLight) {
-      return '#0A0A0A';
-    }
-    return this.isDarkUi ? '#F1F1F1' : '#0A0A0A';
-  }
 
   /**
    * 媒体区：视频 / 多图轮播 / 单图 / 占位，外加双击点赞与放大爱心。
