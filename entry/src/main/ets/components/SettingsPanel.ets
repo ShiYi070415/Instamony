@@ -331,7 +331,9 @@ export struct SettingsPanel {
    */
   private proxySheetOptions(): SheetOptions {
     const options: SheetOptions = {
-      height: SheetSize.MEDIUM,
+      // **整页内容都能显示**（需求）：MEDIUM 只能到半屏，五个输入 + 添加按钮会被截。
+      // LARGE 是系统给的最大底部挡位（距离状态栏 8vp），仍可下拉关闭。
+      height: SheetSize.LARGE,
       dragBar: true,
       showClose: true
     };
@@ -361,11 +363,16 @@ export struct SettingsPanel {
     Column({ space: 12 }) {
       // 标题交给半模态自己画（SheetOptions.title，走 HDS 标题样式），这里不再重复。
 
-      this.proxyInput($r('app.string.settings_proxy_name'), this.draftName, 'name')
-      this.proxyInput($r('app.string.settings_proxy_host'), this.draftHost, 'host')
-      this.proxyInput($r('app.string.settings_proxy_port'), this.draftPort, 'port')
-      this.proxyInput($r('app.string.settings_proxy_user'), this.draftUser, 'user')
-      this.proxyInput($r('app.string.settings_proxy_pass'), this.draftPass, 'pass')
+      this.proxyInput($r('app.string.settings_proxy_name'), this.draftName, 'name',
+        $r('app.string.proxy_ph_name'))
+      this.proxyInput($r('app.string.settings_proxy_host'), this.draftHost, 'host',
+        $r('app.string.proxy_ph_host'))
+      this.proxyInput($r('app.string.settings_proxy_port'), this.draftPort, 'port',
+        $r('app.string.proxy_ph_port'))
+      this.proxyInput($r('app.string.settings_proxy_user'), this.draftUser, 'user',
+        $r('app.string.proxy_ph_optional'))
+      this.proxyInput($r('app.string.settings_proxy_pass'), this.draftPass, 'pass',
+        $r('app.string.proxy_ph_optional'))
 
       Toggle({ type: ToggleType.Button, isOn: false }) {
         Text($r('app.string.settings_proxy_add'))
@@ -393,7 +400,7 @@ export struct SettingsPanel {
 
   /** 一行输入：标题在上、输入框在下（"文本 / 输入框"交叉排布）。 */
   @Builder
-  proxyInput(label: ResourceStr, value: string, which: string) {
+  proxyInput(label: ResourceStr, value: string, which: string, hint: ResourceStr) {
     Column({ space: 6 }) {
       Text(label)
         .fontSize(13)
@@ -406,7 +413,7 @@ export struct SettingsPanel {
        * 再补一层很淡的中性底，让它在深/浅色面板上都"立得起来"。
        */
       Toggle({ type: ToggleType.Button, isOn: false }) {
-        TextInput({ text: value })
+        TextInput({ text: value, placeholder: hint })
           .width('100%')
           .height(42)
           .fontSize(15)

@@ -695,5 +695,10 @@
     {"name": "settings_group_proxy", "value": "Proxy"}
 ,
     {"name": "settings_proxy_hint", "value": "The proxy applies to this app only and takes effect immediately; turn it off to connect directly"}
+,
+    {"name": "proxy_ph_name", "value": "e.g. Office proxy"},
+    {"name": "proxy_ph_host", "value": "e.g. 127.0.0.1"},
+    {"name": "proxy_ph_port", "value": "e.g. 7890"},
+    {"name": "proxy_ph_optional", "value": "Optional"}
 ]
 }
