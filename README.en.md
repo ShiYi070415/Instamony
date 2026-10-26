@@ -9,7 +9,7 @@ Personal project for learning and daily use. Not affiliated with Instagram or Me
 [中文](README.md) · Released under [Apache-2.0](LICENSE).
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.2.0-1677FF?style=flat-square" alt="version 1.2.0">
+  <img src="https://img.shields.io/badge/version-1.3.0-1677FF?style=flat-square" alt="version 1.3.0">
   <img src="https://img.shields.io/badge/HarmonyOS-API%2020-1677FF?style=flat-square" alt="HarmonyOS API 20">
   <img src="https://img.shields.io/badge/ArkTS-Stage-0B0B0D?style=flat-square" alt="ArkTS Stage model">
   <img src="https://img.shields.io/badge/License-Apache--2.0-2EA44F?style=flat-square" alt="Apache-2.0">
@@ -44,7 +44,7 @@ that session in an official-Android-app identity and calls `i.instagram.com/api/
 
 | Item | Value |
 |:--|:--|
-| App | `Instamony` · `com.oneleaf.instamony` · version `1.2.0` (`versionCode` 1002000) |
+| App | `Instamony` · `com.oneleaf.instamony` · version `1.3.0` (`versionCode` 1003000) |
 | Module | `entry` · Stage model |
 | SDK | target `26.0.0` · **compatible `6.0.0 (API 20)`** |
 | Devices | `phone`, `tablet` · full-screen `EntryAbility` |
@@ -116,7 +116,8 @@ tools/                   build and check scripts
 
 ## Documentation
 
-- [`RELEASE_1.2.md`](RELEASE_1.2.md) — **what changed in 1.2.0**, known issues, not implemented yet
+- [`RELEASE_1.3.md`](RELEASE_1.3.md) — **what changed in 1.3.0**, known issues, not implemented yet
+- [`RELEASE_1.2.md`](RELEASE_1.2.md) — what changed in 1.2.0, known issues, not implemented yet
 - [`RELEASE_1.1.md`](RELEASE_1.1.md) — what changed in 1.1.0, known issues, not implemented yet
 - [`RELEASE_1.0.md`](RELEASE_1.0.md) — 1.0.0 feature list, known issues, not implemented yet
 - [`INSTAGRAPI_PORT.md`](INSTAGRAPI_PORT.md) — mobile API port log: endpoint table, parameters, criteria, rate limits

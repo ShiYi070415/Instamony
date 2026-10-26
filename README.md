@@ -8,7 +8,7 @@
 [English](README.en.md) · 采用 [Apache-2.0](LICENSE) 许可证。
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.2.0-1677FF?style=flat-square" alt="version 1.2.0">
+  <img src="https://img.shields.io/badge/version-1.3.0-1677FF?style=flat-square" alt="version 1.3.0">
   <img src="https://img.shields.io/badge/HarmonyOS-API%2020-1677FF?style=flat-square" alt="HarmonyOS API 20">
   <img src="https://img.shields.io/badge/ArkTS-Stage-0B0B0D?style=flat-square" alt="ArkTS Stage model">
   <img src="https://img.shields.io/badge/License-Apache--2.0-2EA44F?style=flat-square" alt="Apache-2.0">
@@ -43,7 +43,7 @@
 
 | 项目 | 当前配置 |
 |:--|:--|
-| 应用 | `Instamony` · `com.oneleaf.instamony` · 版本 `1.2.0`（`versionCode` 1002000） |
+| 应用 | `Instamony` · `com.oneleaf.instamony` · 版本 `1.3.0`（`versionCode` 1003000） |
 | 模块 | `entry` · Stage 模型 |
 | SDK | 目标 SDK `26.0.0` · **兼容 SDK `6.0.0 (API 20)`** |
 | 设备 | `phone`、`tablet` · 全屏 `EntryAbility` |
@@ -108,7 +108,8 @@ tools/                   构建与校验脚本
 
 ## 文档
 
-- [`RELEASE_1.2.md`](RELEASE_1.2.md) —— **本版（1.2.0）变化**、已知问题、未实现项
+- [`RELEASE_1.3.md`](RELEASE_1.3.md) —— **本版（1.3.0）变化**、已知问题、未实现项
+- [`RELEASE_1.2.md`](RELEASE_1.2.md) —— 1.2.0 的变化、已知问题、未实现项
 - [`RELEASE_1.1.md`](RELEASE_1.1.md) —— 1.1.0 的变化、已知问题、未实现项
 - [`RELEASE_1.0.md`](RELEASE_1.0.md) —— 1.0.0 的功能清单、已知问题、未实现项
 - [`INSTAGRAPI_PORT.md`](INSTAGRAPI_PORT.md) —— 移动端协议移植记录：端点表、参数、判据、限速结论
