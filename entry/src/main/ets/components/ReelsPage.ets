@@ -16,6 +16,8 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { display } from '@kit.ArkUI';
+// 触摸探针（排查为什么手势收不到事件，见 core/TouchProbe）。
+import { TouchProbe } from '../core/TouchProbe';
 import { Reel, ReelStreamVm } from '../model/Reel';
 import { ReelsViewModel } from '../viewmodel/ReelsViewModel';
 import { VideoSurface } from './VideoSurface';
@@ -897,6 +899,9 @@ struct ReelSlide {
         .width('100%')
         .height('100%')
         .backgroundColor(Color.Transparent)
+        .onTouch((event: TouchEvent): void => {
+          TouchProbe.log('hitlayer', event.type);
+        })
         .parallelGesture(
       GestureGroup(GestureMode.Parallel,
         // ① 单击 → 暂停 / 继续（需求第 3 条）。
@@ -954,6 +959,7 @@ struct ReelSlide {
      * 新手势的第一个事件，在这里清最稳。
      */
     .onTouch((event: TouchEvent): void => {
+      TouchProbe.log('slide-root', event.type);
       if (event.type === TouchType.Down) {
         this.longPressFired = false;
       }
