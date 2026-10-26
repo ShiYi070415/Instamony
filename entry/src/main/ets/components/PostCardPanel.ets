@@ -469,8 +469,6 @@ export struct PostCardPanel {
     .borderRadius(ROW_HEIGHT / 2)
     .backgroundColor(Color.Transparent)
     // 选中态透明：Toggle 默认选中色是主题强调色，点一下整颗会变蓝（同 MaterialSurface）。
-    .selectedColor(Color.Transparent)
-    .hoverEffect(HoverEffect.None)
     // 资讯栏仍然是材质（需求："用户资讯栏保持材质不变"）；autoInvert 传 false 同 Reels 作者行。
     .attributeModifier(new SurfaceModifier(this.thickness, false))
     .onChange((): void => {
@@ -612,7 +610,7 @@ export struct PostCardPanel {
      * 手指按住胶囊之后拖动，`holdsScroll` 返回真 → 这里否掉 Scroll 的内建 PAN，
      * 卡片不跟着走、面板也不跟着走；按下去就划的竖向拖动则照常放行（否则就"卡手"）。
      */
-    Toggle({ type: ToggleType.Button, isOn: false }) {
+    Stack() {
       Scroll() {
         Column() {
           this.cardBody()
@@ -642,7 +640,6 @@ export struct PostCardPanel {
     .borderRadius(CARD_RADIUS_VP)
     .backgroundColor(Color.Transparent)
     // 选中态透明：Toggle 默认选中色是主题强调色，点一下整颗会变蓝（同 MaterialSurface）。
-    .selectedColor(Color.Transparent)
     /*
      * 静态玻璃（需求："恢复沉浸光感，但不要光源、不要拖拽"）。
      * 参数顺序（见 MaterialSurface.SurfaceModifier）：
@@ -653,10 +650,15 @@ export struct PostCardPanel {
      *   lightEffect=false  **关掉光源**（需求："不要光源"）→ 内部传 `lightEffect: null`
      *   interactive=false  **关掉交互形变**（需求："不要拖拽/按压形变"）→ 静态玻璃
      */
-    .attributeModifier(new SurfaceModifier(this.thickness, false, true, false, false, false))
-    
-    .onChange((): void => {
-      // 卡片本身没有选中态：点空白处不该有任何动作，功能都在里面的胶囊/按钮上。
-    })
+    /*
+     * **卡片本体不再铺沉浸光感材质**（官方规范：材质影响的像素越多功耗越高，应避免用在
+     * 单个超大区域上，也避免大量小区域重复使用；推荐只用在标题栏 / 底栏 / 需要凸显的局部）。
+     *
+     * 卡片是"大区域"，于是改成**纯色表面 + 1vp 描边 + 圆角**：轮廓由边框给出，
+     * 玻璃收回到内部两颗小控件（资讯胶囊、关注按钮）上 —— 层级也更清楚。
+     */
+    .borderRadius(CARD_RADIUS_VP)
+    .backgroundColor($r('app.color.field_background'))
+    .border({ width: 1, color: $r('app.color.divider') })
   }
 }
