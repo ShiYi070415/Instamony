@@ -471,15 +471,8 @@ export struct PostCardPanel {
     // 选中态透明：Toggle 默认选中色是主题强调色，点一下整颗会变蓝（同 MaterialSurface）。
     .selectedColor(Color.Transparent)
     .hoverEffect(HoverEffect.None)
-    /*
-     * **描边代替材质**（需求："第一步用描边"）。
-     *
-     * 卡片根节点已经是一层玻璃，胶囊再挂一层材质就是"材质套材质"——官方不建议，
-     * 实测滚动时每帧都要重算模糊，这是卡片跟着列表滚时发卡的首要嫌疑。
-     * 所以内层降级成：透明底 + 一圈 1vp 分隔线色描边，观感上仍是"一颗胶囊"，
-     * 但不再参与模糊计算（外层玻璃照旧）。
-     */
-    .border({ width: 1, color: $r('app.color.divider') })
+    // 资讯栏仍然是材质（需求："用户资讯栏保持材质不变"）；autoInvert 传 false 同 Reels 作者行。
+    .attributeModifier(new SurfaceModifier(this.thickness, false))
     .onChange((): void => {
       // 纯材质容器，功能由下面的 onClick 接。
     })
@@ -508,33 +501,16 @@ export struct PostCardPanel {
 
       // 关注按钮：作者是我自己时不画。它自带 4-way lock（见材料文件里的 MaterialLabelButton）。
       if (!this.ownerIsMe()) {
-        /*
-         * **关注按钮也走描边**（同胶囊的理由：卡片里不再套第二层材质）。
-         *
-         * 观感与原来的材质药丸对齐：同高、同圆角、同字号；已关注时用次要前景色，
-         * 未关注用主题正文色 —— 这两条颜色规则沿用 MaterialLabelButton 的约定。
-         */
-        Row() {
-          Text(this.following
-            ? $r('app.string.action_following') : $r('app.string.action_follow'))
-            .fontSize(13)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(this.following ? '#737373' : $r('app.color.primary_text'))
-            .maxLines(1)
-        }
-        .width(FOLLOW_PILL_WIDTH)
-        .height(ROW_HEIGHT)
-        .justifyContent(FlexAlign.Center)
-        .borderRadius(ROW_HEIGHT / 2)
-        .border({ width: 1, color: $r('app.color.divider') })
-        .backgroundColor(Color.Transparent)
-        .hoverEffect(HoverEffect.None)
-        .onClick((): void => {
-          this.tapFollow();
+        MaterialLabelButton({ autoInvert: false,
+          labelRes: this.following
+            ? $r('app.string.action_following') : $r('app.string.action_follow'),
+          pillWidth: FOLLOW_PILL_WIDTH,
+          pillHeight: ROW_HEIGHT,
+          fontSize: 13,
+          onTap: (): void => {
+            this.tapFollow();
+          }
         })
-        // 4-way lock 照旧：按住记一下，落在这颗按钮上的滑动先由它吃（见文件头）。
-        .onTouch(trackMaterialTouch)
-        .gesture(PanGesture().onActionStart(consumePan).onActionUpdate(consumePan))
       }
     }
     .width('100%')
