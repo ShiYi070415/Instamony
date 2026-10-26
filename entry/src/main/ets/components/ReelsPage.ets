@@ -316,6 +316,10 @@ struct ReelSlide {
    * 单独一路传进来，只影响"播不播"，不影响"挂不挂"。
    */
   @Prop hostPaused: boolean = false;
+  /** 我在这份列表里的下标（判断"暂停按钮该不该给我显示"用）。 */
+  @Prop slotIndex: number = -1;
+  /** 暂停发生在第几条（-1 = 没有）。只有等于 slotIndex 时才显示正中按钮。 */
+  @Prop pausedSlot: number = -1;
   /** 宿主层面的 2 倍速（长按左右两侧，见 ReelPage.pageHoldStart）。 */
   @Prop hostSpeed: boolean = false;
   /** 长按暂停（不显示正中按钮，所以和 hostPaused 分开）。 */
@@ -1118,7 +1122,8 @@ struct ReelSlide {
        * 而且节点不在树上时**不占触摸**（常驻改 opacity 的话它虽然看不见，照样要小心命中区域）。
        * 它自己不吃触摸（见 pauseButton 的说明），点它 = 点画面 = 继续播放。
        */
-      if (this.playing && this.reel.playable() && (this.userPaused || this.hostPaused)) {
+      if (this.playing && this.reel.playable() && this.pausedSlot === this.slotIndex
+        && this.slotIndex >= 0) {
         this.pauseButton()
       }
 
@@ -2183,6 +2188,14 @@ export struct ReelsPage {
   @State private burst: LikeBurstState = new LikeBurstState();
   /** 用户手动暂停（单击画面切换，见 scheduleSingleTap）。 */
   @State private pagePaused: boolean = false;
+  /**
+   * **暂停发生在第几条**（-1 = 没有）。
+   *
+   * 用它而不是共享布尔来决定"按钮给谁看"：滑动过程中新的一条会先变成"在播"，
+   * 而页面级暂停还是 true —— 只按布尔判断的话，新条会**短暂显示**暂停按钮。
+   * 按下标比对之后，只有"当初被暂停的那一条"才显示，滑到别的条一律不显示。
+   */
+  @State private pausedSlot: number = -1;
   /** 长按（中间）：暂停 + 隐藏全局控件，松手恢复（见 pageHoldStart/End）。 */
   @State private pageHold: boolean = false;
   /** 长按（左右两侧）：2 倍速，松手恢复（见 pageHoldStart/End）。 */
@@ -2677,6 +2690,8 @@ export struct ReelsPage {
           reel: reel,
           segment: this.segment,
           playing: index === this.activeIndex && !this.frozenAll,
+          slotIndex: index,
+          pausedSlot: this.pausedSlot,
           hostPaused: this.pagePaused,
           hostHold: this.pageHold,
           hostSpeed: this.pageSpeed,
@@ -3056,6 +3071,8 @@ export struct ReelsPage {
        * 由**当前条自己**落到本地 userPaused（见 ReelSlide.onPauseTick）。
        */
       this.pagePaused = !this.pagePaused;
+      // 记下"暂停落在哪一条"（继续播放时清掉）。
+      this.pausedSlot = this.pagePaused ? this.activeIndex : -1;
       AppStorage.setOrCreate(REELS_PAUSED, this.pagePaused);
       AppStorage.setOrCreate(REELS_PAUSE_TICK, Date.now());
     }, SINGLE_TAP_DELAY_MS);
@@ -3070,6 +3087,7 @@ export struct ReelsPage {
   /** 正中继续按钮被点：解掉页面级暂停（只影响当前这条）。 */
   private onResumeTap(): void {
     this.pagePaused = false;
+    this.pausedSlot = -1;
     AppStorage.setOrCreate(REELS_PAUSED, false);
     this.pageHold = false;
   }
@@ -3084,6 +3102,7 @@ export struct ReelsPage {
     this.pagePaused = false;
     this.pageHold = false;
     this.pageSpeed = false;
+    this.pausedSlot = -1;
     AppStorage.setOrCreate(REELS_PAUSED, false);
   }
 
