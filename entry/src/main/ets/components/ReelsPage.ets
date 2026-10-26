@@ -1926,7 +1926,18 @@ struct ReelOverlay {
       .padding({ left: SIDE_PADDING, right: ACTION_COLUMN_WIDTH, bottom: this.infoPadding() })
       // 跟着底栏下沉（需求："动作区和资讯区跟随 tabbar 下沉"）：整块往下挪，和栏同一条曲线。
       // 全局控件隐藏时再多挪 CHROME_SHIFT_VP（"淡出 + 轻微位移"，见 onChromeHiddenChanged）。
-      .translate({ y: this.overlaySink + (this.chromeHidden ? CHROME_SHIFT_VP : 0) })
+      /*
+       * **隐藏时不受底栏影响**（需求）：底栏下沉是一个持续变化的量（它自己那条弹簧曲线），
+       * 而隐藏控件只该是一次性位移。两者相加会让这一层每帧都被底栏的中间值推着走 ——
+       * 观感就是"卡"。所以隐藏期间位移只取 CHROME_SHIFT_VP，忽略 overlaySink。
+       */
+      .translate({ y: this.chromeHidden ? CHROME_SHIFT_VP : this.overlaySink })
+      /*
+       * **空长按占位**：材质按钮是 Toggle + PanGesture，没有长按识别器，
+       * 于是长按会落到页面根节点那条长按上（用户："长按按钮还是会触发手势"）。
+       * 给这一层挂一个什么都不做的长按，子节点优先，父节点那条就不会成立。
+       */
+      .gesture(LongPressGesture({ repeat: false, duration: 300 }))
       // 隐藏全局控件：整块淡出（透明度由 @State + animateTo 补间）。
       .opacity(this.chromeAlpha)
       // 文字不吃手势：竖向滑动照旧交给 Swiper。
@@ -1955,7 +1966,18 @@ struct ReelOverlay {
        */
       .padding({ right: ACTION_RIGHT_PADDING, bottom: this.infoPadding() })
       // 和左边那块同一个位移：一起沉、一起回来（见 overlaySink）；隐藏控件时一起下缩一点。
-      .translate({ y: this.overlaySink + (this.chromeHidden ? CHROME_SHIFT_VP : 0) })
+      /*
+       * **隐藏时不受底栏影响**（需求）：底栏下沉是一个持续变化的量（它自己那条弹簧曲线），
+       * 而隐藏控件只该是一次性位移。两者相加会让这一层每帧都被底栏的中间值推着走 ——
+       * 观感就是"卡"。所以隐藏期间位移只取 CHROME_SHIFT_VP，忽略 overlaySink。
+       */
+      .translate({ y: this.chromeHidden ? CHROME_SHIFT_VP : this.overlaySink })
+      /*
+       * **空长按占位**：材质按钮是 Toggle + PanGesture，没有长按识别器，
+       * 于是长按会落到页面根节点那条长按上（用户："长按按钮还是会触发手势"）。
+       * 给这一层挂一个什么都不做的长按，子节点优先，父节点那条就不会成立。
+       */
+      .gesture(LongPressGesture({ repeat: false, duration: 300 }))
       // 隐藏全局控件：整块淡出（和左边资讯区同一条曲线，见 onChromeHiddenChanged）。
       .opacity(this.chromeAlpha)
       // 不吃手势（按钮自己要能点，见 actionColumn 里的材质按钮）。
@@ -2324,7 +2346,7 @@ export struct ReelsPage {
      * 包一层 animateTo（摩擦曲线）之后，那两条属性变化就有了"回弹"的收尾，
      * 而不是线性淡出。
      */
-    animateTo({ duration: 320, curve: Curve.Friction }, (): void => {
+    animateTo({ duration: 260, curve: Curve.Friction }, (): void => {
       this.toggleChromeNow();
     });
   }
