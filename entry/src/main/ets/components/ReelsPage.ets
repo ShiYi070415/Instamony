@@ -330,7 +330,13 @@ struct ReelOverlay {
    */
   @StorageProp(SETTING_OVERLAY_BACKDROP_LIGHT) backdropLight: boolean = false;
 
-  /** 正文/主图标的前景色（反色）。 */
+  /**
+   * 正文/次要文字的前景色（反色）。
+   *
+   * **边界**（需求）：只用于**没被沉浸光感组件包裹**的文本 —— 也就是资讯区那条正文
+   * （作者名/关注按钮那些在材质里，颜色交给材质自己；动作区图标下面的计数也归动作区，
+   * 不走反色）。否则观感是"同一个动作区里字和图标各反各的"，很乱。
+   */
   private primaryInk(): ResourceColor {
     return this.backdropLight ? '#000000' : '#FFFFFF';
   }
@@ -995,7 +1001,7 @@ struct ReelOverlay {
         if (this.reel.likeCount > 0) {
           Text(this.countText(this.reel.likeCount))
             .fontSize(11)
-            .fontColor(this.primaryInk())
+            .fontColor(Color.White)
             .maxLines(1)
         }
       }
@@ -1016,7 +1022,7 @@ struct ReelOverlay {
         if (this.reel.commentCount > 0) {
           Text(this.countText(this.reel.commentCount))
             .fontSize(11)
-            .fontColor(this.primaryInk())
+            .fontColor(Color.White)
             .maxLines(1)
         }
       }
@@ -1038,7 +1044,7 @@ struct ReelOverlay {
         if (this.reel.repostCount > 0) {
           Text(this.countText(this.reel.repostCount))
             .fontSize(11)
-            .fontColor(this.primaryInk())
+            .fontColor(Color.White)
             .maxLines(1)
         }
       }
