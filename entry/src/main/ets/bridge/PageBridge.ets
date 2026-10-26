@@ -10,6 +10,8 @@
 import { webview } from '@kit.ArkWeb';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { InstagramProbe } from '../probe/InstagramProbe';
+// Client Hints 的型号值（见 loadUrl 里那段说明）：和网页 UA 同源，避免两处各写一份。
+import { AppConfig } from '../config/AppConfig';
 import { SessionGate } from '../core/SessionGate';
 // 实时通道的回传落点（见 onMqttEvent）。
 import { MobileMqttWs } from '../core/mobileapi/MobileMqttWs';
@@ -347,7 +349,20 @@ export class InstagramPageBridge {
     this.ready = false;
     this.pendingUrl = '';
     try {
-      this.controller.loadUrl(url);
+      /*
+       * **顺带给整页导航补上 UA Client Hints 的型号**。
+       *
+       * 为什么：`sec-ch-ua-model` 才是新版网页（Chromium 110+）里"机型"的正式通道，
+       * 它能带空格和品牌（`"HUAWEI Mate 80"`），而网页 UA 那一栏塞不下这个名字
+       * （写进去会被 IG 截断/归并，见 AppConfig.webUserAgent 的说明）。
+       * 页面里的脚本还会从 `navigator.userAgentData` 读同一项（见 InstagramWebHost 的补丁），
+       * 两条路铺上，登录 POST 无论走头还是走 JS 拿到的都是同一个名字。
+       */
+      const headers: Array<webview.WebHeader> = [{
+        headerKey: 'Sec-CH-UA-Model',
+        headerValue: `"${AppConfig.deviceModelName()}"`
+      }];
+      this.controller.loadUrl(url, headers);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'loadUrl failed: %{public}s', (error as Error).message);
       this.pendingUrl = url;

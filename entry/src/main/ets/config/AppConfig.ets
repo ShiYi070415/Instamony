@@ -81,4 +81,16 @@ export class AppConfig {
     return `Mozilla/5.0 (Linux; Android ${device.androidRelease}; ${DeviceTruth.webModel()}) `
       + 'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
   }
+
+  /**
+   * **系统市场名**（如 `HUAWEI Mate 80`）：给 UA Client Hints 用（见 InstagramWebHost 的补丁）。
+   *
+   * 和 `webUserAgent()` 里那个型号**故意不是一个值**：
+   *   · UA 里的型号必须是"无空格机型 token"，否则 IG 的解析会截断/丢弃（实测两次）；
+   *   · Client Hints 的 `model` 是 JSON 字符串，允许带空格和品牌 —— 官方客户端显示的
+   *     `Huawei Mate 80` 就是从这里来的。
+   */
+  static deviceModelName(): string {
+    return DeviceTruth.profile().model;
+  }
 }

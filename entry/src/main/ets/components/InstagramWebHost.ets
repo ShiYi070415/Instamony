@@ -29,6 +29,48 @@ const SESSION_RECHECK_MS: number = 1200;
  */
 const HEADLESS_OPACITY: number = 0.01;
 
+/**
+ * **UA Client Hints 补丁**：把 `navigator.userAgentData` 报的型号改成**系统市场名**。
+ *
+ * 为什么要它（三次真机实测的结论）：
+ *   · 网页 UA 那一栏只认**不带空格的机型 token** —— 写 `HUAWEI Mate 80` 会被 IG 归并成
+ *     "Huawei Mate"，写 `Mate 80` 干脆什么都不显示，所以 UA 里现在放的是机型代号 `VYG-AL00`；
+ *   · 但官方客户端显示的是 `Huawei Mate 80`，说明它读到的是**另一条通道**：新版网页
+ *     （Chromium 110+）读机型走的是 Client Hints —— `navigator.userAgentData`
+ *     与 `sec-ch-ua-model`，格式是 JSON 字符串，允许带空格和品牌。
+ *
+ * 这里在**文档开始**就把那条通道的值替换掉：`getHighEntropyValues(['model'])` 和
+ * `userAgentData.model` 两条路都覆盖（不同版本的 IG 读法不同）。UA 本身不动 ——
+ * 它仍然必须是合法、能被服务器解析的形态，两者本来就该各管一摊。
+ *
+ * 失败一律静默：补丁只是"让型号显示得更像真机"，不能影响登录。
+ */
+function clientHintsScript(): string {
+  // 用 JSON.stringify 转义：型号名可能带引号/非 ASCII，直接拼进脚本会破句法。
+  const model: string = JSON.stringify(AppConfig.deviceModelName());
+  return '(function () {'
+    + '  try {'
+    + `    var MODEL = ${model};`
+    + '    var data = navigator.userAgentData;'
+    + '    if (!data) { return; }'
+    + '    var passThrough = data.getHighEntropyValues;'
+    + '    if (typeof passThrough === "function") {'
+    + '      data.getHighEntropyValues = function (hints) {'
+    + '        return passThrough.call(data, hints).then(function (values) {'
+    + '          try { values.model = MODEL; } catch (e) {}'
+    + '          return values;'
+    + '        });'
+    + '      };'
+    + '    }'
+    + '    try {'
+    + '      Object.defineProperty(data, "model", {'
+    + '        configurable: true, get: function () { return MODEL; }'
+    + '      });'
+    + '    } catch (e) {}'
+    + '  } catch (e) {}'
+    + '})();';
+}
+
 @Component
 export struct InstagramWebHost {
   @Prop @Watch('onVisibleChanged') visible: boolean = false;
@@ -279,7 +321,10 @@ export struct InstagramWebHost {
        * 这是"不像自动化"的关键一步。模板机制现在只剩兜底读取（盘上已有的那些）。
        */
       .runJavaScriptOnDocumentStart([
-        { script: SESSION_WATCHER, scriptRules: ['*'] }
+        { script: SESSION_WATCHER, scriptRules: ['*'] },
+        // UA Client Hints 里那项"型号"（见 clientHintsScript）：官方客户端显示的
+        // `Huawei Mate 80` 就是从这里读的，网页 UA 那一栏写不下这个名字。
+        { script: clientHintsScript(), scriptRules: ['*'] }
       ])
       .onPageBegin((event) => {
         this.bridge.markUnready();
