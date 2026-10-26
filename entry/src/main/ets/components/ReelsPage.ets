@@ -485,6 +485,16 @@ struct ReelSlide {
 
   /** 换条 / 变成当前页：进度归零、临时态清干净（需求："切到下一条视频时进度归零"）。 */
   private onPlayingChanged(): void {
+    /*
+     * **暂停只属于某一条**（需求）：一旦这一条不再是"该播的那条"，本地暂停立刻清掉，
+     * 中心按钮的显示条件（见 build 里那一处）也就同时不成立了 —— 划到下一条时
+     * 下一条是全新状态、直接播放，不会残留上一的暂停。
+     */
+    if (!this.playing) {
+      this.userPaused = false;
+      this.holdPaused = false;
+      this.dragging = false;
+    }
     if (this.playing) {
       this.progress = 0;
       this.dragging = false;
@@ -1102,7 +1112,8 @@ struct ReelSlide {
        * 而且节点不在树上时**不占触摸**（常驻改 opacity 的话它虽然看不见，照样要小心命中区域）。
        * 它自己不吃触摸（见 pauseButton 的说明），点它 = 点画面 = 继续播放。
        */
-      if (this.playing && this.reel.playable() && (this.userPaused || this.hostPaused)) {
+      if (this.playing && this.reel.playable()
+        && (this.userPaused || this.hostPaused)) {
         this.pauseButton()
       }
 
