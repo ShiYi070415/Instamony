@@ -1971,6 +1971,10 @@ export struct ReelsPage {
   @StorageLink(REELS_CHROME_HIDDEN) chromeHidden: boolean = false;
   /** 双击点赞那颗放大爱心的瞬时状态（整页一个，见 build 里的 LikeBurst）。 */
   @State private burst: LikeBurstState = new LikeBurstState();
+  /** 用户手动暂停（单击画面切换，见 scheduleSingleTap）。 */
+  @State private pagePaused: boolean = false;
+  /** 单击延迟执行的句柄（-1 = 没有）。 */
+  private singleTapTimer: number = -1;
 
   /**
    * 右侧动作栏 / 作者行那几个动作 —— **功能由宿主实现**（HTTP 直发在 pages/Index），
@@ -2440,7 +2444,7 @@ export struct ReelsPage {
         ReelSlide({
           reel: reel,
           segment: this.segment,
-          playing: index === this.activeIndex && !this.frozenAll,
+          playing: index === this.activeIndex && !this.frozenAll && !this.pagePaused,
           // 预加载下一条：一直开着（原先按网络开关过，实测会影响切换观感；
           // 播放器的预下载缓冲已经收到 2 秒，这一项的开销有界）。
           preload: index === this.activeIndex + 1,
@@ -2659,7 +2663,8 @@ export struct ReelsPage {
     .width('100%')
     .height('100%')
     .backgroundColor(Color.Black)
-    .parallelGesture(
+    .parallelGesture(GestureGroup(GestureMode.Parallel,
+      
       // distanceThreshold 同信息流：不设的话默认"手指没划出组件就算一次点击"，
       // 快速上下滑两下会被凑成一次双击、直接点赞（见 FeedList 的 LIKE_TAP_DISTANCE_VP）。
       TapGesture({ count: 2, distanceThreshold: DOUBLE_TAP_DISTANCE_VP })
@@ -2669,8 +2674,15 @@ export struct ReelsPage {
           const y: number = fingers.length > 0 ? fingers[0].localY : -1;
           playLikeBurst(this.burst, REELS_BURST_KEY, x, y);
           this.doubleTapLike();
-        })
-    )
+        }),
+            /* 单击 → 暂停/继续（需求第 3 条）。挂在这一层是因为双击点赞就挂在这里、真机验证可用；
+             * 卡片内部（含压在 XComponent 上的命中层）收不到事件。延迟一个双击窗口再执行，
+             * 否则双击会顺带把播放暂停掉（见 scheduleSingleTap）。 */
+            TapGesture({ count: 1 })
+              .onAction((): void => {
+                this.scheduleSingleTap();
+              })
+          ))
   }
 
   /**
@@ -2678,6 +2690,21 @@ export struct ReelsPage {
    *
    * 已经赞过就什么都不做（不再发请求）。点赞本身仍走 tapLike 那套乐观 + 回滚。
    */
+  /**
+   * 单击 → 暂停/继续；**延迟一个双击窗口**再执行，见到第二下就作废（那是双击点赞）。
+   */
+  private scheduleSingleTap(): void {
+    if (this.singleTapTimer >= 0) {
+      clearTimeout(this.singleTapTimer);
+      this.singleTapTimer = -1;
+      return;
+    }
+    this.singleTapTimer = setTimeout((): void => {
+      this.singleTapTimer = -1;
+      this.pagePaused = !this.pagePaused;
+    }, SINGLE_TAP_DELAY_MS);
+  }
+
   private doubleTapLike(): void {
     /*
      * **双击点赞以"落定那一条"为准，不用 `activeIndex`**（审计 B1）。
