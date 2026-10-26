@@ -2290,6 +2290,14 @@ export struct ReelsPage {
   onReelSwipe: () => void = (): void => {
   };
   /**
+   * **当前这条的媒体 id**（C1：评论首屏预取用）。
+   *
+   * 为什么单独报：评论面板的首屏要按 mediaId 取，而"当前是哪条"只有本组件知道。
+   * 外壳拿到它就能在用户点开评论**之前**先把首屏热好（面板打开即为内容）。
+   */
+  onActiveMediaId: (mediaId: string) => void = (mediaId: string): void => {
+  };
+  /**
    * 这一次触摸有没有已经报过"开始滑动"。
    *
    * Down 归零、Move 报一次、抬手后置真：一次触摸只报一次，拖拽过程中不会每帧都回调。
@@ -2526,6 +2534,9 @@ export struct ReelsPage {
    * 下载用的是**原视频**地址（Reel.originalVideoUrl）：展示用的那份已经降到 1080 档省流量了。
    */
   private publishAction(): void {
+    // 顺手报一次当前媒体 id（评论首屏预取，见 onActiveMediaId）。
+    const here: Reel | null = this.current();
+    this.onActiveMediaId(here === null ? '' : here.mediaId);
     hilog.info(DOMAIN, TAG, 'active cover idx=%{public}d len=%{public}d reels=%{public}d',
       this.activeIndex, this.activeCoverUrl().length, this.reels.length);
     const reel: Reel | null = this.current();

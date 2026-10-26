@@ -1627,6 +1627,16 @@ struct Index {
    * （见 core/NativeComments.like）。空 = 只试网页那条 REST。
    */
   private commentsMediaId: string = '';
+  /**
+   * **评论首屏预取缓存**（C1 批次）。
+   *
+   * 用户点评论前，reels 每条落定时顺手把首屏取回来（低优先级）；点开面板时直接用它，
+   * 省掉"打开面板 → 转圈 → 内容"那一段。按 mediaId 存，最多留最近 8 条。
+   */
+  private commentsPrefetch: Map<string, CommentsPayload> =
+    new Map<string, CommentsPayload>();
+  /** 在飞的预取（避免同一条重复发）。 */
+  private commentsPrefetching: Set<string> = new Set<string>();
   /** 正在点赞的评论 pk（防连点：同一条在处理中就忽略后续点击）。 */
   private commentLiking: Array<string> = [];
   /** 这次评论面板对应的那条帖子（网页驱动兜底要导航到它，见 likeCommentOnWeb）。 */
@@ -6185,9 +6195,46 @@ struct Index {
    * 为什么"一条都没读到"也算不可用：`state=empty` 有可能是这条媒体真的没有评论，
    * 也有可能是这条端点给的形状变了（那就要去网页那条路看看了）—— 交给后面两条路兜底更稳。
    */
+  /**
+   * **评论首屏预取**（C1）：reels 某条落定后顺手取一页，点开面板时直接用。
+   *
+   * 只取第一页、只走原生那条快路径；失败一律忽略（点开时还会按原逻辑再试）。
+   */
+  private prefetchComments(mediaId: string): void {
+    const key: string = mediaId.trim();
+    if (key.length === 0 || this.commentsPrefetch.has(key) || this.commentsPrefetching.has(key)) {
+      return;
+    }
+    this.commentsPrefetching.add(key);
+    NativeComments.fetch(key, '').then((payload: CommentsPayload | null): void => {
+      this.commentsPrefetching.delete(key);
+      if (payload === null || payload.state !== 'ok') {
+        return;
+      }
+      this.commentsPrefetch.set(key, payload);
+      // 只留最近 8 条（Map 保持插入序，超了删最早的）。
+      while (this.commentsPrefetch.size > 8) {
+        const oldest: string | undefined = this.commentsPrefetch.keys().next().value;
+        if (oldest === undefined) {
+          break;
+        }
+        this.commentsPrefetch.delete(oldest);
+      }
+    }).catch((): void => {
+      this.commentsPrefetching.delete(key);
+    });
+  }
+
   private async readCommentsNative(post: MediaPost): Promise<CommentsPayload | null> {
     // 帖子 id 形如 `<mediaId>_<userId>`；reels 那条直接就是媒体 id（见 openReelComments）。
     const mediaId: string = Index.mediaIdOfPost(post.id);
+    // **先用预取的首屏**（C1）：命中就不发网络，面板打开即为内容。
+    const cached: CommentsPayload | undefined = this.commentsPrefetch.get(mediaId);
+    if (cached !== undefined) {
+      hilog.info(DOMAIN, TAG, 'comments src=prefetch n=%{public}d', (cached.items ?? []).length);
+      this.commentsMediaId = mediaId;
+      return cached;
+    }
     const payload: CommentsPayload | null = await NativeComments.fetch(mediaId, '');
     if (payload === null || payload.state !== 'ok') {
       hilog.info(DOMAIN, TAG, 'comments native skip state=%{public}s detail=%{public}s',
