@@ -403,6 +403,14 @@ export struct ProfilePage {
     };
   /** 个人信息那一块的高度（vp，量出来的）：钉住的判据就是它。 */
   private headerBlockVp: number = 0;
+  /**
+   * 别人主页「关注 / 发消息」那一行的高度（vp；本人主页是 0）。
+   *
+   * 为什么钉住判定要加它：那一行是**单独一个 ListItem**，排在头部块与分段按钮之间 ——
+   * 分段按钮的顶边位置 = 头部块高 + 这一行高。只按头部块高判的话，别人主页会出现
+   * "按钮还没到标题栏就交接"（和本人主页量错高度是同一类问题）。
+   */
+  private followRowVp: number = 0;
   /** 屏幕高度（vp）：算"末尾补高"要用（见 tailSpacerVp）。 */
   private screenHeightVp: number = 0;
   /** 外层滚动（头部 + 分段按钮）的控制器。 */
@@ -596,8 +604,9 @@ export struct ProfilePage {
   highlightsRow() {
     Scroll() {
       Row({ space: 0 }) {
-        // 「+ 新」：和托盘里"你的快拍"同一种画法（大圆 + 细环 + 11sp 小字）。
-        Column({ space: 6 }) {
+        // 「+ 新」：只在**本人**主页出现（别人主页不该有"往自己主页挂东西"的入口）。
+        if (this.isSelfPage()) {
+          Column({ space: 6 }) {
           Stack({ alignContent: Alignment.Center }) {
             Column()
               .width(HIGHLIGHT_SIZE + HIGHLIGHT_RING_GAP * 2)
@@ -615,10 +624,11 @@ export struct ProfilePage {
             .fontColor($r('app.color.primary_text'))
             .maxLines(1)
         }
-        .width(HIGHLIGHT_LABEL_W)
-        .onClick((): void => {
-          hilog.info(DOMAIN, TAG, 'PF highlight new tap (not wired)');
-        })
+          .width(HIGHLIGHT_LABEL_W)
+          .onClick((): void => {
+            hilog.info(DOMAIN, TAG, 'PF highlight new tap (not wired)');
+          })
+        }
 
         ForEach(this.highlights, (one: ProfileHighlight, index: number): void => {
           Column({ space: 6 }) {
@@ -1680,12 +1690,19 @@ export struct ProfilePage {
                 .backgroundColor($r('app.color.field_background'))
               Column({ space: 8 }) {
                 Row({ space: 5 }) {
+                  /*
+                   * **过长的显示名不再挤出屏幕**（需求）：
+                   * 单行 + 省略号之外还必须给宽度约束 —— 只写 maxLines 时 Text 仍按内容取宽，
+                   * 和右侧认证角标一起就把这一行顶出屏幕了。layoutWeight(1) 让它吃掉"剩下的宽度"，
+                   * 角标保持固定大小，超出部分自己出省略号。
+                   */
                   Text(this.displayName())
                     .fontSize(18)
                     .fontWeight(FontWeight.Bold)
                     .fontColor($r('app.color.primary_text'))
                     .maxLines(1)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    .layoutWeight(1)
                   if (this.header !== null && this.header.isVerified) {
                     SymbolGlyph($r('sys.symbol.checkmark_circle_fill'))
                       .fontSize(15)
@@ -1760,10 +1777,14 @@ export struct ProfilePage {
           .padding({ left: 16, right: 16, top: 12, bottom: 14 })
           // 高度统一由**外层那个 Column**（含精选快拍那一排）量，见下面的 onAreaChange。
 
-            // ---- 精选快拍区：满屏宽的一排（左右留白在它自己行内，见 highlightsRow）----
-            if (this.isSelfPage()) {
-              this.highlightsRow()
-            }
+            /*
+             * ---- 精选快拍区 ----
+             *
+             * **本人和别人主页都画**（需求：其他用户主页也要有 highlight 列表）。
+             * 差别只在「+ 新」那一颗：那是"往自己主页挂东西"的入口，别人主页不出现
+             * （见 highlightsRow 里的 isSelfPage 判断）。
+             */
+            this.highlightsRow()
           }
           .width('100%')
           /*
@@ -1789,6 +1810,17 @@ export struct ProfilePage {
           ListItem() {
             this.followRow()
           }
+          /*
+           * 量「关注 / 发消息」这一行的高度：它是分段按钮上面多出来的那一段，
+           * 钉住判定必须算进去（见 followRowVp 的说明）。
+           */
+          .onAreaChange((oldArea: Area, newArea: Area): void => {
+            const height: number = typeof newArea.height === 'number'
+              ? newArea.height as number : 0;
+            if (height > 0 && Math.abs(height - this.followRowVp) > 0.5) {
+              this.followRowVp = height;
+            }
+          })
         }
 
         // ---- 分段按钮：钉住后由标题栏接手（这里淡出，见 inFlowSegmentBar）----
@@ -2270,8 +2302,18 @@ export struct ProfilePage {
     if (this.headerBlockVp <= 0) {
       return;
     }
-    // 留 PIN_SLACK_VP 的余量：外层的可滚范围就是"个人信息的高度"，取整误差下卡太死会差一点。
-    const pinned: boolean = offsetY >= this.headerBlockVp - PIN_SLACK_VP;
+    /*
+     * 交接线 = 头部块高度 + （别人主页）关注行高度。
+     *
+     * 外层 List 滚 offsetY 时，分段按钮的顶边位置就是这个和；判据对齐它，动画才能"滑到哪儿
+     * 就在哪儿换"。PIN_SLACK_VP 现在是 0（只作微调余量保留）。
+     */
+    const blockVp: number = this.headerBlockVp
+      + (this.isSelfPage() ? 0 : this.followRowVp);
+    if (blockVp <= 0) {
+      return;
+    }
+    const pinned: boolean = offsetY >= blockVp - PIN_SLACK_VP;
     if (pinned !== this.barPinned) {
       this.barPinned = pinned;
       // 钉住 = 外层滚到底、内层开始接管：换了容器，底栏那份增量记账清零。
