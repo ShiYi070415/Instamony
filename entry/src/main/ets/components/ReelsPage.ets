@@ -16,16 +16,10 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { display } from '@kit.ArkUI';
-// 反色开关落盘诊断（见 ReelOverlay.onBackdropTone）：真机 hilog 抓不到，只能写文件。
-import { fileIo } from '@kit.CoreFileKit';
 import { Reel, ReelStreamVm } from '../model/Reel';
 import { ReelsViewModel } from '../viewmodel/ReelsViewModel';
 import { VideoSurface } from './VideoSurface';
-import {
-  MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS,
-  // 画面亮度结论（官方「叠字反色」那套的输入，见 BackdropTone）：ReelOverlay 的前景色跟着它翻。
-  SETTING_OVERLAY_BACKDROP_LIGHT, SETTING_VIDEO_MUTED
-} from '../core/AppSettings';
+import { MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS, SETTING_VIDEO_MUTED } from '../core/AppSettings';
 import { ReelsAction } from '../core/ReelsAction';
 import {
   MaterialIconButton, MaterialLabelButton, SurfaceModifier, trackMaterialTouch
@@ -73,6 +67,17 @@ const AUTHOR_FOLLOW_GAP: number = 10;
 /** 正文的字号与行高（vp）。 */
 const CAPTION_FONT_SIZE: number = 14;
 const CAPTION_LINE_HEIGHT: number = 19;
+/**
+ * **压在画面上的文字阴影**（正文 / 动作区计数共用）。
+ *
+ * 为什么用阴影而不是反色：反色要靠采样画面亮度（`componentSnapshot` 拍不到视频表面，
+ * 结论永远是「暗底」，实测无效果，那段代码已删）；阴影是纯渲染属性，
+ * 白字在亮画面上靠它压出边界，暗画面上又几乎看不见 —— 一种实现同时兼顾两种底。
+ * 半径 6 / 下移 1 / 60% 黑：够托住字，又不至于糊成一圈光晕。
+ */
+const OVERLAY_TEXT_SHADOW: ShadowOptions = {
+  radius: 6, color: '#99000000', offsetX: 0, offsetY: 1
+};
 /** 正文折叠排版要用"可用宽度"，量不出来时不截断（见 captionPrefix）。 */
 const FALLBACK_WIDTH_VP: number = 360;
 /** 右侧动作栏：整栏宽度、按钮直径、图标大小、按钮之间的间距（vp）。 */
@@ -320,54 +325,6 @@ struct ReelOverlay {
    * 天然同步；而且这两层本来就是"钉在屏幕底部"的浮层，挪一段最省事。
    */
   @Prop overlaySink: number = 0;
-  /**
-   * **背景反色**：官方那套"叠在画面上时的前景色自动反色"（见 core/BackdropTone）。
-   *
-   * 做法和首页 FeedList 完全一致：BackdropTone 每秒对当前画面采样一次平均亮度，
-   * 只把结论（亮底 / 暗底）写进 AppStorage，这里用 @StorageProp 订阅 —— 于是
-   *   · 暗底：正文 **白**、次要文字 **浅灰**（#BFBFBF）；
-   *   · 亮底：正文 **黑**、次要文字 **灰**（#8A8A8A）。
-   * 正好是需求要的那两组对立色（白↔黑、灰↔浅灰），而不是跟主题走（主题是"界面底色"的事，
-   * 这里压着的是一张随时在变的视频画面）。
-   */
-  @StorageProp(SETTING_OVERLAY_BACKDROP_LIGHT) @Watch('onBackdropTone') backdropLight: boolean = false;
-
-  /**
-   * 正文/次要文字的前景色（反色）。
-   *
-   * **边界**（需求，最终版）：
-   *   · 资讯区正文（含"… 展开 / 收起"那个尾巴）→ 反色；
-   *   · 动作区图标下面的**计数** → 反色（它们是裸文本，没被材质包着）；
-   *   · 沉浸光感组件（动作区按钮、作者行、关注按钮）→ **系统级禁用反色**
-   *     （`autoInvert: false`，见 MaterialSurface 的 SurfaceModifier），
-   *     不再让材质跟着背景翻颜色。
-   */
-  /**
-   * 反色开关一变就落一次盘（`files/Instarmony_tone.txt`）。
-   *
-   * 为什么：真机上 ArkTS 的 hilog 抓不到（见 EntryAbility.dumpIdentity 的说明），
-   * 而"正文到底有没有反色"取决于 BackdropTone 有没有真的把结论翻过来 ——
-   * 没有这一行就只能靠猜。只追加时间戳 + 结论，体量极小。
-   */
-  private onBackdropTone(): void {
-    try {
-      const path: string = `${getContext(this).filesDir}/Instarmony_tone.txt`;
-      const file: fileIo.File = fileIo.openSync(path,
-        fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.APPEND);
-      fileIo.writeSync(file.fd, `${Date.now()} light=${this.backdropLight ? 1 : 0}\n`);
-      fileIo.closeSync(file);
-    } catch (error) {
-    }
-  }
-
-  private primaryInk(): ResourceColor {
-    return this.backdropLight ? '#000000' : '#FFFFFF';
-  }
-
-  /** 次要文字的前景色（反色：灰 ↔ 浅灰）。 */
-  private secondaryInk(): ResourceColor {
-    return this.backdropLight ? '#8A8A8A' : '#BFBFBF';
-  }
   /**
    * 信息层（作者行 / 关注按钮 / 正文）的**底部留白**（vp；0 = 用默认 INFO_BOTTOM）。
    *
@@ -861,12 +818,13 @@ struct ReelOverlay {
         if (this.captionExpanded) {
           Text() {
             Span(this.captionTranslation.length > 0 ? this.captionTranslation : this.reel.caption)
-              .fontColor(this.primaryInk())
+              .fontColor(Color.White)
             Span(CAPTION_LESS)
-              .fontColor(this.secondaryInk())
+              .fontColor('#BFBFBF')
           }
           .fontSize(CAPTION_FONT_SIZE)
           .lineHeight(CAPTION_LINE_HEIGHT)
+          .textShadow(OVERLAY_TEXT_SHADOW)
           .width('100%')
           .textAlign(TextAlign.Start)
           .transition(TransitionEffect.opacity(0).combine(
@@ -878,15 +836,16 @@ struct ReelOverlay {
           Text() {
             Span(this.prefixOfText(this.captionTranslation.length > 0
               ? this.captionTranslation : this.reel.caption))
-              .fontColor(this.primaryInk())
+              .fontColor(Color.White)
             if (this.textTruncated(this.captionTranslation.length > 0
               ? this.captionTranslation : this.reel.caption)) {
               Span(CAPTION_MORE)
-                .fontColor(this.secondaryInk())
+                .fontColor('#BFBFBF')
             }
           }
           .fontSize(CAPTION_FONT_SIZE)
           .lineHeight(CAPTION_LINE_HEIGHT)
+          .textShadow(OVERLAY_TEXT_SHADOW)
           .maxLines(CAPTION_COLLAPSED_MAX_LINES)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
@@ -904,12 +863,13 @@ struct ReelOverlay {
         // 展开态：全文 + 结尾灰色的" 收起"。行数不设限 —— 展开就是为了看全。
         Text() {
           Span(this.reel.caption)
-            .fontColor(this.primaryInk())
+            .fontColor(Color.White)
           Span(CAPTION_LESS)
-            .fontColor(this.secondaryInk())
+            .fontColor('#BFBFBF')
         }
         .fontSize(CAPTION_FONT_SIZE)
         .lineHeight(CAPTION_LINE_HEIGHT)
+          .textShadow(OVERLAY_TEXT_SHADOW)
         .width('100%')
         .textAlign(TextAlign.Start)
         .transition(TransitionEffect.opacity(0).combine(
@@ -921,14 +881,15 @@ struct ReelOverlay {
         // 折叠态：正文（最多两行）+ 结尾灰色的" ... 展开"。
         Text() {
           Span(this.captionPrefix())
-            .fontColor(this.primaryInk())
+            .fontColor(Color.White)
           if (this.captionTruncated()) {
             Span(CAPTION_MORE)
-              .fontColor(this.secondaryInk())
+              .fontColor('#BFBFBF')
           }
         }
         .fontSize(CAPTION_FONT_SIZE)
         .lineHeight(CAPTION_LINE_HEIGHT)
+          .textShadow(OVERLAY_TEXT_SHADOW)
         .maxLines(CAPTION_COLLAPSED_MAX_LINES)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .width('100%')
@@ -1024,7 +985,8 @@ struct ReelOverlay {
         if (this.reel.likeCount > 0) {
           Text(this.countText(this.reel.likeCount))
             .fontSize(11)
-            .fontColor(this.primaryInk())
+            .fontColor(Color.White)
+            .textShadow(OVERLAY_TEXT_SHADOW)
             .maxLines(1)
         }
       }
@@ -1045,7 +1007,8 @@ struct ReelOverlay {
         if (this.reel.commentCount > 0) {
           Text(this.countText(this.reel.commentCount))
             .fontSize(11)
-            .fontColor(this.primaryInk())
+            .fontColor(Color.White)
+            .textShadow(OVERLAY_TEXT_SHADOW)
             .maxLines(1)
         }
       }
@@ -1067,7 +1030,8 @@ struct ReelOverlay {
         if (this.reel.repostCount > 0) {
           Text(this.countText(this.reel.repostCount))
             .fontSize(11)
-            .fontColor(this.primaryInk())
+            .fontColor(Color.White)
+            .textShadow(OVERLAY_TEXT_SHADOW)
             .maxLines(1)
         }
       }
