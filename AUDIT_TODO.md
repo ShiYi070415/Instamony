@@ -254,3 +254,23 @@
 - **Reels 视频宽高诊断**（`reel aspect w=… h=… ratio=…`）与**信息流高视频黑底占位**两项没动。
 - **`WebScripts.commentsByReplayScript`**（只在注释里被提到）删前要确认没有按名字间接调用。
 
+## 工程改名（工具链，非代码）
+
+- [ ] **把工程目录 `C:\HMStudy\Instarmony` 改成 `C:\HMStudy\Instamony`**（用户要求"编译安装包命名也是"）。
+      改不了的原因**不在代码**：hvigor 生成 App Pack 时，文件名前缀取的是**工程根目录名**
+      （`app.json5` 与根 `oh-package.json5` 都没有名字字段，没有任何配置能覆盖），目录叫 `Instarmony`
+      就必然是 `Instarmony-default-signed.app`。目录改名后自动变成 `Instamony-default-signed.app`。
+      **当前被占用无法直接改**：本会话的工作目录 + DevEco Studio 都开在这个目录上，
+      `Rename-Item` 会报 `Access to the path 'C:\HMStudy\Instarmony' is denied`。
+      → 关掉 DevEco 与所有相关终端后跑 `powershell -File .\tools\rename-project.ps1`（脚本里有占用探测、
+      目标已存在的保护、以及改名后的重建步骤提示），然后重新 `assembleHap`/`assembleApp`
+      并覆盖 `release/v1.3.0/` 里的两个产物。
+      **注意 `.ps1` 必须带 UTF-8 BOM**：这台机器只有 Windows PowerShell 5.1（没有 `pwsh` 7），
+      5.1 读无 BOM 的 `.ps1` 会按 ANSI/GBK 解码，中文注释被拆坏、引号配对错乱 → `ParserError`
+      （本轮实测踩到，`tools/rename-project.ps1` 改完用 `node tools/ps1-bom.cjs <文件>` 补 BOM；
+      用 `edit` 工具改 `.ps1` 会把 BOM 吃掉，改完务必补一次）。
+      **签名证书不用动**：`build-profile.json5` 引的是
+      `%USERPROFILE%\.ohos\config\default_Instarmony_*.cer/.p7b/.p12` 这些**文件名**，
+      目录改名不影响它们（要让证书也改名，得改完文件后同步改 `build-profile.json5` 三处路径）。
+      **Git 远端不受影响**（远端是 `ShiYi070415/Instamony`），改完目录名 `git status` 应当仍是干净的。
+
