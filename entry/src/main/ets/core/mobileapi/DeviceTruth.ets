@@ -37,6 +37,32 @@ const DEFAULT_ANDROID_RELEASE: string = '14';
 export class DeviceTruth {
   /** 已经算好的档案（读一次就够；设备信息不会变）。 */
   private static cached: DeviceProfile | null = null;
+  /**
+   * 机型代号（`const.product.model`，如 `VYG-AL00`）的 ASCII 形式（见 `profile()` 里赋值）。
+   *
+   * 单独留一份是因为**网页 UA** 和 **App 身份**对型号字段的要求不一样，见 `webModel()`。
+   */
+  private static webProductModel: string = '';
+
+  /**
+   * **网页 UA 里那个型号字段**该怎么写。
+   *
+   * 这条是实测出来的结论（两次真机登录，看 IG「登录设备」显示什么）：
+   *   · 写 `HUAWEI Mate 80`（系统对外型号名，带品牌、带空格）→ IG 显示 **"Huawei Mate"**，
+   *     具体型号被归并掉；
+   *   · 写 `Mate 80`（去掉品牌，仍带空格）→ IG 干脆**一个型号都不显示**；
+   *   · 所以这一栏要的是**不带空格的机型代号**：`VYG-AL00`。它也正是安卓侧
+   *     `Build.MODEL` 在这台机器上的值（华为机上 `Build.MODEL` 就是认证型号，
+   *     市场名在 `Build.DISPLAY`/产品名里），是"真实且一定能被原样显示"的那个选择。
+   *
+   * App 那条身份（`profile()` 的 model）**不带这个限制**：它走的是官方客户端那套
+   * `(…; 厂商; 型号; …)` 格式，型号里带品牌、带空格才是正常形态，所以那边仍用市场名。
+   */
+  static webModel(): string {
+    const profile: DeviceProfile = DeviceTruth.profile();
+    return DeviceTruth.webProductModel.length > 0
+      ? DeviceTruth.webProductModel : profile.model;
+  }
 
   /**
    * 这台机器的档案（首次调用时读取并缓存）。
@@ -120,25 +146,20 @@ export class DeviceTruth {
      */
     const asciiMarket: string = DeviceTruth.asciiModel(market);
     const asciiModel: string = DeviceTruth.asciiModel(model);
+    // 网页 UA 要用的那份（见 webModel）：只认"不带空格、不带品牌"的机型代号。
+    DeviceTruth.webProductModel = asciiModel;
     /*
-     * **型号名里去掉品牌前缀**（"HUAWEI Mate 80" → "Mate 80"）。
+     * **型号名（App 那条身份用）= 系统里的完整对外型号名**，品牌前缀照留。
      *
-     * 为什么：真机装上去之后 IG 的「登录设备」显示的是 **"HUAWEI Mate"** —— 具体型号被吃掉了。
-     * 说明对面拿模型字段做了一个"品牌 + 关键词"的归并（品牌已经在 manufacturer 里单独给了，
-     * 模型字段再带一遍品牌，它就只认到"M ate"这一辈为止）。所以模型字段只留纯型号名，
-     * 品牌交给 manufacturer / UA 的厂商位去表达 —— 这也更接近 Chromium 自己的写法
-     * （`(Linux; Android 12; Mate 60 Pro)` 这类不带品牌）。
+     * 这条身份走的是 `Instagram ... Android (…; 厂商; 型号; …)` 那套格式，官方客户端就是这个样子，
+     * 型号里自带品牌（安卓侧 `Build.MODEL` 在华为机上就是 "HUAWEI Mate 80" 这种），
+     * IG 那边也按这个格式认得出来。
      *
-     * 归一化后再判一次空：真机型名恰好等于品牌时（某些联通定制机）退回 productModel。
+     * 网页 UA 用的是**另一份**（见 webModel）：那边试过带品牌 → 被归并成 "Huawei Mate"，
+     * 试过只留 "Mate 80" → 干脆什么都不显示，说明它要的是**不带空格的机型代号**。
      */
-    const brandWord: string = `${brand} `;
-    let shortName: string = asciiMarket;
-    if (shortName.length > 0 && brandWord.trim().length > 0
-      && shortName.toUpperCase().indexOf(brandWord.toUpperCase()) === 0) {
-      shortName = shortName.slice(brandWord.length).trim();
-    }
-    const modelName: string = shortName.length > 0
-      ? shortName : (asciiModel.length > 0 ? asciiModel : DeviceProfile.DEFAULT.model);
+    const modelName: string = asciiMarket.length > 0
+      ? asciiMarket : (asciiModel.length > 0 ? asciiModel : DeviceProfile.DEFAULT.model);
     const upperBrand: string = brand.toUpperCase();
     const huawei: boolean = upperBrand.indexOf('HUAWEI') >= 0
       || upperBrand.indexOf('HONOR') >= 0 || upperBrand.indexOf('华为') >= 0;

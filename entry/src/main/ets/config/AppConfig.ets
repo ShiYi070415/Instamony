@@ -76,7 +76,9 @@ export class AppConfig {
    */
   static webUserAgent(): string {
     const device: DeviceProfile = DeviceTruth.profile();
-    return `Mozilla/5.0 (Linux; Android ${device.androidRelease}; ${device.model}) `
+    // 型号用 `DeviceTruth.webModel()`（机型代号，不含空格），理由见它的注释 —— 这一栏
+    // 换成带空格的系统型号名会被 IG 归并成"品牌 + 系列"甚至直接不显示。
+    return `Mozilla/5.0 (Linux; Android ${device.androidRelease}; ${DeviceTruth.webModel()}) `
       + 'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
   }
 }
