@@ -214,6 +214,14 @@ export struct SettingsPanel {
                 return;
               }
               if (this.proxyNames.length === 0) {
+                /*
+                 * 还没有任何代理：打开添加面板，并且**先把开关画成"开"**。
+                 *
+                 * 之前这里直接 return，开关被系统回弹回"关"，用户看到的是"点了又自己关掉"
+                 * （像坏了）。现在：画成开 → 面板里填完点"添加"才真正 setEnabled(true)；
+                 * 用户取消的话，面板关闭时在 onDisappear 里回成关。
+                 */
+                this.proxyOn = true;
                 this.openProxySheet();
                 return;
               }
@@ -327,6 +335,13 @@ export struct SettingsPanel {
       dragBar: true,
       showClose: true
     };
+    /*
+     * 面板关掉时把开关回正：用户点了"开"但没添加成功（或直接取消），界面不能一直显示"开"。
+     * 添加成功那条路由 submitProxy 里的 setEnabled(true) 落实，这里只做兜底。
+     */
+    options.onDisappear = (): void => {
+      this.proxyOn = AppProxy.enabled();
+    };
     if (PlatformCap.hasArkMaterial()) {
       options.systemMaterial = new uiMaterial.ImmersiveMaterial({
         style: uiMaterial.ImmersiveStyle.ULTRA_THIN
@@ -343,8 +358,9 @@ export struct SettingsPanel {
   proxyAddSheet() {
     Column({ space: 12 }) {
       Text($r('app.string.settings_proxy_add_title'))
-        .fontSize(17)
-        .fontWeight(FontWeight.Medium)
+        // 面板标题：加大一档 + 粗体（官方半模态标题层级）。
+        .fontSize(20)
+        .fontWeight(FontWeight.Bold)
         .fontColor($r('app.color.primary_text'))
         .width('100%')
         .textAlign(TextAlign.Start)
@@ -366,7 +382,8 @@ export struct SettingsPanel {
       .padding(0)
       .borderRadius(SIGN_OUT_RADIUS)
       .attributeModifier(new SurfaceModifier(this.materialThickness, true))
-      .backgroundColor($r('sys.color.comp_background_secondary'))
+      // 取消额外底色（需求）：材质本身就是表面，再垫一层会发灰。
+      .backgroundColor(Color.Transparent)
       .onChange((): void => {
         this.submitProxy();
       })
