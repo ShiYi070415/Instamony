@@ -4433,6 +4433,15 @@ struct Index {
      * 补不到 id 也照常推页（头部还能按用户名取），只是网格会退到模板那条路。
      */
     if (userId.length === 0) {
+      /*
+       * 先看缓存：命中就立刻推页，不再等那一发 id 查询
+       * （用户报的"点 @用户名称 要等很久"就是每次都现问一次 id）。
+       */
+      const known: string = NativeProfile.cachedUserId(name);
+      if (known.length > 0) {
+        this.pushUserProfile(name, known);
+        return;
+      }
       NativeProfile.userIdByUsername(name).then((id: string): void => {
         this.pushUserProfile(name, id);
       }).catch((): void => {

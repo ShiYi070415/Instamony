@@ -275,20 +275,67 @@ export class NativeProfile {
    * 用途：简介里的 `@账号` 只有名字，点开主页时得先把 id 补上，否则那一页的网格/头部
    * 都只有"按用户名"那半边能用、整页会像"加载不出来"（用户报的就是这个）。
    */
+  /**
+   * 账号名 → 数字 id 的进程内缓存。
+   *
+   * 为什么必须有：简介里的 @账号 只有名字，点开主页前得先把 id 问出来 —— 那一发要排队
+   * （限速闸门里常等 1~2 秒），所以"点 @用户 要等很久才跳进去"。这张表把结果记下来：
+   * 第二次点同一个人（含返回后再进）是当帧的；再配一个 warmUserId 供渲染时预热。
+   */
+  private static idCache: Map<string, string> = new Map<string, string>();
+  /** 预热中的账号名（避免同一名字并发发多枪）。 */
+  private static idWarming: Set<string> = new Set<string>();
+
+  /** 缓存里有就直接给（没有给空串）。 */
+  static cachedUserId(username: string): string {
+    const key: string = username.trim().toLowerCase();
+    if (key.length === 0) {
+      return '';
+    }
+    const hit: string | undefined = NativeProfile.idCache.get(key);
+    return hit === undefined ? '' : hit;
+  }
+
+  /** 预热某个账号名的 id（火即可不管）：渲染简介/评论时顺手问一遍。 */
+  static warmUserId(username: string): void {
+    const name: string = username.trim();
+    if (name.length === 0) {
+      return;
+    }
+    const key: string = name.toLowerCase();
+    if (NativeProfile.idCache.has(key) || NativeProfile.idWarming.has(key)) {
+      return;
+    }
+    NativeProfile.userIdByUsername(name).catch((): void => {
+    });
+  }
   static async userIdByUsername(username: string): Promise<string> {
     const name: string = username.trim();
     if (name.length === 0) {
       return '';
     }
-    const body: MobileUserBody | null = await MobileProfile.info('', name,
-      ApiThrottle.interactive());
-    if (body === null) {
-      hilog.info(DOMAIN, TAG, 'userIdByUsername miss @%{public}s', name);
-      return '';
+    const key: string = name.toLowerCase();
+    const cached: string | undefined = NativeProfile.idCache.get(key);
+    if (cached !== undefined && cached.length > 0) {
+      return cached;
     }
-    const id: string = NativeProfile.userIdOf(body.user);
-    hilog.info(DOMAIN, TAG, 'userIdByUsername @%{public}s → %{public}s', name, id);
-    return id;
+    NativeProfile.idWarming.add(key);
+    try {
+      const body: MobileUserBody | null = await MobileProfile.info('', name,
+        ApiThrottle.interactive());
+      if (body === null) {
+        hilog.info(DOMAIN, TAG, 'userIdByUsername miss @%{public}s', name);
+        return '';
+      }
+      const id: string = NativeProfile.userIdOf(body.user);
+      if (id.length > 0) {
+        NativeProfile.idCache.set(key, id);
+      }
+      hilog.info(DOMAIN, TAG, 'userIdByUsername @%{public}s → %{public}s', name, id);
+      return id;
+    } finally {
+      NativeProfile.idWarming.delete(key);
+    }
   }
 
   static async fetchHeader(target: ProfileTarget = ProfileTarget.self()): Promise<ProfileHeader | null> {
