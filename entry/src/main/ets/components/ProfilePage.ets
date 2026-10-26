@@ -158,12 +158,18 @@ const PROFILE_LOAD_AHEAD: number = 2;
  */
 const BAR_HANDOFF_MS: number = 180;
 /**
- * 钉住的判定余量（vp）：外层偏移到"个人信息高 − 这个数"就算钉住。
+ * 钉住的判定余量（vp）。
  *
- * 外层的可滚范围**就是**个人信息的高度（内容高 = 视口 + 头部，见 profileList 的说明），
- * 所以这里留一点余量只是吃掉取整误差，保证"一定滑得到、抬得上去"。
+ * **已改为 0**（用户反馈："分段按钮还没到预定位置就转移到 HDS 标题栏上了"）。
+ *
+ * 原来取 16：`offsetY >= headerBlockVp - 16` 就算钉住 —— 也就是**头部还剩 16vp 没滚完**
+ * 就把分段按钮交给标题栏了，于是它比原来那条流内按钮的位置"提前跳上去"。
+ * 外层的可滚范围本来就正好等于个人信息的高度（内容高 = 视口 + 头部，见 profileList 的说明），
+ * 所以判据直接用 `offsetY >= headerBlockVp` 就是"头部刚好滚完、按钮刚好到顶"那一刻。
+ *
+ * 取整误差用浮动值兜（headerBlockVp 是 onAreaChange 量出来的小数），不需要再留余量。
  */
-const PIN_SLACK_VP: number = 16;
+const PIN_SLACK_VP: number = 0;
 
 /**
  * 网格的**行数据源**（`LazyForEach` 要的 `IDataSource`）。
