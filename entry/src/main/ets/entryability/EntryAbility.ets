@@ -42,6 +42,7 @@ import { AccountScope } from '../core/AccountScope';
 import { AccountBook } from '../core/AccountBook';
 import { webview } from '@kit.ArkWeb';
 import { AppConfig } from '../config/AppConfig';
+import { AppProxy } from '../core/AppProxy';
 import { DeepLink, DeepLinkIntent } from '../core/DeepLink';
 import { Translator } from '../core/Translator';
 // 通知（Push Kit 注册 + 本地通知），见 core/PushCenter。
@@ -107,6 +108,8 @@ export default class EntryAbility extends UIAbility {
      * 顺带把 `DeviceTruth` 的缓存预热掉（它内部只读一次设备信息）。
      */
     hilog.info(DOMAIN, TAG_MATERIAL, 'identity ua=%{public}s', AppConfig.webUserAgent());
+    // 应用级代理：冷启动恢复上一份配置（不重启即可生效，见 core/AppProxy）。
+    AppProxy.restoreAndApply();
     /*
      * 同一份身份**再落一次盘**：`files/Instarmony_identity.txt`。
      *
