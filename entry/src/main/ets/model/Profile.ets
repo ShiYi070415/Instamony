@@ -500,7 +500,11 @@ export class ProfileMapper {
       reposted: EngageState.repostedOfByCode(post.shortcode,
         EngageState.repostedOf(post.mediaId, false)),
       repostCount: post.repostCount,
+      // 分享 / 收藏数：个人主页（网格 / 收藏 / 视频分页）那几条载荷里都没有这两个数字
+      // （见 NativeProfile 只读到了 `media_repost_count`），所以这里是 0 ——
+      // 界面按 0 不画那一颗数字，不会显示 "0"。
       shareCount: 0,
+      saveCount: 0,
       mediaWidth: post.width,
       mediaHeight: post.height,
       originalImageUrls: post.originalImageUrls,

@@ -40,6 +40,10 @@ export interface ReelDto {
   saved?: boolean;
   /** 转发数（`media_repost_count`）。 */
   reposts?: number;
+  /** 分享数（网页脚本按字段名找到的；找不到就不给 → 0，界面不画）。 */
+  shares?: number;
+  /** 收藏数（同上；IG 基本不公开这个数字，真机上多半拿不到）。 */
+  saves?: number;
   likes?: number;
   comments?: number;
   plays?: number;
@@ -110,6 +114,23 @@ export class Reel {
    * 数据源给了 `media_repost_count` 就填进来；个人主页那条没有这个字段，默认 0。
    */
   repostCount: number;
+  /**
+   * **分享数**（动作区那颗 `paperplane` 下面的数字）。
+   *
+   * 数据源给了就填，拿不到就是 **0** —— 那时界面上那一颗数字**整颗不画**（见
+   * components/ReelsPage 的 actionColumn）。为什么不显示 "0"：IG 自己的界面在计数为 0 时
+   * 也不画这个数字，而且我们这边 0 的语义其实是"载荷没说"，不是"真的没人分享"。
+   *
+   * 只读：分享按钮点下去只打开转发面板，**不改这个数**（我们不伪造计数）。
+   */
+  readonly shareCount: number;
+  /**
+   * **收藏数**（动作区那颗 `bookmark` 下面的数字）。
+   *
+   * IG 侧基本**不公开**（网页不渲染、clips 载荷里通常连字段都没有），所以实际几乎总是 0
+   * → 那一颗数字不画。点收藏同样是**不改这个数**（本机点一下不可能知道全站收藏量）。
+   */
+  readonly saveCount: number;
   /** 下载用的原视频地址（最大的一档）；为空时退回 videoUrl。**可变**，同 videoUrl。 */
   originalVideoUrl: string;
   /**
@@ -174,7 +195,11 @@ export class Reel {
               mediaId: string = '', authorId: string = '', caption: string = '',
               liked: boolean = false, reposted: boolean = false, repostCount: number = 0,
               following: boolean = false, followKnown: boolean = false,
-              saved: boolean = false, takenAtMs: number = 0) {
+              saved: boolean = false, takenAtMs: number = 0,
+              // 分享数 / 收藏数**追加在末尾**（而不是插到 repostCount 旁边）：这个构造器
+              // 已经是 20 个位置参数了，插在中间会让所有调用点整体错位 —— 加在尾部、
+              // 带默认值，老调用点一个字都不用改（见 Reel.shareCount / saveCount）。
+              shareCount: number = 0, saveCount: number = 0) {
     this.shortcode = shortcode;
     this.videoUrl = videoUrl;
     this.coverUrl = coverUrl;
@@ -197,6 +222,8 @@ export class Reel {
     this.followKnown = followKnown;
     this.saved = saved;
     this.takenAtMs = takenAtMs > 0 ? takenAtMs : 0;
+    this.shareCount = shareCount > 0 ? shareCount : 0;
+    this.saveCount = saveCount > 0 ? saveCount : 0;
   }
 
   /** 能不能播（没有地址就只画封面）。 */
@@ -281,7 +308,7 @@ export class ReelMapper {
         item.likes ?? 0, item.comments ?? 0, item.origUrl ?? '', item.id ?? '',
         item.uid ?? '', item.caption ?? '', item.liked === true, false, item.reposts ?? 0,
         item.following === true, item.following !== undefined, item.saved === true,
-        item.takenAt ?? 0));
+        item.takenAt ?? 0, item.shares ?? 0, item.saves ?? 0));
     }
     return new ReelsPage(reels, dto.cursor ?? '', dto.more === true);
   }

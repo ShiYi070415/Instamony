@@ -108,6 +108,15 @@ export interface MediaPostInit {
   repostCount?: number;
   /** 分享数（同上）。 */
   shareCount?: number;
+  /**
+   * 收藏数。
+   *
+   * IG 的载荷**基本不公开这个数字**（网页不渲染、移动端 v1 媒体对象里通常连字段都没有），
+   * 所以这里和 shareCount 同一条口径：解析层按候选字段名去找（`save_count` 等），
+   * 找不到就是 0 —— 界面按 0 **不画那颗数字**（见 components/FeedList 的 PostActions），
+   * 于是"收藏数永远是 0"也不会在每张卡下面挂一个 0。
+   */
+  saveCount?: number;
   /** 媒体原始宽高（像素）；接口没给就是 0，排版时退回正方形。 */
   mediaWidth?: number;
   mediaHeight?: number;
@@ -169,6 +178,8 @@ export class MediaPost {
   readonly reposted: boolean;
   readonly repostCount: number;
   readonly shareCount: number;
+  /** 收藏数（见 MediaPostInit.saveCount；IG 一般不给 → 0）。 */
+  readonly saveCount: number;
   readonly mediaWidth: number;
   readonly mediaHeight: number;
   /** 下载用的原始图/原视频（见 MediaPostInit 的同名字段）。 */
@@ -204,6 +215,7 @@ export class MediaPost {
     this.reposted = init.reposted ?? false;
     this.repostCount = init.repostCount ?? 0;
     this.shareCount = init.shareCount ?? 0;
+    this.saveCount = init.saveCount ?? 0;
     this.mediaWidth = init.mediaWidth ?? 0;
     this.mediaHeight = init.mediaHeight ?? 0;
     this.originalImageUrls = init.originalImageUrls ?? [];

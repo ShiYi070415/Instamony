@@ -415,6 +415,15 @@ class PostUi {
   repostCount: number = 0;
   shareCount: number = 0;
   /**
+   * 收藏数（载荷给了才有；IG 基本不公开这个数字，见 model/MediaPost.saveCount）。
+   *
+   * 为什么和 liked / saved 一样放在这个 @Observed 对象里：卡片是 ForEach 渲染的，
+   * 键值没变时 item builder **不会重跑**（见本类头的说明），计数一变只有 @ObjectLink
+   * 订阅者（PostActions）会跟着重绘 —— 直接读 `post.saveCount` 是刷不出来的。
+   * 0 = 数据源没说 → 界面那一颗数字整颗不画。
+   */
+  saveCount: number = 0;
+  /**
    * 作者是否已关注（「关注」按钮的标签靠它就地更新）。
    *
    * 为什么要放这儿、而不是页面状态的 Map：本项目里 ForEach 对**键值没变**的项不会重跑 item
@@ -637,11 +646,24 @@ struct PostActions {
       })
       Blank()
       // 收藏（书签）：实心 = 已收藏（图标自带"收藏弹一下"动画，见 AnimatedIcons.SaveIcon）。
+      // 计数和上面几颗同一个写法（图标 + 数字并排、0 不画）——**收藏数是可选的**：
+      // IG 基本不给这个数字（见 model/MediaPost.saveCount），所以绝大多数卡片这里只有图标。
       Button() {
-        SaveIcon({ saved: this.ui.saved, iconSize: ICON_BOOKMARK })
+        Row({ space: 4 }) {
+          SaveIcon({ saved: this.ui.saved, iconSize: ICON_BOOKMARK })
+          if (this.ui.saveCount > 0) {
+            Text(countText(this.ui.saveCount))
+              .fontSize(13)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.primary_text'))
+              .flexShrink(0)
+          }
+        }
+        .alignItems(VerticalAlign.Center)
+        .flexShrink(0)
       }
-      .width(40)
       .height(40)
+      .padding({ left: 6, right: 6 })
       .backgroundColor(Color.Transparent)
       .onClick((): void => {
         this.onSave();
@@ -1225,6 +1247,10 @@ export struct FeedList {
       }
       if (ui.shareCount !== post.shareCount) {
         ui.shareCount = post.shareCount;
+      }
+      // 收藏数：只认载荷（本机点收藏不改这个数——IG 也不公开它），见 PostUi.saveCount。
+      if (ui.saveCount !== post.saveCount) {
+        ui.saveCount = post.saveCount;
       }
       // 关注状态：以**本地点过的**为准（见 core/FollowState）；没点过才用接口值。
       const known: boolean = FollowState.resolve(post.ownerId,

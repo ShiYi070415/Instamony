@@ -307,6 +307,9 @@ export function timelineScript(cursor: string): string {
         'for(var k3 in v2)put(k2+"."+k3,v2[k3]);}}' +
         'return out.slice(0,20).join(",");}catch(e){return "";}};' +
         'var REPOST_RE=/repost|reshare/i;var SHARE_RE=/share/i;' +
+        // 收藏数：IG 基本不公开（网页也不渲染），所以这里同样只是"按名字找"——
+        // 命中不到就是 0，原生侧那一颗数字整颗不画（见 FeedDto.saves 的说明）。
+        'var SAVE_RE=/save/i;' +
         'var edges=conn.edges||[];var items=[];' +
         // 信息流里混着「推荐」卡片：它们的 node.media 是 null，真正的帖子挂在
         // node.explore_story.media 上。早先只认 node.media，这些卡片被整片丢掉，
@@ -329,12 +332,14 @@ export function timelineScript(cursor: string): string {
         'permalink:code.length>0?("https://www.instagram.com/"+kind+"/"+code+"/"):"",' +
         'likes:Number(m.like_count)||0,comments:Number(m.comment_count)||0,' +
         'views:Number(m.view_count)||0,liked:!!m.has_liked,takenAt:(Number(m.taken_at)||0)*1000,' +
-        'reposts:numByRe(m,REPOST_RE,null,1),shares:numByRe(m,SHARE_RE,REPOST_RE,1)});}' +
+        'reposts:numByRe(m,REPOST_RE,null,1),shares:numByRe(m,SHARE_RE,REPOST_RE,1),' +
+        // 收藏数：命中不到就是 0（界面按 0 不画）。
+        'saves:numByRe(m,SAVE_RE,null,1)});}' +
         // 第一个节点的字段名清单，只用于诊断：命中的键 + 所有「像计数」的键与值。
         'var dbg="";try{' +
         'var m0=(edges.length>0&&edges[0].node)?edges[0].node.media:null;' +
         'if(m0)dbg="rp["+namesByRe(m0,REPOST_RE,null,1)+"] sh["' +
-        '+namesByRe(m0,SHARE_RE,REPOST_RE,1)+"] keys["+keyDump(m0)+"]";' +
+        '+namesByRe(m0,SHARE_RE,REPOST_RE,1)+"] sv["+namesByRe(m0,SAVE_RE,null,1)+"] keys["+keyDump(m0)+"]";' +
         '}catch(e){}' +
         'var pi=conn.page_info||{};' +
         'var nextCursor=pi.end_cursor?String(pi.end_cursor):"";' +
@@ -2367,6 +2372,31 @@ export function reelsScript(cfgJson: string, varsJson: string): string {
     'var c=(j.data&&j.data["xdt_api__v1__clips__home__connection_v2"])||null;' +
     'if(!c)return JSON.stringify({state:"no-conn",src:src,keys:(j.data?Object.keys(j.data).slice(0,4):[]).join(",")});' +
     'var out=[];var es=c.edges||[];' +
+    /*
+     * 动作区计数（分享 / 收藏）用的小工具：按**键名正则**在媒体节点里找计数。
+     *
+     * 值的形态不能想当然：可能是数字，也可能是 "239" / "1,234" / "1.2K" 这样的字符串，
+     * 还可能被包一层对象（`{count: 3}`，也就是 `edge_media_to_share` 那种老形状）—— 三种都认。
+     * 找两层：外层键名命中就直接取；外层是对象、内层键名命中就取内层那个。
+     * `ex` 是要**排除**的键名正则（分享数要排掉 `reshare_count` 这类转发字段）。
+     */
+    'var asNum=function(v){' +
+    'if(typeof v==="number")return v>0?Math.round(v):0;' +
+    'if(typeof v==="string"){var s=v.replace(/[,\\s]/g,"");' +
+    'var m=/^([0-9]+(?:\\.[0-9]+)?)([KkMmBb])?$/.exec(s);if(!m)return 0;' +
+    'var n=Number(m[1]);var u=(m[2]||"").toLowerCase();' +
+    'if(u==="k")n*=1e3;else if(u==="m")n*=1e6;else if(u==="b")n*=1e9;' +
+    'return n>0?Math.round(n):0;}' +
+    'if(v&&typeof v==="object"){var ks=["count","total_count","total","value","count_aggregate"];' +
+    'for(var i=0;i<ks.length;i++){var r=asNum(v[ks[i]]);if(r>0)return r;}}' +
+    'return 0;};' +
+    'var cntByRe=function(o,re,ex){try{' +
+    'for(var k in o){if(!re.test(k))continue;if(ex&&ex.test(k))continue;' +
+    'var v=asNum(o[k]);if(v>0)return v;}' +
+    'for(var k2 in o){var v2=o[k2];' +
+    'if(v2&&typeof v2==="object"&&!Array.isArray(v2)){' +
+    'for(var k3 in v2){if(!re.test(k3))continue;if(ex&&ex.test(k3))continue;' +
+    'var v3=asNum(v2[k3]);if(v3>0)return v3;}}}}catch(e){}return 0;};' +
     MEDIA_PICK_JS +
     'for(var e=0;e<es.length;e++){' +
     'var n=es[e]?es[e].node:null;var m=n?n.media:null;' +
@@ -2406,6 +2436,18 @@ export function reelsScript(cfgJson: string, varsJson: string): string {
     '?u.friendship_status.followed_by_viewer===true:undefined))),' +
     // 转发数（动作区那颗转发下面的数字）。
     'reposts:m.media_repost_count||0,' +
+    /*
+     * 分享数 / 收藏数（动作区那颗 paperplane / bookmark 下面的数字）。
+     *
+     * 字段名不确定（clips 这条查询的媒体对象稀疏，且 IG 时常改名），所以在**有界深度内
+     * 按名字找**：分享认 `share_count` / `shares_count` / `media_share_count`，
+     * 以及 GraphQL 老形状 `edge_media_to_share{count}`；收藏认 `save_count` /
+     * `saves_count` / `media_save_count` / `edge_media_to_save{count}`。
+     * `reshare_count` 这类同时含 share 的字段要排掉（那是转发数，见信息流脚本的说明）。
+     * 一个都没命中就是 0 —— 原生侧按 0 把那一颗数字**整颗不画**，不会显示 "0"。
+     */
+    'shares:cntByRe(m,/share/i,/repost|reshare/i)||0,' +
+    'saves:cntByRe(m,/save/i,null)||0,' +
     'likes:m.like_count||0,comments:m.comment_count||0,' +
     'plays:m.play_count||m.ig_play_count||0});}' +
     'var pi=c.page_info||{};' +

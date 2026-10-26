@@ -33,7 +33,7 @@ const KEY: string = 'page1_v1';
 /** 关注那条流自己那份（两条流分开两页之后各存各的，别互相覆盖，见 pages/Index 的 reelsSegment）。 */
 const KEY_FOLLOWING: string = 'page1_follow_v1';
 /** 缓存格式版本：改了结构就 +1，旧的一律当没有。 */
-const FORMAT: number = 3;
+const FORMAT: number = 4;
 /** 有效期（毫秒）：6 小时（见文件头）。 */
 const MAX_AGE_MS: number = 6 * 60 * 60 * 1000;
 /** 单份上限（字符）：超过就不存（防呆）。 */
@@ -66,6 +66,16 @@ interface ReelCacheDto {
   lk?: boolean;
   /** 转发数（动作区那颗转发下面的数字）。 */
   rp?: number;
+  /**
+   * 分享数 / 收藏数（动作区那颗 `paperplane` / `bookmark` 下面的数字）。
+   *
+   * 缩写 `sc` = share count、`sv` = save count（`sc` 没给短码用掉了：短码是 `c`）。
+   * 0 / 缺省 = 载荷没说 → 界面那一颗数字**整颗不画**（见 model/Reel.shareCount）。
+   * 加这两个字段时**格式版本号一起 +1**（见 FORMAT）：旧缓存里没有它们，读回来不但
+   * 少两颗数字，还会让"这次是从缓存铺的"与"这次是新取的"两条路显示得不一样。
+   */
+  sc?: number;
+  sv?: number;
   /** 本机关注作者了没有（那颗关注按钮按它画）。 */
   fol?: boolean;
   /** `fol` 是数据源真的说了（false = 不知道，界面会单独问一次，见 NativeFollow.statesFor）。 */
@@ -152,6 +162,10 @@ export class ReelsCache {
           cm: one.commentCount,
           id: one.mediaId,
           rp: one.repostCount,
+          // 分享 / 收藏数也存（见 ReelCacheDto.sc/sv）：少了它们，限流时从缓存铺出来的那批
+          // 动作区就只有点赞/评论/转发三颗数字，和新取的那批观感不一致。
+          sc: one.shareCount,
+          sv: one.saveCount,
           // 关注状态也要存：缓存那份是"限流时直接拿来显示"的，少了它那颗按钮会显示成"关注"
           // （用户报的"reels 关注按钮状态没正确显示"就是这么发现的）。
           fol: one.following,
@@ -209,7 +223,9 @@ export class ReelsCache {
         reels.push(new Reel(code, one.u ?? '', one.v ?? '', one.w ?? 0, one.h ?? 0,
           one.a ?? '', one.av ?? '', false, one.m ?? '', one.l ?? 0, one.cm ?? 0,
           one.o ?? '', one.id ?? '', one.uid ?? '', one.cap ?? '', one.lk === true,
-          false, one.rp ?? 0, one.fol === true, one.fk === true, false, one.ta ?? 0));
+          false, one.rp ?? 0, one.fol === true, one.fk === true, false, one.ta ?? 0,
+          // 分享 / 收藏数（见 ReelCacheDto.sc/sv；旧格式读不到 → 0 → 不画那颗数字）。
+          one.sc ?? 0, one.sv ?? 0));
       }
       if (reels.length === 0) {
         return null;

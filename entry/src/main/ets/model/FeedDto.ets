@@ -56,6 +56,13 @@ export interface FeedItemDto {
   reposts?: number;
   shares?: number;
   /**
+   * 收藏数（脚本同样按字段名找）。
+   *
+   * IG 基本不公开这个数字，绝大多数情况下这里会是缺省的 —— 原生侧按 0 处理、
+   * 界面按 0 不画（见 FeedItemDto -> MediaPost.saveCount 的说明）。
+   */
+  saves?: number;
+  /**
    * 媒体原始宽高（像素），来自接口节点的 original_width/height。
    *
    * 原生侧按 w/h 算出真实宽高比来排版，不再把媒体裁成正方形；

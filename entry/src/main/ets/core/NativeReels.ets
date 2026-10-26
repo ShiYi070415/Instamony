@@ -68,6 +68,11 @@ interface IgCaption {
   text?: string | null;
 }
 
+/** `edge_media_to_xxx { count }` 这种 GraphQL 老形状（见 IgClipsMedia 里分享/收藏那组候选名）。 */
+interface IgCountEdge {
+  count?: number | null;
+}
+
 interface IgSoundInfo {
   original_audio_title?: string | null;
 }
@@ -96,6 +101,34 @@ interface IgClipsMedia {
   ig_play_count?: number | null;
   /** 转发数（右侧动作区那颗转发下面的数字）。 */
   media_repost_count?: number | null;
+  /**
+   * 分享数（右侧动作区那颗 `paperplane` 下面的数字）。
+   *
+   * 真机上 clips 这条查询**不一定给**，字段名也不稳定（和"不给头像 / 不给 taken_at"
+   * 是同一类稀疏），所以这里列几个候选名，按顺序取第一个有值的：
+   *   `share_count` / `shares_count` / `media_share_count`，
+   *   外加 GraphQL 老形状 `edge_media_to_share { count }`。
+   * 都拿不到就是 0 —— 界面那一颗数字**整颗不画**（见 model/Reel.shareCount）。
+   */
+  share_count?: number | null;
+  shares_count?: number | null;
+  media_share_count?: number | null;
+  /**
+   * "关闭分享"的**开关**，不是计数（布尔值）；列在这里只是提醒别把它当成数。
+   */
+  share_count_disabled?: boolean | null;
+  edge_media_to_share?: IgCountEdge | null;
+  /**
+   * 收藏数（右侧动作区那颗 `bookmark` 下面的数字）。
+   *
+   * IG 侧**基本不公开**这个数字（网页不渲染、clips 载荷里通常连字段都没有），
+   * 所以几乎总是 0 → 那一颗数字不画。候选名同分享：`save_count` / `saves_count` /
+   * `media_save_count` / `edge_media_to_save { count }`。
+   */
+  save_count?: number | null;
+  saves_count?: number | null;
+  media_save_count?: number | null;
+  edge_media_to_save?: IgCountEdge | null;
   /** 本机点过赞没有（Reels 页右侧那颗心按它画）。 */
   has_liked?: boolean | null;
   viewer_has_liked?: boolean | null;
@@ -1017,10 +1050,25 @@ export class NativeReels {
     const savedKnown: boolean = media.has_saved !== undefined && media.has_saved !== null
       || media.viewer_has_saved !== undefined && media.viewer_has_saved !== null;
     const saved: boolean = media.has_saved === true || media.viewer_has_saved === true;
+    /*
+     * 分享 / 收藏数（动作区那两颗下面的数字，见 IgClipsMedia 的候选名）。
+     *
+     * 取不到就是 0：界面对 0 的处理是"这一颗数字整颗不画"，所以宁可 0 也不要瞎猜 ——
+     * 猜出来的数字是假的，而 0 的语义是"数据源没说"。
+     */
+    const share: number = NativeReels.firstCount([
+      media.share_count, media.shares_count, media.media_share_count,
+      NativeReels.edgeCount(media.edge_media_to_share)
+    ]);
+    const save: number = NativeReels.firstCount([
+      media.save_count, media.saves_count, media.media_save_count,
+      NativeReels.edgeCount(media.edge_media_to_save)
+    ]);
     if (!NativeReels.saveDiagDone) {
       NativeReels.saveDiagDone = true;
-      hilog.info(DOMAIN, TAG, 'clips save known=%{public}s saved=%{public}s mediaKeys=%{public}s',
-        `${savedKnown}`, `${saved}`,
+      hilog.info(DOMAIN, TAG,
+        'clips save known=%{public}s saved=%{public}s share=%{public}d saveCount=%{public}d mediaKeys=%{public}s',
+        `${savedKnown}`, `${saved}`, share, save,
         Object.keys(media as Record<string, Object>).slice(0, 18).join(','));
     }
     /*
@@ -1046,7 +1094,47 @@ export class NativeReels {
       user.is_verified === true, (sound.original_audio_title ?? '').trim(),
       media.like_count ?? 0, media.comment_count ?? 0, original.url,
       mediaId, authorId, caption, liked, false, media.media_repost_count ?? 0,
-      following, followKnown, saved, NativeReels.takenAtMsOf(media));
+      following, followKnown, saved, NativeReels.takenAtMsOf(media), share, save);
+  }
+
+  /**
+   * 取第一个**正的**计数（字段名不定时用；都不认就 0）。
+   *
+   * 和信息流那条（NativeTimelineParser.firstCount）**同一套判据**：数字直接用，
+   * "1,234" / "1.2K" 这种格式化过的字符串也认 —— 两处不一致就会出现"信息流有数、
+   * 视频页没有"这种最难查的差异。
+   */
+  private static firstCount(values: Array<number | string | null | undefined>): number {
+    for (let index: number = 0; index < values.length; index++) {
+      const raw: number | string | null | undefined = values[index];
+      let value: number = 0;
+      if (typeof raw === 'number') {
+        value = raw;
+      } else if (typeof raw === 'string') {
+        const text: string = raw.replace(/,/g, '').trim();
+        const match: RegExpMatchArray | null = text.match(/^([0-9]+(?:\.[0-9]+)?)([KkMmBb])?$/);
+        if (match !== null) {
+          value = Number(match[1]);
+          const unit: string = (match[2] ?? '').toLowerCase();
+          if (unit === 'k') {
+            value = value * 1000;
+          } else if (unit === 'm') {
+            value = value * 1000000;
+          } else if (unit === 'b') {
+            value = value * 1000000000;
+          }
+        }
+      }
+      if (value > 0) {
+        return Math.round(value);
+      }
+    }
+    return 0;
+  }
+
+  /** `edge_media_to_x { count }` 里的 count（没有这一层 / 没有 count 都给 0）。 */
+  private static edgeCount(edge: IgCountEdge | null | undefined): number {
+    return (edge === null || edge === undefined) ? 0 : (edge.count ?? 0);
   }
 
   /**

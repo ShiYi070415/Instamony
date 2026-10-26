@@ -269,7 +269,12 @@ export class ProfileReelsViewModel implements ReelStreamVm {
         // 发布时间（毫秒）：个人主页/推荐流那条解析已经取到 `taken_at`（见 NativeProfile、
         // NativeSearch.readPost → MediaPost.takenAtMs），这里直接带过去 —— 评论面板里那张
         // 帖子卡片就靠它显示"x 小时前"（见 PostCardPanel.agoText）。
-        post.takenAtMs
+        post.takenAtMs,
+        // 分享 / 收藏数：这条路上它们本来就来自 MediaPost（推荐流那条解析给了就带上；
+        // 个人主页那条没有就是 0）。**不传的话**这里会静默丢成 0，
+        // 于是同一批视频从推荐流进 Reels 页时那两颗数字又消失了（本项目的老坑）。
+        post.shareCount,
+        post.saveCount
       ));
     }
     hilog.info(DOMAIN, TAG, 'map %{public}d post → %{public}d reel (pending video %{public}d)',

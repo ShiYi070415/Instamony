@@ -68,6 +68,17 @@ interface IgCaption {
 }
 
 /**
+ * `edge_media_to_xxx { count }` 这种 GraphQL 老形状。
+ *
+ * 信息流这条新查询用扁平的 `share_count`，但**网页 GraphQL 那条**（以及别人抓的老载荷）
+ * 是用 `edge_media_to_share { count }` 表达的 —— 两种形状都要认，否则换个端点就永远读不到
+ * （见 IgMedia 里 share/save 那两组候选名）。
+ */
+interface IgCountEdge {
+  count?: number | null;
+}
+
+/**
  * 一条媒体（帖子）。
  *
  * 注意每个字段都可能是 **null**（不是 undefined）：GraphQL 对"没有这个字段"就是回 null，
@@ -105,10 +116,33 @@ interface IgMedia {
   share_count?: number | null;
   shares_count?: number | null;
   media_share_count?: number | null;
+  /**
+   * `share_count_disabled`：IG 的"关闭分享"**开关**，不是计数。
+   *
+   * 列在这里只是为了把话说清楚：它是个布尔值，`firstCount` 拿到 0 —— 不能当成分享数用。
+   */
+  share_count_disabled?: boolean | null;
   repost_count?: number | null;
   media_repost_count?: number | null;
   reposts_count?: number | null;
   reshares_count?: number | null;
+  /**
+   * GraphQL 老形状的分享数（`edge_media_to_share { count }`）。
+   *
+   * 和上面的 `share_count` 是**同一个数字的两种写法**，两个都认（见 IgCountEdge）。
+   */
+  edge_media_to_share?: IgCountEdge | null;
+  /**
+   * 收藏数。
+   *
+   * IG 侧基本**不公开**这个数字：网页界面不渲染，移动端 v1 媒体对象里一般连字段都没有
+   * （真机载荷里翻不到）。所以这里只是"有就收"的几个候选名，取不到一律 0，
+   * 界面按 0 不画那颗数字（见 components/FeedList 的 PostActions）。
+   */
+  save_count?: number | null;
+  saves_count?: number | null;
+  media_save_count?: number | null;
+  edge_media_to_save?: IgCountEdge | null;
 }
 
 interface IgNode {
@@ -656,7 +690,19 @@ export class NativeTimelineParser {
       media.reshare_count, media.reshares_count
     ]);
     const share: number = NativeTimelineParser.firstCount([
-      media.share_count, media.shares_count, media.media_share_count
+      media.share_count, media.shares_count, media.media_share_count,
+      // GraphQL 老形状：分享数包在 `edge_media_to_share { count }` 里（见 IgCountEdge）。
+      NativeTimelineParser.edgeCount(media.edge_media_to_share)
+    ]);
+    /*
+     * 收藏数：IG 基本不给（见 IgMedia 里 save 那组字段的说明），**取不到就是 0**。
+     *
+     * 这里不做任何"猜"（比如拿 likeCount 折算）：猜出来的数字是假的，而 0 的语义是
+     * "数据源没说"，界面按 0 把这一颗数字整颗不画 —— 那才是对的观感。
+     */
+    const save: number = NativeTimelineParser.firstCount([
+      media.save_count, media.saves_count, media.media_save_count,
+      NativeTimelineParser.edgeCount(media.edge_media_to_save)
     ]);
     if (repost > 0) {
       item.reposts = repost;
@@ -664,7 +710,15 @@ export class NativeTimelineParser {
     if (share > 0) {
       item.shares = share;
     }
+    if (save > 0) {
+      item.saves = save;
+    }
     return item;
+  }
+
+  /** `edge_media_to_x { count }` 里的 count（没有这一层 / 没有 count 都给 0）。 */
+  private static edgeCount(edge: IgCountEdge | null | undefined): number {
+    return (edge === null || edge === undefined) ? 0 : (edge.count ?? 0);
   }
 
   /** 取第一个正的计数（字符串数字也认，字段名不定时用；都不认就 0）。 */

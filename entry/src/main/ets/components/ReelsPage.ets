@@ -972,35 +972,61 @@ struct ReelOverlay {
       }
       .alignItems(HorizontalAlign.Center)
 
-      // 转发给好友。
-      MaterialIconButton({ autoInvert: false,
-        symbol: $r('sys.symbol.paperplane'),
-        isOn: false,
-        tint: '',
-        buttonSize: ACTION_BUTTON_SIZE,
-        iconSize: ACTION_ICON_SIZE,
-        onTap: (on: boolean): void => {
-          this.onShare(this.reel);
+      // 转发给好友（分享）：图标 + 分享数。
+      // 计数的样式与上面三颗**完全一致**（11sp 白字 + OVERLAY_TEXT_SHADOW、单行、千分位/万缩写
+      // 走同一个 countText）；**为 0 时整颗不画** —— 载荷不给这个数时那一栏就只有图标，
+      // 不会挂一个 "0"（见 model/Reel.shareCount）。
+      Column({ space: 2 }) {
+        MaterialIconButton({ autoInvert: false,
+          symbol: $r('sys.symbol.paperplane'),
+          isOn: false,
+          tint: '',
+          buttonSize: ACTION_BUTTON_SIZE,
+          iconSize: ACTION_ICON_SIZE,
+          onTap: (on: boolean): void => {
+            this.onShare(this.reel);
+          }
+        })
+        if (this.reel.shareCount > 0) {
+          Text(this.countText(this.reel.shareCount))
+            .fontSize(11)
+            .fontColor(Color.White)
+            .textShadow(OVERLAY_TEXT_SHADOW)
+            .maxLines(1)
         }
-      })
+      }
+      .alignItems(HorizontalAlign.Center)
 
       /*
        * 收藏（书签）—— **放在「更多」上面**（需求："显示在更多按钮上方"）。
        *
        * 图标是系统那两颗 `bookmark` / `bookmark_fill`（和「我的」页"收藏"分段一致），
        * 收藏那一刻由小到大弹一下（见 AnimatedIcons.SaveIcon）。
-       * 没有计数：IG 的书签下面本来也不显示数字。
+       *
+       * 收藏数：IG 基本**不公开**这个数字（clips 载荷里通常连字段都没有，见
+       * model/Reel.saveCount），所以绝大多数情况下这里只有图标；真给到了才画那个数字，
+       * 样式与其它几颗一致，为 0 时整颗不画。
        */
-      MaterialIconButton({ autoInvert: false,
-        symbol: $r('sys.symbol.bookmark'),
-        isOn: this.saved,
-        animated: 'save',
-        buttonSize: ACTION_BUTTON_SIZE,
-        iconSize: ACTION_ICON_SIZE,
-        onTap: (on: boolean): void => {
-          this.tapSave(on);
+      Column({ space: 2 }) {
+        MaterialIconButton({ autoInvert: false,
+          symbol: $r('sys.symbol.bookmark'),
+          isOn: this.saved,
+          animated: 'save',
+          buttonSize: ACTION_BUTTON_SIZE,
+          iconSize: ACTION_ICON_SIZE,
+          onTap: (on: boolean): void => {
+            this.tapSave(on);
+          }
+        })
+        if (this.reel.saveCount > 0) {
+          Text(this.countText(this.reel.saveCount))
+            .fontSize(11)
+            .fontColor(Color.White)
+            .textShadow(OVERLAY_TEXT_SHADOW)
+            .maxLines(1)
         }
-      })
+      }
+      .alignItems(HorizontalAlign.Center)
 
       // 更多。
       MaterialIconButton({ autoInvert: false,

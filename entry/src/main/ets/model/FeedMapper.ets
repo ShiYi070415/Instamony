@@ -86,6 +86,8 @@ export class FeedMapper {
       viewCount: item.views ?? 0,
       repostCount: item.reposts ?? 0,
       shareCount: item.shares ?? 0,
+      // 收藏数：载荷给了才有（IG 基本不给），没有就 0 —— 界面按 0 不画那颗数字。
+      saveCount: item.saves ?? 0,
       mediaWidth: item.w ?? 0,
       mediaHeight: item.h ?? 0,
       // 下载用的原始地址：接口给了就用，没给就退回展示用的那份（至少还能下载）。
@@ -189,11 +191,12 @@ export class FeedMapper {
       imageUrls: post.imageUrls,
       liked: liked,
       viewCount: post.viewCount,
-      // 这条最容易漏：MediaPost 是整体重建的，不带上这两项，点一次赞就会把
-      // 转发/分享数清成 0。
+      // 这条最容易漏：MediaPost 是整体重建的，不带上这几项，点一次赞就会把
+      // 转发/分享/收藏数清成 0。
       reposted: reposted,
       repostCount: repostCount >= 0 ? repostCount : post.repostCount,
       shareCount: post.shareCount,
+      saveCount: post.saveCount,
       // 尺寸同理：漏了就退回正方形，图片会被重新裁掉。
       mediaWidth: post.mediaWidth,
       mediaHeight: post.mediaHeight,
@@ -264,6 +267,7 @@ export class FeedMapper {
       // 常常没有这个数，而媒体详情里有）。
       repostCount: repostCount >= 0 ? repostCount : post.repostCount,
       shareCount: post.shareCount,
+      saveCount: post.saveCount,
       mediaWidth: post.mediaWidth,
       mediaHeight: post.mediaHeight,
       originalImageUrls: many ? originalImages : post.originalImageUrls,
@@ -489,9 +493,10 @@ export class FeedMapper {
         viewCount: hit.views ?? post.viewCount,
         // 转发状态接口里没有，只能保留原生这边记住的（见 FeedViewModel.repostedKeys）。
         reposted: post.reposted,
-        // 转发/分享数只有接口侧有；接口给了就用接口的，否则保留原值。
+        // 转发/分享/收藏数只有接口侧有；接口给了就用接口的，否则保留原值。
         repostCount: (hit.reposts ?? 0) > 0 ? (hit.reposts ?? 0) : post.repostCount,
         shareCount: (hit.shares ?? 0) > 0 ? (hit.shares ?? 0) : post.shareCount,
+        saveCount: (hit.saves ?? 0) > 0 ? (hit.saves ?? 0) : post.saveCount,
         // 尺寸同样来自接口；DOM 兜底那条路径本来就没尺寸，所以没有就保留原值。
         mediaWidth: (hit.w ?? 0) > 0 ? (hit.w ?? 0) : post.mediaWidth,
         mediaHeight: (hit.h ?? 0) > 0 ? (hit.h ?? 0) : post.mediaHeight,
