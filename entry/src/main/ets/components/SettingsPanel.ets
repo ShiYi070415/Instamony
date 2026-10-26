@@ -86,7 +86,13 @@ const MENU_OFFSET_Y: number = 6;
  * 渐变糊掉，也会让沉浸光感的下拉按钮失去通透感。
  */
 const PAGE_PADDING: number = 12;
-const CARD_ROW_PADDING: number = 14;
+/**
+ * 卡片内部每一行的左右内缩（vp）。
+ *
+ * 统一到 **8 的倍数**：原来是 14（既不是 8 也不是 4 的倍数），和 PAGE_PADDING=16
+ * 相加是 30，视觉上比其它页面的 32 少 2vp，卡片里的文字和列表项会差一点点。
+ */
+const CARD_ROW_PADDING: number = 16;
 /**
  * 卡片圆角（vp）。
  *
@@ -192,7 +198,7 @@ export struct SettingsPanel {
    */
   @Builder
   proxySection() {
-    Column({ space: 10 }) {
+    Column({ space: 12 }) {
 
       Column() {
         Row() {

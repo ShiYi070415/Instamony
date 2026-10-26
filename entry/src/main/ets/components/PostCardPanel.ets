@@ -71,7 +71,13 @@ const CARD_PAD_VP: number = 16;
  *
  * 资讯栏 ↔ 正文、正文 ↔ 时间、时间 ↔ 「查看翻译」三处都吃这一个值，节奏才匀。
  */
-const CARD_GAP_VP: number = 10;
+/**
+ * 卡片内垂直/横向间距（vp）。
+ *
+ * 统一到 **4 的倍数**（8 网格的子档）：之前是 10，和页面里其它 8/12/16 并排时
+ * 会差半个像素的呼吸感。8 太挤、12 又偏松，这一档取 12 与设置页卡片一致。
+ */
+const CARD_GAP_VP: number = 12;
 /**
  * 卡片圆角（vp）：比评论面板（22）小一号，一眼能看出它是"面板里的一张卡"。
  */
@@ -158,7 +164,7 @@ struct CardAvatar {
         .height(this.boxSize)
         .borderRadius(this.boxSize / 2)
         .objectFit(ImageFit.Cover)
-        .backgroundColor($r('app.color.field_background'))
+        .backgroundColor($r('sys.color.comp_background_secondary'))
         .onError((): void => {
           this.failed = true;
         })
@@ -172,7 +178,7 @@ struct CardAvatar {
       .height(this.boxSize)
       .borderRadius(this.boxSize / 2)
       .justifyContent(FlexAlign.Center)
-      .backgroundColor($r('app.color.field_background'))
+      .backgroundColor($r('sys.color.comp_background_secondary'))
     }
   }
 }
@@ -659,7 +665,7 @@ export struct PostCardPanel {
      * 玻璃收回到内部两颗小控件（资讯胶囊、关注按钮）上 —— 层级也更清楚。
      */
     .borderRadius(CARD_RADIUS_VP)
-    .backgroundColor($r('app.color.field_background'))
+    .backgroundColor($r('sys.color.comp_background_secondary'))
     .border({ width: 1, color: $r('app.color.divider') })
   }
 }
