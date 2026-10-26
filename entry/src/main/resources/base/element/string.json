@@ -947,5 +947,7 @@
     {"name": "settings_proxy_add_title", "value": "添加代理"},
     {"name": "settings_proxy_name", "value": "代理名称"},
     {"name": "settings_proxy_add", "value": "添加"}
+,
+    {"name": "settings_group_proxy", "value": "代理"}
 ]
 }

@@ -180,12 +180,6 @@ export struct SettingsPanel {
   @Builder
   proxySection() {
     Column({ space: 10 }) {
-      // **单开一个分类**（需求）：分类标题 + 下面那张卡片。
-      Text($r('app.string.settings_proxy_title'))
-        .fontSize(13)
-        .fontColor($r('app.color.secondary_text'))
-        .width('100%')
-        .textAlign(TextAlign.Start)
 
       Column() {
         Row() {
@@ -1038,14 +1032,16 @@ export struct SettingsPanel {
        * 内容见 core/StoryDiag：最近 8 次失败的 `detail`/`shape`/逐发轨迹 + 整条托盘的形状与原始条目。
        */
       ListItem() {
-        this.groupHeader($r('app.string.settings_group_diag'))
+        this.groupHeader($r('app.string.settings_group_proxy'))
       }
-      // 代理：放在**诊断模块上方**（需求）。
       ListItem() {
         this.proxySection()
       }
-      .padding({ left: PAGE_PADDING, right: PAGE_PADDING, top: 20, bottom: 8 })
+      .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
 
+      ListItem() {
+        this.groupHeader($r('app.string.settings_group_diag'))
+      }
       ListItem() {
         Column({ space: 0 }) {
           this.actionRow($r('app.string.settings_export_diag'), (): void => {

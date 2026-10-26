@@ -691,5 +691,7 @@
     {"name": "settings_proxy_add_title", "value": "Add proxy"},
     {"name": "settings_proxy_name", "value": "Proxy name"},
     {"name": "settings_proxy_add", "value": "Add"}
+,
+    {"name": "settings_group_proxy", "value": "Proxy"}
 ]
 }
