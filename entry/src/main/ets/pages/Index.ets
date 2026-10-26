@@ -8835,7 +8835,7 @@ struct Index {
       .tabBar('')
     }
     .barHeight(0)
-    .scrollable(true)
+    .scrollable(false)
     .animationDuration(REELS_SWITCH_MS)
     /*
      * **进入页面就把两段的内容都拉起来**（需求："进入页面后要触发加载所有 content"）。
