@@ -2327,13 +2327,9 @@ export struct ReelsPage {
        * 注意它盖不到 HDS 标题栏那一条（标题栏在外壳那层、压在本页上面），标题栏区域的单击
        * 由 pages/Index 里那层"标题栏热区"接（见那里的说明）。
        */
-      Column()
-        .width('100%')
-        .height('100%')
-        .backgroundColor(Color.Transparent)
-        .onClick((): void => {
-          this.toggleChrome();
-        })
+      // **已删除**：这层整屏透明 Column（点它 = 隐藏/恢复全局控件）会和画面里的
+// `XComponent` 抢触摸，导致画面上的单击/长按/横滑全部失效。隐藏控件改由长按承担
+// （需求第 5 条本来就是"长按 → 暂停 + 隐藏控件"）。
       // 画面盒子：**宽度铺满 + 高度按视频比例**，居中放在全屏背景上。
       //
       // 为什么这样做（而不是让播放器整屏 Cover）：Cover 是按"两个方向都要铺满"去裁的 ——
