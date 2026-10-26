@@ -300,11 +300,11 @@ struct ReelSlide {
    * 一暂停就把 `VideoSurface` 从树上摘掉 → 播放器销毁 → 恢复播放时**从头开始**（用户报的）。
    * 单独一路传进来，只影响"播不播"，不影响"挂不挂"。
    */
-  @Prop hostPaused: boolean = false;
+  @Prop @Watch('onPauseEdge') hostPaused: boolean = false;
   /** 宿主层面的 2 倍速（长按左右两侧，见 ReelPage.pageHoldStart）。 */
   @Prop hostSpeed: boolean = false;
   /** 长按暂停（不显示正中按钮，所以和 hostPaused 分开）。 */
-  @Prop hostHold: boolean = false;
+  @Prop @Watch('onPauseEdge') hostHold: boolean = false;
   /** 静音（全局开关）。 */
   @Prop muted: boolean = false;
   /**
@@ -383,6 +383,14 @@ struct ReelSlide {
   private longPressMode: string = '';
   /** 这一下触摸里已经有长按成立过 → 抬手时那一次单击要吞掉（见 onVideoTap）。 */
   private longPressFired: boolean = false;
+  /**
+   * **最近一次播放位置**（毫秒）。
+   *
+   * 为什么要记：真机探针（core/VideoProbe）证实暂停/恢复时播放器会被**重建**
+   * （连续 teardownPlayer → createPlayer），新实例当然从 0 开始 —— 这是"暂停后重头播"的根因。
+   * 与其和 ArkUI 的重建机制拔河，不如记住位置、恢复时 seek 回去。
+   */
+  private lastPosMs: number = 0;
   /** 原生触摸：按下时刻（毫秒）、长按是否已成立、长按定时器句柄（见 onRawTouch）。 */
   private rawDownMs: number = 0;
   private rawHoldFired: boolean = false;
@@ -702,6 +710,25 @@ struct ReelSlide {
     }
   }
 
+  /**
+   * **暂停沿 / 恢复沿**：恢复时把播放位置 seek 回去。
+   *
+   * 探针证据：暂停/恢复会让 `VideoSurface` 被重建（teardown → create），新播放器从 0 起播。
+   * 所以这里在"从暂停回到播放"的那一刻，把 `lastPosMs` 交给 `seekMs`——
+   * 播放器挂好之后会 seek 到那个位置，用户看到的就是"接着播"。
+   * 暂停沿只记一次位置（避免把已经停在的位置又往前推）。
+   */
+  private onPauseEdge(): void {
+    const paused: boolean = this.hostPaused || this.hostHold;
+    if (paused) {
+      return;
+    }
+    if (this.lastPosMs > 0) {
+      // +1 保证值一定变化（@Watch 只在值变化时触发，seekMs 相同会被忽略）。
+      this.seekMs = this.lastPosMs + 1;
+    }
+  }
+
   private onSeekCancel(): void {
     if (!this.dragging) {
       return;
@@ -893,6 +920,8 @@ struct ReelSlide {
             },
             // 进度条唯一的来源（见 onPlayProgress）—— 播放器自己报的 position/duration。
             onProgress: (positionMs: number, durationMs: number): void => {
+              // 记住位置：播放器若被重建，恢复时靠它 seek 回去（见 lastPosMs）。
+              this.lastPosMs = positionMs;
               this.onPlayProgress(positionMs, durationMs);
             }
           })
