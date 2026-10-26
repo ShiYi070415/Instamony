@@ -47,6 +47,8 @@ import {
   SETTING_VIDEO_QUALITY
 } from '../core/AppSettings';
 import { MATERIAL_PILL_HEIGHT, SelectSurfaceModifier, SurfaceModifier } from './MaterialSurface';
+// 应用级代理（设置页的数据与生效逻辑，见 core/AppProxy）。
+import { AppProxy, AppProxyConfig } from '../core/AppProxy';
 import { PlatformCap } from '../core/PlatformCap';
 import { StoryDiag } from '../core/StoryDiag';
 import { StoryTray } from '../model/Story';
@@ -110,6 +112,13 @@ const MATERIAL_THICKNESS_ORDER: string[] = [
 
 @Component
 export struct SettingsPanel {
+  /** 代理设置：开关 + 四个输入（本地草稿，点 应用 才真正生效）。 */
+  @State private proxyOn: boolean = false;
+  @State private proxyDraftHost: string = '';
+  @State private proxyDraftPort: string = '';
+  @State private proxyDraftUser: string = '';
+  @State private proxyDraftPass: string = '';
+  @State private proxyStatus: string = '';
   /** 点「退出登录」。 */
   onSignOut: () => void = (): void => {
   };
@@ -156,6 +165,123 @@ export struct SettingsPanel {
    * 为什么这两行必须有（需求："把包发给别人测试获取日志"）：测试者手上**没有 DevEco、没有 hdc**，
    * 沙箱里的文件他们根本看不到 —— 必须由 App 自己把文件送到"能被分享出去"的地方。
    */
+  /**
+   * **代理设置区**（需求：设置里加代理，参考 HarmonyX；保存即生效、不用重启）。
+   *
+   * 材质规范：输入框本身不是材质"生效范围"里的组件（官方只对 Toggle/Slider/Select/弹窗），
+   * 所以这一区里**用 Toggle 承载材质**做"应用"按钮与每行的底（和"退出登录"那颗同款写法），
+   * 输入框放在材质底之上、自己保持透明 —— 观感统一，又不假装输入框能带光源。
+   */
+  @Builder
+  proxySection() {
+    Column({ space: 10 }) {
+      Text($r('app.string.settings_proxy_title'))
+        .fontSize(13)
+        .fontColor($r('app.color.secondary_text'))
+        .width('100%')
+
+      // 开关：承载材质的一行。
+      Toggle({ type: ToggleType.Switch, isOn: this.proxyOn })
+        .width('100%')
+        .height(SIGN_OUT_HEIGHT)
+        .attributeModifier(new SurfaceModifier(this.materialThickness, true))
+        .onChange((on: boolean): void => {
+          this.proxyOn = on;
+        })
+
+      if (this.proxyOn) {
+        this.proxyField($r('app.string.settings_proxy_host'), this.proxyDraftHost, 'host')
+        this.proxyField($r('app.string.settings_proxy_port'), this.proxyDraftPort, 'port')
+        this.proxyField($r('app.string.settings_proxy_user'), this.proxyDraftUser, 'user')
+        this.proxyField($r('app.string.settings_proxy_pass'), this.proxyDraftPass, 'pass')
+
+        // 应用：Toggle 承载材质（点击即调 AppProxy.save，立即生效）。
+        Toggle({ type: ToggleType.Button, isOn: false }) {
+          Text($r('app.string.settings_proxy_apply'))
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.accent'))
+        }
+        .width('100%')
+        .height(SIGN_OUT_HEIGHT)
+        .padding(0)
+        .borderRadius(SIGN_OUT_RADIUS)
+        .attributeModifier(new SurfaceModifier(this.materialThickness, true))
+        .backgroundColor($r('sys.color.comp_background_secondary'))
+        .onChange((): void => {
+          this.applyProxy();
+        })
+
+        Toggle({ type: ToggleType.Button, isOn: false }) {
+          Text($r('app.string.settings_proxy_off'))
+            .fontSize(15)
+            .fontColor($r('app.color.secondary_text'))
+        }
+        .width('100%')
+        .height(SIGN_OUT_HEIGHT)
+        .padding(0)
+        .borderRadius(SIGN_OUT_RADIUS)
+        .attributeModifier(new SurfaceModifier(this.materialThickness, true))
+        .backgroundColor($r('sys.color.comp_background_secondary'))
+        .onChange((): void => {
+          this.proxyOn = false;
+          AppProxy.disable();
+          this.proxyStatus = AppProxy.config().summary();
+        })
+      }
+
+      if (this.proxyStatus.length > 0) {
+        Text(this.proxyStatus)
+          .fontSize(12)
+          .fontColor($r('app.color.secondary_text'))
+          .width('100%')
+      }
+    }
+    .width('100%')
+  }
+
+  /** 一行输入：标签 + TextInput（透明底，靠外层留白对齐）。 */
+  @Builder
+  proxyField(label: ResourceStr, value: string, which: string) {
+    Row({ space: 8 }) {
+      Text(label)
+        .fontSize(14)
+        .fontColor($r('app.color.primary_text'))
+        .width(84)
+      TextInput({ text: value })
+        .layoutWeight(1)
+        .height(40)
+        .fontSize(14)
+        .backgroundColor(Color.Transparent)
+        .onChange((text: string): void => {
+          if (which === 'host') {
+            this.proxyDraftHost = text;
+          } else if (which === 'port') {
+            this.proxyDraftPort = text;
+          } else if (which === 'user') {
+            this.proxyDraftUser = text;
+          } else {
+            this.proxyDraftPass = text;
+          }
+        })
+    }
+    .width('100%')
+    .padding({ left: 12, right: 12 })
+    .borderRadius(12)
+    .backgroundColor($r('sys.color.comp_background_secondary'))
+  }
+
+  /** 把草稿落到 AppProxy（保存即生效，不需要重启）。 */
+  private applyProxy(): void {
+    const config: AppProxyConfig = new AppProxyConfig();
+    config.host = this.proxyDraftHost.trim();
+    const port: number = Number.parseInt(this.proxyDraftPort.trim(), 10);
+    config.port = Number.isNaN(port) ? 0 : port;
+    config.username = this.proxyDraftUser.trim();
+    config.password = this.proxyDraftPass;
+    const ok: boolean = AppProxy.save(config);
+    this.proxyStatus = ok ? AppProxy.config().summary() : '应用失败（地址或端口不合法）';
+  }
   @Builder
   actionRow(label: ResourceStr, action: () => void) {
     Row({ space: 12 }) {
@@ -879,6 +1005,11 @@ export struct SettingsPanel {
       // 不生效 —— 官方「生效范围」那条限制里，全页面只有弹窗类组件/接口与 Slider、Toggle、Select；
       // 所以这颗按钮改成 **Toggle 承载材质**（`ToggleType.Button` 可以带子组件），
       // 交互形变与光源效果随之在设置页也能用上，和全 app 其它按钮一致（见 MaterialSurface）。
+      ListItem() {
+        this.proxySection()
+      }
+      .padding({ left: PAGE_PADDING, right: PAGE_PADDING, top: 20 })
+
       ListItem() {
         Toggle({ type: ToggleType.Button, isOn: false }) {
           Text($r('app.string.sign_out'))

@@ -932,5 +932,13 @@
       "name": "story_need_challenge",
       "value": "IG 要求这个账号先完成安全验证：请到网页里登录 / 验证一次再回来看快拍"
     }
-  ]
+  ,
+    {"name": "settings_proxy_title", "value": "代理"},
+    {"name": "settings_proxy_host", "value": "主机"},
+    {"name": "settings_proxy_port", "value": "端口"},
+    {"name": "settings_proxy_user", "value": "用户名"},
+    {"name": "settings_proxy_pass", "value": "密码"},
+    {"name": "settings_proxy_apply", "value": "应用"},
+    {"name": "settings_proxy_off", "value": "关闭代理"}
+]
 }

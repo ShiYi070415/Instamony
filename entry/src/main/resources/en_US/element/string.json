@@ -676,5 +676,13 @@
       "name": "story_need_challenge",
       "value": "Instagram wants this account verified first: sign in / complete the check on the web, then try stories again"
     }
-  ]
+  ,
+    {"name": "settings_proxy_title", "value": "Proxy"},
+    {"name": "settings_proxy_host", "value": "Host"},
+    {"name": "settings_proxy_port", "value": "Port"},
+    {"name": "settings_proxy_user", "value": "Username"},
+    {"name": "settings_proxy_pass", "value": "Password"},
+    {"name": "settings_proxy_apply", "value": "Apply"},
+    {"name": "settings_proxy_off", "value": "Turn off proxy"}
+]
 }
