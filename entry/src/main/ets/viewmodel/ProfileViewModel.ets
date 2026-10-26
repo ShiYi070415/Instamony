@@ -1422,7 +1422,8 @@ export class ProfileViewModel {
    * 在 IG 里是高频操作（关注列表来回点）。缓存之后第二次进是**当帧出图**，
    * 网络那一发只在缓存缺失时才发。
    */
-  private highlightCache: Map<string, Array<ProfileHighlight>> = new Map<string, Array<ProfileHighlight>>();
+  private static highlightCache: Map<string, Array<ProfileHighlight>> =
+    new Map<string, Array<ProfileHighlight>>();
   private highlightsFor: string = '';
   /** 已经从网页侧拉过歌的账号名（见 fillMusicFromWeb：只试一次）。 */
   private musicTriedFor: string = '';
@@ -1450,7 +1451,7 @@ export class ProfileViewModel {
       return;
     }
     // **缓存命中：当帧就给出去**（不再等网络，也不再受 highlightsFor 去重影响）。
-    const cached: Array<ProfileHighlight> | undefined = this.highlightCache.get(uid);
+    const cached: Array<ProfileHighlight> | undefined = ProfileViewModel.highlightCache.get(uid);
     if (cached !== undefined) {
       this.highlightItems = cached;
       this.onHighlights(cached);
@@ -1470,7 +1471,7 @@ export class ProfileViewModel {
       }
       this.highlightItems = list;
       // 写进缓存（空结果也写：下次进来当帧就知道"这里没有高光"，不必再等 2 秒空白）。
-      this.highlightCache.set(uid, list);
+      ProfileViewModel.highlightCache.set(uid, list);
       hilog.info(DOMAIN, TAG, 'highlights n=%{public}d', list.length);
       this.onHighlights(list);
     } catch (error) {
