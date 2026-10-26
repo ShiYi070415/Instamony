@@ -1666,7 +1666,7 @@ struct ReelOverlay {
       // 比"因为少一个 id 就整颗按钮不出现"好得多（用户报的"没看到关注按钮"就是这个）。
       // 例外：**作者就是我自己**时不画（关注自己没有意义，见 ownAuthor）。
       if (this.reel.author.length > 0 && !this.isOwnAuthor()) {
-        MaterialLabelButton({ autoInvert: false,
+        MaterialLabelButton({ autoInvert: false, swallowLongPress: true,
           // 视频页这颗**不接 4-way lock**（见作者行上面的说明与 MaterialLabelButton.lockMaterial）。
           lockMaterial: false,
           labelRes: this.following
@@ -1772,7 +1772,7 @@ struct ReelOverlay {
     Column({ space: ACTION_GAP }) {
       // 点赞：图标 + 计数（图标自带"点赞弹一下"动画，见 AnimatedIcons.LikeIcon）。
       Column({ space: 2 }) {
-        MaterialIconButton({ autoInvert: false,
+        MaterialIconButton({ autoInvert: false, swallowLongPress: true,
           symbol: this.reel.liked ? $r('sys.symbol.heart_fill') : $r('sys.symbol.heart'),
           isOn: this.reel.liked,
           // 带动画的图标自己管颜色（已赞红、未赞主题色），这里不需要再给 tint。
@@ -1795,7 +1795,7 @@ struct ReelOverlay {
 
       // 评论：图标 + 计数。
       Column({ space: 2 }) {
-        MaterialIconButton({ autoInvert: false,
+        MaterialIconButton({ autoInvert: false, swallowLongPress: true,
           symbol: $r('sys.symbol.message'),
           isOn: false,
           tint: '',
@@ -1818,7 +1818,7 @@ struct ReelOverlay {
       // 转发：图标（已转发时正中叠对勾）+ 计数。
       // 图标自带两个动画：外层循环箭头转 360° 镜像旋转、内层对勾一笔画出来（见 AnimatedIcons.RepostIcon）。
       Column({ space: 2 }) {
-        MaterialIconButton({ autoInvert: false,
+        MaterialIconButton({ autoInvert: false, swallowLongPress: true,
           symbol: $r('sys.symbol.transfer_station'),
           isOn: this.reel.reposted,
           animated: 'repost',
@@ -1845,7 +1845,7 @@ struct ReelOverlay {
       // 图标用 `sys.symbol.share`（和 FeedList 动作区那颗分享**同一个符号**）：纸飞机在系统
       // 语义里是"发送/私信"，而这一颗是"把这条分享出去"，两者不能混用。
       Column({ space: 2 }) {
-        MaterialIconButton({ autoInvert: false,
+        MaterialIconButton({ autoInvert: false, swallowLongPress: true,
           symbol: $r('sys.symbol.share'),
           isOn: false,
           tint: '',
@@ -1876,7 +1876,7 @@ struct ReelOverlay {
        * 样式与其它几颗一致，为 0 时整颗不画。
        */
       Column({ space: 2 }) {
-        MaterialIconButton({ autoInvert: false,
+        MaterialIconButton({ autoInvert: false, swallowLongPress: true,
           symbol: $r('sys.symbol.bookmark'),
           isOn: this.saved,
           animated: 'save',
@@ -1897,7 +1897,7 @@ struct ReelOverlay {
       .alignItems(HorizontalAlign.Center)
 
       // 更多。
-      MaterialIconButton({ autoInvert: false,
+      MaterialIconButton({ autoInvert: false, swallowLongPress: true,
         symbol: $r('sys.symbol.sort'),
         isOn: false,
         tint: '',

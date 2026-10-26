@@ -511,6 +511,16 @@ export struct MaterialIconButton {
    * 名字不叫 invert：`invert` 同样和自定义组件基类成员冲突（编译期报 not assignable）。
    * 沉浸式视频标题区传 false（需求：取消那里的反色）。
    */
+  /**
+   * **是否吞掉长按**（默认 false，全 app 行为不变）。
+   *
+   * 为什么需要：这些按钮是 Toggle + PanGesture，没有长按识别器，长按会继续冒泡到
+   * 页面根节点那条长按（Reels 的长按暂停 / 2 倍速），于是按在按钮上也会触发画面手势。
+   * 打开后给按钮**自己**挂一个空长按，子节点优先，父节点那条就不会成立。
+   *
+   * 只能挂在按钮自己这一小块：挂到外层容器会连画面一起吞掉（踩过一次）。
+   */
+  @Prop swallowLongPress: boolean = false;
   @Prop autoInvert: boolean = true;
   /**
    * 图标要不要带动画。空串 = 静态图标（默认，行为与以前完全一样）。
@@ -615,6 +625,8 @@ export struct MaterialIconButton {
     // 沉浸光感材质（必须放在其他样式属性**之后**，官方 FAQ：放前面会导致优先级不符预期）。
     // 走 AttributeModifier：低版本设备（API < 26）自动退化成纯色底，见 SurfaceModifier。
     .attributeModifier(new SurfaceModifier(this.thickness, this.autoInvert))
+    // 开启时吞掉长按（见 swallowLongPress 的说明）。
+    .gesture(this.swallowLongPress ? LongPressGesture({ repeat: false, duration: 300 }) : null)
     .onChange((value: boolean): void => {
       this.fire(value);
     })
@@ -667,6 +679,8 @@ export struct MaterialLabelButton {
   /** 文字颜色（十六进制），非空时覆盖 tone。 */
   @Prop tint: string = '';
   /** 是否启用材质的自动反色（语义同 MaterialIconButton.autoInvert）。 */
+  /** 是否吞掉长按（见 MaterialSurface 里 swallowLongPress 的说明）。 */
+  @Prop swallowLongPress: boolean = false;
   @Prop autoInvert: boolean = true;
   /**
    * 要不要接 **4-way lock**（`trackMaterialTouch` + `consumePan`，见文件里那两个函数）。
@@ -736,6 +750,8 @@ export struct MaterialLabelButton {
     .selectedColor(Color.Transparent)
     // 沉浸光感材质；低版本设备自动退化成纯色底（见 SurfaceModifier）。
     .attributeModifier(new SurfaceModifier(this.thickness, this.autoInvert))
+    // 开启时吞掉长按（见 swallowLongPress 的说明）。
+    .gesture(this.swallowLongPress ? LongPressGesture({ repeat: false, duration: 300 }) : null)
     .onChange((): void => {
       this.fire();
     })
@@ -781,6 +797,8 @@ export struct MaterialChipButton {
   @Prop chipHeight: number = 28;
   @Prop iconSize: number = 12;
   @Prop tint: string = '';
+  /** 是否吞掉长按（见 MaterialSurface 里 swallowLongPress 的说明）。 */
+  @Prop swallowLongPress: boolean = false;
   @Prop autoInvert: boolean = true;
   @StorageProp(SETTING_MATERIAL_THICKNESS) thickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
   onTap: () => void = (): void => {
@@ -831,6 +849,8 @@ export struct MaterialChipButton {
     .backgroundColor(Color.Transparent)
     .selectedColor(Color.Transparent)
     .attributeModifier(new SurfaceModifier(this.thickness, this.autoInvert))
+    // 开启时吞掉长按（见 swallowLongPress 的说明）。
+    .gesture(this.swallowLongPress ? LongPressGesture({ repeat: false, duration: 300 }) : null)
     .onChange((): void => {
       this.fire();
     })
@@ -861,6 +881,8 @@ export struct MaterialPillIcon {
   @Prop iconSize: number = 16;
   /** 图标色；空串 = 系统可反色资源色（跟着材质底色自动反色）。 */
   @Prop tint: string = '';
+  /** 是否吞掉长按（见 MaterialSurface 里 swallowLongPress 的说明）。 */
+  @Prop swallowLongPress: boolean = false;
   @Prop autoInvert: boolean = true;
   @StorageProp(SETTING_MATERIAL_THICKNESS) thickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
   onTap: () => void = (): void => {
@@ -899,6 +921,8 @@ export struct MaterialPillIcon {
     .selectedColor(Color.Transparent)
     // 沉浸光感材质；低版本设备自动退化成纯色底（见 SurfaceModifier）。
     .attributeModifier(new SurfaceModifier(this.thickness, this.autoInvert))
+    // 开启时吞掉长按（见 swallowLongPress 的说明）。
+    .gesture(this.swallowLongPress ? LongPressGesture({ repeat: false, duration: 300 }) : null)
     .onChange((): void => {
       this.fire();
     })
