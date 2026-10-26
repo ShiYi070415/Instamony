@@ -331,9 +331,9 @@ export struct SettingsPanel {
    */
   private proxySheetOptions(): SheetOptions {
     const options: SheetOptions = {
-      // **整页内容都能显示**（需求）：MEDIUM 只能到半屏，五个输入 + 添加按钮会被截。
-      // LARGE 是系统给的最大底部挡位（距离状态栏 8vp），仍可下拉关闭。
-      height: SheetSize.LARGE,
+      // **高度刚好包住内容**（需求）：FIT_CONTENT 由内容自适应 —— 五个输入 + 添加按钮
+      // 全部显示出来，又不会整页铺满（LARGE 那样留一大片空白）。
+      height: SheetSize.FIT_CONTENT,
       dragBar: true,
       showClose: true
     };
