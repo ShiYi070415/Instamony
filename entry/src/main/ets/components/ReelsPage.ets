@@ -173,6 +173,8 @@ export const REELS_SEEK_CMD: string = 'reels_seek_cmd';
 export const REELS_SEEK_DX: string = 'reels_seek_dx';
 /** 松手时要跳到的位置（毫秒）。直连播放器用，见 VideoSurface 的 seekTarget。 */
 export const REELS_SEEK_TARGET: string = 'reels_seek_target';
+/** 点正中"继续"按钮时递增的计数（见 ReelSlide.pauseButton）。 */
+export const REELS_RESUME_TICK: string = 'reels_resume_tick';
 export const REELS_CHROME_HIDDEN: string = 'reels_chrome_hidden';
 
 /**
@@ -931,9 +933,19 @@ struct ReelSlide {
       buttonSize: PAUSE_BUTTON_SIZE,
       iconSize: PAUSE_ICON_SIZE,
       onTap: (on: boolean): void => {
+        /*
+         * 点它 = 继续播放**这一条**。
+         *
+         * 两处暂停要一起解：本地 userPaused，以及页面级 pagePaused / pageHold
+         * （后者靠 REELS_RESUME_TICK 通知页面，见 ReelsPage.onResumeTap）。
+         * 之前它是空的 onTap + HitTestMode.None，全靠"点到画面上"间接生效，所以
+         * 从别的条切过来时会出现"按钮在、点了没反应"。
+         */
+        this.userPaused = false;
+        this.holdPaused = false;
+        AppStorage.setOrCreate(REELS_RESUME_TICK, Date.now());
       }
     })
-      .hitTestBehavior(HitTestMode.None)
       // 画面正中（外层 Stack 是 Center，`align` 是"我这个子节点摆在哪儿"）。
       .align(Alignment.Center)
       // 出现/消失淡入淡出（需求：约 150ms）。transition 要挂在**被插入/移除的那个节点**上，
@@ -2159,6 +2171,8 @@ export struct ReelsPage {
   @State private pageHold: boolean = false;
   /** 长按（左右两侧）：2 倍速，松手恢复（见 pageHoldStart/End）。 */
   @State private pageSpeed: boolean = false;
+  /** 订阅"正中继续按钮被点了"：把它自身的页面级暂停解掉。 */
+  @StorageLink(REELS_RESUME_TICK) @Watch('onResumeTap') resumeTick: number = 0;
   /** 单击延迟执行的句柄（-1 = 没有）。 */
   private singleTapTimer: number = -1;
   /** 这一次触摸里长按已经成立过 → 抬手时那一下单击要吞掉（否则长按松手会顺带暂停）。 */
@@ -3028,6 +3042,12 @@ export struct ReelsPage {
    * 单击暂停、长按暂停、2 倍速都是"针对当前这条"的操作，带到下一条就成了莫名其妙的
    * "新视频也是暂停/加速"。Swiper 落定后调用（见 onSwiperIndexChanged）。
    */
+  /** 正中继续按钮被点：解掉页面级暂停（只影响当前这条）。 */
+  private onResumeTap(): void {
+    this.pagePaused = false;
+    this.pageHold = false;
+  }
+
   private resetTransientPlayState(): void {
     this.pagePaused = false;
     this.pageHold = false;
