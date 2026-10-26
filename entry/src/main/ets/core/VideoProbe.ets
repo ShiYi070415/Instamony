@@ -11,7 +11,7 @@
 import { fileIo } from '@kit.CoreFileKit';
 
 export class VideoProbe {
-  static ON: boolean = true;
+  static ON: boolean = false;
   private static lines: number = 0;
 
   static log(what: string): void {

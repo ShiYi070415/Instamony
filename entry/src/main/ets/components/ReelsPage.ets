@@ -300,11 +300,11 @@ struct ReelSlide {
    * 一暂停就把 `VideoSurface` 从树上摘掉 → 播放器销毁 → 恢复播放时**从头开始**（用户报的）。
    * 单独一路传进来，只影响"播不播"，不影响"挂不挂"。
    */
-  @Prop @Watch('onPauseEdge') hostPaused: boolean = false;
+  @Prop hostPaused: boolean = false;
   /** 宿主层面的 2 倍速（长按左右两侧，见 ReelPage.pageHoldStart）。 */
   @Prop hostSpeed: boolean = false;
   /** 长按暂停（不显示正中按钮，所以和 hostPaused 分开）。 */
-  @Prop @Watch('onPauseEdge') hostHold: boolean = false;
+  @Prop hostHold: boolean = false;
   /** 静音（全局开关）。 */
   @Prop muted: boolean = false;
   /**
@@ -735,19 +735,7 @@ struct ReelSlide {
     }
   }
 
-  private onPauseEdge(): void {
-    const paused: boolean = this.hostPaused || this.hostHold;
-    if (paused) {
-      return;
-    }
-    /*
-     * **什么也不做**（保留方法是因为两个 @Watch 还指向它）。
-     *
-     * 这里原本在恢复播放时把记住的位置塞回 seekMs，用来兜"播放器被重建"。
-     * 现在暂停只走 paused、播放器不再销毁（见 VideoSurface 的 playing/paused 拆分），
-     * 那次多余的 seek 反而让画面往前跳一帧，所以拆掉。
-     */
-  }
+
 
   private onSeekCancel(): void {
     if (!this.dragging) {
@@ -2329,6 +2317,19 @@ export struct ReelsPage {
    * 而受影响的层里有三个根本不在本组件里（标题栏 / 底栏 / 别的条目的信息层）。
    */
   private toggleChrome(): void {
+    /*
+     * **弹性动画**（需求：顶栏与底栏要有弹性）。
+     *
+     * 顶栏/底栏的隐藏是靠订阅 `reels_chrome_hidden` 改透明度与位移实现的；
+     * 包一层 animateTo（摩擦曲线）之后，那两条属性变化就有了"回弹"的收尾，
+     * 而不是线性淡出。
+     */
+    animateTo({ duration: 320, curve: Curve.Friction }, (): void => {
+      this.toggleChromeNow();
+    });
+  }
+
+  private toggleChromeNow(): void {
     const next: boolean = !this.chromeHidden;
     hilog.info(DOMAIN, TAG, 'chrome hidden=%{public}s', `${next}`);
     AppStorage.setOrCreate(REELS_CHROME_HIDDEN, next);
