@@ -237,6 +237,9 @@ const SINGLE_TAP_DELAY_MS: number = 240;
  * 两者**靠热区区分**（见 SPEED_ZONE_RATIO），不靠时长区分。
  */
 const LONG_PRESS_CENTER_MS: number = 400;
+/** 原生触摸判"长按"的门槛（毫秒）与"划走就不算长按"的门槛（见 onRawTouch）。 */
+const RAW_LONG_PRESS_MS: number = 400;
+const RAW_MOVE_CANCEL_MS: number = 260;
 const LONG_PRESS_SIDE_MS: number = 300;
 /**
  * 两侧长按热区各占屏宽的比例（需求："左右两侧各占屏宽约 30%，中间 40% 仍归第 5 条"）。
@@ -366,6 +369,10 @@ struct ReelSlide {
   private longPressMode: string = '';
   /** 这一下触摸里已经有长按成立过 → 抬手时那一次单击要吞掉（见 onVideoTap）。 */
   private longPressFired: boolean = false;
+  /** 原生触摸：按下时刻（毫秒）、长按是否已成立、长按定时器句柄（见 onRawTouch）。 */
+  private rawDownMs: number = 0;
+  private rawHoldFired: boolean = false;
+  private rawHoldTimer: number = -1;
   /** 长按中间之前，全局控件本来就是藏着的吗（松手要恢复成"原来那样"，见 onHoldEnd）。 */
   private chromeHiddenBefore: boolean = false;
   /**
@@ -630,6 +637,57 @@ struct ReelSlide {
   }
 
   /** 拖动被打断（被翻页手势抢走 / 手指出界）：放弃这次拖动，不改播放位置。 */
+  /**
+   * **原生触摸状态机**（见命中层上的 onTouch 说明）。
+   *
+   * 只判两件事：单击（暂停/播放）与长按（暂停 + 隐藏全局控件，松手恢复）。
+   * 拖动进度的判定仍留给原来的横向手势 —— 两套不冲突：onTouch 只在"没怎么移动"时下结论。
+   */
+  private onRawTouch(event: TouchEvent): void {
+    if (event.type === TouchType.Down) {
+      this.rawDownMs = Date.now();
+      this.rawHoldFired = false;
+      if (this.rawHoldTimer >= 0) {
+        clearTimeout(this.rawHoldTimer);
+        this.rawHoldTimer = -1;
+      }
+      this.rawHoldTimer = setTimeout((): void => {
+        this.rawHoldTimer = -1;
+        this.rawHoldFired = true;
+        // 长按：暂停 + 隐藏全局控件（松手在 Up 里恢复）。
+        this.holdPaused = true;
+        AppStorage.setOrCreate(REELS_CHROME_HIDDEN, true);
+      }, RAW_LONG_PRESS_MS);
+      return;
+    }
+    if (event.type === TouchType.Move) {
+      // 手指划走了 = 不是长按：撤掉定时器（翻页/拖进度照常走各自的手势）。
+      if (this.rawHoldTimer >= 0 && Date.now() - this.rawDownMs > RAW_MOVE_CANCEL_MS) {
+        clearTimeout(this.rawHoldTimer);
+        this.rawHoldTimer = -1;
+      }
+      return;
+    }
+    if (event.type !== TouchType.Up && event.type !== TouchType.Cancel) {
+      return;
+    }
+    if (this.rawHoldTimer >= 0) {
+      clearTimeout(this.rawHoldTimer);
+      this.rawHoldTimer = -1;
+    }
+    if (this.rawHoldFired) {
+      // 长按松手：恢复成"按之前那样"（这里只做恢复，不额外切播放）。
+      this.rawHoldFired = false;
+      this.holdPaused = false;
+      AppStorage.setOrCreate(REELS_CHROME_HIDDEN, false);
+      return;
+    }
+    if (Date.now() - this.rawDownMs <= RAW_LONG_PRESS_MS) {
+      // 单击：暂停 / 继续（暂停时正中那颗按钮由 userPaused 驱动，见 pauseButton）。
+      this.userPaused = !this.userPaused;
+    }
+  }
+
   private onSeekCancel(): void {
     if (!this.dragging) {
       return;
@@ -899,8 +957,16 @@ struct ReelSlide {
         .width('100%')
         .height('100%')
         .backgroundColor(Color.Transparent)
+        /*
+         * **原生 onTouch**（不再是手势识别器）。
+         *
+         * 为什么换成它：单击 / 长按 / 横滑用手势识别器连改几版都没反应 —— 识别器要经过
+         * "命中 → 协商 → 成立"三步，任何一步出问题都表现为"毫无反应"，而且无法判断卡在哪。
+         * onTouch 是触摸事件本身：**节点被命中就一定回调**，所以我们自己按时间/位移判单击与长按。
+         * 判据（都在 onRawTouch 里）：位移 < 10vp 且时长 < 400ms → 单击；不动且时长 ≥ 400ms → 长按。
+         */
         .onTouch((event: TouchEvent): void => {
-          TouchProbe.log('hitlayer', event.type);
+          this.onRawTouch(event);
         })
         .parallelGesture(
       GestureGroup(GestureMode.Parallel,
