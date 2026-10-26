@@ -1118,7 +1118,7 @@ struct ReelSlide {
        * 而且节点不在树上时**不占触摸**（常驻改 opacity 的话它虽然看不见，照样要小心命中区域）。
        * 它自己不吃触摸（见 pauseButton 的说明），点它 = 点画面 = 继续播放。
        */
-      if (this.playing && this.reel.playable() && this.userPaused) {
+      if (this.playing && this.reel.playable() && (this.userPaused || this.hostPaused)) {
         this.pauseButton()
       }
 
