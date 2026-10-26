@@ -137,6 +137,9 @@ import { StoriesTray } from '../components/StoriesTray';
 import { LoginPage } from '../components/LoginPage';
 import { StoryViewer } from '../components/StoryViewer';
 import { ReelsPage } from '../components/ReelsPage';
+// 视频页"隐藏全局控件"这个开关（AppStorage 键，见 components/ReelsPage 的说明）：
+// 标题栏与底栏由外壳订阅它 —— 标题栏/底栏不在 ReelsPage 里，只能靠这个键跨层通知。
+import { REELS_CHROME_HIDDEN } from '../components/ReelsPage';
 import { Reel } from '../model/Reel';
 // 兜底的发布时间：载荷没给 `taken_at` 时用"第一次见到这条"的本机时刻（见 ReelSeenTime）。
 import { ReelSeenTime } from '../core/ReelSeenTime';
@@ -804,6 +807,22 @@ const REELS_TITLE_LEFT_PAD_VP: number = 16;
  * 一直铺到菜单底下，所以只能自己往左退一点。真机上要再挤一点/松一点就改这个数。
  */
 const REELS_SEGMENT_MENU_GAP_VP: number = 108;
+/**
+ * Reels 页"点标题栏 → 隐藏全局控件"那条**热区**的几何（vp）。
+ *
+ * 为什么只能这么做：HDS 的标题栏是 `HdsNavigation`/`HdsNavDestination` 自己画的，官方接口
+ * 里**没有**"标题栏被点了一下"的回调（只有 hideTitleBar / dynamicHideTitleBar 这类显隐接口，
+ * 见 @hms.hds.hdsBaseComponent.d.ts），所以想接住标题栏那一下，只能在外壳里盖一层透明热区。
+ *
+ * 两个限制（都是为了让标题栏自己的控件照常工作）：
+ *   · **宽度只到分段药丸左边**：右侧是「探索|关注」药丸 + 静音/下载菜单，热区盖上去的话
+ *     点药丸会顺带把控件藏了；
+ *   · **高度固定 56**（HDS 的 MINI 标题栏高度），从外壳 Stack 的顶边算起 —— 外壳这一层本来
+ *     就从安全区下沿开始（见 nativeShell 的 ignoreLayoutSafeArea）。
+ * 也就是说：点在标题文字 / 标题右边那片空白上 = 隐藏控件；点在药丸和菜单上 = 它们自己的事。
+ */
+const REELS_TITLE_TAP_HEIGHT_VP: number = 56;
+
 /** 切段动画时长（ms）：和系统 Tab 的过渡接近，快一点更"跟手"。 */
 const REELS_SWITCH_MS: number = 220;
 /** 切段时那一页的横向位移（vp）：只做一点点，观感是"翻过去"而不是"飞过去"。 */
@@ -1352,6 +1371,17 @@ struct Index {
     }
     // 离开 Reels 类页面：把配色交回系统（浅色模式就该恢复浅色，见 syncReelsColorMode）。
     this.syncReelsColorMode();
+    /*
+     * 关掉的/被盖住的正好是 reels 类整屏页：**把"隐藏全局控件"复位**。
+     *
+     * 不复位的话，下一次从别处进 reels 页时标题栏一开始就是藏着的（那个键是全局的），
+     * 用户会看到"标题栏和返回键都不见了"，只能靠点一下画面才恢复。
+     */
+    if (name === PROFILE_REELS_PAGE || name === SEARCH_REELS_PAGE) {
+      if (this.reelsChromeHidden) {
+        AppStorage.setOrCreate(REELS_CHROME_HIDDEN, false);
+      }
+    }
   }
 
   /** 现在显示着的整屏页面（顺序 = 压栈顺序；见 onPageShown）。 */
@@ -1378,6 +1408,18 @@ struct Index {
   private lastProbeDumpMs: number = 0;
   /** 屏幕宽度（vp）：底栏胶囊的左右留白按它反算（见 barSideMargin）。 */
   private screenWidthVp: number = 0;
+  /**
+   * **视频页的全局控件（标题栏 / 底栏）现在藏起来了没有**。
+   *
+   * 需求："单击视频画面之外（含 HDS 标题栏区域）隐藏全局控件" —— 受影响的层里，标题栏
+   * （HdsNavigation / HdsNavDestination）和底栏（HdsTabs）都归外壳画，所以由这一层订阅
+   * AppStorage 里那个键（见 components/ReelsPage 的 REELS_CHROME_HIDDEN）。
+   *
+   * 注意**只在 reels 类页面上生效**（见 reelsChromeHidesShell）：那个键是全局的，用户从
+   * Reels 切到别的标签时它还留在 true，不 gate 一下的话首页的标题栏/底栏会莫名其妙消失。
+   */
+  @StorageLink(REELS_CHROME_HIDDEN) reelsChromeHidden: boolean = false;
+
   /**
    * 沉浸光感的材质等级（设定页里的四档，见 AppSettings 的 MATERIAL_LEVEL_*）。
    *
@@ -5461,6 +5503,15 @@ struct Index {
     // 换页面就把底栏复位（上一页可能把它沉下去/藏起来了；新页面还没滚过，
     // 栏沉在那儿会很怪）。系统显隐那支也一样收干净（见 restoreBar / showBar）。
     this.restoreBar();
+    /*
+     * **离开视频页时把"隐藏全局控件"复位**。
+     *
+     * 那个键是全局的：用户从隐藏状态切走，标题栏/底栏在别的页面上会一起消失（见
+     * reelsChromeHidesShell 的 gate，这里再补一道，免得"切回来还是藏着的"让人以为页面坏了）。
+     */
+    if (this.reelsChromeHidden) {
+      AppStorage.setOrCreate(REELS_CHROME_HIDDEN, false);
+    }
     // 切页时顺带看一眼"账号是不是被要求验证了"（见 refreshChallengeState）。
     this.refreshChallengeState();
     /*
@@ -7353,6 +7404,21 @@ struct Index {
       // 抬整层会让栏和它的背板一起离开屏幕底边 —— 那就成了需求里不要的"悬浮"。
       .width('100%')
       .height(this.barLayerHeight())
+      /*
+       * **视频页隐藏全局控件时，底栏一起藏**（需求第 4 条）。
+       *
+       * 三件事一起做：
+       *   · `opacity` 淡出（不摘节点，理由见 barChromeOpacity 的说明）；
+       *   · `translate` 往下带一点 —— 和 ReelOverlay 的信息层同一个观感（"淡出 + 轻微位移"）；
+       *   · `enabled(false)`：透明度 0 的栏**照样吃点击**，不关掉的话"点一下恢复控件"那一下会
+       *     被那颗看不见的标签接走（用户会觉得点了没反应）。
+       * `.animation()` 只补间这两个渲染属性（这条链上别的属性在隐藏期间不变），180ms 与
+       * `CHROME_FADE_MS`（components/ReelsPage）一致。
+       */
+      .opacity(this.barChromeOpacity())
+      .translate({ y: this.barChromeShift() })
+      .enabled(!this.reelsChromeHidesShell())
+      .animation({ duration: 180, curve: Curve.EaseOut })
     }
     .width('100%')
     .height('100%')
@@ -9809,6 +9875,64 @@ struct Index {
   }
 
   /**
+   * 现在这一层外壳要不要**跟着视频页把标题栏/底栏藏起来**（见 reelsChromeHidden 的说明）。
+   *
+   * 两个条件都必要：
+   *   · 用户按了"隐藏控件"（`reelsChromeHidden`）；
+   *   · 屏幕上真的是 reels 类页面（`reelsLikeOnScreen`，含底栏那个标签与两个整屏 reels 页）——
+   *     那个键是全局的，切到别的标签时它还留在 true，不 gate 的话首页也会变成没有标题栏。
+   */
+  private reelsChromeHidesShell(): boolean {
+    return this.reelsChromeHidden && this.reelsLikeOnScreen();
+  }
+
+  /**
+   * 底部栏（HdsTabs 那层）隐藏时的**透明度**与**下移距离**。
+   *
+   * 为什么不直接 `if (!hidden)` 把栏从树上摘掉：`HdsTabs` 一摘，它内部的选中下标、材质、
+   * 悬浮参数全部重来（本项目的 `tabsController` 也就失联了），显示/隐藏一次要重建一遍系统栏。
+   * 用透明度 + 位移 + `enabled(false)`（见 build 里那一层）既能"看不见也点不到"，又是纯渲染属性。
+   */
+  private barChromeOpacity(): number {
+    return this.reelsChromeHidesShell() ? 0 : 1;
+  }
+
+  /** 隐藏时把栏往下带一点（vp）：和 ReelOverlay 的信息层同一个"淡出 + 轻微位移"的观感。 */
+  private barChromeShift(): number {
+    return this.reelsChromeHidesShell() ? BAR_HEIGHT : 0;
+  }
+
+  /**
+   * 标题栏热区的宽度（vp）：**从左边一直到分段药丸之前**（见 REELS_TITLE_TAP_HEIGHT_VP）。
+   *
+   * 只在底栏那个 Reels 标签页上挂（`reelsTitleTapEnabled`）：整屏的 reels 页（视频分页 /
+   * 搜索推荐）左上角是**原生返回键**，热区盖上去会让返回键点不动。
+   */
+  private reelsTitleTapWidth(): number {
+    const width: number = this.screenWidthVp > 0 ? this.screenWidthVp : 360;
+    const reserved: number = REELS_SEGMENT_WIDTH_VP + REELS_SEGMENT_MENU_GAP_VP;
+    const left: number = width - reserved;
+    return left > 24 ? left : 24;
+  }
+
+  /**
+   * 现在要不要挂标题栏热区（见 reelsTitleTapWidth 的说明）。
+   *
+   * 藏起来之后**仍然要挂**：那一层是"再点一下恢复"的唯一入口（标题栏本身已经不见了）。
+   */
+  private reelsTitleTapEnabled(): boolean {
+    // 网页盖在上面时不挂（那时候点哪儿都该由网页处理）。
+    return !this.webVisible && this.currentTab() === AppTab.Reels;
+  }
+
+  /** 标题栏热区被点了一下：隐藏 / 恢复全局控件（和 ReelsPage.toggleChrome 同一件事）。 */
+  private toggleReelsChromeFromTitle(): void {
+    const next: boolean = !this.reelsChromeHidden;
+    hilog.info(DOMAIN, TAG, 'chrome hidden from title bar =%{public}s', `${next}`);
+    AppStorage.setOrCreate(REELS_CHROME_HIDDEN, next);
+  }
+
+  /**
    * 原生壳：标题栏改用 HDS 的 HdsNavigation（HarmonyOS Design System 的导航容器）。
    *
    * 标题与右上角动作都由 titleBar 配置，字号、点击热区、配色跟随系统设计规范；
@@ -9849,8 +9973,12 @@ struct Index {
      *
      * 已登录时**不绑** hideTitleBar：需求"不需要隐藏 hdsnavigation" —— 下沉时收走标题栏
      * 那版已撤掉，现在跟着底栏下沉的是 reels 页的动作区 / 资讯区（见 OVERLAY_SINK_DISTANCE）。
+     *
+     * **例外：视频页"隐藏全局控件"**（需求第 4 条）。那一刻标题栏要和底栏、信息层一起藏
+     * （见 reelsChromeHidesShell）；第二个参数 `true` 是 HDS 自带的那支显隐动画时长，
+     * 传 true 才会淡出而不是"啪"地消失。
      */
-    .hideTitleBar(this.loginPageShown())
+    .hideTitleBar(this.loginPageShown() || this.reelsChromeHidesShell(), true)
     // 让标题栏铺到系统栏下方，沉浸光感才有连续的底；内容下边距由各栏自己留。
     .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
     .zIndex(10)
@@ -10253,6 +10381,12 @@ struct Index {
       // 左上角那颗**原生**返回键（点击 pop 路由栈）—— 需求明确要它。
       .hideBackButton(false)
       .titleMode(HdsNavDestinationTitleMode.MINI)
+      /*
+       * 视频页"隐藏全局控件"（需求第 4 条）：整屏的 reels 页也一样要把标题栏（连同返回键）收起来。
+       * 收起来之后点不到返回了，但**再点一下画面**就会恢复（见 ReelsPage.toggleChrome）。
+       * 第二个参数 true = 走 HDS 自带的显隐动画（淡出而不是瞬移）。
+       */
+      .hideTitleBar(this.reelsChromeHidesShell(), true)
       .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
       // 视频要铺到标题栏底下（沉浸式），所以不裁内容。
       .clip(false)
@@ -10292,6 +10426,8 @@ struct Index {
       })
       .hideBackButton(false)
       .titleMode(HdsNavDestinationTitleMode.MINI)
+      // 同视频分页那一页：隐藏全局控件时标题栏一起收（见 reelsChromeHidesShell）。
+      .hideTitleBar(this.reelsChromeHidesShell(), true)
       .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
       .clip(false)
       .onShown((): void => {
@@ -11676,8 +11812,38 @@ struct Index {
 
       if (!this.webVisible) {
         this.nativeShell()
-      } else {
-        WebChromeBar({
+        /*
+         * **标题栏热区**（需求第 4 条："单击画面外，含 HDS 标题栏区域 → 隐藏全局控件"）。
+         *
+         * HDS 的标题栏不对外提供"被点了一下"的回调（接口只有显隐那一组，见
+         * REELS_TITLE_TAP_HEIGHT_VP 的说明），所以只能在外壳这一层盖一块透明热区。
+         * 两块几何都是刻意收窄的：
+         *   · 宽度 = 屏宽 − 分段药丸 − 右侧菜单（`reelsTitleTapWidth`），只盖住标题文字那一段 ——
+         *     药丸和静音/下载菜单必须照常可点；
+         *   · 高度 = 56（MINI 标题栏），从外壳 Stack 的顶边算起。
+         * `HitTestMode.Transparent`：热区自己响应，**不阻塞**兄弟节点 —— 于是它下面那个
+         * HdsNavigation 的标题栏控件（菜单/返回键）照常工作，而这一层收下自己那片区域的点击。
+         *
+         * zIndex 12：压在本页的 HdsNavigation（zIndex 10）之上，但仍在账号选单（80）之下。
+         */
+        if (this.reelsTitleTapEnabled()) {
+          Column()
+            .width(this.reelsTitleTapWidth())
+            .height(REELS_TITLE_TAP_HEIGHT_VP)
+            /*
+             * 从**状态栏下沿**开始（`topSafeVp`，和评论面板那一层同一个口径）：页面根节点是整屏
+             * 铺开的（HdsNavigation 用了 ignoreLayoutSafeArea），标题栏自己落在安全区下面。
+             * 于是这块热区正好压在"Reels 标题文字 + 它右边的空白"上。
+             */
+            .position({ x: 0, y: this.topSafeVp })
+            .backgroundColor(Color.Transparent)
+            .hitTestBehavior(HitTestMode.Transparent)
+            .zIndex(12)
+            .onClick((): void => {
+              this.toggleReelsChromeFromTitle();
+            })
+        }
+      } else {        WebChromeBar({
           onBack: (): void => {
             this.handleWebBack();
           },

@@ -50,6 +50,23 @@ const BUFFER_TOTAL_SEC: number = 2;
 const SOURCE_RETRY_MS: number = 150;
 /** 同一条视频最多重试几次设源（再多就是地址真有问题了）。 */
 const SOURCE_RETRY_MAX: number = 2;
+/**
+ * 进度上报的**最小间隔**（毫秒）。
+ *
+ * 播放器的 `timeUpdate` 大约每 100ms 来一次，而每来一次都会写父组件的 `@State`（重绘一条 3vp 的
+ * 进度条）。抖音/IG 那种进度条 10Hz 就够顺滑了，这里再压到 ~8Hz 一是省重绘、二是避免真机上
+ * "进度条比画面抖"；跳转请求（`seekMs`）不受它影响，**立刻**上报一次，否则松手后进度条要等一帧
+ * 才走到目标位置。
+ */
+const PROGRESS_REPORT_MIN_MS: number = 120;
+/**
+ * 跳转目标最多停在"离片尾还差多少毫秒"（见 applySeek）。
+ *
+ * 跳到 duration 本身会让播放器**立刻 completed**，而我们对 completed 的处理是"还想播就继续播"
+ * —— 循环短视频于是当场从头上开始放，用户看到的是"拖到最右边一松手，视频重头播了"。
+ * 留 300ms：既贴到片尾，又还留得出一次正常的"播完 → 循环"。
+ */
+const SEEK_TAIL_GUARD_MS: number = 300;
 
 @Component
 export struct VideoSurface {
@@ -79,6 +96,25 @@ export struct VideoSurface {
   @Prop @Watch('onPropChanged') cover: boolean = true;
   /** 静音（全局开关，见 AppSettings.SETTING_VIDEO_MUTED）：true = 音量 0。 */
   @Prop @Watch('onPropChanged') muted: boolean = false;
+  /**
+   * **跳转请求**（毫秒；< 0 = 还没有请求过）。
+   *
+   * 为什么用 `@Prop + @Watch` 而不是给本组件加一个 `seekTo()` 方法：ArkUI 里父组件**不能直接调
+   * 子组件的方法**（没有 ref 那套），父子之间只有"属性 + 回调"这条路。所以跳转做成一个**状态**：
+   * 父组件把目标位置写到这里，本组件在 @Watch 里落到播放器上。
+   *
+   * 同一个毫秒值重复写不会再来一次（@Watch 只在值变化时触发）—— 对"左滑/右滑松手"这种交互
+   * 完全够用（连续两次落在同一个毫秒上，结果本来就一样）。
+   */
+  @Prop @Watch('onSeekRequested') seekMs: number = -1;
+  /**
+   * 播放倍速（1 = 原速，2 = 长按左右两侧时的 2 倍速）。
+   *
+   * 只在 prepared 及之后才设得上（接口文档：setSpeed 只允许 prepared/playing/paused/completed），
+   * 所以除了这里，`startPlayback()` 之后还会再补一次 —— 真机上 pause → play 之后倍速有可能被
+   * 播放器自己丢回 1.0。
+   */
+  @Prop @Watch('onSpeedChanged') speed: number = 1;
   /** 首帧真的上屏了（父组件据此撤掉封面）。只回调一次。 */
   onFirstFrame: () => void = (): void => {
   };
@@ -95,6 +131,16 @@ export struct VideoSurface {
    */
   onVideoSize: (w: number, h: number) => void = (w: number, h: number): void => {
   };
+  /**
+   * **播放进度上报**（毫秒；`durationMs` 拿不到时给 0）。
+   *
+   * 谁来用：reels 卡片顶部那条进度条（需求："进度条画在视频卡片内部顶部"）。播放器的
+   * `timeUpdate` 是唯一的进度来源 —— 自己没有可靠的时钟（倍速 2x、seek、缓冲都会让"按时间推算"
+   * 偏掉），所以宁可以播放器为准，按 PROGRESS_REPORT_MIN_MS 节流上报。
+   */
+  onProgress: (positionMs: number, durationMs: number) => void =
+    (positionMs: number, durationMs: number): void => {
+    };
 
   /**
    * **这一颗播放器此刻该不该真的在播**：调用方说该播 + 没被全局冻住 + 自己是当前分段。
@@ -134,6 +180,23 @@ export struct VideoSurface {
   private urlAttempts: number = 0;
   /** 正在重试的那个地址（用来判断"换地址了、计数该归零"，见 applyUrl）。 */
   private attemptUrl: string = '';
+  /**
+   * 还没机会落到播放器上的跳转位置（毫秒；< 0 = 没有）。
+   *
+   * 为什么要有它：用户可能在**还没 prepared** 的时候就拖了进度条（切过去一两百毫秒内就开始滑）。
+   * 那一刻播放器不接 seek（文档：只允许 prepared 及之后），如果直接丢掉，这次拖拽就白做了，
+   * 所以先记下来，prepared 那一刻补一次（见 onState 的 prepared 分支）。
+   */
+  private pendingSeekMs: number = -1;
+  /**
+   * 上一次把倍速**真正下发成功**的那个值（0 = 还没设过）。
+   *
+   * 用来避免每次属性变化都重下发（`setSpeed` 有 IPC 成本，而且真机上连续下发同值偶尔会打嗝）；
+   * 换视频 / 重建播放器时归零，于是新播放器会重新设一次。
+   */
+  private appliedSpeed: number = 0;
+  /** 上一次上报进度的时刻（节流用，见 PROGRESS_REPORT_MIN_MS）。 */
+  private lastProgressMs: number = 0;
   /**
    * 应用现在是不是前台。
    *
@@ -212,6 +275,16 @@ export struct VideoSurface {
         } catch (error) {
         }
       });
+      /*
+       * **播放进度**（见 onProgress 的说明）。
+       *
+       * 用 `timeUpdate` 而不是自己起定时器按时间推算：倍速、seek、缓冲都会让"推算值"偏离真实
+       * 播放位置，而这条事件是播放器自己报的当前位置。它在 paused 期间也会来（seek 之后会补一次），
+       * 所以拖动进度条松手、跳转落定之后进度条也能自己对齐。
+       */
+      player.on('timeUpdate', (time: number): void => {
+        this.reportProgress(time);
+      });
       this.applyUrl();
     }).catch((error: BusinessError): void => {
       this.creating = false;
@@ -245,12 +318,18 @@ export struct VideoSurface {
     this.attemptUrl = '';
     this.urlAttempts = 0;
     this.firstFrameSent = false;
+    // 倍速 / 跳转 / 进度都是"跟着这条播放器走"的：播放器没了就一并归零，
+    // 否则下一个播放器会继承上一条的 2 倍速或一次过期的跳转。
+    this.pendingSeekMs = -1;
+    this.appliedSpeed = 0;
+    this.lastProgressMs = 0;
     if (player === null) {
       return;
     }
     try {
       player.off('stateChange');
       player.off('error');
+      player.off('timeUpdate');
       player.release();
     } catch (error) {
     }
@@ -286,6 +365,19 @@ export struct VideoSurface {
       this.applyRenderOptions();
       hilog.info(DOMAIN, TAG, 'prepared in %{public}dms surface=%{public}s url=%{public}s',
         Date.now() - this.prepareStartedMs, this.surfaceReady ? 'y' : 'n', this.shortUrl());
+      // 倍速 / 跳转只能在 prepared 及之后下发（见 speed / pendingSeekMs 的说明）。
+      this.appliedSpeed = 0;
+      this.applySpeed();
+      if (this.pendingSeekMs >= 0) {
+        const pending: number = this.pendingSeekMs;
+        this.pendingSeekMs = -1;
+        try {
+          this.player?.seek(pending, media.SeekMode.SEEK_CLOSEST);
+        } catch (error) {
+        }
+      }
+      // 进度条立刻拿到"总时长"（还没播之前就该有正确的底，见 onProgress）。
+      this.reportProgress(0, true);
       if (this.wantsPlay()) {
         this.beginWhenSurfaceReady();
       }
@@ -351,6 +443,126 @@ export struct VideoSurface {
     return BUFFER_TOTAL_SEC;
   }
 
+  /**
+   * 把一条进度上报给父组件（带节流，见 PROGRESS_REPORT_MIN_MS）。
+   *
+   * @param positionMs 播放器报的当前位置（毫秒）。
+   * @param force true = 不节流（跳转落定、换视频这类"必须立刻对齐"的时刻用）。
+   */
+  private reportProgress(positionMs: number, force: boolean = false): void {
+    const now: number = Date.now();
+    if (!force && now - this.lastProgressMs < PROGRESS_REPORT_MIN_MS) {
+      return;
+    }
+    this.lastProgressMs = now;
+    const total: number = this.playerDurationMs();
+    try {
+      this.onProgress(positionMs > 0 ? positionMs : 0, total);
+    } catch (error) {
+    }
+  }
+
+  /** 当前这条的总时长（毫秒；拿不到给 0 —— 调用方据此判断"还不能按比例算进度"）。 */
+  private playerDurationMs(): number {
+    const player: media.AVPlayer | null = this.player;
+    if (player === null) {
+      return 0;
+    }
+    try {
+      const total: number = player.duration;
+      return total > 0 ? total : 0;
+    } catch (error) {
+      return 0;
+    }
+  }
+
+  /**
+   * 把 `seekMs` 落到播放器上（见 seekMs 的说明）。
+   *
+   * 两个坑：
+   *   1. `seek()` 的返回值是 **void**（结果靠 `seekDone` 事件），所以不能 then/catch，只能 try/包一层；
+   *   2. 播放器没到 prepared 时调用会直接抛（或者静默不生效），所以那一刻**记进 pendingSeekMs**，
+   *      等 prepared 再补（见 onState）。
+   *
+   * 模式用 `SEEK_CLOSEST`：滑到哪就跳到哪一帧（`SEEK_PREV_SYNC` 会退到上一个关键帧，长视频上
+   * 能差好几秒，手指明明滑到 50% 却跳到 42%，观感是"跳不准"）。
+   */
+  private applySeek(): void {
+    if (this.seekMs < 0) {
+      return;
+    }
+    const player: media.AVPlayer | null = this.player;
+    if (player === null || !this.prepared) {
+      this.pendingSeekMs = this.seekMs;
+      return;
+    }
+    let target: number = this.seekMs;
+    const total: number = this.playerDurationMs();
+    if (total > 0 && target > total - SEEK_TAIL_GUARD_MS) {
+      // 别跳到"片子最后一毫秒"：那会立刻 completed、循环重播（观感就是"一松手视频从头开始了"）。
+      target = total - SEEK_TAIL_GUARD_MS;
+    }
+    if (target < 0) {
+      target = 0;
+    }
+    this.pendingSeekMs = -1;
+    try {
+      player.seek(target, media.SeekMode.SEEK_CLOSEST);
+      hilog.info(DOMAIN, TAG, 'seek %{public}d/%{public}d url=%{public}s',
+        target, total, this.shortUrl());
+      // 跳完之后进度条要立刻反映目标位置（不用等下一帧 timeUpdate）。
+      this.reportProgress(target, true);
+    } catch (error) {
+      const err: BusinessError = error as BusinessError;
+      hilog.warn(DOMAIN, TAG, 'seek failed code=%{public}d msg=%{public}s', err.code, err.message);
+      // 失败就退回原速播放，别让"拖动过"变成"卡住不动"：不改变播放状态，只是不再重试。
+    }
+  }
+
+  /**
+   * 把 `speed` 落到播放器上（见 speed 的说明）。
+   *
+   * 两条路，按能力降级：
+   *   ① `setSpeed(PlaybackSpeed)` —— 老接口（API 9 起），只支持固定几档，2 倍是其中一档；
+   *   ② `setPlaybackRate(number)` —— API 20 起的新接口，接受任意倍率（0.125~4.0）。
+   * 两条都可能因为"设备/版本不支持"或"当前状态不允许"抛错，所以各自 try 包一层；
+   * **全都失败就静默放弃**（不影响正常播放，只是没有 2 倍速 —— 需求也要求这么做）。
+   */
+  private applySpeed(): void {
+    const player: media.AVPlayer | null = this.player;
+    if (player === null || !this.prepared) {
+      return;
+    }
+    const wanted: number = this.speed > 0 ? this.speed : 1;
+    if (Math.abs(wanted - this.appliedSpeed) < 0.01 && this.appliedSpeed > 0) {
+      return;
+    }
+    // 先试枚举那条（覆盖面最广）：只有 1.00x / 2.00x 两档用得上，别的倍率留给第二条路。
+    const byEnum: media.PlaybackSpeed | null = wanted === 2
+      ? media.PlaybackSpeed.SPEED_FORWARD_2_00_X
+      : (Math.abs(wanted - 1) < 0.01 ? media.PlaybackSpeed.SPEED_FORWARD_1_00_X : null);
+    if (byEnum !== null) {
+      try {
+        player.setSpeed(byEnum);
+        this.appliedSpeed = wanted;
+        hilog.info(DOMAIN, TAG, 'speed enum %{public}s ok=1', `${wanted}`);
+        return;
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'setSpeed failed, try setPlaybackRate');
+      }
+    }
+    try {
+      player.setPlaybackRate(wanted);
+      this.appliedSpeed = wanted;
+      hilog.info(DOMAIN, TAG, 'speed rate %{public}s ok=1', `${wanted}`);
+    } catch (error) {
+      const err: BusinessError = error as BusinessError;
+      this.appliedSpeed = -1;
+      hilog.warn(DOMAIN, TAG, 'setPlaybackRate failed code=%{public}d msg=%{public}s',
+        err.code, err.message);
+    }
+  }
+
   /** 起播缓冲 1 秒 + prepare 阶段解首帧 —— 这两条就是"没有黑闪 + 起播快"的关键。 */
   private doStrategyAndPrepare(): void {
     const player: media.AVPlayer | null = this.player;
@@ -399,12 +611,36 @@ export struct VideoSurface {
   /** 上一次记录过的闸门状态（只在变化时打日志，避免刷屏）。 */
   private lastGateLog: string = '';
 
+  /**
+   * `seekMs` 变了：拖完进度条松手那一下（见 seekMs 的说明）。
+   *
+   * **单独一个 @Watch**（不跟 `onPropChanged` 混用）：混在一起的话，任何别的属性变化（静音、
+   * 倍速、冻结…）都会带着"上一次的跳转位置"再 seek 一次 —— 用户暂停一下、视频就往前跳回去。
+   */
+  private onSeekRequested(): void {
+    if (this.seekMs < 0) {
+      return;
+    }
+    this.pendingSeekMs = this.seekMs;
+    this.applySeek();
+  }
+
+  /** `speed` 变了：长按侧边开始 / 松手（见 speed 的说明）。 */
+  private onSpeedChanged(): void {
+    this.applySpeed();
+  }
+
   private onPropChanged(): void {
     this.logGate();
     if (!this.wanted()) {
       // 不再是"该播/该预加载"的这条：把解码器还回去（滚动时最常走这条路）。
       this.teardownPlayer();
       return;
+    }
+    // 还没 prepared 的跳转请求先存着（见 pendingSeekMs）：这条路径下面会提前 return，
+    // 不留下来这次拖拽就白做了。
+    if (this.seekMs >= 0 && !this.prepared) {
+      this.pendingSeekMs = this.seekMs;
     }
     if (this.player === null) {
       this.createPlayer();
@@ -415,6 +651,9 @@ export struct VideoSurface {
       return;
     }
     this.applyRenderOptions();
+    // 跳转不在这里补：`seekMs` 有自己的 @Watch（见 onSeekRequested），
+    // 混进来会让"任意属性变化"都变成一次多余的 seek。
+    this.applySpeed();
     if (this.wantsPlay()) {
       this.beginWhenSurfaceReady();
     } else {
@@ -511,6 +750,9 @@ export struct VideoSurface {
       return;
     }
     this.playRequestedMs = Date.now();
+    // play 之前补一次倍速：部分机型 pause → play 之后倍速会被播放器丢回 1.0（见 speed 的说明）。
+    this.appliedSpeed = 0;
+    this.applySpeed();
     this.watchPromise(player.play(), (error: BusinessError): void => {
       hilog.warn(DOMAIN, TAG, 'play failed: %{public}s', error.message);
     });
@@ -531,6 +773,11 @@ export struct VideoSurface {
     this.prepared = false;
     this.firstFrameSent = false;
     this.playRequestedMs = 0;
+    // 换了一条片子：上一条的跳转/倍速/进度全部作废（新的一条应该从头播；倍速由父组件的
+    // speed 重新下发，所以这里只把"已经下发过的值"清掉，见 appliedSpeed）。
+    this.pendingSeekMs = -1;
+    this.appliedSpeed = 0;
+    this.lastProgressMs = 0;
     const strategy: media.PlaybackStrategy = {
       preferredBufferDurationForPlaying: BUFFER_FOR_PLAYING_SEC,
       preferredBufferDuration: this.bufferSeconds(),

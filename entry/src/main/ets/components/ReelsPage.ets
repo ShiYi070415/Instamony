@@ -151,6 +151,112 @@ function commitReelLike(reel: Reel, next: boolean,
 const INFO_BOTTOM: number = 112;
 
 /**
+ * **全局控件（chrome）现在藏起来了没有** —— 整个 app 共用一个 AppStorage 键。
+ *
+ * 需求："单击画面之外（左右留白 / 上下模糊带 / HDS 标题栏）隐藏全局控件，再点恢复"，并且
+ * "隐藏后是**所有视频**的信息层一起消失，标题栏与底栏也一起藏"。
+ *
+ * 为什么要跨组件用一个键、而不是各层自己记一份：
+ *   · 信息层是**每条一个**的组件（ReelOverlay，在 ForEach 里）—— 键没变的项不会重跑 item
+ *     builder，父组件的 @Prop 传不到已经建好的那几条（本项目反复踩过），只有
+ *     `@StorageLink/@StorageProp` 这种**组件级订阅**能让**所有**已建好的信息层一起动；
+ *   · 标题栏（HdsNavigation）与底栏（HdsTabs）根本不在 ReelsPage 里，它们的宿主是 pages/Index
+ *     —— 一个 AppStorage 键是把"这一层按了什么"告诉外壳最省事的通道（见 Index 里的订阅）。
+ *
+ * 命名/取值和 `reels_frozen_all` / `reels_active_segment` 同一套（那两个也是 AppStorage 键，
+ * 见 VideoSurface 的说明）：字符串常量写在一处，别的地方 import 它，避免打错字导致"点了没反应"。
+ */
+export const REELS_CHROME_HIDDEN: string = 'reels_chrome_hidden';
+
+/**
+ * 控件淡出/淡入时长（毫秒）。
+ *
+ * 180ms：比翻页动画（480ms）短、比系统按压反馈（~100ms）长 —— 感觉得到"收起来了"，
+ * 又不会让隐藏这个动作本身变成一次等待。两条位移（CHROME_SHIFT_VP）纯粹是"顺手一起缩"。
+ */
+const CHROME_FADE_MS: number = 180;
+/** 控件隐藏时整块往下缩的距离（vp，轻微位移，见 CHROME_FADE_MS）。 */
+const CHROME_SHIFT_VP: number = 14;
+
+/** 置中那颗"暂停/继续"按钮的直径与图标尺寸（vp，需求：约 64vp）。 */
+const PAUSE_BUTTON_SIZE: number = 64;
+const PAUSE_ICON_SIZE: number = 26;
+/** 暂停按钮淡入淡出时长（毫秒，需求：约 150ms）。 */
+const PAUSE_FADE_MS: number = 150;
+
+/**
+ * 卡片内那条**进度条**的几何与配色（需求："画在视频卡片内部顶部，一条粗直线，不可拖动"）。
+ *
+ * 位置在卡片内顶部再留 GAP：贴边会跟着卡片圆角被裁掉两头，看着像"断了一截"；
+ * 左右也各留 PAD，理由相同（圆角把内宽吃掉了）。高度 3vp 是"看得出来、又不喧宾夺主"的一档。
+ */
+const PROGRESS_TOP_GAP: number = 10;
+const PROGRESS_HEIGHT: number = 3;
+const PROGRESS_SIDE_PAD: number = 14;
+/** 轨道底色（半透明白）与已播放色（实白）—— 压在任意画面上都读得出来。 */
+const PROGRESS_TRACK_COLOR: string = '#4DFFFFFF';
+const PROGRESS_FILL_COLOR: string = '#FFFFFFFF';
+
+/** 2 倍速胶囊：离进度条下方多远、高度、宽度、字号（vp）。 */
+const SPEED_PILL_GAP: number = 8;
+const SPEED_PILL_HEIGHT: number = 26;
+const SPEED_PILL_WIDTH: number = 58;
+const SPEED_PILL_FONT: number = 13;
+/** 胶囊上的文案（需求："显示胶囊「2.0x」"）。 */
+const SPEED_PILL_TEXT: string = '2.0x';
+/** 2 倍速的倍率（见 VideoSurface.speed）。 */
+const SPEED_2X: number = 2;
+
+/**
+ * 单击视频画面（暂停/播放）允许的手指位移（vp）。
+ *
+ * 和双击点赞同一个口径（DOUBLE_TAP_DISTANCE_VP 的两倍不到）：手指稍微动一下仍然算"点"，
+ * 但一旦超过它就不再算点击 —— 那是在滑页（竖向）或者拖进度条（横向）。
+ */
+const VIDEO_TAP_DISTANCE_VP: number = 10;
+/** 横向拖动要走出这么远才算"拖进度条"（vp）：太小会和"点击"抢，太大又会觉得拖不动。 */
+const SEEK_PAN_DISTANCE_VP: number = 12;
+/**
+ * 单击"暂停/继续"的**生效延迟**（毫秒）。
+ *
+ * 为什么不是点下去立刻生效：这一页上还有"双击点赞"（ReelsPage 根节点的 parallelGesture）。
+ * 单击若立刻切播放状态，双击点赞会顺手把视频暂停（第一下暂停、第二下又恢复，中间一卡；
+ * 慢一点的双击就干脆停在暂停上）。所以第一下先挂一个短定时器，等到这段时间内没有第二下
+ * 才真的切 —— 有第二下就当作双击，这一下不动播放状态（见 onVideoTap）。
+ * 240ms：接近系统双击判定窗口，手感上"点了就响应"，又不会把两次独立的快速点击吃掉太多。
+ */
+const SINGLE_TAP_DELAY_MS: number = 240;
+
+/**
+ * 长按的两个时长（毫秒）：中间 = 暂停 + 隐藏控件；两侧 = 2 倍速。
+ *
+ * 为什么中间给 400、两侧给 300：两侧的 2 倍速是"持续按住"的临时状态（松手就还原），
+ * 越灵敏越好；中间那条要停播 + 藏控件，是"有副作用"的动作，长一点更不容易误触。
+ * 两者**靠热区区分**（见 SPEED_ZONE_RATIO），不靠时长区分。
+ */
+const LONG_PRESS_CENTER_MS: number = 400;
+const LONG_PRESS_SIDE_MS: number = 300;
+/**
+ * 两侧长按热区各占屏宽的比例（需求："左右两侧各占屏宽约 30%，中间 40% 仍归第 5 条"）。
+ */
+const SPEED_ZONE_RATIO: number = 0.3;
+
+/**
+ * **信息层护栏**：手指落在这两条带子里时，我们不再处理"单击暂停/长按"。
+ *
+ * 为什么需要：信息层（作者行 / 正文 / 动作栏）是 `HitTestMode.Transparent` 盖在画面上的
+ * （不加 Transparent 竖向翻页就没了，见 ReelOverlay 类头第 2 条），于是"点个赞"这一次点击
+ * **画面这层也会收到**。不挡掉的话点个赞顺手把视频暂停了（StoryViewer 里同一类问题的注释
+ * 就是"加了 Transparent，点关注会同时翻一条"）。
+ * 判据只能按**几何**来（两层是兄弟，拿不到"谁吃掉了这次点击"），所以把这两块的位置写死：
+ * 右侧动作栏一条（宽 = 栏宽 + 右边距 + 一点余量）、底部资讯区一条（高 = 底部留白 + 两行文字）。
+ * 控件已经藏起来时这两块不存在，所以那时也不护栏（见 overOverlay 的第一行）。
+ */
+const OVERLAY_GUARD_RIGHT_VP: number = ACTION_COLUMN_WIDTH + ACTION_RIGHT_PADDING + 12;
+const OVERLAY_GUARD_EXTRA_VP: number = 96;
+
+
+/**
  * 一条视频的**画面**：封面铺底 + 播放器 + 首帧叠层。
  *
  * 为什么单独一个组件（而不是写在 ReelsPage 的 @Builder 里）：画面要用 `@ObjectLink` 订阅
@@ -168,14 +274,42 @@ const INFO_BOTTOM: number = 112;
 struct ReelSlide {
   /** 这条视频（**@ObjectLink**：地址是后补的，见类头说明）。 */
   @ObjectLink reel: Reel;
-  /** 现在是这一条在播吗。 */
-  @Prop playing: boolean = false;
+  /**
+   * 现在是这一条在播吗。
+   *
+   * 父组件给的是"这一页是不是当前页"，**不含**本组件自己的暂停/长按态（那两个是下面的
+   * userPaused / holdPaused）—— 这样"用户手动暂停"不会把播放器从树上摘掉（摘掉就黑一下，
+   * 见 VideoSurface 类头）。
+   */
+  @Prop @Watch('onPlayingChanged') playing: boolean = false;
   /** 本页所属分段（0 = 探索 / 1 = 关注 / -1 = 独立页），原样转给播放器做全局播放闸门。 */
   segment: number = -1;
   /** 提前 prepare 下一条。 */
   @Prop preload: boolean = false;
   /** 静音（全局开关）。 */
   @Prop muted: boolean = false;
+  /**
+   * 屏幕宽 / 高（vp）：**只**用来算"这一下手势落在画面的左中右哪一档、有没有压在信息层上"
+   * （见 overOverlay 与 onHoldStart）。画面本身不用它 —— 宽度来自布局（100%）。
+   *
+   * 为什么本组件自己量、而不让 ReelsPage 传下来（原来是 @Prop）：ReelSlide 在 ForEach 里，
+   * 而"@Prop 的变化穿不过 ForEach"是本项目反复踩到的坑（见类头）；ReelsPage 的
+   * `screenWidthVp` 是 `aboutToAppear` 里才写进去的，@Prop 传下来有可能永远停在兜底值上，
+   * 于是"中间 40% / 两侧 30%"会按错的屏宽算。自己量一次就没有这个问题（display 是同步接口）。
+   */
+  @State private screenW: number = FALLBACK_WIDTH_VP;
+  @State private screenH: number = 780;
+  /** 画面自己在布局里的实际宽度（vp），拖动进度按它换算比例（见 cardWidthVp）。 */
+  @State private measuredWidthVp: number = 0;
+  /** 信息层底部留白 + 护栏余量（vp，见 OVERLAY_GUARD_EXTRA_VP 与 overOverlay）。 */
+  @Prop overlayGuardBottomVp: number = INFO_BOTTOM + OVERLAY_GUARD_EXTRA_VP;
+  /**
+   * **全局控件藏起来了没有**（见 REELS_CHROME_HIDDEN）。
+   *
+   * 本组件只用它一件事：控件藏着的时候信息层不存在，于是"压在信息层上"的护栏要一起失效
+   * （否则藏起来之后点屏幕底部那一条会什么都不发生，见 overOverlay）。
+   */
+  @StorageProp(REELS_CHROME_HIDDEN) chromeHidden: boolean = false;
   /** 首帧上屏时通知父组件（父组件拿它决定整页的封面叠层，见 ReelsPage.videoReady）。 */
   onFirstFrame: () => void = (): void => {
   };
@@ -191,6 +325,55 @@ struct ReelSlide {
    */
   @State private measuredAspect: number = 0;
 
+  // ==========================================================================
+  // 视频手势与控制条（这一次新增）的状态
+  //
+  // 为什么这些状态放在**画面**这个组件里，而不是放在 ReelsPage：
+  //   · 它们全是"这一条视频自己的"（播到哪儿、用户暂停了没有、是不是在 2 倍速）；
+  //   · 它们由**画面上**的手势驱动，而画面就是本组件（卡片内部），放这里手势、状态、
+  //     控制条三者同一个节点树，不用跨组件传；
+  //   · 进度只能由播放器报上来（VideoSurface.onProgress），播放器也在这里 —— 少一层转发
+  //     就少一次"@Prop 穿不过 ForEach"的机会（参见类头对本项目那个坑的说明）。
+  // ==========================================================================
+
+  /** 播放进度 0..1（播放器报的，见 VideoSurface.onProgress）。 */
+  @State private progress: number = 0;
+  /** 正在拖进度条（拖动期间进度条显示 dragProgress，且**不改**播放位置）。 */
+  @State private dragging: boolean = false;
+  /** 拖动中的预览进度 0..1（松手才真的 seek，见 onSeekEnd）。 */
+  @State private dragProgress: number = 0;
+  /** 用户单击画面把这一条暂停了（再点一下继续）。 */
+  @State private userPaused: boolean = false;
+  /** 长按左右两侧：临时 2 倍速（松手回 1 倍速）。 */
+  @State private speedBoost: boolean = false;
+  /** 长按中间：临时暂停（松手恢复原状态），同时全局控件被藏起来。 */
+  @State private holdPaused: boolean = false;
+  /** 拖动开始那一刻的进度（seek 的基线，见 onSeekMove）。 */
+  private baseProgress: number = 0;
+  /** 播放器报上来的总时长（毫秒；0 = 还不知道，此时拖动不生效）。 */
+  private durationMs: number = 0;
+  /** 最近一次请求的跳转位置（毫秒；-1 = 还没请求过）—— 写进 VideoSurface.seekMs。 */
+  private seekMs: number = -1;
+  /**
+   * 这一下触摸已经被哪条长按占用了（'' = 没有 / 'pause' / 'speed'）。
+   *
+   * 为什么需要：两条长按（中间 400ms、两侧 300ms）在一个 `GestureGroup(Parallel)` 里，
+   * 在两侧按住够久时**两条都会成立** —— 不挡的话 300ms 开始 2 倍速、400ms 又顺手把它暂停
+   * 并藏了控件（同一根手指触发两个动作）。这里用"先到先得"排他。
+   */
+  private longPressMode: string = '';
+  /** 这一下触摸里已经有长按成立过 → 抬手时那一次单击要吞掉（见 onVideoTap）。 */
+  private longPressFired: boolean = false;
+  /** 长按中间之前，全局控件本来就是藏着的吗（松手要恢复成"原来那样"，见 onHoldEnd）。 */
+  private chromeHiddenBefore: boolean = false;
+  /**
+   * 单击"暂停/继续"那个延迟窗口的定时器句柄（-1 = 没有在等）。
+   *
+   * 存句柄而不是裸 `setTimeout`：组件被销毁时（翻页/切标签）定时器还会去写 `@State`，
+   * 而且"双击"要靠这个句柄把第一下撤掉（见 onVideoTap / SINGLE_TAP_DELAY_MS）。
+   */
+  private tapTimer: number = -1;
+
   /** 画面盒子该用的比例：**实测优先** > 接口给的 > 9:16 兜底。 */
   private aspect(): number {
     if (this.measuredAspect > 0) {
@@ -199,6 +382,363 @@ struct ReelSlide {
     const w: number = this.reel.width;
     const h: number = this.reel.height;
     return (w > 0 && h > 0) ? w / h : 9 / 16;
+  }
+
+  /** 画面（= 卡片内宽）的宽度（vp）：拖动进度时按它把位移换算成比例。 */
+  private cardWidthVp(): number {
+    if (this.measuredWidthVp > 0) {
+      return this.measuredWidthVp;
+    }
+    // 量不到时按"卡片宽度 = 屏宽 − 32vp"兜底（见 ReelsPage.reelPage 的圆角卡片）。
+    const width: number = this.screenW - 32;
+    return width > 0 ? width : FALLBACK_WIDTH_VP;
+  }
+
+  aboutToAppear(): void {
+    // 只量一次：屏幕宽高在翻页过程中不会变，量到就够用了（见 screenW 的说明）。
+    try {
+      const dsp: display.Display = display.getDefaultDisplaySync();
+      this.screenW = this.getUIContext().px2vp(dsp.width);
+      this.screenH = this.getUIContext().px2vp(dsp.height);
+    } catch (error) {
+      this.screenW = FALLBACK_WIDTH_VP;
+    }
+  }
+
+  /**
+   * 组件销毁：把单击的延迟定时器撤掉。
+   *
+   * 它 240ms 后会写 `this.userPaused`（见 onVideoTap）—— 翻页/切标签正好落在这个窗口里时，
+   * 定时器会去写一个已经卸载的组件（本项目 Audit A3 那批问题里最常见的一种）。
+   */
+  aboutToDisappear(): void {
+    if (this.tapTimer >= 0) {
+      clearTimeout(this.tapTimer);
+      this.tapTimer = -1;
+    }
+  }
+
+  /** 画面此刻该不该真的在播（父组件说"是当前页" && 用户没暂停 && 不在长按暂停中）。 */
+  private wantsPlayNow(): boolean {
+    return this.playing && !this.userPaused && !this.holdPaused;
+  }
+
+  /** 换条 / 变成当前页：进度归零、临时态清干净（需求："切到下一条视频时进度归零"）。 */
+  private onPlayingChanged(): void {
+    if (this.playing) {
+      this.progress = 0;
+      this.dragging = false;
+      this.dragProgress = 0;
+    }
+    /*
+     * 长按途中被打断（翻页 / 切段会让 `playing` 变化，此时 onActionEnd 不一定会来）：
+     * **先把全局控件恢复回去**，再清临时态 —— 不然"长按藏了控件"就永远藏着了。
+     */
+    if (this.longPressMode === 'pause') {
+      AppStorage.setOrCreate(REELS_CHROME_HIDDEN, this.chromeHiddenBefore);
+    }
+    // 不再当前 / 刚成为当前：暂停、2 倍速、长按这些临时态都不该跨条保留。
+    this.userPaused = false;
+    this.speedBoost = false;
+    this.holdPaused = false;
+    this.longPressMode = '';
+  }
+
+  /**
+   * 这一下手势的落点是不是压在**信息层**上（作者行 / 正文 / 右侧动作栏）。
+   *
+   * 见 OVERLAY_GUARD_RIGHT_VP 的说明：那一层是 Transparent，同一次点击会同时传到画面这一层，
+   * 所以按几何挡掉两块区域。用**应用窗口坐标**（`globalX/globalY`，FingerInfo 里就是这一档）
+   * 而不是组件内坐标：那两块是钉在
+   * **屏幕**右边的浮层，用组件坐标还要再加卡片偏移，多一处可能算错的地方。
+   * 拿不到坐标时返回 false（宁可响应，也不要"点了没反应"）。
+   */
+  private overOverlay(fingers: Array<FingerInfo>): boolean {
+    if (this.chromeHidden || fingers.length === 0) {
+      return false;
+    }
+    const x: number = fingers[0].globalX;
+    const y: number = fingers[0].globalY;
+    if (x >= this.screenW - OVERLAY_GUARD_RIGHT_VP) {
+      return true;
+    }
+    return y >= this.screenH - this.overlayGuardBottomVp;
+  }
+
+  /** 手势落点相对屏幕宽度的位置（0..1，拿不到坐标按正中算）。 */
+  private pointRatioX(fingers: Array<FingerInfo>): number {
+    const width: number = this.screenW > 0 ? this.screenW : FALLBACK_WIDTH_VP;
+    if (fingers.length === 0) {
+      return 0.5;
+    }
+    const ratio: number = fingers[0].globalX / width;
+    return ratio < 0 ? 0 : (ratio > 1 ? 1 : ratio);
+  }
+
+  /**
+   * 单击视频画面 → 暂停 / 继续（需求第 3 条）。
+   *
+   * 为什么用 `GestureGroup(Parallel)` 同时挂 Tap 与两条 LongPress（需求第 5、6 条也在这个区域）：
+   *   · 串行（Sequence）不行：长按要求"按住不动 400ms"，串行会把单击排在它后面，单击要等 400ms；
+   *   · 互斥（Exclusive）也不行：三条手势里先成立的那条会把别的踢掉，而"单击"和"长按"在
+   *     手指抬起那一刻才分得出胜负 —— Exclusive 下长按成立后单击就收不到，看着很正常，
+   *     但**长按结束的回调顺序**会变得不可靠（onActionEnd 有时不来），按 StoryViewer 的经验
+   *     那样会导致状态卡住；
+   *   · Parallel 下三条都会走完自己的判定，于是**必须自己排他**：长按成立时打 `longPressFired`，
+   *     抬手时那一次单击据此吞掉（见下）。
+   *
+   * 另外**单击是延迟生效的**（SINGLE_TAP_DELAY_MS）：这一页还有双击点赞，立刻切播放状态的话
+   * 双击会顺手把视频暂停。延迟窗口里来了第二下 = 双击 → 撤掉，不切。
+   */
+  private onVideoTap(event: GestureEvent): void {
+    if (this.longPressFired) {
+      // 长按抬手时系统还会补一次单击：吞掉（否则"长按暂停"松手后会立刻又切一次播放态）。
+      this.longPressFired = false;
+      return;
+    }
+    // 这一下即使被判定成"双击的第一下"，也要把延迟窗口撤掉（见下面第二下的分支）。
+    if (!this.playing || !this.reel.playable() || this.overOverlay(event.fingerList)) {
+      if (this.tapTimer >= 0 && !this.playing) {
+        clearTimeout(this.tapTimer);
+        this.tapTimer = -1;
+      }
+      return;
+    }
+    if (this.tapTimer >= 0) {
+      /*
+       * 第二下到了 → 这一下是**双击**（点赞由 ReelsPage 根节点那个 parallelGesture 负责），
+       * 于是把第一下挂起来的定时器撤掉：双击不改变播放状态（见 SINGLE_TAP_DELAY_MS）。
+       */
+      clearTimeout(this.tapTimer);
+      this.tapTimer = -1;
+      return;
+    }
+    // 第一下：挂一个短定时器，等到窗口过去还没有第二下才真的切（期间被取消 = 双击）。
+    this.tapTimer = setTimeout((): void => {
+      this.tapTimer = -1;
+      this.userPaused = !this.userPaused;
+    }, SINGLE_TAP_DELAY_MS);
+  }
+
+  /**
+   * 长按开始（`side` = 是不是"两侧"那一条）。
+   *
+   * 中间 40%：暂停 + 隐藏全局控件；两侧各 30%：2 倍速。热区按**屏宽比例**分（需求）。
+   * 已经有一条长按占住这一下触摸就直接返回（见 longPressMode）。
+   */
+  private onHoldStart(event: GestureEvent, side: boolean): void {
+    if (this.longPressMode.length > 0 || !this.playing || !this.reel.playable()) {
+      return;
+    }
+    const fingers: Array<FingerInfo> = event.fingerList;
+    if (this.overOverlay(fingers)) {
+      return;
+    }
+    const ratio: number = this.pointRatioX(fingers);
+    const inMiddle: boolean = ratio > SPEED_ZONE_RATIO && ratio < 1 - SPEED_ZONE_RATIO;
+    if (side) {
+      if (inMiddle) {
+        // 中间那 40% 归"暂停 + 隐藏控件"（见下面的 else 分支）。
+        return;
+      }
+      this.longPressMode = 'speed';
+      this.longPressFired = true;
+      this.speedBoost = true;
+      hilog.info(DOMAIN, TAG, 'hold side → 2.0x code=%{public}s', this.reel.shortcode);
+      return;
+    }
+    if (!inMiddle) {
+      // 两侧归 2 倍速（上面那一条）。
+      return;
+    }
+    this.longPressMode = 'pause';
+    this.longPressFired = true;
+    const before: boolean | undefined = AppStorage.get<boolean>(REELS_CHROME_HIDDEN);
+    this.chromeHiddenBefore = before === undefined ? false : before;
+    this.holdPaused = true;
+    AppStorage.setOrCreate(REELS_CHROME_HIDDEN, true);
+    hilog.info(DOMAIN, TAG, 'hold center → pause + hide chrome code=%{public}s',
+      this.reel.shortcode);
+  }
+
+  /**
+   * 长按结束（抬手 / 被别的手势抢走都走这里）→ **恢复到长按之前的状态**。
+   *
+   * 两条长按共用这一个收尾：先到先得的那条记在 `longPressMode` 里，第二条进来时它是空串，
+   * 什么都不做（幂等，连点两次也不会把状态翻回去）。
+   */
+  private onHoldEnd(): void {
+    const mode: string = this.longPressMode;
+    this.longPressMode = '';
+    if (mode === 'speed') {
+      this.speedBoost = false;
+      hilog.info(DOMAIN, TAG, 'hold side released → 1.0x code=%{public}s', this.reel.shortcode);
+      return;
+    }
+    if (mode === 'pause') {
+      this.holdPaused = false;
+      AppStorage.setOrCreate(REELS_CHROME_HIDDEN, this.chromeHiddenBefore);
+      hilog.info(DOMAIN, TAG, 'hold center released → restore code=%{public}s',
+        this.reel.shortcode);
+    }
+  }
+
+  /** 开始横向拖动：记下基线（**此刻**的进度），拖动中只改显示（见 onSeekMove）。 */
+  private onSeekStart(): void {
+    if (!this.playing || !this.reel.playable() || this.durationMs <= 0) {
+      return;
+    }
+    this.dragging = true;
+    this.baseProgress = this.progress;
+    this.dragProgress = this.progress;
+  }
+
+  /** 拖动中：按位移换算预览进度。**这里不 seek**（需求："松手才生效"）。 */
+  private onSeekMove(event: GestureEvent): void {
+    if (!this.dragging) {
+      return;
+    }
+    const width: number = this.cardWidthVp();
+    const next: number = this.baseProgress + event.offsetX / width;
+    this.dragProgress = next < 0 ? 0 : (next > 1 ? 1 : next);
+  }
+
+  /**
+   * 松手：把预览进度落到播放器上（唯一的 seek 时机）。
+   *
+   * 时长还拿不到（0）时什么都不做 —— 按比例算不出毫秒，硬算会跳到 0。
+   */
+  private onSeekEnd(): void {
+    if (!this.dragging) {
+      return;
+    }
+    this.dragging = false;
+    // 时长还拿不到：按比例算不出毫秒，硬算会跳到 0（见上面的说明）。
+    if (this.durationMs <= 0) {
+      return;
+    }
+    const target: number = Math.round(this.dragProgress * this.durationMs);
+    // 进度条立刻停在松手的位置（等播放器下一次 timeUpdate 再对齐到真实位置）。
+    this.progress = this.dragProgress;
+    // 同一个毫秒值重复写不会触发 @Watch，所以这里保证每次都是"新值"：
+    // 目标没变时加减 1ms（人眼完全看不出来，但能保证这次拖动一定落到播放器上）。
+    this.seekMs = target === this.seekMs ? target + 1 : target;
+    hilog.info(DOMAIN, TAG, 'seek %{public}d/%{public}d code=%{public}s',
+      target, this.durationMs, this.reel.shortcode);
+  }
+
+  /** 拖动被打断（被翻页手势抢走 / 手指出界）：放弃这次拖动，不改播放位置。 */
+  private onSeekCancel(): void {
+    if (!this.dragging) {
+      return;
+    }
+    this.dragging = false;
+    this.dragProgress = this.progress;
+  }
+
+  /**
+   * 播放器报上来的进度（见 VideoSurface.onProgress）。
+   *
+   * 拖动中不覆盖显示：那一段是"预览位置"，等松手 seek 之后播放器会自己报回来。
+   */
+  private onPlayProgress(positionMs: number, durationMs: number): void {
+    if (durationMs > 0) {
+      this.durationMs = durationMs;
+    }
+    if (this.dragging || this.durationMs <= 0) {
+      return;
+    }
+    const ratio: number = positionMs / this.durationMs;
+    this.progress = ratio < 0 ? 0 : (ratio > 1 ? 1 : ratio);
+  }
+
+  /** 进度条当前该画到哪儿（拖动中画预览位置，否则画真实进度）。 */
+  private progressNow(): number {
+    const value: number = this.dragging ? this.dragProgress : this.progress;
+    return value < 0 ? 0 : (value > 1 ? 1 : value);
+  }
+
+  /**
+   * 卡片顶部那条**进度条**（需求："画在视频卡片内部顶部，一条粗直线，不可拖动"）。
+   *
+   * 为什么整条都挂 `hitTestBehavior(HitTestMode.None)`：需求明确"不可拖动" —— 它只是指示器，
+   * 手指落在它上面要照常当成"点画面/拖进度"，不该被它吃掉（横滑 seek 的 PanGesture 挂在
+   * 外层画面上，这里一旦吃触摸，从进度条上开始拖就没有反应了）。
+   */
+  @Builder
+  progressBar() {
+    Stack({ alignContent: Alignment.Start }) {
+      // 轨道：半透明白（压在亮画面上也读得出来）。
+      Row()
+        .width('100%')
+        .height(PROGRESS_HEIGHT)
+        .borderRadius(PROGRESS_HEIGHT / 2)
+        .backgroundColor(PROGRESS_TRACK_COLOR)
+      // 已播放：实白。宽度按比例给字符串百分比（0..1 → '0%'..'100%'）。
+      Row()
+        .width(`${this.progressNow() * 100}%`)
+        .height(PROGRESS_HEIGHT)
+        .borderRadius(PROGRESS_HEIGHT / 2)
+        .backgroundColor(PROGRESS_FILL_COLOR)
+    }
+    .width('100%')
+    .height(PROGRESS_HEIGHT)
+    .hitTestBehavior(HitTestMode.None)
+  }
+
+  /**
+   * 2 倍速胶囊（需求："播放期间在卡片顶部（进度条下方适当距离）显示胶囊「2.0x」"）。
+   *
+   * 复用全 app 的材质文字按钮（MaterialLabelButton），所以材质厚度跟着设定页走、和作者行/
+   * 关注按钮是同一层玻璃；`lockMaterial: false` 让它不参与 4-way lock（手指落在它上面照样能
+   * 上下翻页 —— 它只是个指示器）。点击照样落到外层画面（整颗挂 HitTestMode.None）。
+   */
+  @Builder
+  speedPill() {
+    MaterialLabelButton({
+      labelText: SPEED_PILL_TEXT,
+      fontSize: SPEED_PILL_FONT,
+      pillWidth: SPEED_PILL_WIDTH,
+      pillHeight: SPEED_PILL_HEIGHT,
+      // 视频上一律不反色（和作者行、动作区那几颗一致，见它们的 autoInvert: false）。
+      autoInvert: false,
+      tint: '#FFFFFF',
+      lockMaterial: false,
+      onTap: (): void => {
+      }
+    })
+      .hitTestBehavior(HitTestMode.None)
+      // 出现/消失淡一下（和暂停按钮同一档观感；需求的"松手消失"不要求动画，这里只是别太生硬）。
+      .transition(TransitionEffect.OPACITY.animation({ duration: PAUSE_FADE_MS, curve: Curve.EaseOut }))
+  }
+
+  /**
+   * 置中的"继续播放"按钮（需求："暂停时置中显示沉浸光感暂停按钮…点击它 = 继续播放"）。
+   *
+   * **它自己不吃触摸**（`HitTestMode.None`）：点它和点画面走的是同一条路（外层画面的单击 →
+   * 暂停/继续），这样就不存在"按钮和画面各处理一次、暂停被翻回去"的问题（本项目的
+   * MaterialIconButton 内部是 Toggle，真机上点一下可能回调两次，见 MaterialSurface.fire）。
+   */
+  @Builder
+  pauseButton() {
+    MaterialIconButton({
+      symbol: $r('sys.symbol.play_fill'),
+      isOn: false,
+      // 视频上一律不反色（需求："autoInvert: false"）。
+      autoInvert: false,
+      tint: '#FFFFFF',
+      buttonSize: PAUSE_BUTTON_SIZE,
+      iconSize: PAUSE_ICON_SIZE,
+      onTap: (on: boolean): void => {
+      }
+    })
+      .hitTestBehavior(HitTestMode.None)
+      // 画面正中（外层 Stack 是 Center，`align` 是"我这个子节点摆在哪儿"）。
+      .align(Alignment.Center)
+      // 出现/消失淡入淡出（需求：约 150ms）。transition 要挂在**被插入/移除的那个节点**上，
+      // 所以写在 Builder 内部而不是 `if` 里的调用处（@Builder 调用本身不能链属性）。
+      .transition(TransitionEffect.OPACITY
+        .animation({ duration: PAUSE_FADE_MS, curve: Curve.EaseOut }))
   }
 
   build() {
@@ -245,10 +785,16 @@ struct ReelSlide {
           // 所以下面那层封面是在"首帧真的上屏"之后才撤的，不再有黑闪。
           VideoSurface({
             url: this.reel.videoUrl,
-            playing: this.playing,
+            // `wantsPlayNow()` 而不是 `playing`：用户单击暂停 / 长按暂停都只影响"播不播"，
+            // **不影响播放器挂不挂**（挂载条件还是上面那句 `playing || preload`）。
+            playing: this.wantsPlayNow(),
             segment: this.segment,
             preload: this.preload,
             muted: this.muted,
+            // 长按左右两侧时 2 倍速，松手回 1 倍速（见 VideoSurface.speed，失败静默降级）。
+            speed: this.speedBoost ? SPEED_2X : 1,
+            // 拖动进度条松手那一下写进来（见 onSeekEnd）。
+            seekMs: this.seekMs,
             // 盒子比例已经等于视频比例，所以用 FIT（完整显示）就正好铺满这个盒子；
             // 再开 FIT_CROP 反而会二次裁切（把本该看到的画面切掉）。
             cover: false,
@@ -268,6 +814,10 @@ struct ReelSlide {
                   this.measuredAspect = ratio;
                 }
               }
+            },
+            // 进度条唯一的来源（见 onPlayProgress）—— 播放器自己报的 position/duration。
+            onProgress: (positionMs: number, durationMs: number): void => {
+              this.onPlayProgress(positionMs, durationMs);
             }
           })
             .width('100%')
@@ -287,9 +837,127 @@ struct ReelSlide {
       .aspectRatio(this.aspect())
       // 竖屏视频（高 > 屏高）超出的部分在**外层**被裁掉，而不是把画面压扁。
       .clip(true)
+
+      /*
+       * **卡片顶部：进度条 + 2 倍速胶囊**（需求第 2、6 条）。
+       *
+       * 放这一层（画面之后、也就是画在画面上方）而不是放进 ReelOverlay 的原因：
+       *   · 需求明确"画在视频卡片内部顶部" —— 卡片就是本组件所在的这个盒子，跟着卡片一起
+       *     被圆角裁、跟着卡片一起随翻页移动；
+       *   · ReelOverlay 会在"隐藏全局控件"时整层淡出，而进度条**不该**跟着消失
+       *     （它不是控件，是播放状态的指示，和 IG 一致）。
+       * 整层 `HitTestMode.None`：它只显示，不能吃掉"点画面暂停"和"横滑 seek"。
+       */
+      Column({ space: SPEED_PILL_GAP }) {
+        Column() {
+          this.progressBar()
+        }
+        .width('100%')
+        .padding({ left: PROGRESS_SIDE_PAD, right: PROGRESS_SIDE_PAD })
+
+        // 2 倍速胶囊：只在长按侧边期间出现（出现/消失淡入淡出 ~150ms）。
+        if (this.speedBoost) {
+          this.speedPill()
+        }
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Center)
+      // 距卡片顶部留一点：贴边会被圆角裁掉两头（见 PROGRESS_TOP_GAP）。
+      .padding({ top: PROGRESS_TOP_GAP })
+      .align(Alignment.Top)
+      .hitTestBehavior(HitTestMode.None)
+
+      /*
+       * **置中的暂停/继续按钮**：只在"这一条是当前页 且 用户手动暂停或长按暂停"时出现。
+       *
+       * 用 `if` + `.transition` 而不是常驻改透明度：插入/移除自带淡入淡出（需求：约 150ms），
+       * 而且节点不在树上时**不占触摸**（常驻改 opacity 的话它虽然看不见，照样要小心命中区域）。
+       * 它自己不吃触摸（见 pauseButton 的说明），点它 = 点画面 = 继续播放。
+       */
+      if (this.playing && this.reel.playable() && (this.userPaused || this.holdPaused)) {
+        this.pauseButton()
+      }
     }
     .width('100%')
     .height('100%')
+    /*
+     * 按下那一刻把"长按吞单击"的记号清掉。
+     *
+     * 为什么需要：`longPressFired` 是给"长按抬手时系统还会补一次单击"用的。如果这一下长按
+     * 之后手指是**划走**的（长按成立后继续拖，tap 不会成立），那个记号就没人清 —— 于是
+     * 下一次真正的单击会被误吞（用户会报"点一下没反应，要再点一下"）。Down 一定是每一次
+     * 新手势的第一个事件，在这里清最稳。
+     */
+    .onTouch((event: TouchEvent): void => {
+      if (event.type === TouchType.Down) {
+        this.longPressFired = false;
+      }
+    })
+    // 量一次画面自己的宽度：拖动进度按"位移 ÷ 画面宽"换算比例（见 cardWidthVp）。
+    // 用布局量出来的值而不是"屏宽 − 32"：卡片宽度写的是 `calc(100% - 32vp)`，两者本该相同，
+    // 但真机上卡片还可能被 maxHeight 那一条约束反推窄一点，量到的才是真的。
+    .onAreaChange((oldArea: Area, newArea: Area): void => {
+      const width: number = typeof newArea.width === 'number' ? newArea.width as number : 0;
+      if (width > 0 && Math.abs(width - this.measuredWidthVp) > 0.5) {
+        this.measuredWidthVp = width;
+      }
+    })
+    /*
+     * 手势全挂在**画面这一层**（= 卡片内部，见类头）：需求第 1 条要求"起点落在视频画面内的
+     * 左右滑动 = 拖进度"，所以横滑手势必须只覆盖画面，不能覆盖左右 16vp 留白 ——
+     * 那里要留给外面 Tabs 的"左右滑切段"。
+     *
+     * 用 `GestureGroup(GestureMode.Parallel)` 装四条手势（单击 / 两条长按 / 横滑），原因见
+     * onVideoTap 的注释（串行会把单击排在长按后面，互斥又不保证 onActionEnd 一定来）。
+     *
+     * 为什么这里**不该**影响上下翻页：Swiper 的内建 PAN 是本组件的**祖先**，方向也限定在竖向；
+     * 这里的横滑用 `PanDirection.Horizontal`，竖向滑动根本不会让这条手势成立。
+     */
+    .gesture(
+      GestureGroup(GestureMode.Parallel,
+        // ① 单击 → 暂停 / 继续（需求第 3 条）。
+        TapGesture({ count: 1, distanceThreshold: VIDEO_TAP_DISTANCE_VP })
+          .onAction((event: GestureEvent): void => {
+            this.onVideoTap(event);
+          }),
+        // ② 长按中间 40% → 暂停 + 隐藏全局控件，松手恢复（需求第 5 条）。
+        LongPressGesture({ repeat: false, duration: LONG_PRESS_CENTER_MS })
+          .onAction((event: GestureEvent): void => {
+            this.onHoldStart(event, false);
+          })
+          .onActionEnd((): void => {
+            this.onHoldEnd();
+          })
+          .onActionCancel((): void => {
+            this.onHoldEnd();
+          }),
+        // ③ 长按左右两侧各 30% → 2 倍速，松手回 1 倍速（需求第 6 条）。
+        LongPressGesture({ repeat: false, duration: LONG_PRESS_SIDE_MS })
+          .onAction((event: GestureEvent): void => {
+            this.onHoldStart(event, true);
+          })
+          .onActionEnd((): void => {
+            this.onHoldEnd();
+          })
+          .onActionCancel((): void => {
+            this.onHoldEnd();
+          }),
+        // ④ 横滑 → 拖进度条（需求第 1 条）：拖动中只改显示，松手才 seek。
+        PanGesture({ fingers: 1, direction: PanDirection.Horizontal, distance: SEEK_PAN_DISTANCE_VP })
+          .onActionStart((): void => {
+            this.onSeekStart();
+          })
+          .onActionUpdate((event: GestureEvent): void => {
+            this.onSeekMove(event);
+          })
+          .onActionEnd((): void => {
+            this.onSeekEnd();
+          })
+          .onActionCancel((): void => {
+            this.onSeekCancel();
+          })
+      )
+    )
   }
 }
 
@@ -352,6 +1020,23 @@ struct ReelOverlay {
   @Prop infoBottomVp: number = 0;
   /** 材质厚度（和全 app 的材质组件同一份设定）。 */
   @StorageProp(SETTING_MATERIAL_THICKNESS) materialThickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
+  /**
+   * **全局控件藏起来了没有**（见 REELS_CHROME_HIDDEN）。
+   *
+   * 用 `@StorageLink`（不是 @Prop）：信息层是**每条一个**、都在 ForEach 里，键没变的项不会
+   * 重跑 item builder —— 父组件的 @Prop 到不了已经建好的那几条，只有组件级订阅能让
+   * "所有视频一起隐藏"（需求原话："隐藏后是所有视频隐藏"）。
+   */
+  @StorageLink(REELS_CHROME_HIDDEN) @Watch('onChromeHiddenChanged') chromeHidden: boolean = false;
+  /**
+   * 信息层的实际透明度（0 = 藏起来）。
+   *
+   * 为什么不直接用 `opacity(this.chromeHidden ? 0 : 1)` + 通用 `.animation()`：那个属性动画
+   * 会把**同一节点上别的属性变化**也一起吃掉 —— 这里同一层还挂着 `overlaySink` 的下沉位移
+   * （底栏那条弹簧曲线，见 overlaySink），时序会被改写。所以用 `animateTo` 只补间这一个 `@State`。
+   */
+  @State private chromeAlpha: number = 1;
+
   /** 关注状态是会话级覆盖表说了算（别处点过也要跟着变，见 core/FollowState）。 */
   @StorageLink(FOLLOW_VERSION_KEY) @Watch('onFollowVersion') followVersion: number = 0;
   /** 这一条的作者我关注了没有。 */
@@ -418,6 +1103,12 @@ struct ReelOverlay {
   aboutToAppear(): void {
     this.syncFollow();
     this.syncSaved();
+    /*
+     * 组件**在"控件已经藏起来"的状态下被创建**时（比如翻到这一条、Swiper 新建了一页），
+     * @Watch 不一定补一次，所以这里按当前值先把透明度摆到位 —— 否则新那一页的信息层会
+     * 明着出现在一个"全隐藏"的界面上。
+     */
+    this.chromeAlpha = this.chromeHidden ? 0 : 1;
   }
 
   /**
@@ -441,6 +1132,19 @@ struct ReelOverlay {
   /** 别处改过关注状态：重新算一次（见 core/FollowState 的"全局刷新"）。 */
   private onFollowVersion(): void {
     this.syncFollow();
+  }
+
+  /**
+   * 全局控件被藏起来 / 恢复了：整层淡出、淡入（需求：约 180ms，可带轻微位移）。
+   *
+   * 位移写在 build 里那两层的 `translate` 上（和 `overlaySink` 同一个属性、相加），这里只管透明度
+   * —— 透明度是 `@State`，`animateTo` 会给它补间；位移那边跟着同一个 `chromeHidden` 变，属于
+   * "布局属性瞬间变"，但只差 CHROME_SHIFT_VP 十几 vp，眼睛看着就是跟着淡出一起往下缩了一点。
+   */
+  private onChromeHiddenChanged(): void {
+    this.getUIContext().animateTo({ duration: CHROME_FADE_MS, curve: Curve.EaseOut }, (): void => {
+      this.chromeAlpha = this.chromeHidden ? 0 : 1;
+    });
   }
 
   /** 这一条成了"当前这条"：数据源没给关注状态的话，现在问一次（见 ensureFollowState）。 */
@@ -1059,7 +1763,10 @@ struct ReelOverlay {
       // 底边留白：和右边动作区**用同一个值**（见 infoPadding 的说明）。
       .padding({ left: SIDE_PADDING, right: ACTION_COLUMN_WIDTH, bottom: this.infoPadding() })
       // 跟着底栏下沉（需求："动作区和资讯区跟随 tabbar 下沉"）：整块往下挪，和栏同一条曲线。
-      .translate({ y: this.overlaySink })
+      // 全局控件隐藏时再多挪 CHROME_SHIFT_VP（"淡出 + 轻微位移"，见 onChromeHiddenChanged）。
+      .translate({ y: this.overlaySink + (this.chromeHidden ? CHROME_SHIFT_VP : 0) })
+      // 隐藏全局控件：整块淡出（透明度由 @State + animateTo 补间）。
+      .opacity(this.chromeAlpha)
       // 文字不吃手势：竖向滑动照旧交给 Swiper。
       .hitTestBehavior(HitTestMode.Transparent)
 
@@ -1085,8 +1792,10 @@ struct ReelOverlay {
        * 一旦宿主传了非 0 的值，两块就错开一截，正是用户看到的那条"底边不齐"。
        */
       .padding({ right: ACTION_RIGHT_PADDING, bottom: this.infoPadding() })
-      // 和左边那块同一个位移：一起沉、一起回来（见 overlaySink）。
-      .translate({ y: this.overlaySink })
+      // 和左边那块同一个位移：一起沉、一起回来（见 overlaySink）；隐藏控件时一起下缩一点。
+      .translate({ y: this.overlaySink + (this.chromeHidden ? CHROME_SHIFT_VP : 0) })
+      // 隐藏全局控件：整块淡出（和左边资讯区同一条曲线，见 onChromeHiddenChanged）。
+      .opacity(this.chromeAlpha)
       // 不吃手势（按钮自己要能点，见 actionColumn 里的材质按钮）。
       .hitTestBehavior(HitTestMode.Transparent)
     }
@@ -1094,6 +1803,12 @@ struct ReelOverlay {
     .height('100%')
     // 这一层整体也不吃手势：竖向滑动要落到下面的 Swiper 上（见类头第 2 条）。
     .hitTestBehavior(HitTestMode.Transparent)
+    /*
+     * **藏起来之后整层停用**：透明度 0 的节点照样吃点击（点到的是一颗看不见的赞/关注），
+     * 所以淡出之后还要把这一层的事件关掉 —— 否则"隐藏控件后点画面外恢复"这一下会被
+     * 那颗看不见的按钮接走（它自己还有个 600ms 去重，更显得"点了没反应"）。
+     */
+    .enabled(!this.chromeHidden)
   }
 }
 
@@ -1143,6 +1858,17 @@ export struct ReelsPage {
   @StorageProp(SETTING_VIDEO_MUTED) videoMuted: boolean = false;
   /** 屏幕宽度（vp）：交给信息层做正文折叠排版（见 ReelOverlay.captionPrefix）。 */
   @State private screenWidthVp: number = FALLBACK_WIDTH_VP;
+  /**
+   * 屏幕高度（vp）：交给每条画面判断"这一下手势有没有落在屏幕底部那块信息层上"
+   * （见 ReelSlide.overOverlay）。只做一次粗判，所以不需要精确到避让区。
+   */
+  @State private screenHeightVp: number = 780;
+  /**
+   * **全局控件藏起来了没有**（见 REELS_CHROME_HIDDEN）。
+   *
+   * 这一页是"谁来切换"的入口（单击画面之外的留白 / 模糊带），信息层和外壳各自订阅同一个键。
+   */
+  @StorageLink(REELS_CHROME_HIDDEN) chromeHidden: boolean = false;
   /** 双击点赞那颗放大爱心的瞬时状态（整页一个，见 build 里的 LikeBurst）。 */
   @State private burst: LikeBurstState = new LikeBurstState();
 
@@ -1271,6 +1997,8 @@ export struct ReelsPage {
     try {
       const dsp: display.Display = display.getDefaultDisplaySync();
       this.screenWidthVp = this.getUIContext().px2vp(dsp.width);
+      // 高度只给"手势热区"用（信息层护栏 / 左右两侧的长按热区），拿不到就留兜底值。
+      this.screenHeightVp = this.getUIContext().px2vp(dsp.height);
     } catch (error) {
       this.screenWidthVp = FALLBACK_WIDTH_VP;
     }
@@ -1349,6 +2077,16 @@ export struct ReelsPage {
     };
     this.vm.onStatus = (text: string): void => {
     };
+    /*
+     * **离开这一页时把控件恢复出来**。
+     *
+     * 控件是"整页沉浸"状态，忘了复位的话：从隐藏状态切走再切回来，标题栏/底栏一开始就是
+     * 藏着的，用户会以为"页面坏了"（外壳那边也有一道复位，见 Index 的 selectTab，
+     * 这里是本组件的兜底）。
+     */
+    if (this.chromeHidden) {
+      AppStorage.setOrCreate(REELS_CHROME_HIDDEN, false);
+    }
   }
 
   /**
@@ -1396,9 +2134,24 @@ export struct ReelsPage {
     this.vm.setActiveIndex(index);
   }
 
+  /**
+   * 单击**画面之外**（左右 16vp 留白 / 上下模糊带）→ 隐藏或恢复全局控件（需求第 4 条）。
+   *
+   * 只写一个 AppStorage 键：信息层（ReelOverlay，@StorageLink）、每条画面（ReelSlide，
+   * @StorageProp）、外壳的标题栏与底栏（pages/Index，@StorageLink）各自订阅同一个值，
+   * 于是"所有视频的信息层 + 标题栏 + 底栏"一起动 —— 需求要的就是"隐藏后是所有视频隐藏"。
+   *
+   * 为什么在这里而不是每条画面自己记：这个手势落在**画面之外**，属于"页面级"的命中区域；
+   * 而受影响的层里有三个根本不在本组件里（标题栏 / 底栏 / 别的条目的信息层）。
+   */
+  private toggleChrome(): void {
+    const next: boolean = !this.chromeHidden;
+    hilog.info(DOMAIN, TAG, 'chrome hidden=%{public}s', `${next}`);
+    AppStorage.setOrCreate(REELS_CHROME_HIDDEN, next);
+  }
+
   /** 从视图模型回读（不依赖回调时序，见 ProfilePage 里同一个坑）。 */
-  private syncFromVm(): void {
-    const list: Array<Reel> = this.vm.list();
+  private syncFromVm(): void {    const list: Array<Reel> = this.vm.list();
     if (list.length > 0) {
       this.reels = list;
       // 首屏铺完数据也要报一次：这时 activeIndex 可能没变（switchTo 不会被触发），
@@ -1552,6 +2305,27 @@ export struct ReelsPage {
         .blur(120)
         .opacity(0.75)
         .hitTestBehavior(HitTestMode.None)
+      /*
+       * **"画面之外"那一层：单击 = 隐藏 / 恢复全局控件**（需求第 4 条）。
+       *
+       * 为什么放在画面**下面**（先画 = 层级更低）：
+       *   · 需求把左右滑分成两域 —— 起点在画面内，横滑是拖进度；起点在留白里，横滑还是切段。
+       *     命中关系天然满足：手指落在画面上时这一层被卡片挡住（默认 HitTestMode 会阻塞兄弟），
+       *     落在留白/模糊带里时卡片没被命中，于是这一层收下这一下（只挂 onClick，不挂横滑手势，
+       *     所以留白上的左右滑照旧交给外层 Tabs）；
+       *   · 千万不要给它加 `HitTestMode.Transparent`：那样画面上的点击会**同时**落到这层，
+       *     点一下画面就既暂停又切控件（StoryViewer 里那条注释讲的就是这个坑）。
+       *
+       * 注意它盖不到 HDS 标题栏那一条（标题栏在外壳那层、压在本页上面），标题栏区域的单击
+       * 由 pages/Index 里那层"标题栏热区"接（见那里的说明）。
+       */
+      Column()
+        .width('100%')
+        .height('100%')
+        .backgroundColor(Color.Transparent)
+        .onClick((): void => {
+          this.toggleChrome();
+        })
       // 画面盒子：**宽度铺满 + 高度按视频比例**，居中放在全屏背景上。
       //
       // 为什么这样做（而不是让播放器整屏 Cover）：Cover 是按"两个方向都要铺满"去裁的 ——
@@ -1576,6 +2350,13 @@ export struct ReelsPage {
           preload: index === this.activeIndex + 1,
           // 静音开关是全局的（媒体区那颗喇叭键），见 AppSettings.SETTING_VIDEO_MUTED。
           muted: this.videoMuted,
+          /*
+           * 信息层护栏高度：手势要判断"这一下有没有压在信息层上"（见 ReelSlide.overOverlay）。
+           * 宿主给了底部留白就用它，没给用默认值（和 ReelOverlay.infoPadding 同一个口径）。
+           * 这个值整页固定，不会在翻页过程中变。
+           */
+          overlayGuardBottomVp:
+          (this.infoBottomVp > 0 ? this.infoBottomVp : INFO_BOTTOM) + OVERLAY_GUARD_EXTRA_VP,
           onFirstFrame: (): void => {
             // 首帧已在表面上：撤封面（这一下就是"封面直切画面"）。
             this.videoReady = true;
