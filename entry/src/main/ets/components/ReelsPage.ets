@@ -56,7 +56,8 @@ const SIDE_PADDING: number = 16;
  * 而新的那条在动画一开始就起播（见 onAnimationStart），所以落定那一刻画面已经在了。
  * 想再快就往 300 调（官方短视频示例是 300ms + Curve.Ease），更慢往 700~900 调。
  */
-const SWITCH_ANIM_MS: number = 480;
+/** 翻页动画时长（毫秒）：从 480 收到 300 —— 用户要求切换更快，同时别快到看不清段落位移。 */
+const SWITCH_ANIM_MS: number = 300;
 /** 作者行高度（vp）：和全 app 的材质按钮对齐（40，见 MaterialSurface）。 */
 const AUTHOR_ROW_HEIGHT: number = 40;
 /** 作者行里的头像直径（vp）。 */
