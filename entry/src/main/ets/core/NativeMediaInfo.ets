@@ -27,7 +27,7 @@ import { MediaQuality, PickedMedia } from './MediaQuality';
 import { MobileRequest, MobileResult, MobileOptions } from './mobileapi/MobileRequest';
 import { ApiThrottle } from './ApiThrottle';
 import { MobileEngage } from './mobileapi/MobileEngage';
-// 分享数取证（落盘 files/Instarmony_share_probe.txt，见那个文件的头注释）。
+// 分享数取证（落盘 files/Instamony_share_probe.txt，见那个文件的头注释）。
 import { ShareProbe } from './ShareProbe';
 
 const DOMAIN: number = 0xFF00;

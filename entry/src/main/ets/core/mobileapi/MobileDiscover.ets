@@ -10,7 +10,7 @@
  * "搜索推荐和 reels 是同一发请求"，拿到的也确实是同一批 clips。现在推荐网格改走**它自己那条**：
  * `GET /api/v1/discover/topical_explore/`（instagrapi 的 `explore_page`，官方 App 探索页那一发）。
  *
- * ## 实测形状（2026-10-17，真机 + 已登录会话，见 `filesDir/Instarmony_scout.txt`）
+ * ## 实测形状（2026-10-17，真机 + 已登录会话，见 `filesDir/Instamony_scout.txt`）
  *   • `GET discover/topical_explore/`（`module=explore_popular` / `cluster_id=explore_all:0` /
  *     `use_sectional_payload=true`）→ 200、1.30MB、4.7s（首屏那一发；预热过之后就快了）：
  *       `sectional_items[]` → 每条 `{ layout_type, feed_type, explore_item_info, layout_content }`，

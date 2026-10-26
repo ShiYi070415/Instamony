@@ -29,7 +29,7 @@ import { FeedCache } from '../core/FeedCache';
 import { NativeSearch } from '../core/NativeSearch';
 import { NativeReels, REELS_SOURCE_EXPLORE } from '../core/NativeReels';
 import { ReelsCache } from '../core/ReelsCache';
-// 分享数取证（落盘 files/Instarmony_share_probe.txt，见那个文件的头注释）。
+// 分享数取证（落盘 files/Instamony_share_probe.txt，见那个文件的头注释）。
 import { ShareProbe } from '../core/ShareProbe';
 // 快拍托盘的落盘缓存（冷启动先画上次那排头像，见 core/TrayCache）。
 import { TrayCache } from '../core/TrayCache';
@@ -65,8 +65,8 @@ const WARM_REELS_COUNT: number = 7;
  * 6 秒足够让首屏那一发先走完，之后再把 Reels 备上（用户真去点 Reels 时多半已经到了）。
  */
 const WARM_REELS_DELAY_MS: number = 6000;
-/** 材质能力诊断日志的 tag（`hilog -T InstarmonyMaterialDiag` 单独抓）。 */
-const TAG_MATERIAL: string = 'InstarmonyMaterialDiag';
+/** 材质能力诊断日志的 tag（`hilog -T InstamonyMaterialDiag` 单独抓）。 */
+const TAG_MATERIAL: string = 'InstamonyMaterialDiag';
 
 export default class EntryAbility extends UIAbility {
   /**
@@ -111,7 +111,7 @@ export default class EntryAbility extends UIAbility {
     // 应用级代理：冷启动恢复上一份配置（不重启即可生效，见 core/AppProxy）。
     AppProxy.restoreAndApply();
     /*
-     * 同一份身份**再落一次盘**：`files/Instarmony_identity.txt`。
+     * 同一份身份**再落一次盘**：`files/Instamony_identity.txt`。
      *
      * 为什么要文件：真机上 ArkTS 的 hilog 有时抓不到（这次就是这样 —— 进程在跑、
      * chromium 的日志一大堆，但 app 域一条都没有），而"型号名到底读成了什么"必须能看。
@@ -169,7 +169,7 @@ export default class EntryAbility extends UIAbility {
       ReelsCache.init(this.context);
       /*
        * **分享数取证**（见 core/ShareProbe）：把每条取数响应的键名与"分享类键有没有"落盘到
-       * `files/Instarmony_share_probe.txt`。真机 hilog 抓不住（chromium 把环形缓冲冲掉），
+       * `files/Instamony_share_probe.txt`。真机 hilog 抓不住（chromium 把环形缓冲冲掉），
        * 所以走文件。这里只交出 `filesDir`，不读不写任何账号数据；开关在 ShareProbe 里。
        */
       ShareProbe.init(this.context);
@@ -223,7 +223,7 @@ export default class EntryAbility extends UIAbility {
     // 为什么延迟：Cookie 罐里要有 IG 的会话，得等 Web 内核把持久化的 Cookie 载进来（上面才
     // initializeWebEngine）；onCreate 这一刻读往往是空的。所以等几秒再跑，**不挡 UI**。
     // 探针只报告形状，不解析、不改任何界面状态；失败也不影响任何既有路径。
-    // 传 context 是为了把结论**落盘**（`filesDir/Instarmony_mobile.txt`）：真机上 chromium 的
+    // 传 context 是为了把结论**落盘**（`filesDir/Instamony_mobile.txt`）：真机上 chromium 的
     // 日志会把 hilog 环形缓冲冲掉，只有落盘能用 `hdc file recv` 取到（同 core/StoryDiag）。
     MobileProbe.scheduleSelfTest(this.context);
     /*
@@ -235,7 +235,7 @@ export default class EntryAbility extends UIAbility {
     PushCenter.start(this, this.context);
     // ---- 翻译自检（诊断用，见 core/Translator 的 SELF_TEST_ON_START）----
     // 用户报"全部文本点翻译都失败"：界面里点不出结论，这里启动后翻一句固定英文并落盘
-    // `filesDir/Instarmony_translate.txt`（原因码 / 端点 / 耗时），取回来就能分清是网络不通
+    // `filesDir/Instamony_translate.txt`（原因码 / 端点 / 耗时），取回来就能分清是网络不通
     // 还是端点拒绝。不影响任何用户路径。
     Translator.scheduleSelfTest(this.context);
     // ---- 深链：冷启动这次是不是被 instarmony:// 唤起的 ----
@@ -311,7 +311,7 @@ export default class EntryAbility extends UIAbility {
    * **want 没到** 还是 **到了但没参数**，日志里一眼能分。
    */
   /**
-   * 把"这台机器对外报的身份"写进 `files/Instarmony_identity.txt`（见调用处的说明）。
+   * 把"这台机器对外报的身份"写进 `files/Instamony_identity.txt`（见调用处的说明）。
    *
    * 内容：最终 UA + 逐个原始字段（brand / marketName / productModel / productSeries），
    * 目的是**一眼看出型号名取的是哪一项** —— 万一 systems 上 marketName 是空的（部分机型），
@@ -329,7 +329,7 @@ export default class EntryAbility extends UIAbility {
       lines.push(`productSeries=${deviceInfo.productSeries}`);
       lines.push(`osFullName=${deviceInfo.osFullName}`);
       lines.push(`sdkApiVersion=${deviceInfo.sdkApiVersion}`);
-      const path: string = `${this.context.filesDir}/Instarmony_identity.txt`;
+      const path: string = `${this.context.filesDir}/Instamony_identity.txt`;
       const file: fileIo.File = fileIo.openSync(path,
         fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
       fileIo.writeSync(file.fd, `${lines.join('\n')}\n`);

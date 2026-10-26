@@ -36,11 +36,11 @@ const TAG: string = 'MobileProbe';
  * 是这条链路上唯一可靠的取证方式（同 `core/StoryDiag` 的做法），也顺带让测试者能在
  * 设置页里直接读到结论（见 `lastSummary`）。
  */
-const REPORT_NAME: string = 'Instarmony_mobile';
+const REPORT_NAME: string = 'Instamony_mobile';
 
 /**
  * **端点侦察**：把"下一步要接的移动端点"逐条打一发，把响应结构写进单独一份文件
- * （`filesDir/Instarmony_scout.txt`）。
+ * （`filesDir/Instamony_scout.txt`）。
  *
  * 为什么要它（而不是直接照 instagrapi 写解析）：移动端这些端点的形状每隔一阵就变
  * （托盘不再给 `items` 就是本项目踩过的例子），而"哪个端点在**我们这套身份**下通、
@@ -310,7 +310,7 @@ export class MobileProbe {
   }
 
   /**
-   * 把这次自检写进沙箱文件（`filesDir/Instarmony_mobile.txt`，覆盖写）。
+   * 把这次自检写进沙箱文件（`filesDir/Instamony_mobile.txt`，覆盖写）。
    *
    * 覆盖而不是追加：这是"当前会话行不行"的快照，留一堆历史只会让人分不清哪份是这次的
    * （对比 `InstagramProbe` 的带时间戳 dump：那个要按时间序列还原"哪一发之后变了"，
@@ -322,7 +322,7 @@ export class MobileProbe {
       return;
     }
     const lines: Array<string> = [];
-    lines.push(`Instarmony 移动 API 自检 ${MobileProbe.stamp()}`);
+    lines.push(`Instamony 移动 API 自检 ${MobileProbe.stamp()}`);
     lines.push(`结论 ${MobileProbe.last}`);
     lines.push(`身份 ${MobileProbe.identityLine}`);
     lines.push(`主机 ${MobileSession.host()}`);
@@ -984,7 +984,7 @@ export class MobileProbe {
    */
   private static async scout(identity: MobileIdentity): Promise<void> {
     const lines: Array<string> = [];
-    lines.push(`Instarmony 移动端点侦察 ${MobileProbe.stamp()}`);
+    lines.push(`Instamony 移动端点侦察 ${MobileProbe.stamp()}`);
     lines.push(`身份 ${identity.summary()}`);
     lines.push(`主机 ${MobileSession.host()}`);
     lines.push('说明：每段 = 一行结论 + 一层缩进树（数组只展开 [0]，最多 '
@@ -1133,7 +1133,7 @@ export class MobileProbe {
       return;
     }
     try {
-      const path: string = InstagramProbe.dumpFixed(context, 'Instarmony_scout', lines.join('\n'));
+      const path: string = InstagramProbe.dumpFixed(context, 'Instamony_scout', lines.join('\n'));
       hilog.info(DOMAIN, TAG, 'scout report written %{public}s lines=%{public}d', path, lines.length);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'scout report failed: %{public}s', (error as Error).message);

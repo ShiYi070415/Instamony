@@ -3,9 +3,9 @@
 > 面向：在**另一个工作区**接手这件事的 agent。
 > 本文件记录「已经查清的事实」「已经写完的代码」「卡在哪」「下一步做什么」。
 >
-> **本文件位于工程根目录，路径：`C:\HMStudy\Instarmony\INSTAGRAPI_PORT.md`。**
+> **本文件位于工程根目录，路径：`C:\HMStudy\Instamony\INSTAGRAPI_PORT.md`。**
 > 让另一个 agent 读它，只要在提示词里给出这个绝对路径（或让它先读工程根的 `*.md`）即可，
-> 例如：「读 `C:\HMStudy\Instarmony\INSTAGRAPI_PORT.md`，按里面的第 3.3 与第 5 节继续」。
+> 例如：「读 `C:\HMStudy\Instamony\INSTAGRAPI_PORT.md`，按里面的第 3.3 与第 5 节继续」。
 >
 > 最后更新：2026-10-16（编译已通过，只剩签名）。
 
@@ -13,7 +13,7 @@
 
 ## 0. 一句话背景
 
-`Instarmony` 是一个**鸿蒙 ArkTS 应用**（`com.fanha.instarmony`），取数路线是：
+`Instamony` 是一个**鸿蒙 ArkTS 应用**（`com.fanha.instarmony`），取数路线是：
 把 Instagram 自己的移动版网页跑在常驻 WebView 里，原生层通过页面桥读页面渲染出的数据、
 并回放网页自己发出的同源请求。
 
@@ -142,7 +142,7 @@ instagrapi 的默认 `x-ig-www-claim` 就是字符串 `"0"`，它**同样不自�
 | `DEVECO_SDK_HOME` 未设置 | 命令行 hvigor 不会猜，显式设为 `C:\Program Files\Huawei\DevEco Studio\sdk` |
 | hvigor 默认把缓存写 `~/.hvigor` | **官方开关**：环境变量 `HVIGOR_USER_HOME`（见 `hvigorw.js` 的 `getHvigorUserHomeCacheDir`）指到任意可写目录 |
 | npm 缓存默认 `%LOCALAPPDATA%\npm-cache` | 重定向 `npm_config_cache` |
-| **hvigor 引擎引导失败**（启动器只报 `ENOENT ... workspace\node_modules\@ohos\hvigor\bin\hvigor.js`） | **根因**：工程根 `node_modules/@ohos/{hvigor,hvigor-ohos-plugin}` 必须是**完整**的。`C:\HMStudy\Instarmony` 那份是完整的 → 引导成功；`Instarmony - instagrapi` 那份是**空壳**（早先 npm 失败留下的残骸）→ 无论怎么补缓存都报同一个 ENOENT（启动器把真实错误吞了，只留 ENOENT）。**修法**：让工程根的这两个包完整（用 DevEco 构建一次会自动补，或从 `C:\Program Files\Huawei\DevEco Studio\tools\hvigor\` 用 robocopy 复制，注意路径超 260 字符要用 robocopy 而非 `Copy-Item`） |
+| **hvigor 引擎引导失败**（启动器只报 `ENOENT ... workspace\node_modules\@ohos\hvigor\bin\hvigor.js`） | **根因**：工程根 `node_modules/@ohos/{hvigor,hvigor-ohos-plugin}` 必须是**完整**的。`C:\HMStudy\Instamony` 那份是完整的 → 引导成功；`Instamony - instagrapi` 那份是**空壳**（早先 npm 失败留下的残骸）→ 无论怎么补缓存都报同一个 ENOENT（启动器把真实错误吞了，只留 ENOENT）。**修法**：让工程根的这两个包完整（用 DevEco 构建一次会自动补，或从 `C:\Program Files\Huawei\DevEco Studio\tools\hvigor\` 用 robocopy 复制，注意路径超 260 字符要用 robocopy 而非 `Copy-Item`） |
 | PowerShell 5.1 按 GBK 读无 BOM 的 `.ps1` | **脚本里所有字符串字面量必须 ASCII-only**，否则中文被读坏、解析报错 |
 | 原生命令往 stderr 写警告时 `$ErrorActionPreference='Stop'` 会误判失败 | 调用期间改 `Continue`，用退出码判成败 |
 
@@ -150,9 +150,9 @@ instagrapi 的默认 `x-ig-www-claim` 就是字符串 `"0"`，它**同样不自�
 
 ```powershell
 $env:DEVECO_SDK_HOME = 'C:\Program Files\Huawei\DevEco Studio\sdk'
-$env:HVIGOR_USER_HOME = 'C:\HMStudy\Instarmony\.tmp-hvigor-home'   # 任意可写目录
+$env:HVIGOR_USER_HOME = 'C:\HMStudy\Instamony\.tmp-hvigor-home'   # 任意可写目录
 $env:npm_config_cache = "$env:HVIGOR_USER_HOME\npm-cache"
-Set-Location 'C:\HMStudy\Instarmony'
+Set-Location 'C:\HMStudy\Instamony'
 & 'C:\Program Files\Huawei\DevEco Studio\tools\hvigor\bin\hvigorw.bat' `
     assembleHap --mode module -p product=default -p buildMode=debug --no-daemon
 ```
@@ -170,7 +170,7 @@ ERROR: Failed :entry:default@SignHap...                        ← 只有签名�
 
 ### 3.2 建议的绕法
 
-**在 DevEco Studio 里构建**最省事：`C:\HMStudy\Instarmony\node_modules/@ohos/` 是完整的，
+**在 DevEco Studio 里构建**最省事：`C:\HMStudy\Instamony\node_modules/@ohos/` 是完整的，
 DevEco 走自己的路径，完全不碰上面的引导问题。自动签名也会顺手把过期证书换掉。
 
 构建产物与安装/抓日志：
@@ -195,7 +195,7 @@ hdc shell hilog -x | Select-String 'MobileProbe|MobileSession|MobileRequest'
 `build-profile.json5` 里 `signingConfigs` 指向用户目录下的证书：
 
 ```
-C:\Users\ShiYi\.ohos\config\default_Instarmony_xdBfzhVo_HdK1AuBYDE0AvxUW8aPPEsEcPxKsIhgmog=.p12/.cer/.p7b
+C:\Users\ShiYi\.ohos\config\default_Instamony_xdBfzhVo_HdK1AuBYDE0AvxUW8aPPEsEcPxKsIhgmog=.p12/.cer/.p7b
 ```
 
 报错：
@@ -284,7 +284,7 @@ MobileProbe  3) 结论：三发全通 / 部分通 / 全失败
    `DirectThreadViewModel.ets` 的私信路径 —— **先试新层、失败回退旧层**。
 7. ~~**诊断面板接线**：把 `MobileProbe.lastSummary()` 挂到设置里的诊断项~~ —— **已完成**：
    设置 → 诊断新增「跑移动 API 自检（测试）」+ 结果行（点一下复制）；
-   同时自检结论与每一发的响应形状落盘到 `filesDir/Instarmony_mobile.txt`（`hdc file recv` 可取）。
+   同时自检结论与每一发的响应形状落盘到 `filesDir/Instamony_mobile.txt`（`hdc file recv` 可取）。
 
 ---
 
@@ -323,7 +323,7 @@ MobileProbe  3) 结论：三发全通 / 部分通 / 全失败
 | L2 请求骨架 `MobileRequest.ets` | 完成，**编译通过** |
 | 自检探针 `MobileProbe.ets` + `EntryAbility` 接线 | 完成，**编译通过** |
 | 命令行构建引导（`HVIGOR_USER_HOME` + 工程根 `node_modules` 完整性） | **已跑通**（见 3.1） |
-| 代码搬到 `C:\HMStudy\Instarmony`（用户指定） | 完成 |
+| 代码搬到 `C:\HMStudy\Instamony`（用户指定） | 完成 |
 | 签名 | **已解决**（用户 2026-10-16 15:48 重新自动签名；`install -r` 原地覆盖成功，会话未丢） |
 | 模拟器真机验证（跑自检看三行结论） | **完成，全部通过**：`ok=7/7`（见第 9 节） |
 | stories 端点 `MobileStories.ets` + 接进 `NativeStories` | **完成并在真机跑通**：托盘 213 条、点开播放页有媒体（见第 9 节） |
@@ -339,9 +339,9 @@ MobileProbe  3) 结论：三发全通 / 部分通 / 全失败
 
 ## 9. 实测结论（2026-10-16，模拟器 + 已登录会话）
 
-设备：DevEco 模拟器 `127.0.0.1:5555`（Mate 80 镜像，已登录 IG 的 Instarmony 0.8.1）。
+设备：DevEco 模拟器 `127.0.0.1:5555`（Mate 80 镜像，已登录 IG 的 Instamony 0.8.1）。
 取证方式：`MobileProbe` 自检报告落盘 →
-`hdc file recv /data/app/el2/100/base/com.fanha.instarmony/haps/entry/files/Instarmony_mobile.txt`。
+`hdc file recv /data/app/el2/100/base/com.fanha.instarmony/haps/entry/files/Instamony_mobile.txt`。
 
 ### 9.1 自检 `ok=7/7`（**这条路成立**）
 
@@ -393,7 +393,7 @@ $env:DEVECO_SDK_HOME='C:\Program Files\Huawei\DevEco Studio\sdk'
 # 装 + 跑 + 取自检报告
 hdc -t 127.0.0.1:5555 install -r entry\build\default\outputs\default\entry-default-signed.hap
 hdc shell "aa force-stop com.fanha.instarmony"; hdc shell "aa start -a EntryAbility -b com.fanha.instarmony"
-hdc file recv "/data/app/el2/100/base/com.fanha.instarmony/haps/entry/files/Instarmony_mobile.txt" .\Instarmony_mobile.txt
+hdc file recv "/data/app/el2/100/base/com.fanha.instarmony/haps/entry/files/Instamony_mobile.txt" .\Instamony_mobile.txt
 ```
 
 ### 9.6 私信（direct_v2）也已接上（只读）
@@ -596,7 +596,7 @@ MobileDirect: thread ok id=…363010 msgs=20 raw=21 older=true with=meowlok0w0
 于是回落到 `CLIPS_HINTS` —— 那就是 reels 的 `PolarisClipsTabRootPaginationQuery`。
 结果：两个页面拿同一发请求、同一批内容，而且两条路还共用 `ApiThrottle.CLIPS` 那把限流锁。
 
-### 12.2 端点侦察（真机实测，`filesDir/Instarmony_scout.txt`）
+### 12.2 端点侦察（真机实测，`filesDir/Instamony_scout.txt`）
 
 `MobileProbe` 里新加了**端点侦察**（`ENDPOINT_SCOUT`，默认关，设定页那颗自检按钮即可触发）：
 它把候选端点各打一发，把"通不通 + 结构树"写进单独一份文件。本轮结论（账号 `alice`）：

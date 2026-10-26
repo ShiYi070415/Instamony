@@ -30,7 +30,7 @@ import { immersiveLevel } from '../core/ImmersiveLight';
 import { PlatformCap } from '../core/PlatformCap';
 
 const DOMAIN: number = 0xFF00;
-const TAG: string = 'InstarmonyCreatePost';
+const TAG: string = 'InstamonyCreatePost';
 /** 和首页一样的顶部留白算法：状态栏 38 + MINI 标题栏 56（见 FeedList 的 FEED_START_OFFSET）。 */
 const CONTENT_TOP_OFFSET: number = 94;
 

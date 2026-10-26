@@ -27,7 +27,7 @@ import {
 } from './AppSettings';
 
 const DOMAIN = 0xFF00;
-const TAG = 'InstarmonyMaterial';
+const TAG = 'InstamonyMaterial';
 
 /**
  * 设备是否支持 IMMERSIVE 材质类型：`undefined` = 还没查过。

@@ -33,7 +33,7 @@ import { PlatformCap } from '../core/PlatformCap';
 import { DeepLink, DeepLinkIntent } from '../core/DeepLink';
 
 const DOMAIN: number = 0xFF00;
-const TAG: string = 'InstarmonyDeepLink';
+const TAG: string = 'InstamonyDeepLink';
 /** 和 CreatePost / 首页一致的顶部留白（状态栏 38 + MINI 标题栏 56）。 */
 const CONTENT_TOP_OFFSET: number = 94;
 

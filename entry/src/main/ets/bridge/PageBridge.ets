@@ -1,5 +1,5 @@
 /*
- * Instarmony page bridge.
+ * Instamony page bridge.
  *
  * One WebView owns the real Instagram session. Native ArkUI asks the page to
  * read its own DOM or perform a same-origin request; asynchronous results come
@@ -31,7 +31,7 @@ const NOT_READY_MEMO_MS: number = 10000;
  * 几万次 —— 曾经真的这么打过 36 万行日志（日志本身又反过来占住主线程，见下面的 yield）。
  */
 const NOT_READY_LOG_GAP_MS: number = 500;
-const TAG: string = 'InstarmonyBridge';
+const TAG: string = 'InstamonyBridge';
 const DOMAIN: number = 0xFF00;
 
 class PendingBridge {

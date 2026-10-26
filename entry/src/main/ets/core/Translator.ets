@@ -61,7 +61,7 @@ const MYMEMORY_BAD: Array<string> = ['INVALID SOURCE LANGUAGE', 'MYMEMORY WARNIN
 
 /**
  * 启动自检（诊断用）：启动后把三个引擎各打一发，结果写日志 + 落盘
- * `filesDir/Instarmony_translate.txt`。
+ * `filesDir/Instamony_translate.txt`。
  *
  * 为什么要有：用户报"全部文本点翻译都失败"时，界面里只弹一句"翻译失败"，点不出结论；
  * 而真机上 chromium 的日志会把 hilog 环形缓冲冲掉。一次自检把**每个端点的 http 码回原话**
@@ -72,7 +72,7 @@ const SELF_TEST_ON_START: boolean = true;
 const SELF_TEST_DELAY_MS: number = 5000;
 const SELF_TEST_TEXT: string = 'hello world';
 /** 自检落盘的文件名（`InstagramProbe.dumpFixed` 会补 `.txt`）。 */
-const REPORT_NAME: string = 'Instarmony_translate';
+const REPORT_NAME: string = 'Instamony_translate';
 
 /** 一发的尝试结果（成功/失败 + 原因）。 */
 class TranslateTry {
@@ -340,7 +340,7 @@ export class Translator {
    * 启动自检（诊断用，见 SELF_TEST_ON_START 的说明）。
    *
    * 三个引擎**各打一发**（不走缓存、不写缓存），把每一发的结果落盘：
-   * `hdc file recv /data/app/el2/100/base/com.fanha.instarmony/haps/entry/files/Instarmony_translate.txt`。
+   * `hdc file recv /data/app/el2/100/base/com.fanha.instarmony/haps/entry/files/Instamony_translate.txt`。
    */
   static scheduleSelfTest(context: common.UIAbilityContext): void {
     if (!SELF_TEST_ON_START || Translator.selfTestScheduled) {
@@ -358,7 +358,7 @@ export class Translator {
     const target: string = Translator.targetLang();
     const lines: Array<string> = [];
     const now: Date = new Date();
-    lines.push(`Instarmony 翻译自检 ${now.toISOString()}`);
+    lines.push(`Instamony 翻译自检 ${now.toISOString()}`);
     lines.push(`系统语言 ${Translator.systemLanguageRaw()} → 目标 ${target}`);
     let firstOk: string = '-';
     for (let index: number = 0; index < 3; index++) {

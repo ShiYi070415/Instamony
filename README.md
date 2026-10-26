@@ -1,4 +1,4 @@
-# Instarmony
+# Instamony
 
 原生 HarmonyOS（ArkTS / ArkUI）的 Instagram 客户端：界面全部用 ArkUI 实现，
 数据来自**隐藏 WebView 持有的会话 + instagrapi 那套私有移动 API**。
@@ -43,7 +43,7 @@
 
 | 项目 | 当前配置 |
 |:--|:--|
-| 应用 | `Instarmony` · `com.oneleaf.instamony` · 版本 `1.2.0`（`versionCode` 1002000） |
+| 应用 | `Instamony` · `com.oneleaf.instamony` · 版本 `1.2.0`（`versionCode` 1002000） |
 | 模块 | `entry` · Stage 模型 |
 | SDK | 目标 SDK `26.0.0` · **兼容 SDK `6.0.0 (API 20)`** |
 | 设备 | `phone`、`tablet` · 全屏 `EntryAbility` |

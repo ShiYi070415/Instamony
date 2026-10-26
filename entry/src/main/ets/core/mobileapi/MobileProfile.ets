@@ -10,7 +10,7 @@
  *   · 头部：`GET /api/v1/users/{pk}/info/`（或按用户名 `users/{username}/usernameinfo/`）
  *   · 网格：`GET /api/v1/feed/user/{pk}/?count=N[&max_id=…]`
  *
- * ## 实测形状（2026-10-17，真机 + 已登录会话，见 `filesDir/Instarmony_scout.txt`）
+ * ## 实测形状（2026-10-17，真机 + 已登录会话，见 `filesDir/Instamony_scout.txt`）
  *   • `GET feed/user/{pk}/?count=12` → 200、377KB、2.2s：
  *       `items[]`（与信息流同形状：`pk` / `id` / `code` / `media_type` / `carousel_media` /
  *       `image_versions2.candidates` / `original_width` / `original_height` / …）

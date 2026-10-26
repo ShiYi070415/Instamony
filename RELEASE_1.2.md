@@ -1,4 +1,4 @@
-# Instarmony 1.2.0 —— 本版变化 / 已知问题
+# Instamony 1.2.0 —— 本版变化 / 已知问题
 
 > 版本：`versionName 1.2.0`（`versionCode 1002000`，见 `AppScope/app.json5`）
 > 包名：`com.oneleaf.instamony`（1.1.0 起从 `com.fanha.instarmony` 改名，属于**另一个应用**）
@@ -12,9 +12,9 @@ MQTToT 长连接、实时落列表、实时插会话、系统通知、点通知�
 
 | 文件 | 位置 / 用途 |
 |---|---|
-| `Instarmony-1.2.0.hap` | GitHub Release Asset **+** 仓库 `release/v1.2.0/`：单模块 HAP（已签名），`hdc install` 直接装机 |
-| `Instarmony-1.2.0.app.zip` | GitHub Release Asset **+** 仓库：**App Pack** 的压缩形态（Release 只允许这个后缀；解开即是 `Instarmony-1.2.0.app`） |
-| `Instarmony-1.2.0.app` | **只在仓库** `release/v1.2.0/` 下：App Pack 原始文件（AppGallery / 正式分发）—— GitHub Release **不允许** `.app` 后缀上传 |
+| `Instamony-1.2.0.hap` | GitHub Release Asset **+** 仓库 `release/v1.2.0/`：单模块 HAP（已签名），`hdc install` 直接装机 |
+| `Instamony-1.2.0.app.zip` | GitHub Release Asset **+** 仓库：**App Pack** 的压缩形态（Release 只允许这个后缀；解开即是 `Instamony-1.2.0.app`） |
+| `Instamony-1.2.0.app` | **只在仓库** `release/v1.2.0/` 下：App Pack 原始文件（AppGallery / 正式分发）—— GitHub Release **不允许** `.app` 后缀上传 |
 
 - 构建命令：
   - HAP：`hvigorw --mode module -p product=default assembleHap` → `entry/build/default/outputs/default/entry-default-signed.hap`

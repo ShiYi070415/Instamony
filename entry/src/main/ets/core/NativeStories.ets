@@ -139,7 +139,7 @@ export class NativeStories {
   }
 
   /**
-   * 把这一轮托盘的**原始条目**整理成文本（诊断：进 `Instarmony_diag.txt`，见 core/StoryDiag）。
+   * 把这一轮托盘的**原始条目**整理成文本（诊断：进 `Instamony_diag.txt`，见 core/StoryDiag）。
    *
    * 为什么值得单独留一份：托盘条目的形状**按账号/设备不一样**（带不带 `user`、有没有 `items`、
    * id 字段叫什么），而"点开快拍 empty 只有部分用户"恰恰取决于这些差异 ——

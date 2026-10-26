@@ -19,7 +19,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AccountScope } from './AccountScope';
 
 const DOMAIN = 0xFF00;
-const TAG = 'InstarmonySettings';
+const TAG = 'InstamonySettings';
 /** preferences 文件名。 */
 const STORE_NAME: string = 'instarmony_settings';
 

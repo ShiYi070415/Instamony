@@ -3,7 +3,7 @@
  *
  * 为什么要它：Reels 页的单击 / 长按 / 横滑连改三版都"毫无反应"，靠读代码已经推不出来
  * 事件到底进没进到卡片这一支；而真机上 ArkTS 的 hilog 常常抓不到（见 EntryAbility.dumpIdentity）。
- * 所以把"哪个节点收到了哪种触摸"追加写进 files/Instarmony_touch.txt，一次真机点击就能定案。
+ * 所以把"哪个节点收到了哪种触摸"追加写进 files/Instamony_touch.txt，一次真机点击就能定案。
  *
  * 只有几行、只在 onTouch 里调用，命中不到不影响任何功能。
  */
@@ -22,7 +22,7 @@ export class TouchProbe {
     }
     try {
       const ctx: Context = getContext();
-      const path: string = `${ctx.filesDir}/Instarmony_touch.txt`;
+      const path: string = `${ctx.filesDir}/Instamony_touch.txt`;
       const file: fileIo.File = fileIo.openSync(path,
         fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.APPEND);
       fileIo.writeSync(file.fd, `${Date.now()} ${node} t=${type}\n`);

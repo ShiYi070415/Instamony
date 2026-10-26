@@ -1,4 +1,4 @@
-# Instarmony 1.1.0 —— 本版变化 / 已知问题
+# Instamony 1.1.0 —— 本版变化 / 已知问题
 
 > 版本：`versionName 1.1.0`（`versionCode 1001000`，见 `AppScope/app.json5`）
 > 形态：HarmonyOS NEXT 原生 ArkUI + **一个常驻隐藏 Web 组件**（`components/InstagramWebHost`）
@@ -11,8 +11,8 @@
 
 | 文件 | 用途 |
 |---|---|
-| `Instarmony-1.1.0.app.zip` | **App Pack**（`.app`，用于 AppGallery / 正式分发；GitHub 不允许 `.app` 扩展名，故带 `.zip`。解开或改名回 `.app` 即可） |
-| `Instarmony-1.1.0.hap` | 单模块 HAP，用于 `hdc install` 直接装到设备 |
+| `Instamony-1.1.0.app.zip` | **App Pack**（`.app`，用于 AppGallery / 正式分发；GitHub 不允许 `.app` 扩展名，故带 `.zip`。解开或改名回 `.app` 即可） |
+| `Instamony-1.1.0.hap` | 单模块 HAP，用于 `hdc install` 直接装到设备 |
 
 - App Pack 内含 `entry-default.hap`，版本 `1.1.0`（`versionCode 1001000`），`pack.info` 里
   `apiVersion.compatible=20 / target=26`。
@@ -130,7 +130,7 @@ IG 的实时通道是 **MQTToT（MQTT over TLS）**。本版把三条独立路�
 - **音乐胶囊**只在 IG 网页给出曲目时出现：`profile_music` 不在 profile HTML 里，
   部分账号就拿不到（要拿全得拦截网页的 GraphQL 响应）。
 - **评论草稿跨面板携带**（评论区草稿带进帖子评论框）仍未接线 —— 老问题，未在本版处理。
-- 快拍/精选的失败现场仍会落盘 `Instarmony_diag.txt`；诊断代码保留，未清理。
+- 快拍/精选的失败现场仍会落盘 `Instamony_diag.txt`；诊断代码保留，未清理。
 
 ---
 

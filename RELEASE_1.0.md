@@ -1,4 +1,4 @@
-# Instarmony 1.0.0 —— 功能 / 已知问题 / 未实现
+# Instamony 1.0.0 —— 功能 / 已知问题 / 未实现
 
 > 版本：`versionName 1.0.0`（`versionCode 1000000`，见 `AppScope/app.json5`）
 > 形态：HarmonyOS NEXT 原生 ArkUI + **一个常驻隐藏 Web 组件**（`components/InstagramWebHost`）
@@ -66,7 +66,7 @@
 - 内容：**移动端私有 API**（`feed/reels_tray/`、`feed/user/{pk}/story/`、`feed/reels_media/?reel_ids=<裸 id>`），
   老路（模板 + 网页脚本）保留为回退。
 - 播放器：进度条、点按前进/后退、长按暂停、右滑收起、图片 5 秒自动前进；
-  消息里带失败原因，失败现场落盘 `Instarmony_diag.txt`。
+  消息里带失败原因，失败现场落盘 `Instamony_diag.txt`。
 
 ### 1.4 Reels（底栏「视频」）
 
@@ -134,7 +134,7 @@
   gtx 那条被 Google 按 IP 限流（`http-429`），现在 ①gtx → ②`clients5.google.com`
   → ③MyMemory **三级兜底**，每发都带浏览器请求头，成功的那个钉成本会话首选；
   译文等于原文（MyMemory 常见）按失败处理。启动 5 秒后会打一次三发自检并落盘
-  `filesDir/Instarmony_translate.txt`（`Translator.scheduleSelfTest`，可关）。
+  `filesDir/Instamony_translate.txt`（`Translator.scheduleSelfTest`，可关）。
   ⚠️ 待翻译的正文会发到第三方接口。
 
 ### 1.9 通知页
@@ -165,7 +165,7 @@
 ### 1.11 诊断与自检（0.8 起积累，0.9 保留）
 
 - `core/StoryDiag`：快拍失败逐发轨迹；`core/mobileapi/MobileProbe`：移动 API 9~10 发自检 + 结论落盘
-  `filesDir/Instarmony_mobile.txt`；**端点侦察**（`ENDPOINT_SCOUT`，默认关）写 `Instarmony_scout.txt`；
+  `filesDir/Instamony_mobile.txt`；**端点侦察**（`ENDPOINT_SCOUT`，默认关）写 `Instamony_scout.txt`；
 - `probe/InstagramProbe`：网页探针面板（请求 / 响应样本、模板清单、DOM 摘要）；
 - 常驻诊断行：`web route`、`page begin`、`main frame error`、`navigation blocked (signed out)` 等。
 

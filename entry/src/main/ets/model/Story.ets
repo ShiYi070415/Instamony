@@ -45,7 +45,7 @@ export class StoryTrayItem {
   /**
    * 这条是 IG **推荐**给我们的快拍（新号没有关注任何人时最常见）。
    *
-   * 真机实测（`Instarmony_mobile.txt`）：托盘条目里 `reel_type=suggested_user_reel` 就是它。
+   * 真机实测（`Instamony_mobile.txt`）：托盘条目里 `reel_type=suggested_user_reel` 就是它。
    * 界面据此在头像底部挂一颗椭圆「+关注」按钮（需求），关注成功后整条消失。
    */
   readonly suggested: boolean;

@@ -31,7 +31,7 @@ import { InstagramPageBridge } from '../bridge/PageBridge';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'LoginTrace';
-const FILE_NAME: string = 'Instarmony_login_trace.txt';
+const FILE_NAME: string = 'Instamony_login_trace.txt';
 
 export class LoginTrace {
   /** 一轮登录里的所有行（也用于 `tail()` 直接回给界面/日志）。 */
@@ -72,7 +72,7 @@ export class LoginTrace {
    * 绑定应用上下文（`pages/Index` 启动时调一次）。
    *
    * 为什么要有：真机上 `hilog` 的缓冲**很快就被系统日志刷掉**（这一轮排查里连续三次
-   * 拉不到 App 行）。把同样的内容再写一份到 `filesDir/Instarmony_login_trace.txt`，
+   * 拉不到 App 行）。把同样的内容再写一份到 `filesDir/Instamony_login_trace.txt`，
    * 就能随时用 `hdc file recv` 取回，不受日志缓冲影响。
    */
   static bind(context: common.Context): void {

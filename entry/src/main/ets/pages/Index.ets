@@ -1,6 +1,6 @@
 /*
 /**
- * Instarmony native shell.
+ * Instamony native shell.
  *
  * Instagram's own web client runs in one persistent WebView. The shell keeps
  * that WebView mounted underneath native ArkUI and asks it for feed data through
@@ -207,7 +207,7 @@ import { SessionGate } from '../core/SessionGate';
 import { InstagramProbe } from '../probe/InstagramProbe';
 import { FeedRecommendedPage, FeedViewModel } from '../viewmodel/FeedViewModel';
 
-const TAG: string = 'InstarmonyHome';
+const TAG: string = 'InstamonyHome';
 const DOMAIN: number = 0xFF00;
 /** 通知页在 NavPathStack 里的名字（见 destinationBuilder）。 */
 const NOTIFICATIONS_PAGE: string = 'notifications';
@@ -3888,7 +3888,7 @@ struct Index {
       MobileProbe.clearReport(context);
       // 带时间戳的那批：文件名前缀见各 dump 的调用点（探针 / 快拍失败 / 托盘形状…）。
       InstagramProbe.clearDumps(context,
-        ['probe', 'storyfail', 'trayshape', 'trayraw', 'search', 'Instarmony_']);
+        ['probe', 'storyfail', 'trayshape', 'trayraw', 'search', 'Instamony_']);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'wipe diagnostics failed: %{public}s', (error as Error).message);
     }
@@ -9311,7 +9311,7 @@ struct Index {
     this.storyQueue = items;
     this.storyQueueAtMs = Date.now();
     /*
-     * **一轮进程写一次诊断汇总**（`Instarmony_diag.txt`，固定名，见 core/StoryDiag）：
+     * **一轮进程写一次诊断汇总**（`Instamony_diag.txt`，固定名，见 core/StoryDiag）：
      * 把托盘形状与原始条目放进去，这样"点开快拍没取到"的现场**随时可发**——
      * 不必等失败那一刻，也不必在带时间戳的一堆探针文件里挑。
      */
@@ -9742,7 +9742,7 @@ struct Index {
     hilog.warn(DOMAIN, TAG, 'story fail uid=%{public}s why=%{public}s at=%{public}d',
       item.userId, why, at);
     /*
-     * 落进**固定的诊断汇总**（`Instarmony_diag.txt`，见 core/StoryDiag）：
+     * 落进**固定的诊断汇总**（`Instamony_diag.txt`，见 core/StoryDiag）：
      * 每次失败追加一段（保留最近几次），测试同学复现两次再把这个文件发回来就行 ——
      * 不用抓日志、也不用在带时间戳的探针文件里挑。
      */

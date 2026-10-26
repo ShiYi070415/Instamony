@@ -1,5 +1,5 @@
 /*
- * The only Instagram WebView in Instarmony.
+ * The only Instagram WebView in Instamony.
  *
  * **按需挂载**（见 Index 的 `webHostMounted`）：平时这棵树里根本没有它，登录/注册、
  * 安全验证、少数"只能靠网页"的动作（看帖子、私信会话、深链）才建一个。

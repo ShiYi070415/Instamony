@@ -1,5 +1,5 @@
 /*
- * Instarmony 深链（deep link）核心。
+ * Instamony 深链（deep link）核心。
  *
  * ## 为什么要有它
  * 需求/课程目标：让"外部世界"（系统浏览器、其他 App、二维码、分享链接）能直接进到本 App 的

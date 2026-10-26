@@ -1,7 +1,7 @@
 /*
  * 集中配置。
  *
- * Instarmony 的取数路径是「常驻 WebView + 复用网页自身会话」，所以这里只剩
+ * Instamony 的取数路径是「常驻 WebView + 复用网页自身会话」，所以这里只剩
  * 网页地址与 WebView 的身份标识。
  *
  * 原先的 APP_ID / APP_VERSION / LOCALE / GRAPH_BASE_URL / MEDIA_FIELDS 以及

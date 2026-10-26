@@ -7,12 +7,12 @@
  *   2. **分散的探针文件不好要**：`probe_<ts>.txt` / `trayraw_<ts>.txt` / `storyfail_<ts>.txt`
  *      都带时间戳，测试同学不知道该回传哪一个。
  *
- * 所以这里统一写 **`Instarmony_diag.txt`**（固定名，每次覆盖）：
+ * 所以这里统一写 **`Instamony_diag.txt`**（固定名，每次覆盖）：
  *   ① 每次快拍取数失败都往里**追加一段记录**（保留最近若干次，方便"复现两次再一起发"）；
  *   ② 托盘形状与原始条目一起带上（判断"这一条该不该有快拍"）。
  *
  * 落盘路径（DevEco 的 Device File Browser 或 hdc 都能取）：
- *   /data/app/el2/100/base/com.fanha.instarmony/haps/entry/files/Instarmony_diag.txt
+ *   /data/app/el2/100/base/com.fanha.instarmony/haps/entry/files/Instamony_diag.txt
  */
 
 import { common } from '@kit.AbilityKit';
@@ -26,7 +26,7 @@ import { ApiThrottle } from './ApiThrottle';
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'StoryDiag';
 /** 固定的文件名（不带时间戳，测试同学永远知道该发哪一个）。 */
-const FILE_NAME: string = 'Instarmony_diag';
+const FILE_NAME: string = 'Instamony_diag';
 /** 最多保留几次失败记录（复现两次再一起发也装得下，文件又不至于太大）。 */
 const MAX_FAILURES: number = 8;
 /** 汇总里最多带多少条托盘原始条目（形状摘要全带；原始 JSON 只带前面这些，控制文件大小）。 */
@@ -103,14 +103,14 @@ export class StoryDiag {
   /**
    * **给"导出给别人"用的文件名**：带上版本与时间，避免多个测试者的文件混在一起。
    *
-   * 例：`Instarmony_diag_v0.8.1_20261010_0130.txt`。
+   * 例：`Instamony_diag_v0.8.1_20261010_0130.txt`。
    */
   static exportFileName(): string {
     const now: Date = new Date();
     const two = (value: number): string => value < 10 ? `0${value}` : `${value}`;
     const stamp: string = `${now.getFullYear()}${two(now.getMonth() + 1)}${two(now.getDate())}`
       + `_${two(now.getHours())}${two(now.getMinutes())}`;
-    return `Instarmony_diag_v${APP_VERSION}_${stamp}.txt`;
+    return `Instamony_diag_v${APP_VERSION}_${stamp}.txt`;
   }
 
   /** 导出用的正文（当前就是完整那份；单列一个方法，方便以后按需裁剪）。 */
@@ -126,7 +126,7 @@ export class StoryDiag {
    */
   static exportBrief(): string {
     const lines: Array<string> = [];
-    lines.push('Instarmony 诊断摘要（快拍取数）');
+    lines.push('Instamony 诊断摘要（快拍取数）');
     lines.push(`生成时间 ${StoryDiag.stamp()}`);
     lines.push(`快拍这一族限流：${ApiThrottle.blocked(ApiThrottle.STORIES)
       ? `是，还剩 ${ApiThrottle.remainingMinutes(ApiThrottle.STORIES)} 分钟`
@@ -214,7 +214,7 @@ export class StoryDiag {
    */
   private static compose(): string {
     const lines: Array<string> = [];
-    lines.push('Instarmony 诊断汇总（快拍取数）');
+    lines.push('Instamony 诊断汇总（快拍取数）');
     lines.push(`生成时间 ${StoryDiag.stamp()}  文件 ${FILE_NAME}.txt`);
     lines.push('');
     lines.push('== 怎么读 ==');

@@ -1,4 +1,4 @@
-# 为什么 Instarmony 容易被 IG 判成自动化 —— 排查与对策
+# 为什么 Instamony 容易被 IG 判成自动化 —— 排查与对策
 
 > 版本基线：0.9（`versionCode 9000`）　排查时间：2026-10-17
 > 结论先行：**不是"WebView 登录 + i.instagram.com"本身**，而是三件事叠加：
@@ -182,7 +182,7 @@ this.timezoneOffset = DEFAULT_TIMEZONE_OFFSET;  // -14400（纽约）
 2. **流量基线**：每 5 分钟的请求条数与总字节（现在冷启动前 40 秒约 **4~5 MB / 15~20 发**，
    其中 explore 与 saved 各占 ~1.2 MB）。
 3. **端点成功率**：`MobileProbe.run()` 那 9~10 发（设定页那颗自检按钮即触发）的 `ok=N/M`。
-4. 观察 `filesDir/Instarmony_mobile.txt` 与 `Instarmony_diag.txt` 里新增的失败原因。
+4. 观察 `filesDir/Instamony_mobile.txt` 与 `Instamony_diag.txt` 里新增的失败原因。
 
 阶段一做完就应该能看到 (1)(2) 明显下降；阶段二主要影响 (1) 与"账号被要求验证"的频率。
 
@@ -222,4 +222,4 @@ this.timezoneOffset = DEFAULT_TIMEZONE_OFFSET;  // -14400（纽约）
 - `instagram-private-api` 的设备/Feed 文档：<https://github.com/dilame/instagram-private-api>
   （`TopicalExploreFeed`、`UsertagsFeed`、`UserFeed` 等端点的官方参数，本项目第 12 节即据此实测）。
 - 本次排查用到的现场证据：`hilog` 七个 tag（`MobileRequest` / `MobileSession` / `MobileDiscover` /
-  `MobileProfile` / `NativeReels` / `NativeSearch` / `InstarmonyHome`）+ 设定页的移动 API 自检报告。
+  `MobileProfile` / `NativeReels` / `NativeSearch` / `InstamonyHome`）+ 设定页的移动 API 自检报告。

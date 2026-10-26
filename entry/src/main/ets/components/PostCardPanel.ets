@@ -58,7 +58,7 @@ import { FollowState, FOLLOW_VERSION_KEY } from '../core/FollowState';
 import { NativeFollow } from '../core/NativeFollow';
 
 const DOMAIN = 0xFF00;
-const TAG = 'InstarmonyPostCard';
+const TAG = 'InstamonyPostCard';
 
 /**
  * 卡片内边距（vp，**四边同一个值**）。

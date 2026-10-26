@@ -1,4 +1,4 @@
-# Instarmony
+# Instamony
 
 A native **HarmonyOS** (ArkTS / ArkUI) Instagram client: the entire UI is built with ArkUI,
 and the data comes from **a session held by a hidden WebView + the private mobile API used by
@@ -44,7 +44,7 @@ that session in an official-Android-app identity and calls `i.instagram.com/api/
 
 | Item | Value |
 |:--|:--|
-| App | `Instarmony` · `com.oneleaf.instamony` · version `1.2.0` (`versionCode` 1002000) |
+| App | `Instamony` · `com.oneleaf.instamony` · version `1.2.0` (`versionCode` 1002000) |
 | Module | `entry` · Stage model |
 | SDK | target `26.0.0` · **compatible `6.0.0 (API 20)`** |
 | Devices | `phone`, `tablet` · full-screen `EntryAbility` |

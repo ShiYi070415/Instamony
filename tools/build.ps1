@@ -1,4 +1,4 @@
-# Instarmony command-line build (for use without DevEco Studio)
+# Instamony command-line build (for use without DevEco Studio)
 #
 # Why this script exists: hvigor writes its build cache to `~/.hvigor` by default.
 # Under a restricted sandbox that path is not writable and the build dies with

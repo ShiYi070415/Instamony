@@ -1,6 +1,6 @@
 /*
  * **分享数取证**：把每条取数响应里"第一条帖子的键名清单 + 分享类键的值"写进
- * `files/Instarmony_share_probe.txt`。
+ * `files/Instamony_share_probe.txt`。
  *
  * ## 为什么需要它（本次要回答的问题）
  * 需求："feeds 与 reels 实际没显示分享数量，查清是请求 / 解析 / 映射 / UI 哪一段断了。"
@@ -38,7 +38,7 @@ import { JsonRead } from './JsonRead';
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'ShareProbe';
 /** 固定的落盘文件名（`dumpFixed` 的口径：沙箱 filesDir 下补 `.txt`）。 */
-const FILE_NAME: string = 'Instarmony_share_probe';
+const FILE_NAME: string = 'Instamony_share_probe';
 /** **调试开关**：false = 完全不做诊断（release 里应该是 false）。 */
 const PROBE_ON: boolean = true;
 /** 最多记几个来源（时间线 / clips 三条 / 探索流，6 个够）。 */
@@ -333,7 +333,7 @@ export class ShareProbe {
   /** 整份文件的正文（怎么读 + 各来源 + 结论）。 */
   private static compose(): string {
     const lines: Array<string> = [];
-    lines.push('Instarmony 分享数取证（固定文件名，每次覆盖）');
+    lines.push('Instamony 分享数取证（固定文件名，每次覆盖）');
     lines.push(`生成时间 ${ShareProbe.stamp()}  来源 ${ShareProbe.order.length} 个`);
     lines.push('');
     lines.push('== 怎么读 ==');

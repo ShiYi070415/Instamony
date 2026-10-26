@@ -515,7 +515,7 @@ export class ProfileMapper {
        *
        * 以前这里是**写死 0** 的，理由是"个人主页那几条载荷里没有这个数字"。但那是猜的：
        * 转发数（`media_repost_count`）就是同一批载荷里读出来的，分享数一族有没有只能实测
-       * （见 core/ShareProbe 落的那份 files/Instarmony_share_probe.txt）。
+       * （见 core/ShareProbe 落的那份 files/Instamony_share_probe.txt）。
        * 所以改成"有就带上，没有就是 0"—— 0 时界面照样不画那颗数字，行为不变。
        */
       shareCount: post.shareCount,

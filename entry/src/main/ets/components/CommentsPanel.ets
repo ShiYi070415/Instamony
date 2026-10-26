@@ -31,7 +31,7 @@ import { TranslateLabel } from './TranslateLabel';
 import { Translator } from '../core/Translator';
 
 const DOMAIN = 0xFF00;
-const TAG = 'InstarmonyCommentsPanel';
+const TAG = 'InstamonyCommentsPanel';
 
 /** 头像大小（vp）：评论行用小一号，作者行大一点。 */
 const COMMENT_AVATAR_SIZE: number = 32;

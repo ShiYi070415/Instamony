@@ -24,7 +24,7 @@ import { MobileClips } from './mobileapi/MobileClips';
 // 主页 Reels 分页（`clips/user/{pk}/`）—— 补货池用它，见 fetchAuthorPage。
 import { MobileProfile, MobileGridPage } from './mobileapi/MobileProfile';
 import { EngageState } from './NativeEngage';
-// 分享数取证（落盘 `files/Instarmony_share_probe.txt`，见那个文件的头注释）。
+// 分享数取证（落盘 `files/Instamony_share_probe.txt`，见那个文件的头注释）。
 import { ShareProbe } from './ShareProbe';
 
 const DOMAIN: number = 0xFF00;

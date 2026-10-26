@@ -7,7 +7,7 @@
  * 而同一台设备换成移动端这套头（App-ID / UA / signed_body / Authorization）之后
  * **五发全通**（见 MobileProbe 的自检报告）。所以快拍改走这里，网页那条留作退路。
  *
- * ## 实测形状（2026-10-16，模拟器 + 已登录会话，见 `filesDir/Instarmony_mobile.txt`）
+ * ## 实测形状（2026-10-16，模拟器 + 已登录会话，见 `filesDir/Instamony_mobile.txt`）
  *   • `POST /api/v1/feed/reels_tray/` → `{ tray: [ …213 条… ], status:"ok" }`，一条里：
  *       `id`（reel id，`user_reel` 时等于用户 pk）、`latest_reel_media`、`seen`、
  *       `media_count`、`media_ids`、`expiring_at`、`has_video`、`reel_type`、
@@ -267,7 +267,7 @@ export class MobileStories {
       /*
        * 「推荐快拍」（需求："新号会推荐快拍，头像底部需要显示一个椭圆形加号按钮用于关注该快拍用户"）。
        *
-       * 真机实测（见 `Instarmony_mobile.txt` 的 tray[0]）：`reel_type=suggested_user_reel` 就是它；
+       * 真机实测（见 `Instamony_mobile.txt` 的 tray[0]）：`reel_type=suggested_user_reel` 就是它；
        * 个别版本改挂 `is_suggested` 布尔。两种都认。
        */
       const reelType: string = MobileStories.firstText(one, ['reel_type']);

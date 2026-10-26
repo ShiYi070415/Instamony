@@ -20,7 +20,7 @@ export class VideoProbe {
     }
     try {
       const ctx: Context = getContext();
-      const path: string = `${ctx.filesDir}/Instarmony_video.txt`;
+      const path: string = `${ctx.filesDir}/Instamony_video.txt`;
       const file: fileIo.File = fileIo.openSync(path,
         fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.APPEND);
       fileIo.writeSync(file.fd, `${Date.now()} ${what}\n`);

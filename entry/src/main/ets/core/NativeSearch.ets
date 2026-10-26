@@ -32,7 +32,7 @@ import { MobileFeedPage, MobileFeedTimeline } from './mobileapi/MobileFeedTimeli
 import { SearchPost, SearchUser } from '../model/Search';
 // 轮播帖的逐页媒体（与时间线那份 DTO 同形，见 readPost / carouselPage）。
 import { FeedMediaItemDto } from '../model/FeedDto';
-// 分享数取证（落盘 `files/Instarmony_share_probe.txt`，见那个文件的头注释）。
+// 分享数取证（落盘 `files/Instamony_share_probe.txt`，见那个文件的头注释）。
 import { ShareProbe } from './ShareProbe';
 
 const DOMAIN: number = 0xFF00;

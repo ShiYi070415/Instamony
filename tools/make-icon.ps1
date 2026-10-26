@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-  生成 Instarmony 的分层应用图标：黑底 + Instagram 渐变 + 高斯模糊的相机轮廓。
+  生成 Instamony 的分层应用图标：黑底 + Instagram 渐变 + 高斯模糊的相机轮廓。
 
 .DESCRIPTION
   标记是**镂空**的：圆角方机身只描边不填充、镜头是空心圆环，只有右上闪光点是实心。

@@ -15,7 +15,7 @@ import { NativeTimeline, NativeTimelineParser } from './NativeTimelineParser';
 import { MobileFeedPage, MobileFeedTimeline } from './mobileapi/MobileFeedTimeline';
 // "关注流已看完"这个状态要落盘（见 markCaughtUp）。
 import { FeedCache } from './FeedCache';
-// 分享数取证（落盘 `files/Instarmony_share_probe.txt`，见那个文件的头注释）。
+// 分享数取证（落盘 `files/Instamony_share_probe.txt`，见那个文件的头注释）。
 import { ShareProbe } from './ShareProbe';
 import { QualityProfile } from './MediaQuality';
 import { parseFeedTask } from '../workers/FeedParseTask';
