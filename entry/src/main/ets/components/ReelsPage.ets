@@ -191,7 +191,7 @@ const PAUSE_FADE_MS: number = 150;
  * 左右也各留 PAD，理由相同（圆角把内宽吃掉了）。高度 3vp 是"看得出来、又不喧宾夺主"的一档。
  */
 const PROGRESS_TOP_GAP: number = 10;
-const PROGRESS_HEIGHT: number = 3;
+const PROGRESS_HEIGHT: number = 5;
 const PROGRESS_SIDE_PAD: number = 14;
 /** 轨道底色（半透明白）与已播放色（实白）—— 压在任意画面上都读得出来。 */
 const PROGRESS_TRACK_COLOR: string = '#4DFFFFFF';
@@ -861,10 +861,13 @@ struct ReelSlide {
         }
       }
       .width('100%')
+      // **撑满卡片高度 + 从顶部开始排**：外面是 Stack，`.align(Alignment.Top)` 在 Stack 子节点上
+      // 不可靠（真机上进度条会跑到画面正中）。用"整高 Column + FlexAlign.Start"摆位才稳。
+      .height('100%')
       .alignItems(HorizontalAlign.Center)
+      .justifyContent(FlexAlign.Start)
       // 距卡片顶部留一点：贴边会被圆角裁掉两头（见 PROGRESS_TOP_GAP）。
       .padding({ top: PROGRESS_TOP_GAP })
-      .align(Alignment.Top)
       .hitTestBehavior(HitTestMode.None)
 
       /*
@@ -913,7 +916,12 @@ struct ReelSlide {
      * 为什么这里**不该**影响上下翻页：Swiper 的内建 PAN 是本组件的**祖先**，方向也限定在竖向；
      * 这里的横滑用 `PanDirection.Horizontal`，竖向滑动根本不会让这条手势成立。
      */
-    .gesture(
+    /*
+     * **用 parallelGesture 而不是 gesture**：画面是 `XComponent`（视频表面），它自己会消费
+     * 触摸事件；普通 `.gesture()` 挂在祖先节点上会被它截断 —— 真机表现就是"手势完全无效"。
+     * `parallelGesture` 允许与子节点的手势并行识别，单击/长按/横滑才收得到。
+     */
+    .parallelGesture(
       GestureGroup(GestureMode.Parallel,
         // ① 单击 → 暂停 / 继续（需求第 3 条）。
         TapGesture({ count: 1, distanceThreshold: VIDEO_TAP_DISTANCE_VP })
