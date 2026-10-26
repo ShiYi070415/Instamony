@@ -167,6 +167,8 @@ export struct VideoSurface {
   private readonly xController: XComponentController = new XComponentController();
   private player: media.AVPlayer | null = null;
   private surfaceId: string = '';
+  /** 已经交给播放器的地址（见 onPropChanged 里那道判据）。 */
+  private appliedUrl: string = '';
   /** XComponent 的 onLoad 已经给过 surfaceId（播放器可能比它先到，所以两边都要兜）。 */
   private surfaceReady: boolean = false;
   /** 该播了但表面还没就绪：等 onLoad 补播（见 beginWhenSurfaceReady）。 */
@@ -652,9 +654,20 @@ export struct VideoSurface {
     }
     if (this.player === null) {
       this.createPlayer();
+      this.appliedUrl = this.url;
       return;
     }
-    this.applyUrl();
+    /*
+     * **只有 url 真的变了才 applyUrl**。
+     *
+     * applyUrl 会把地址重新交给播放器（内部 reset / 重设 source），播放位置因此回到 0 ——
+     * 这正是"暂停一下再播会从头开始"的真正原因：暂停只改了 paused，但 onPropChanged
+     * 每次都会调 applyUrl。加上这道判据后，暂停 / 倍速 / 静音这些属性变化都不会再动播放位置。
+     */
+    if (this.appliedUrl !== this.url) {
+      this.applyUrl();
+      this.appliedUrl = this.url;
+    }
     if (!this.prepared) {
       return;
     }

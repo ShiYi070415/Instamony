@@ -193,6 +193,8 @@ const PAUSE_FADE_MS: number = 150;
  * 左右也各留 PAD，理由相同（圆角把内宽吃掉了）。高度 3vp 是"看得出来、又不喧宾夺主"的一档。
  */
 const PROGRESS_TOP_GAP: number = 0;
+/** 倍速胶囊距卡片顶部的距离（vp）。 */
+const SPEED_PILL_TOP_GAP: number = 24;
 const PROGRESS_HEIGHT: number = 5;
 const PROGRESS_SIDE_PAD: number = 0;
 /** 轨道底色（半透明白）与已播放色（实白）—— 压在任意画面上都读得出来。 */
@@ -921,25 +923,24 @@ struct ReelSlide {
        * 整层 `HitTestMode.None`：它只显示，不能吃掉"点画面暂停"和"横滑 seek"。
        */
       Column({ space: SPEED_PILL_GAP }) {
+        // 2 倍速胶囊：长按左右侧期间出现，**保持在卡片顶部适当距离**（需求）。
+        if (this.speedBoost || this.hostSpeed) {
+          this.speedPill()
+        }
+        // 撑开剩余空间：把下面的进度条压到卡片底边（需求：进度条移到底部）。
+        Blank()
         Column() {
           this.progressBar()
         }
         .width('100%')
         .padding({ left: PROGRESS_SIDE_PAD, right: PROGRESS_SIDE_PAD })
-
-        // 2 倍速胶囊：只在长按侧边期间出现（出现/消失淡入淡出 ~150ms）。
-        if (this.speedBoost || this.hostSpeed) {
-          this.speedPill()
-        }
       }
       .width('100%')
-      // **撑满卡片高度 + 从顶部开始排**：外面是 Stack，`.align(Alignment.Top)` 在 Stack 子节点上
-      // 不可靠（真机上进度条会跑到画面正中）。用"整高 Column + FlexAlign.Start"摆位才稳。
       .height('100%')
       .alignItems(HorizontalAlign.Center)
       .justifyContent(FlexAlign.Start)
-      // 距卡片顶部留一点：贴边会被圆角裁掉两头（见 PROGRESS_TOP_GAP）。
-      .padding({ top: PROGRESS_TOP_GAP })
+      // 顶部留白只给倍速胶囊，进度条由 Blank 压到底部。
+      .padding({ top: SPEED_PILL_TOP_GAP })
       .hitTestBehavior(HitTestMode.None)
 
       /*
@@ -2738,7 +2739,7 @@ export struct ReelsPage {
     const fingers: Array<FingerInfo> = event.fingerList;
     const x: number = fingers.length > 0 ? fingers[0].globalX : -1;
     const width: number = this.screenWidthVp;
-    const side: boolean = x >= 0 && width > 0 && (x < width * 0.05 || x > width * 0.95);
+    const side: boolean = x >= 0 && width > 0 && (x < width * 0.1 || x > width * 0.9);
     this.holdFired = true;
     if (side) {
       this.pageSpeed = true;
