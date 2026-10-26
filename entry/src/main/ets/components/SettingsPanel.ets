@@ -377,6 +377,9 @@ export struct SettingsPanel {
       .height(SIGN_OUT_HEIGHT)
       .padding(0)
       .borderRadius(SIGN_OUT_RADIUS)
+      // **和输入区拉开距离**（需求）：最后一个输入框下沿到按钮上沿至少 20vp，
+      // 否则按钮像贴着表单（半模态里紧挨着会显得拥挤）。
+      .margin({ top: 20 })
       .attributeModifier(new SurfaceModifier(this.materialThickness, true))
       // 取消额外底色（需求）：材质本身就是表面，再垫一层会发灰。
       .backgroundColor(Color.Transparent)
@@ -398,18 +401,18 @@ export struct SettingsPanel {
         .width('100%')
         .textAlign(TextAlign.Start)
       /*
-       * **输入框不要底色**（需求）：既不要自己那层填充，也不要外面那层材质胶囊 ——
-       * 只留文字、光标与一条细下划线，输入区因此和背景融为一体。
+       * **看得见的胶囊**（需求回归）：材质只能由 Toggle 承载（官方生效范围），
+       * 所以输入框套在 Toggle(Button) 里、自身透明，胶囊的圆角与材质由外层给；
+       * 再补一层很淡的中性底，让它在深/浅色面板上都"立得起来"。
        */
-      TextInput({ text: value })
-        .width('100%')
-        .height(42)
-        .fontSize(15)
-        .padding({ left: 0, right: 0 })
-        .backgroundColor(Color.Transparent)
-        .borderRadius(0)
-        .border({ width: { bottom: 1 }, color: $r('app.color.divider') })
-        .onChange((text: string): void => {
+      Toggle({ type: ToggleType.Button, isOn: false }) {
+        TextInput({ text: value })
+          .width('100%')
+          .height(42)
+          .fontSize(15)
+          .padding({ left: 14, right: 14 })
+          .backgroundColor(Color.Transparent)
+          .onChange((text: string): void => {
           if (which === 'name') {
             this.draftName = text;
           } else if (which === 'host') {
@@ -421,7 +424,16 @@ export struct SettingsPanel {
             } else {
               this.draftPass = text;
             }
-        })
+          })
+      }
+      .width('100%')
+      .height(42)
+      .padding(0)
+      .borderRadius(21)
+      .attributeModifier(new SurfaceModifier(this.materialThickness, true))
+      .backgroundColor($r('sys.color.comp_background_secondary'))
+      .onChange((): void => {
+      })
     }
     .width('100%')
   }
