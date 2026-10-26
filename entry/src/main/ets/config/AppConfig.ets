@@ -10,6 +10,9 @@
  * `core/mobileapi/` 的私有 API 取代），没有任何运行路径引用它们。
  */
 
+import { DeviceTruth } from '../core/mobileapi/DeviceTruth';
+import { DeviceProfile } from '../core/mobileapi/MobileConfig';
+
 export class AppConfig {
   static readonly INSTAGRAM_HOME_URL: string = 'https://www.instagram.com/';
   static readonly INSTAGRAM_LOGIN_URL: string = 'https://www.instagram.com/accounts/login/';
@@ -57,11 +60,23 @@ export class AppConfig {
    */
   static readonly INSTAGRAM_CREATE_URL: string = 'https://www.instagram.com/create/select/';
   /**
-   * Ordinary mobile browser identity. The WebView is loading Instagram's own
-   * public web client, so it should look like a browser rather than claim to be
-   * an official Instagram application.
+   * 网页身份（UA）：**这台机器自己的型号**，不再是写死的 Pixel 8。
+   *
+   * 为什么必须改：这个 UA 是 WebView（以及跟着它走的网页登录请求）的唯一身份，
+   * IG 的「登录设备 / 新登录邮件」就是拿它解析出来的 —— 写死 Pixel 8 的后果是
+   * 一封封邮件都在说"你的 Google Pixel 8 登录了"，跟手里这台机器毫无关系，
+   * 而且"美国机型 + 中文 + 国内 IP"本身就是最廉价的风控判据（见 DeviceTruth 的头注释）。
+   *
+   * 取值全部来自「DeviceTruth」（读一次缓存一生）：型号 = 系统里的型号名称
+   * （marketName 优先，退化到 productModel），Android 版本按品牌给一个固定值。
+   * 于是 UA 和人设（语言/时区/IP）、以及私有 API 那条身份的型号**是同一份**。
+   *
+   * 为什么是方法不是常量：常量在类加载时就定了，那时设备信息还没读；而且全局只该有
+   * 一份型号来源，写成方法等于把"唯一来源"这件事落到代码结构上。
    */
-  static readonly WEB_USER_AGENT: string =
-    'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 '
-    + '(KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
+  static webUserAgent(): string {
+    const device: DeviceProfile = DeviceTruth.profile();
+    return `Mozilla/5.0 (Linux; Android ${device.androidRelease}; ${device.model}) `
+      + 'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
+  }
 }

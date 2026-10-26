@@ -44,6 +44,30 @@ export class DeviceTruth {
    * 读不到任何字段时退回 `DeviceProfile.DEFAULT` —— 那仍然是"一台固定的设备"，
    * 不会退化成"每次请求都不同"。
    */
+  /**
+   * 把型号名收敛成 UA 能安全携带的 ASCII 形式（空串 = 不可用）。
+   *
+   * 允许：字母、数字、空格、`-`、`.`、`_`（Chromium 的机型字段就是这种 token）。
+   * 别的字符一律判为不可用 —— 与其塞个可能被服务端解析成乱码的名字，不如退回型号代号。
+   */
+  private static asciiModel(raw: string): string {
+    const text: string = raw.trim();
+    if (text.length === 0) {
+      return '';
+    }
+    for (let at: number = 0; at < text.length; at++) {
+      const code: number = text.charCodeAt(at);
+      const digit: boolean = code >= 0x30 && code <= 0x39;
+      const upper: boolean = code >= 0x41 && code <= 0x5A;
+      const lower: boolean = code >= 0x61 && code <= 0x7A;
+      const other: boolean = code === 0x20 || code === 0x2D || code === 0x2E || code === 0x5F;
+      if (!digit && !upper && !lower && !other) {
+        return '';
+      }
+    }
+    return text;
+  }
+
   static profile(): DeviceProfile {
     const hit: DeviceProfile | null = DeviceTruth.cached;
     if (hit !== null) {
@@ -51,11 +75,19 @@ export class DeviceTruth {
     }
     let brand: string = '';
     let model: string = '';
+    let market: string = '';
     let series: string = '';
     let abi: string = '';
     try {
       brand = `${deviceInfo.brand ?? ''}`.trim();
       model = `${deviceInfo.productModel ?? ''}`.trim();
+      /*
+       * **系统里显示的那个型号名称**（"关于手机 → 型号"那一栏，官方说明给的例子是
+       * "HUAWEI Mate 60 Pro"）。需求："登录设备改成系统型号名称" —— IG 那边显示的
+       * 名字就是从 UA 的模型字段解析出来的，所以要用这一项，而不是 productModel 那种
+       * 内部代号（ALN-AL00 这类），更不是原先写死的 Pixel 8 / Pixel 8 Pro。
+       */
+      market = `${deviceInfo.marketName ?? ''}`.trim();
       series = `${deviceInfo.productSeries ?? ''}`.trim();
       abi = `${deviceInfo.abiList ?? ''}`.trim();
     } catch (error) {
@@ -80,6 +112,16 @@ export class DeviceTruth {
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'display read failed: %{public}s', (error as Error).message ?? '-');
     }
+    /*
+     * UA 里的模型字段是**空格分隔的 token**：带中文/全角字符的型号名（部分国行机型的
+     * 对外名称会是这样）原样塞进请求头只会被 Chromium 侧处理得很怪，所以先过一遍
+     * ASCII 白名单。过不了就退到 productModel（型号代号，纯 ASCII），再退到默认值 ——
+     * 目的是"显示真实型号"，不是"显示一个可能被改写的东西"。
+     */
+    const asciiMarket: string = DeviceTruth.asciiModel(market);
+    const asciiModel: string = DeviceTruth.asciiModel(model);
+    const modelName: string = asciiMarket.length > 0
+      ? asciiMarket : (asciiModel.length > 0 ? asciiModel : DeviceProfile.DEFAULT.model);
     const upperBrand: string = brand.toUpperCase();
     const huawei: boolean = upperBrand.indexOf('HUAWEI') >= 0
       || upperBrand.indexOf('HONOR') >= 0 || upperBrand.indexOf('华为') >= 0;
@@ -98,13 +140,13 @@ export class DeviceTruth {
       dpi,
       resolution,
       manufacturer,
-      model.length > 0 ? model : DeviceProfile.DEFAULT.model,
+      modelName,
       deviceCode,
       cpu.length > 0 ? cpu : DeviceProfile.DEFAULT.cpu);
     DeviceTruth.cached = profile;
     hilog.info(DOMAIN, TAG,
-      'device truth brand=%{public}s model=%{public}s device=%{public}s res=%{public}s dpi=%{public}s cpu=%{public}s',
-      brand, profile.model, profile.device, profile.resolution, profile.dpi, profile.cpu);
+      'device truth brand=%{public}s market=%{public}s model=%{public}s device=%{public}s res=%{public}s dpi=%{public}s cpu=%{public}s',
+      brand, market, profile.model, profile.device, profile.resolution, profile.dpi, profile.cpu);
     return profile;
   }
 }

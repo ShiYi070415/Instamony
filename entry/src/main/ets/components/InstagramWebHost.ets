@@ -258,7 +258,7 @@ export struct InstagramWebHost {
       })
       .onControllerAttached(() => {
         try {
-          this.bridge.controller.setCustomUserAgent(AppConfig.WEB_USER_AGENT);
+          this.bridge.controller.setCustomUserAgent(AppConfig.webUserAgent());
         } catch (error) {
           hilog.warn(0x0000, TAG, 'custom user agent rejected');
         }

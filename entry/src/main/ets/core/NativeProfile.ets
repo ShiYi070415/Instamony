@@ -22,6 +22,8 @@ import { InstagramCookieJar, InstagramCookieSnapshot } from './InstagramCookieJa
 import { ApiThrottle } from './ApiThrottle';
 import { MobileProfile, MobileUserBody, MobileGridPage } from './mobileapi/MobileProfile';
 import { ProfileHeader, ProfileHighlight, ProfileMusic, ProfilePost, ProfilePostsPage } from '../model/Profile';
+// UA 的**唯一来源**（见 AppConfig.webUserAgent）：这里只读取，不再自己拼一份型号。
+import { AppConfig } from '../config/AppConfig';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeProfile';
@@ -677,8 +679,9 @@ export class NativeProfile {
     const out: Record<string, string> = {};
     out['cookie'] = jar.cookie;
     out['x-ig-app-id'] = '1217981644879628';
-    out['user-agent'] = 'Mozilla/5.0 (Linux; Android 14; HarmonyOS) AppleWebKit/537.36 '
-      + '(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36';
+    // 和 WebView / 私有 API 用**同一个**身份（见 AppConfig.webUserAgent）：三处各写一份
+    // 型号名，就会出现"网页说 Pixel、原生说 HarmonyOS、邮件说第三个"的分裂。
+    out['user-agent'] = AppConfig.webUserAgent();
     out['accept'] = 'text/html,application/xhtml+xml';
     out['accept-language'] = 'zh-CN,zh;q=0.9,en;q=0.8';
     return out;
