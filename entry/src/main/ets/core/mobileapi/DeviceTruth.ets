@@ -38,39 +38,6 @@ export class DeviceTruth {
   /** 已经算好的档案（读一次就够；设备信息不会变）。 */
   private static cached: DeviceProfile | null = null;
   /**
-   * 机型代号（`const.product.model`，如 `VYG-AL00`）的 ASCII 形式（见 `profile()` 里赋值）。
-   *
-   * 单独留一份是因为**网页 UA** 和 **App 身份**对型号字段的要求不一样，见 `webModel()`。
-   */
-  private static webProductModel: string = '';
-
-  /**
-   * **网页 UA 里那个型号字段**该怎么写。
-   *
-   * 这条是实测出来的结论（两次真机登录，看 IG「登录设备」显示什么）：
-   *   · 写 `HUAWEI Mate 80`（系统对外型号名，带品牌、带空格）→ IG 显示 **"Huawei Mate"**，
-   *     具体型号被归并掉；
-   *   · 写 `Mate 80`（去掉品牌，仍带空格）→ IG 干脆**一个型号都不显示**；
-   *   · 所以这一栏要的是**不带空格的机型代号**：`VYG-AL00`。它也正是安卓侧
-   *     `Build.MODEL` 在这台机器上的值（华为机上 `Build.MODEL` 就是认证型号，
-   *     市场名在 `Build.DISPLAY`/产品名里），是"真实且一定能被原样显示"的那个选择。
-   *
-   * App 那条身份（`profile()` 的 model）**不带这个限制**：它走的是官方客户端那套
-   * `(…; 厂商; 型号; …)` 格式，型号里带品牌、带空格才是正常形态，所以那边仍用市场名。
-   */
-  static webModel(): string {
-    const profile: DeviceProfile = DeviceTruth.profile();
-    return DeviceTruth.webProductModel.length > 0
-      ? DeviceTruth.webProductModel : profile.model;
-  }
-
-  /**
-   * 这台机器的档案（首次调用时读取并缓存）。
-   *
-   * 读不到任何字段时退回 `DeviceProfile.DEFAULT` —— 那仍然是"一台固定的设备"，
-   * 不会退化成"每次请求都不同"。
-   */
-  /**
    * 把型号名收敛成 UA 能安全携带的 ASCII 形式（空串 = 不可用）。
    *
    * 允许：字母、数字、空格、`-`、`.`、`_`（Chromium 的机型字段就是这种 token）。
@@ -94,6 +61,12 @@ export class DeviceTruth {
     return text;
   }
 
+  /**
+   * 这台机器的档案（首次调用时读取并缓存）。
+   *
+   * 读不到任何字段时退回 `DeviceProfile.DEFAULT` —— 那仍然是"一台固定的设备"，
+   * 不会退化成"每次请求都不同"。
+   */
   static profile(): DeviceProfile {
     const hit: DeviceProfile | null = DeviceTruth.cached;
     if (hit !== null) {
@@ -146,17 +119,19 @@ export class DeviceTruth {
      */
     const asciiMarket: string = DeviceTruth.asciiModel(market);
     const asciiModel: string = DeviceTruth.asciiModel(model);
-    // 网页 UA 要用的那份（见 webModel）：只认"不带空格、不带品牌"的机型代号。
-    DeviceTruth.webProductModel = asciiModel;
     /*
-     * **型号名（App 那条身份用）= 系统里的完整对外型号名**，品牌前缀照留。
+     * **型号 = 系统里的完整对外型号名**（带品牌、带空格，如 `HUAWEI Mate 80`），
+     * 网页 UA 和 App 身份**都用它**。
      *
-     * 这条身份走的是 `Instagram ... Android (…; 厂商; 型号; …)` 那套格式，官方客户端就是这个样子，
-     * 型号里自带品牌（安卓侧 `Build.MODEL` 在华为机上就是 "HUAWEI Mate 80" 这种），
-     * IG 那边也按这个格式认得出来。
+     * 这是三次真机登录实测出来的取舍（看 IG「登录设备」显示什么）：
+     *   · `HUAWEI Mate 80`  → 显示 **"Huawei Mate"**   ← 能显示，最好的一档；
+     *   · `Mate 80`（去品牌）→ **什么都不显示**；
+     *   · `VYG-AL00`（机型代号）→ **什么都不显示**。
      *
-     * 网页 UA 用的是**另一份**（见 webModel）：那边试过带品牌 → 被归并成 "Huawei Mate"，
-     * 试过只留 "Mate 80" → 干脆什么都不显示，说明它要的是**不带空格的机型代号**。
+     * 也就是说对面**必须看到品牌出现在型号里**才肯展示，去掉品牌它整条设备名都不要了。
+     * 所以别再"聪明地"剥品牌前缀或换代号 —— 那两次都让显示彻底消失。
+     * 想要更具体的 `Huawei Mate 80`，走的是 UA Client Hints 那条通道
+     * （见 InstagramWebHost 的补丁与 PageBridge.loadUrl），不是改这里。
      */
     const modelName: string = asciiMarket.length > 0
       ? asciiMarket : (asciiModel.length > 0 ? asciiModel : DeviceProfile.DEFAULT.model);
