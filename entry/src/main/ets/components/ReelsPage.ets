@@ -417,7 +417,7 @@ struct ReelSlide {
   private rawSeeking: boolean = false;
   /** 页面级横滑手势 → 本条 seek 的桥（见 REELS_SEEK_CMD 的说明）。 */
   @StorageLink(REELS_SEEK_CMD) @Watch('onSeekBridge') seekBridgeCmd: number = 0;
-  @StorageLink(REELS_SEEK_DX) seekBridgeDx: number = 0;
+  @StorageLink(REELS_SEEK_DX) @Watch('onSeekBridge') seekBridgeDx: number = 0;
   private rawHoldFired: boolean = false;
   private rawHoldTimer: number = -1;
   /** 长按中间之前，全局控件本来就是藏着的吗（松手要恢复成"原来那样"，见 onHoldEnd）。 */
@@ -2828,6 +2828,8 @@ export struct ReelsPage {
           const before: number = this.lastReportedIndex;
           // 落定页以 onChange 为准（见 settledIndex 的说明，审计 B1）。
           this.settledIndex = index;
+        // 翻到下一条：暂停/长按/倍速只属于上一条，清掉（见 resetTransientPlayState）。
+        this.resetTransientPlayState();
           this.switchTo(index);
           // 兜底：真的翻页了也报一次"滑动"（正常路径在 onTouch 的第一次 Move 已经报过，
           // 这里重复一次是无害的 —— 页面那边"已经沉着"就直接返回）。
@@ -3013,6 +3015,18 @@ export struct ReelsPage {
       this.singleTapTimer = -1;
       this.pagePaused = !this.pagePaused;
     }, SINGLE_TAP_DELAY_MS);
+  }
+
+  /**
+   * 翻页时把"只对某一条有效"的临时状态清掉（需求：暂停只作用于该视频，划到下一条继续播）。
+   *
+   * 单击暂停、长按暂停、2 倍速都是"针对当前这条"的操作，带到下一条就成了莫名其妙的
+   * "新视频也是暂停/加速"。Swiper 落定后调用（见 onSwiperIndexChanged）。
+   */
+  private resetTransientPlayState(): void {
+    this.pagePaused = false;
+    this.pageHold = false;
+    this.pageSpeed = false;
   }
 
   private doubleTapLike(): void {
