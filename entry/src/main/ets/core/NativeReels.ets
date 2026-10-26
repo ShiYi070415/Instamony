@@ -102,6 +102,13 @@ interface IgClipsMedia {
   /** 本机收藏了没有（真机上这条 clips 查询一般不给，见 Reel.saved / core/SaveState）。 */
   has_saved?: boolean | null;
   viewer_has_saved?: boolean | null;
+  /**
+   * 发布时间：移动端 v1 媒体对象里是 **Unix 秒**（和 `NativeTimelineParser` / `NativeSearch`
+   * 读的同一个字段）。真机载荷**不一定给**，拿不到就是 0。
+   */
+  taken_at?: number | null;
+  /** 同一个时间的另一种写法（部分载荷用毫秒，见 NativeReels.takenAtMsOf 的兼容处理）。 */
+  taken_at_timestamp?: number | null;
 }
 
 interface IgClipsNode {
@@ -1039,7 +1046,30 @@ export class NativeReels {
       user.is_verified === true, (sound.original_audio_title ?? '').trim(),
       media.like_count ?? 0, media.comment_count ?? 0, original.url,
       mediaId, authorId, caption, liked, false, media.media_repost_count ?? 0,
-      following, followKnown, saved);
+      following, followKnown, saved, NativeReels.takenAtMsOf(media));
+  }
+
+  /**
+   * 发布时间 → **毫秒**（拿不到就是 0）。
+   *
+   * 字段名按实际载荷兼容两种：
+   *   · `taken_at`：IG 的老写法，**Unix 秒**（和 `NativeTimelineParser` 的 `media.taken_at`、
+   *     `NativeSearch.readPost` 的 `taken_at` 是同一份数据），要 ×1000；
+   *   · `taken_at_timestamp`：少数载荷的别名，**可能已经是毫秒**（值超过 1e11 就当毫秒）。
+   *
+   * 为什么先看 `taken_at`：它是 v1 媒体对象里的标准字段（`MobileStories` / `NativeMediaInfo`
+   * 读的都是它），而 `clips/*` 这些条目就是**同一个 v1 媒体对象**（见 parseMobile 的解析形状）。
+   *
+   * 拿不到返回 0：评论面板里那张卡片按 `createdAtMs > 0` 才画时间那一行，
+   * 兜底交给 core/ReelSeenTime（见 pages/Index.reelTakenAtMs），不在这里瞎猜。
+   */
+  private static takenAtMsOf(media: IgClipsMedia): number {
+    const raw: number = media.taken_at ?? media.taken_at_timestamp ?? 0;
+    if (raw <= 0) {
+      return 0;
+    }
+    // 1e11 毫秒 ≈ 1973 年之后的毫秒时间戳；秒值现在都在 1.7e9 量级，不会误判。
+    return raw > 100000000000 ? Math.floor(raw) : Math.floor(raw * 1000);
   }
 
   /** 视频候选 → 一档（original=false 取 1080 档给播放，true 取最大档给下载）。 */

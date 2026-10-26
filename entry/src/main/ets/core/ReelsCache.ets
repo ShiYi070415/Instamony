@@ -33,7 +33,7 @@ const KEY: string = 'page1_v1';
 /** 关注那条流自己那份（两条流分开两页之后各存各的，别互相覆盖，见 pages/Index 的 reelsSegment）。 */
 const KEY_FOLLOWING: string = 'page1_follow_v1';
 /** 缓存格式版本：改了结构就 +1，旧的一律当没有。 */
-const FORMAT: number = 2;
+const FORMAT: number = 3;
 /** 有效期（毫秒）：6 小时（见文件头）。 */
 const MAX_AGE_MS: number = 6 * 60 * 60 * 1000;
 /** 单份上限（字符）：超过就不存（防呆）。 */
@@ -70,6 +70,13 @@ interface ReelCacheDto {
   fol?: boolean;
   /** `fol` 是数据源真的说了（false = 不知道，界面会单独问一次，见 NativeFollow.statesFor）。 */
   fk?: boolean;
+  /**
+   * 发布时间（**毫秒**；0 = 载荷没给）。
+   *
+   * 取值来自 IG 载荷的 `taken_at`（见 core/NativeReels.takenAtMsOf）。缓存是"限流时直接拿来显示"
+   * 的那份，少了它，从缓存铺出来的那条点正文开卡片时就没有"x 小时前"。
+   */
+  ta?: number;
   l?: number;
   cm?: number;
   id?: string;
@@ -148,7 +155,9 @@ export class ReelsCache {
           // 关注状态也要存：缓存那份是"限流时直接拿来显示"的，少了它那颗按钮会显示成"关注"
           // （用户报的"reels 关注按钮状态没正确显示"就是这么发现的）。
           fol: one.following,
-          fk: one.followKnown
+          fk: one.followKnown,
+          // 发布时间也存（见 ReelCacheDto.ta）：否则缓存铺出来的那条没有"x 小时前"。
+          ta: one.takenAtMs
         });
       }
       const payload: StoredReelsPage = { v: FORMAT, at: Date.now(), items: items };
@@ -200,7 +209,7 @@ export class ReelsCache {
         reels.push(new Reel(code, one.u ?? '', one.v ?? '', one.w ?? 0, one.h ?? 0,
           one.a ?? '', one.av ?? '', false, one.m ?? '', one.l ?? 0, one.cm ?? 0,
           one.o ?? '', one.id ?? '', one.uid ?? '', one.cap ?? '', one.lk === true,
-          false, one.rp ?? 0, one.fol === true, one.fk === true));
+          false, one.rp ?? 0, one.fol === true, one.fk === true, false, one.ta ?? 0));
       }
       if (reels.length === 0) {
         return null;

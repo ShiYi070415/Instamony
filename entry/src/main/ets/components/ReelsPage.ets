@@ -22,14 +22,12 @@ import { VideoSurface } from './VideoSurface';
 import { MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS, SETTING_VIDEO_MUTED } from '../core/AppSettings';
 import { ReelsAction } from '../core/ReelsAction';
 import {
-  MaterialIconButton, MaterialLabelButton, SurfaceModifier, trackMaterialTouch
+  MaterialIconButton, MaterialLabelButton, SurfaceModifier
 } from './MaterialSurface';
 import { FollowState, FOLLOW_VERSION_KEY } from '../core/FollowState';
 import { SaveState } from '../core/SaveState';
 import { NativeFollow } from '../core/NativeFollow';
-import { Translator } from '../core/Translator';
-// 「查看翻译 / 显示原文」那颗小字（评论面板与帖子卡片都用同一颗，见 components/TranslateLabel）。
-import { TranslateLabel } from './TranslateLabel';
+import { ReelSeenTime } from '../core/ReelSeenTime';
 import { LikeBurst, LikeBurstState, playLikeBurst } from './AnimatedIcons';
 import {
   CAPTION_TAIL_SAFETY_VP, CaptionFit
@@ -68,18 +66,6 @@ const AUTHOR_FOLLOW_GAP: number = 10;
 /** 正文的字号与行高（vp）。 */
 const CAPTION_FONT_SIZE: number = 14;
 const CAPTION_LINE_HEIGHT: number = 19;
-/**
- * 「查看翻译」的译文切换时长（毫秒）与曲线（需求："用 animateTo({ duration: 200, curve: Curve.Linear })
- * 包住状态切换，译文展开/收起要线性，不要弹性/缓动"）。下面切换与节点过渡都读这一个常量。
- */
-const TRANSLATE_ANIM_MS: number = 200;
-/**
- * 译文最多几行（超出用省略号）。
- *
- * 译文是展开在**视频画面之上**的浮字：不设上限时一段长配文的译文会把整屏视频盖掉。
- * 6 行大约是"一屏 1/3"，看得清又不至于喧宾夺主。
- */
-const TRANSLATED_MAX_LINES: number = 6;
 /**
  * **Reels 正文折叠成一行**（需求："正文限制到一行，'… 展开'也要在这一行里"）。
  *
@@ -318,12 +304,14 @@ struct ReelSlide {
  *      还停在第一条"（"数据显示固定在第一条 reels"）。这里用 `@ObjectLink reel` 订阅这一条，
  *      和信息流的 PostActions 完全同一套做法（那个组件就是为这件事抽出来的）。
  *
- *   2) **手势**。浮层挂在 Swiper 外面时，它和 Swiper 是**兄弟**关系；动作区/关注按钮是 Toggle
+ *   2) **手势**。浮层挂在 Swiper 外面时，它和 Swiper 是**兄弟**关系；动作区那几颗是 Toggle
  *      带着自己的 PanGesture（材质按钮的 4-way-lock，见 MaterialSurface.consumePan），兄弟关系下
- *      它们会把竖向滑动赢走 —— 手指落在关注按钮或右侧动作区上就怎么划都翻不了页。放进页内之后
+ *      它们会把竖向滑动赢走 —— 手指落在按钮上就怎么划都翻不了页。放进页内之后
  *      Swiper 的内建 PAN 是祖先，滑动照常翻页（和信息流 List 里按在按钮上也能滚是同一个道理）。
+ *      另外**作者行与关注按钮这一轮彻底退出了 4-way lock**（需求："lock 只作用于评论面板里那张
+ *      卡片"）：作者行那颗胶囊不再记"按住"，关注按钮传 `lockMaterial: false`（见 MaterialLabelButton）。
  *
- *   3) 关注 / 点赞 / 转发 / 正文展开这些状态本来就属于"这一条"，改 `reel` 上的字段即可就地重绘
+ *   3) 关注 / 点赞 / 转发这些状态本来就属于"这一条"，改 `reel` 上的字段即可就地重绘
  *      （`reel` 是 @Observed，见 model/Reel），不用再往父组件搬一份镜像状态。
  */
 @Component
@@ -370,17 +358,6 @@ struct ReelOverlay {
   @State private following: boolean = false;
   /** 按**文本**缓存的折叠前缀（见 prefixOfText）。 */
   private textFits: Map<string, string> = new Map<string, string>();
-  /**
-   * 正文现在显示的是**译文**吗（需求："正文末尾挂查看翻译，点它就地展开译文，再点收起"）。
-   *
-   * 存"这一条自己的"状态：信息层是每条一个组件（见类头第 1 条），翻页天然各自丢状态 ——
-   * 切回来看到的是原文，和 IG 一致。
-   */
-  @State private captionTranslated: boolean = false;
-  /** 翻好的译文（空串 = 还没翻出来，正文那一格仍是原文）。 */
-  private captionTranslation: string = '';
-  /** 译文到货计数（普通字段改了不重绘，理由同 FeedList.translatedCaption）。 */
-  @State private translationEpoch: number = 0;
   /** 关注 / 点赞 / 转发正在请求中（防连点）。 */
   @State private followBusy: boolean = false;
   @State private likeBusy: boolean = false;
@@ -808,7 +785,13 @@ struct ReelOverlay {
       .onClick((): void => {
         this.onOpenUser(this.reel);
       })
-      .onTouch(trackMaterialTouch)
+      /*
+       * **这里没有 4-way lock**（需求："lock 只作用于评论面板里那张卡片"）。
+       *
+       * 上一轮在这颗作者行胶囊上挂了 `onTouch(trackMaterialTouch)`，这一轮拿掉了：视频页的
+       * 作者行/关注按钮就是"压在画面上的普通按钮"，手指落在它上面照样应该能上下翻视频。
+       * 材质本身的观感不受影响（那份材质在 `.attributeModifier` 上，和手势是两件事）。
+       */
 
       // 关注按钮（需求："组件右边显示关注按钮（沉浸光感），需要展示关注状态，点击关注或者取消关注"）。
       //
@@ -818,6 +801,8 @@ struct ReelOverlay {
       // 例外：**作者就是我自己**时不画（关注自己没有意义，见 ownAuthor）。
       if (this.reel.author.length > 0 && !this.isOwnAuthor()) {
         MaterialLabelButton({ autoInvert: false,
+          // 视频页这颗**不接 4-way lock**（见作者行上面的说明与 MaterialLabelButton.lockMaterial）。
+          lockMaterial: false,
           labelRes: this.following
             ? $r('app.string.action_following') : $r('app.string.action_follow'),
           // 字色**始终走主题色（深色下就是白）**：需求"已关注字体颜色保持白色" ——
@@ -837,74 +822,21 @@ struct ReelOverlay {
   }
 
   /**
-   * 正文这一格现在要显示的文字（显示译文且译文已到货时用译文，否则原文）。
-   *
-   * 读一下"译文到货"计数，让调用它的 build 登记成依赖（普通字段改了不重绘，
-   * 理由同 FeedList.translatedCaption）。
-   */
-  private translatedCaption(): string {
-    const tick: number = this.translationEpoch;
-    if (tick < 0) {
-      return '';
-    }
-    return this.captionTranslation;
-  }
-
-  /**
-   * 点「查看翻译 / 显示原文」：**先就地切状态**（立刻有反应），译文第一次出现时再补一次网络。
-   *
-   * 状态切换包在 `animateTo({ duration: TRANSLATE_ANIM_MS, curve: Curve.Linear })` 里
-   * （需求：线性展开/收起，不要弹性/缓动）；译文那个节点自己带同一条线性 `transition`，
-   * 于是"字出现/消失"和"这块高度变化"都是匀速的。
-   *
-   * 失败就把状态退回去 —— 不能让按钮写着"显示原文"而正文下面是空的。
-   */
-  private toggleCaptionTranslation(show: boolean): void {
-    if (this.reel.caption.length === 0 || show === this.captionTranslated) {
-      return;
-    }
-    this.getUIContext().animateTo({ duration: TRANSLATE_ANIM_MS, curve: Curve.Linear }, (): void => {
-      this.captionTranslated = show;
-    });
-    if (!show || this.captionTranslation.length > 0) {
-      return;
-    }
-    Translator.translate(this.reel.caption).then((translated: string | null): void => {
-      if (translated === null || translated.length === 0) {
-        hilog.warn(DOMAIN, TAG, 'reel caption translate failed why=%{public}s',
-          Translator.lastDetail());
-        this.captionTranslated = false;
-        return;
-      }
-      this.captionTranslation = translated;
-      // 换引用不够（内容比较不重绘），再加一个计数让 build 真的重跑。
-      this.translationEpoch = this.translationEpoch + 1;
-    }).catch((): void => {
-      this.captionTranslated = false;
-    });
-  }
-
-  /**
    * **正文**（需求："在用户资讯组件下方显示正文，不需要叠加背景，结构采用 feeds 的正文部分，
    * **限制到一行**"）。
    *
    * 不叠任何材质/底色：直接白字压在画面上（和 IG 一致）；折叠判据与信息流那份**同一套**
    * （见 core/CaptionFit），只有折叠行数这一页收成一行（见 CAPTION_MAX_LINES）。
    *
-   * 版式（自上而下）：**一行正文 + " ..."** → 译文（展开时才有）→ 「查看翻译」。
+   * 版式（自上而下）**只有一行**：正文 + 结尾那颗 " ..."。视频页**不提供翻译**
+   * （需求："视频页正文区去掉查看翻译，译文也不再在视频页展开"）：译文只在评论面板里那张
+   * 帖子卡片上（见 components/PostCardPanel）。上一轮挂在正文下面的 `TranslateLabel`、
+   * 它的 `captionTranslated` 状态、译文文本与那段线性 `animateTo` 都整块删掉了。
    *
-   * ## 点击归属：为什么"正文"和"查看翻译"是**两个兄弟节点**
-   * 正文那颗 Text 的 `.onClick` = 打开评论面板（带卡片）；「查看翻译」是**另一颗**节点
-   * （TranslateLabel 自带 onClick），两者没有任何父子关系 —— ArkUI 的 Click 是按命中节点派的，
-   * 不会从子节点冒泡到兄弟，所以点翻译**不会**顺带把面板打开，点正文也照旧只开面板。
-   * 上一版正文整块只有一个 Text（连省略号都是它的 Span），那时**没有**翻译入口 ——
-   * 硬把它塞进同一颗 Text 是不行的：Span 没有自己的命中区域，点翻译会连正文一起触发。
-   *
-   * ## 为什么「查看翻译」在正文的**下一行**（而不是正文那一行的右端）
-   * 正文那一行能放多少字，是靠 `captionAvailVp()` 事先量好的（见 captionLine）：量的时候按
-   * **整行可用宽度**算。要是同一行再塞一颗按钮，实际可用宽度就变窄了 —— 量的是满宽、渲染是窄宽，
-   * 于是正文先被 `maxLines` 切一刀、又接一个 " ..."，变成**双重省略号**。
-   * 放在下一行（= 需求里的"正文末尾"）既不碰那条宽度基准，也不破坏"一行正文 + ' ...'"。
+   * ## 点击归属：点哪里都开面板
+   * 正文与省略号在**同一颗 Text** 里（省略号是它的 Span）。Span 没有自己的命中区域，
+   * 所以整颗 Text 就是那一片命中区 —— 点正文、点省略号走的都是同一个 `.onClick`
+   * （打开评论面板，面板里带那张卡片，见 openPostCard）。
    *
    * ## 手势
    * 正文那颗 Text 只吃"点"（Click），竖向滑动仍由外层 Swiper 的 Pan 手势裁决 ——
@@ -912,71 +844,34 @@ struct ReelOverlay {
    */
   @Builder
   captionBlock() {
-    Column({ space: 2 }) {
-      if (this.reel.caption.length > 0 && this.captionLine().length > 0) {
-        /*
-         * 一个 Text 装两段：正文（白）+ 结尾省略号（灰）。
-         *
-         * **Span 没有自己的 onClick**（挂在 Text 上整段只有一个回调），所以整颗 Text 才是那颗
-         * 命中区域 —— 点正文、点省略号走的都是同一个 `.onClick`（都开面板）。
-         * 早就量好的前缀保证这两段加起来正好一行（见 captionLine）。
-         * Span 支持 `textShadow` 且会从父 Text 继承（官方文档：API 10 起 Span 继承
-         * fontColor/fontSize/fontStyle/fontWeight/decoration/letterSpacing/textCase/fontFamily/
-         * textShadow），所以阴影只需要在 Text 上写一次。
-         */
-        Text() {
-          Span(this.captionLine())
-            .fontColor(Color.White)
-          Span(CAPTION_TAIL)
-            .fontColor('#BFBFBF')
-        }
-        .fontSize(CAPTION_FONT_SIZE)
-        .lineHeight(CAPTION_LINE_HEIGHT)
-        .textShadow(OVERLAY_TEXT_SHADOW)
-        .maxLines(CAPTION_MAX_LINES)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .width('100%')
-        .textAlign(TextAlign.Start)
-        .onClick((): void => {
-          this.openPostCard();
-        })
-      }
-
-      // ② 译文：**白色**（需求）+ 画面那层文字阴影；展开/收起走同一条线性过渡。
-      if (this.captionTranslated && this.translatedCaption().length > 0) {
-        Text(this.translatedCaption())
-          .fontSize(CAPTION_FONT_SIZE)
-          .lineHeight(CAPTION_LINE_HEIGHT)
+    if (this.reel.caption.length > 0 && this.captionLine().length > 0) {
+      /*
+       * 一个 Text 装两段：正文（白）+ 结尾省略号（灰）。
+       *
+       * **Span 没有自己的 onClick**（挂在 Text 上整段只有一个回调），所以整颗 Text 才是那颗
+       * 命中区域 —— 点正文、点省略号走的都是同一个 `.onClick`（都开面板）。
+       * 早就量好的前缀保证这两段加起来正好一行（见 captionLine）。
+       * Span 支持 `textShadow` 且会从父 Text 继承（官方文档：API 10 起 Span 继承
+       * fontColor/fontSize/fontStyle/fontWeight/decoration/letterSpacing/textCase/fontFamily/
+       * textShadow），所以阴影只需要在 Text 上写一次。
+       */
+      Text() {
+        Span(this.captionLine())
           .fontColor(Color.White)
-          .textShadow(OVERLAY_TEXT_SHADOW)
-          .textAlign(TextAlign.Start)
-          .width('100%')
-          .maxLines(TRANSLATED_MAX_LINES)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .transition(TransitionEffect.OPACITY
-            .animation({ duration: TRANSLATE_ANIM_MS, curve: Curve.Linear }))
+        Span(CAPTION_TAIL)
+          .fontColor('#BFBFBF')
       }
-
-      // ③ 「查看翻译 / 显示原文」：只有非中文正文才会真的画出来（见 TranslateLabel）。
-      //    左内边距传 0，让它和正文那一行的左边界对齐（默认 6 是给"挨着时间排"那几处留的）。
-      if (this.reel.caption.length > 0) {
-        Row() {
-          TranslateLabel({
-            source: this.reel.caption,
-            showing: this.captionTranslated,
-            fontSize: 12,
-            padLeft: 0,
-            onToggle: (show: boolean): void => {
-              this.toggleCaptionTranslation(show);
-            }
-          })
-        }
-        .width('100%')
-        .justifyContent(FlexAlign.Start)
-      }
+      .fontSize(CAPTION_FONT_SIZE)
+      .lineHeight(CAPTION_LINE_HEIGHT)
+      .textShadow(OVERLAY_TEXT_SHADOW)
+      .maxLines(CAPTION_MAX_LINES)
+      .textOverflow({ overflow: TextOverflow.Ellipsis })
+      .width('100%')
+      .textAlign(TextAlign.Start)
+      .onClick((): void => {
+        this.openPostCard();
+      })
     }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
   }
 
   /**
@@ -1353,6 +1248,9 @@ export struct ReelsPage {
     }
     this.vm.onReels = (reels: Array<Reel>, hasMore: boolean): void => {
       this.reels = reels;
+      // 记一份"这几条第一次进入列表的时刻"：载荷没给 `taken_at` 时，评论面板里那张卡片
+      // 用它当兜底的发布时间（见 core/ReelSeenTime 与 pages/Index.reelTakenAtMs）。
+      ReelSeenTime.note(reels.map((reel: Reel): string => reel.shortcode));
       // 列表一变（首屏到位 / 又接了一页）就重报一次：标题栏那两颗按钮的状态跟着它走。
       this.publishAction();
       this.logCurrent();
@@ -1369,6 +1267,8 @@ export struct ReelsPage {
     const cached: Array<Reel> = this.vm.list();
     if (cached.length > 0) {
       this.reels = cached;
+      // 回填这条路径也要记一次（可能来自落盘缓存，见 core/ReelsCache）：见 core/ReelSeenTime。
+      ReelSeenTime.note(cached.map((reel: Reel): string => reel.shortcode));
       // 连"看到第几条"一起恢复：切 tab 会重建这个组件，@State 会归零，
       // 不恢复的话每次切回来都从第一条重新开始（视图模型记着它，见 ReelsViewModel.activeIndex）。
       const resume: number = this.vm.activeIndex();

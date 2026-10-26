@@ -9,13 +9,26 @@
  * 因此**只画卡片本身**：没有遮罩、没有关闭按钮、没有自己的定位/入场动画 —— 那些原来是为
  * "独立浮层"服务的（见文件末尾"上一版的浮层那套已经删掉"的说明），现在全归评论面板。
  *
- * ## 呈现方式：**普通表面**（需求："取消卡片的 light 效果"）
- * 上一版卡片底色是一颗透明 Toggle 承载的沉浸光感（`SurfaceModifier`），材质自带的光源/高光
- * 让它在评论面板里"發亮"，用户要求去掉。现在的做法最朴素：
- *   · 底色 = `app.color.field_background`（浅色 #F2F2F2 / 深色 #1A1A1A，跟着主题走）；
- *   · 边框 = `app.color.divider`（浅色 #DBDBDB / 深色 #262626）一圈 1vp；
- *   · 再补一层很轻的投影（#1A000000 / 半径 10 / 下移 2），让它和面板有一点层次。
+ * ## 呈现方式：**静态玻璃**（沉浸光感材质，但关掉光源与拖拽）
+ * 需求一路变过来：
+ *   ① 最早是一颗透明 Toggle 承载沉浸光感 —— 材质自带的光源/形变让它在面板里"發亮"；
+ *   ② 用户要求"取消卡片的 light 效果"，于是改成纯色表面（`app.color.field_background`）；
+ *   ③ 最新一版又要"恢复沉浸光感的玻璃观感，但不要光源、不要拖拽" —— 也就是**静态玻璃**。
+ * 所以现在卡片的底色重新走材质（`SurfaceModifier` + `immersiveMaterial`，见 MaterialSurface），
+ * 但显式把两个交互开关关掉：
+ *   · `lightEffect = false` → `lightEffect: null`（官方：设 null 即关闭光感交互反馈）；
+ *   · `interactive = false` → 不做按下/拖动的材质形变。
+ * 于是它是一块"贴在那里的玻璃"：看得出材质、有层次，但不会跟着手指动、也不会一碰就发光。
+ * 另外两个参数维持原样：`invert = false`（内容用主题色，同评论面板底层那颗材质）、
+ * `applyShadow = true`（材质自带那圈很轻的阴影，就是它的轮廓来源）。
+ * 外面再补一圈 1vp 的 `app.color.divider` 极轻边框：材质生效时系统会接管底色/边框/阴影，
+ * 这圈边框实际只在**降级分支**（API < 26 的兜底）里看得到，用来替卡片兜住轮廓。
  * **用户资讯栏胶囊与关注按钮仍然是材质**（那是组件自身，见 MaterialSurface），不能跟着改。
+ *
+ * 为什么材质挂在**卡片根节点**上（一颗 Toggle）：内容区里只有 Toggle / Slider / Select 拿得到
+ * 沉浸光感（官方《沉浸光感–功耗优化》，见 MaterialSurface 文件头），而这张卡片的高度是**内容
+ * 撑出来的** —— "底层空 Toggle + 上层内容"那种写法要求父容器高度已定（评论面板、输入条都是），
+ * 这里用不了（详见 build 里的说明）。
  *
  * ## 左对齐 / 头像三边等距（需求："头像左侧间距 = 头像上/下间距"）
  * 胶囊的内缩抽成一个常量 `AVATAR_INSET_VP = (行高 40 - 头像 32) / 2 = 4`：头像在胶囊里
@@ -577,15 +590,27 @@ export struct PostCardPanel {
 
   build() {
     /*
-     * 卡片 = **普通表面 + 一层 Scroll**（不是浮层了，见文件头）。
+     * 卡片 = **一颗 Toggle 承载静态玻璃材质**，它的内容就是那一层 Scroll（见文件头）。
      *
-     * Scroll 的意义：正文完整显示、可能很长，超过 `cardMaxH` 时让它自己滚，卡片不会被裁一截。
+     * ## 为什么材质挂在卡片**根节点**上，而不是像评论面板那样铺一层背景 Toggle
+     * 评论面板、输入条那种"底层一颗空 Toggle + 上层内容"的写法，前提是**高度已定**
+     * （面板占满屏、输入条是固定 `BAR_HEIGHT`）。而这张卡片的高度是**内容撑出来的**
+     * （正文几句、有没有关注按钮都会变）：在自适应高度的 Stack 里给背景层写 `height('100%')`，
+     * 百分比会按"父容器的可用空间"算 —— 卡片会一下长到面板剩多少就多高，正文短的时候下面
+     * 一大片空玻璃。挂在根节点上则天然是"内容多高、玻璃多高"。
+     *
+     * 至于"材质嵌套"（官方：同一子树里只宜在最外层设一次）：卡片里那两颗材质（资讯栏胶囊、
+     * 关注按钮）确实在它的子树里，但它们是**独立组件自己的材质**，两者都画得出来 ——
+     * 这一处是"卡片要玻璃"和"胶囊/按钮保持材质"两个需求同时要的结果，取舍记在这里。
+     *
+     * ## Scroll
+     * 正文完整显示、可能很长，超过 `cardMaxH` 时让它自己滚，卡片不会被裁一截。
      *
      * `onGestureRecognizerJudgeBegin` 是 4-way lock 的**外层那一半**（见文件头）：
      * 手指按住胶囊之后拖动，`holdsScroll` 返回真 → 这里否掉 Scroll 的内建 PAN，
      * 卡片不跟着走、面板也不跟着走；按下去就划的竖向拖动则照常放行（否则就"卡手"）。
      */
-    Column() {
+    Toggle({ type: ToggleType.Button, isOn: false }) {
       Scroll() {
         Column() {
           this.cardBody()
@@ -597,6 +622,9 @@ export struct PostCardPanel {
       .constraintSize({ maxHeight: this.cardMaxH })
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.None)
+      // 内容裁圆角：长正文滚动时不能溢出到卡片角上（材质那层自己也是同一个半径）。
+      .borderRadius(CARD_RADIUS_VP)
+      .clip(true)
       // 记下触摸起点 / 第一次移动的时刻（holdsScroll 的判据，见 MaterialSurface）。
       .onTouch(trackScrollTouch)
       .onGestureRecognizerJudgeBegin((event: BaseGestureEvent, current: GestureRecognizer,
@@ -609,14 +637,30 @@ export struct PostCardPanel {
       })
     }
     .width('100%')
-    .alignItems(HorizontalAlign.Start)
+    .padding(0)
     .borderRadius(CARD_RADIUS_VP)
-    // 普通表面（需求：取消 light 效果）：纯色底 + 一圈边框，两张卡的颜色都走主题资源。
-    .backgroundColor($r('app.color.field_background'))
+    .backgroundColor(Color.Transparent)
+    // 选中态透明：Toggle 默认选中色是主题强调色，点一下整颗会变蓝（同 MaterialSurface）。
+    .selectedColor(Color.Transparent)
+    /*
+     * 静态玻璃（需求："恢复沉浸光感，但不要光源、不要拖拽"）。
+     * 参数顺序（见 MaterialSurface.SurfaceModifier）：
+     *   thickness          材质厚度（跟设定页联动）
+     *   invert=false       不跟着背景反色（卡片内容走主题色，同评论面板底层那颗）
+     *   applyShadow=true   保留材质自带那圈阴影（它就是卡片的轮廓来源）
+     *   forceFallback=false 正常走系统材质
+     *   lightEffect=false  **关掉光源**（需求："不要光源"）→ 内部传 `lightEffect: null`
+     *   interactive=false  **关掉交互形变**（需求："不要拖拽/按压形变"）→ 静态玻璃
+     */
+    .attributeModifier(new SurfaceModifier(this.thickness, false, true, false, false, false))
+    /*
+     * 极轻的一圈边框：材质生效时系统会接管底色/边框/阴影（官方：设了材质后
+     * backgroundColor / borderColor / shadow 都不再生效），**只有在降级分支**（API < 26，
+     * 见 SurfaceModifier 的兜底）才看得到这一圈 —— 那时它替卡片兜住轮廓。
+     */
     .border({ width: 1, color: $r('app.color.divider') })
-    // 很轻的一层投影：只为了和评论面板分出层次，不参与"沉浸光感"那套光源。
-    .shadow({ radius: 10, color: '#1A000000', offsetX: 0, offsetY: 2 })
-    // 圆角内裁：内容（长正文的滚动区）不能溢出卡片圆角。
-    .clip(true)
+    .onChange((): void => {
+      // 卡片本身没有选中态：点空白处不该有任何动作，功能都在里面的胶囊/按钮上。
+    })
   }
 }

@@ -139,6 +139,8 @@ import { LoginPage } from '../components/LoginPage';
 import { StoryViewer } from '../components/StoryViewer';
 import { ReelsPage } from '../components/ReelsPage';
 import { Reel } from '../model/Reel';
+// 兜底的发布时间：载荷没给 `taken_at` 时用"第一次见到这条"的本机时刻（见 ReelSeenTime）。
+import { ReelSeenTime } from '../core/ReelSeenTime';
 import { CommentInputBar } from '../components/CommentInputBar';
 import { ProfileHeader, ProfileHighlight, ProfilePost, ProfileStreamPage } from '../model/Profile';
 import { DirectThread } from '../model/Direct';
@@ -1555,7 +1557,8 @@ struct Index {
   /**
    * 卡片上那条帖子的发布时刻（毫秒）。
    *
-   * reels 载荷不带 `taken_at`，所以从 Reels 那条路进来时是 0 —— 卡片据此**不画**"x小时前"那一截
+   * 来源见 reelAsPost / reelTakenAtMs：优先 IG 载荷的 `taken_at`，拿不到才退回"本机第一次见到
+   * 这条"（core/ReelSeenTime）；两种都拿不到就是 0，卡片据此**不画**"x小时前"那一截
    * （不猜、也不显示 "0"），其余（头像 / 账号名 / 正文 / 查看翻译 / 关注）照常。
    */
   @State private commentsTakenAtMs: number = 0;
@@ -2165,14 +2168,34 @@ struct Index {
       displayUrl: reel.coverUrl,
       likeCount: reel.likeCount,
       commentCount: reel.commentCount,
-      // reels 这条载荷**不带发布时刻**（见 model/Reel）：卡片那一截因此不画（createdAtMs = 0），
-      // 其余（头像/账号名/正文/查看翻译/关注）照常。
-      takenAtMs: 0,
+      // 发布时间：优先用 IG 载荷给的 `taken_at`（见 model/Reel.takenAtMs / core/NativeReels.toReel），
+      // 载荷没给才退回"本机第一次见到这条"（见 reelTakenAtMs）。
+      takenAtMs: this.reelTakenAtMs(reel),
       ownerUsername: reel.author,
       ownerAvatarUrl: reel.avatarUrl,
       ownerId: reel.authorId,
       videoUrl: reel.videoUrl
     });
+  }
+
+  /**
+   * 这条 reel 在卡片上该显示的**发布时刻**（毫秒；> 0）。
+   *
+   * ① 载荷给了 `taken_at` 就用它（毫秒，见 core/NativeReels.takenAtMsOf）—— 这是**真实**发布时间；
+   * ② 没给（真机上 clips 这条查询不一定带）就退回 **core/ReelSeenTime** 记的"本机第一次见到这条
+   *    的时刻"。这是**兜底**，有局限：它只代表"我们第一次看到它"，不是 IG 的发布时间 ——
+   *    一条两天前发布的视频，今天第一次刷到也只会显示"刚刚 / 几分钟前"。
+   *    之所以还这么做：卡片上"什么时间"总比"没有时间"强，而且这条时间**记下就不再变**
+   *    （"3 小时前"会跟着真实时间长大，不会每次打开都退回"刚刚"）。
+   *
+   * 之前这里是写死的 0（"reels 载荷不带 taken_at"），于是卡片那一行永远不画 ——
+   * 用户报的"卡片里看不到发布时间"就是这个。
+   */
+  private reelTakenAtMs(reel: Reel): number {
+    if (reel.takenAtMs > 0) {
+      return reel.takenAtMs;
+    }
+    return ReelSeenTime.of(reel.shortcode);
   }
 
   /**

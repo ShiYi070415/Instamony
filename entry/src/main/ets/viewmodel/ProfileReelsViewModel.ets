@@ -263,7 +263,13 @@ export class ProfileReelsViewModel implements ReelStreamVm {
         // 搜索推荐流那条由 NativeSearch 采到 user 上 —— 两边都会落进 MediaPost.ownerFollowing。
         // Reels 页那颗按钮以前只信本地覆盖表，所以"我明明关注了却还显示关注"（用户报的问题）。
         post.ownerFollowing,
-        post.ownerFollowKnown
+        post.ownerFollowKnown,
+        // 收藏状态：个人主页这条查询不给 `has_saved`，交给 core/SaveState 的会话覆盖表（传 false）。
+        false,
+        // 发布时间（毫秒）：个人主页/推荐流那条解析已经取到 `taken_at`（见 NativeProfile、
+        // NativeSearch.readPost → MediaPost.takenAtMs），这里直接带过去 —— 评论面板里那张
+        // 帖子卡片就靠它显示"x 小时前"（见 PostCardPanel.agoText）。
+        post.takenAtMs
       ));
     }
     hilog.info(DOMAIN, TAG, 'map %{public}d post → %{public}d reel (pending video %{public}d)',

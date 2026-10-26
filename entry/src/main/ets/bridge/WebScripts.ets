@@ -2393,6 +2393,10 @@ export function reelsScript(cfgJson: string, varsJson: string): string {
     'music:String(snd.original_audio_title||""),' +
     // 正文（Reels 页作者行下面那一段）。和音乐名分开：以前正文被塞进 music 那一栏。
     'caption:String((m.caption&&m.caption.text)||""),' +
+    // 发布时间：GraphQL 这边 `taken_at` 是 **Unix 秒**，这里就 ×1000 换成毫秒
+    // （评论面板那张卡片要毫秒，见 model/Reel.takenAtMs）。`taken_at_timestamp` 是别名，
+    // 两种都认；都没有就是 0（卡片那边退回"本机第一次见到"的兜底，见 core/ReelSeenTime）。
+    'takenAt:(Number(m.taken_at)||Number(m.taken_at_timestamp)||0)*1000,' +
     'liked:m.has_liked===true||m.viewer_has_liked===true,' +
     // 关注状态（Reels 页作者行那颗按钮）：网页载荷里它挂在 `user.friendship_status`。
     // 没有这个字段时**不给这个键**（undefined）——原生据此知道"要单独问一次"（见 model/Reel）。

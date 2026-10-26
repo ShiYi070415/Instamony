@@ -26,6 +26,12 @@ export interface ReelDto {
   music?: string;
   /** 正文（Reels 页作者行下面那一段，见 Reel.caption）。 */
   caption?: string;
+  /**
+   * 发布时间（**毫秒**；0 = 这条没给）。
+   *
+   * 网页脚本（bridge/WebScripts 的 reelsScript）里已经把秒换算成毫秒再回来，见 Reel.takenAtMs。
+   */
+  takenAt?: number;
   /** 本机点赞了没有（`has_liked`）。 */
   liked?: boolean;
   /** 本机关注这位作者了没有（`user.friendship_status.following`）；没给就是 undefined。 */
@@ -149,6 +155,18 @@ export class Reel {
    * —— 用户点过之后，无论信息层被重建多少次，那颗书签都还是实心的（见 ReelOverlay）。
    */
   saved: boolean;
+  /**
+   * 这条的**发布时间**（毫秒；0 = 数据源没给）。
+   *
+   * 用途：评论面板里那张置顶帖子卡片要显示"x 分钟前 / x 小时前"
+   * （见 components/PostCardPanel 的 agoText 与 pages/Index.reelAsPost）。
+   *
+   * 来源：IG 载荷里的 `taken_at`（移动端 v1 媒体对象是 **Unix 秒**，见
+   * core/NativeReels.takenAtMsOf；网页脚本那条把秒 ×1000 之后再回来）。
+   * 真机上 clips 这条查询**不一定给**它 —— 拿不到就是 0，卡片那边退回
+   * "本机第一次见到这条的时刻"（见 core/ReelSeenTime）。所以它允许是 0，界面按 0 不画。
+   */
+  readonly takenAtMs: number;
 
   constructor(shortcode: string, videoUrl: string, coverUrl: string, width: number, height: number,
               author: string, avatarUrl: string, isVerified: boolean, music: string,
@@ -156,7 +174,7 @@ export class Reel {
               mediaId: string = '', authorId: string = '', caption: string = '',
               liked: boolean = false, reposted: boolean = false, repostCount: number = 0,
               following: boolean = false, followKnown: boolean = false,
-              saved: boolean = false) {
+              saved: boolean = false, takenAtMs: number = 0) {
     this.shortcode = shortcode;
     this.videoUrl = videoUrl;
     this.coverUrl = coverUrl;
@@ -178,6 +196,7 @@ export class Reel {
     this.following = following;
     this.followKnown = followKnown;
     this.saved = saved;
+    this.takenAtMs = takenAtMs > 0 ? takenAtMs : 0;
   }
 
   /** 能不能播（没有地址就只画封面）。 */
@@ -261,7 +280,8 @@ export class ReelMapper {
         item.author ?? '', item.avatar ?? '', item.verified === true, item.music ?? '',
         item.likes ?? 0, item.comments ?? 0, item.origUrl ?? '', item.id ?? '',
         item.uid ?? '', item.caption ?? '', item.liked === true, false, item.reposts ?? 0,
-        item.following === true, item.following !== undefined, item.saved === true));
+        item.following === true, item.following !== undefined, item.saved === true,
+        item.takenAt ?? 0));
     }
     return new ReelsPage(reels, dto.cursor ?? '', dto.more === true);
   }

@@ -72,6 +72,10 @@ export class SurfaceModifier implements AttributeModifier<ToggleAttribute> {
   private readonly thickness: string;
   private readonly invert: boolean;
   private readonly applyShadow: boolean;
+  /** 光感交互反馈（按下时表面那道光）开不开，见 immersiveMaterial 的 @param lightEffect。 */
+  private readonly lightEffect: boolean;
+  /** 交互形变（按下/拖动时材质跟着形变）开不开，见 @param interactive。 */
+  private readonly interactive: boolean;
   /**
    * **强制用降级观感**（不碰 `systemMaterial`），即使设备支持材质。
    *
@@ -94,13 +98,22 @@ export class SurfaceModifier implements AttributeModifier<ToggleAttribute> {
    *   （`systemMaterialEffect`，见 pages/Index 的 floatingStyle / pageTitleStyle），
    *   hdsMaterial 里压根没有 applyShadow 字段 —— 它们的阴影由 HDS 自己决定。
    * @param forceFallback 见字段说明（标题栏里那条分段按钮传 true）。
+   * @param lightEffect 要不要**光感交互反馈**（默认 true = 全 app 的老观感）。
+   *   评论面板里那张帖子卡片传 false（需求："取消卡片的 light 效果"）——
+   *   卡片是"贴在那儿的一块静态玻璃"，不应该一碰就自己发光。
+   * @param interactive 要不要**交互形变**（默认 true）。同一个调用点也传 false：
+   *   需求"卡片是静态玻璃，不跟着手指动"。
+   *   两个默认值都保持原行为，**不影响全 app 其它调用点**。
    */
   constructor(thickness: string, invert: boolean = true, applyShadow: boolean = true,
-              forceFallback: boolean = false) {
+              forceFallback: boolean = false, lightEffect: boolean = true,
+              interactive: boolean = true) {
     this.thickness = thickness;
     this.invert = invert;
     this.applyShadow = applyShadow;
     this.forceFallback = forceFallback;
+    this.lightEffect = lightEffect;
+    this.interactive = interactive;
   }
 
   applyNormalAttribute(instance: ToggleAttribute): void {
@@ -110,7 +123,8 @@ export class SurfaceModifier implements AttributeModifier<ToggleAttribute> {
       // 而不是把整个界面带崩。
       let applied: boolean = false;
       try {
-        instance.systemMaterial(immersiveMaterial(this.thickness, this.invert, this.applyShadow));
+        instance.systemMaterial(immersiveMaterial(this.thickness, this.invert, this.applyShadow,
+          this.lightEffect, this.interactive));
         applied = true;
       } catch (error) {
         hilog.warn(DOMAIN, TAG, 'systemMaterial skipped: %{public}s',
@@ -390,16 +404,35 @@ export function trackMaterialTouch(event: TouchEvent): void {
  *   材质的所有档位的算力设备的显示效果生效**。" —— 所以这一圈阴影是"材质给的"，不随算力档位变。
  *   注意它同时也是"轮廓"的来源：材质底色很透（浅色下实测轨道只有 #FBFBFB），没有这圈阴影时
  *   组件和背景几乎融成一片。
+ * @param lightEffect 要不要**光感交互反馈**（触摸时表面那道光）。默认 true；评论面板里那张
+ *   帖子卡片传 false —— 官方文档：`lightEffect` 设成 **null** 就是"关闭光感交互反馈"，
+ *   所以这里用 null 而不是空对象。
+ * @param interactive 要不要**交互形变**（按下/拖动时材质跟着形变）。默认 true（全 app 老观感）；
+ *   卡片传 false：需求要"静态玻璃"，贴在那儿不跟着手指动。
+ *   两个开关都**默认保持原行为**，只有显式传 false 的调用点（那张卡片）会变。
  */
+/**
+ * 光感交互反馈的两种取值（见 immersiveMaterial 的 @param lightEffect）。
+ *
+ * 为什么提成两个常量而不是在函数里写三元：ArkTS 严格模式下 `{}` 这种**无类型对象字面量**
+ * 只能放在"有明确目标类型"的位置（构造函数实参就算），塞进三元表达式容易推不出类型。
+ * 提出来之后再包一层显式类型，两边都稳。
+ */
+const LIGHT_EFFECT_ON: uiMaterial.LightEffectOptions = {};
+/** 官方文档："If this parameter is set to null, the light sensing feedback effect is disabled"。 */
+const LIGHT_EFFECT_OFF: uiMaterial.LightEffectOptions | null = null;
+
 export function immersiveMaterial(thickness: string, invert: boolean = true,
-                                  applyShadow: boolean = true): uiMaterial.ImmersiveMaterial {
+                                  applyShadow: boolean = true,
+                                  lightEffect: boolean = true,
+                                  interactive: boolean = true): uiMaterial.ImmersiveMaterial {
   return new uiMaterial.ImmersiveMaterial({
     style: materialStyleFrom(thickness),
     materialColor: ARKUI_MATERIAL_COLOR,
-    // 交互形变（按下/拖动时材质跟着形变）
-    interactive: true,
-    // 光感交互反馈（触摸时表面出现光源流动效果）
-    lightEffect: {},
+    // 交互形变（按下/拖动时材质跟着形变）；卡片关掉，见 @param interactive。
+    interactive: interactive,
+    // 光感交互反馈（触摸时表面出现光源流动效果）；null = 关掉（见 @param lightEffect）。
+    lightEffect: lightEffect ? LIGHT_EFFECT_ON : LIGHT_EFFECT_OFF,
     // 自动反色：颜色必须走资源接口（见文件头），硬编码颜色不参与。
     colorInvert: invert,
     // 材质自带的投影（默认 true）：见 @param applyShadow 的说明。
@@ -635,6 +668,15 @@ export struct MaterialLabelButton {
   @Prop tint: string = '';
   /** 是否启用材质的自动反色（语义同 MaterialIconButton.autoInvert）。 */
   @Prop autoInvert: boolean = true;
+  /**
+   * 要不要接 **4-way lock**（`trackMaterialTouch` + `consumePan`，见文件里那两个函数）。
+   *
+   * 默认 true = 全 app 这颗按钮一直以来的行为（信息流资料行 / 个人页 / 评论面板里那张卡片
+   * 的关注按钮都靠它）：手指按在按钮上再拖，页面/照片都不跟着走。
+   * **Reels 视频页那颗传 false**（需求："4-way lock 只作用于评论面板里的那张卡片"）——
+   * 视频页要恢复成"作者行那颗关注按钮就只是个按钮"：手指落在它上面照样能上下翻视频。
+   */
+  @Prop lockMaterial: boolean = true;
   @StorageProp(SETTING_MATERIAL_THICKNESS) thickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
   onTap: () => void = (): void => {
   };
@@ -701,8 +743,20 @@ export struct MaterialLabelButton {
       this.fire();
     })
     // 按住期间把外层滚动/翻页也挡住（见 MaterialPressState 与 consumePan）。
-    .onTouch(trackMaterialTouch)
-    .gesture(PanGesture().onActionStart(consumePan).onActionUpdate(consumePan))
+    // `lockMaterial` 为假（Reels 视频页那颗关注按钮）时**连"按住"都不记**：那个标记是给
+    // 外层滚动容器的 holdsScroll 用的，记了反而会让别处误以为手指按在材质按钮上。
+    .onTouch((event: TouchEvent): void => {
+      if (this.lockMaterial) {
+        trackMaterialTouch(event);
+      }
+    })
+    // 4-way lock 的另一半：占住落在它上面的滑动（见 consumePan）。
+    // 关掉时把方向设成 `None` —— 手势**根本不成立**，也就不会和翻页/列表滚动竞争
+    // （不能只把回调写成空实现：手势一成立就赢走这一下拖动，照样卡翻页）。
+    .gesture(PanGesture(new PanGestureOptions({
+      fingers: 1,
+      direction: this.lockMaterial ? PanDirection.All : PanDirection.None
+    })).onActionStart(consumePan).onActionUpdate(consumePan))
   }
 }
 
