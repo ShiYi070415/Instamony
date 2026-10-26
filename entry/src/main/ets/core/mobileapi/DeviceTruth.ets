@@ -120,8 +120,25 @@ export class DeviceTruth {
      */
     const asciiMarket: string = DeviceTruth.asciiModel(market);
     const asciiModel: string = DeviceTruth.asciiModel(model);
-    const modelName: string = asciiMarket.length > 0
-      ? asciiMarket : (asciiModel.length > 0 ? asciiModel : DeviceProfile.DEFAULT.model);
+    /*
+     * **型号名里去掉品牌前缀**（"HUAWEI Mate 80" → "Mate 80"）。
+     *
+     * 为什么：真机装上去之后 IG 的「登录设备」显示的是 **"HUAWEI Mate"** —— 具体型号被吃掉了。
+     * 说明对面拿模型字段做了一个"品牌 + 关键词"的归并（品牌已经在 manufacturer 里单独给了，
+     * 模型字段再带一遍品牌，它就只认到"M ate"这一辈为止）。所以模型字段只留纯型号名，
+     * 品牌交给 manufacturer / UA 的厂商位去表达 —— 这也更接近 Chromium 自己的写法
+     * （`(Linux; Android 12; Mate 60 Pro)` 这类不带品牌）。
+     *
+     * 归一化后再判一次空：真机型名恰好等于品牌时（某些联通定制机）退回 productModel。
+     */
+    const brandWord: string = `${brand} `;
+    let shortName: string = asciiMarket;
+    if (shortName.length > 0 && brandWord.trim().length > 0
+      && shortName.toUpperCase().indexOf(brandWord.toUpperCase()) === 0) {
+      shortName = shortName.slice(brandWord.length).trim();
+    }
+    const modelName: string = shortName.length > 0
+      ? shortName : (asciiModel.length > 0 ? asciiModel : DeviceProfile.DEFAULT.model);
     const upperBrand: string = brand.toUpperCase();
     const huawei: boolean = upperBrand.indexOf('HUAWEI') >= 0
       || upperBrand.indexOf('HONOR') >= 0 || upperBrand.indexOf('华为') >= 0;
