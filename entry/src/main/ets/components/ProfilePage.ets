@@ -1818,8 +1818,13 @@ export struct ProfilePage {
                *   · 顺序天然正确；
                *   · 下面那个 onAreaChange 量到的就是"关注行 + 高光排"的合计高度 ——
                *     分段按钮的交接线正好需要这个和。
+               *
+               * **一条高光都没有就整排不画**（需求）：别人主页不像本人主页有「+ 新」那一颗，
+               * 空排只剩一段无意义的留白。
                */
-              this.highlightsRow()
+              if (this.highlights.length > 0) {
+                this.highlightsRow()
+              }
             }
             .width('100%')
           }
