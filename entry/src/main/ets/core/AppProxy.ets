@@ -3,13 +3,16 @@
  *
  * 参考 HarmonyX 的做法：代理是"整个 App 的出网通道"，所以用系统提供的应用级接口
  * `connection.setAppHttpProxy()` —— 它对本 App 后续的 http / WebView 请求都生效，
- * 不需要改每一处请求，也不需要重启进程（请求时读当前配置）。
+ * 不需要改每一处请求，也不需要重启进程。
  *
- * 设计取舍：
- *   · **只用系统能力**，不做 VPN / 旁路（HarmonyOS 的 VPN 需要系统级权限，普通应用拿不到）；
- *   · 配置落盘在 AppSettings（跟着账号无关，全局一份）；
- *   · 打开/关闭/改地址都**立即生效**，不需要重启 App（用户明确要求"设置目标不用停"）；
- *   · 关闭时传 `null` 清除（官方接口接受 null 表示不使用代理）。
+ * ## 两种形状并存（过渡期，编译必须一直是绿的）
+ *   · `AppProxyConfig` + `save/disable/config`：**旧 UI（单份代理）**在用，先保留；
+ *   · `ProxyEntry` + `list/add/select/setEnabled`：**新 UI（多份代理 + 下拉）**用。
+ * 两套都落到同一个系统接口上，谁在用谁生效。
+ *
+ * 命名注意：字段一律起名 `activeEntry` / `enabledFlag` 这类，**不要**用 `current` / `on`
+ * —— 它们会和同名方法/组件属性撞（ArkTS 报 Duplicate identifier 或
+ * Reassigning object methods is not supported）。
  */
 
 import { connection } from '@kit.NetworkKit';
@@ -17,13 +20,18 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'AppProxy';
-/** 代理配置的持久键（设置页与核心逻辑共用）。 */
+
+/** 旧（单份）配置的持久键。 */
 export const PROXY_HOST: string = 'proxy_host';
 export const PROXY_PORT: string = 'proxy_port';
 export const PROXY_USER: string = 'proxy_user';
 export const PROXY_PASS: string = 'proxy_pass';
+/** 新（多份）列表的持久键：JSON 串 + 选中下标 + 总开关。 */
+export const PROXY_LIST: string = 'proxy_list_json';
+export const PROXY_ACTIVE: string = 'proxy_active_index';
+export const PROXY_ON: string = 'proxy_enabled';
 
-/** 代理配置（空 host = 未启用）。 */
+/** 旧形状：一份代理（空 host = 未启用）。 */
 export class AppProxyConfig {
   host: string = '';
   port: number = 0;
@@ -34,7 +42,7 @@ export class AppProxyConfig {
     return this.host.length > 0 && this.port > 0;
   }
 
-  /** 一行摘要（设置页显示 / 日志用；**不打印密码**）。 */
+  /** 一行摘要（日志/展示用；**不打印密码**）。 */
   summary(): string {
     if (!this.enabled()) {
       return '未启用';
@@ -44,38 +52,155 @@ export class AppProxyConfig {
   }
 }
 
-export class AppProxy {
-  /** 当前配置（内存镜像，AppSettings 里是持久层）。 */
-  private static current: AppProxyConfig = new AppProxyConfig();
+/** 新形状：带别名的一份代理。 */
+export class ProxyEntry {
+  /** 别名（设置页下拉里显示的名字）。 */
+  name: string = '';
+  host: string = '';
+  port: number = 0;
+  username: string = '';
+  password: string = '';
 
-  /** 从持久层读回并应用（冷启动时调一次）。 */
+  enabled(): boolean {
+    return this.host.length > 0 && this.port > 0;
+  }
+
+  summary(): string {
+    if (!this.enabled()) {
+      return '未填写完整';
+    }
+    const auth: string = this.username.length > 0 ? '（含认证）' : '';
+    return `${this.host}:${this.port}${auth}`;
+  }
+}
+
+/** 落盘用的扁平行（ArkTS 不允许无类型对象字面量）。 */
+class ProxyRow {
+  name: string = '';
+  host: string = '';
+  port: number = 0;
+  username: string = '';
+  password: string = '';
+}
+
+export class AppProxy {
+  /** 旧 UI 的内存镜像。 */
+  private static singleConfig: AppProxyConfig = new AppProxyConfig();
+  /** 新 UI：列表 / 选中下标 / 总开关。 */
+  private static entries: Array<ProxyEntry> = [];
+  private static activeIndexValue: number = -1;
+  private static enabledFlag: boolean = false;
+
+  /** 冷启动：读回两种形状，并把"该生效的那份"落到系统接口。 */
   static restoreAndApply(): void {
-    const config: AppProxyConfig = AppProxy.load();
-    AppProxy.current = config;
+    AppProxy.loadEntries();
+    const config: AppProxyConfig = AppProxy.loadSingle();
+    AppProxy.singleConfig = config;
+    // 新形状有选中项时优先按它应用（新 UI 是后续方向）。
+    const entry: ProxyEntry | null = AppProxy.currentEntry();
+    if (AppProxy.enabledFlag && entry !== null) {
+      AppProxy.applyEntry(entry);
+      return;
+    }
     AppProxy.apply(config);
   }
 
+  // ---------------- 旧接口（单份代理） ----------------
+
   static config(): AppProxyConfig {
-    return AppProxy.current;
+    return AppProxy.singleConfig;
   }
 
-  /**
-   * 保存并**立即应用**（不需要重启 App）。
-   *
-   * @returns 是否真的应用成功（false = 参数不合法或系统接口报错）。
-   */
   static save(config: AppProxyConfig): boolean {
-    AppProxy.current = config;
-    AppProxy.persist(config);
+    AppProxy.singleConfig = config;
+    AppProxy.persistSingle(config);
     return AppProxy.apply(config);
   }
 
-  /** 关闭代理并清除持久化里的地址（保留历史输入由 UI 决定）。 */
   static disable(): boolean {
     const empty: AppProxyConfig = new AppProxyConfig();
-    AppProxy.current = empty;
-    AppProxy.persist(empty);
+    AppProxy.singleConfig = empty;
+    AppProxy.persistSingle(empty);
+    AppProxy.enabledFlag = false;
+    AppStorage.setOrCreate(PROXY_ON, false);
     return AppProxy.apply(empty);
+  }
+
+  // ---------------- 新接口（多份代理 + 下拉） ----------------
+
+  /** 已保存的代理（按保存顺序）。 */
+  static list(): Array<ProxyEntry> {
+    return AppProxy.entries;
+  }
+
+  /** 当前选中的下标（-1 = 没有）。 */
+  static activeIndex(): number {
+    return AppProxy.activeIndexValue;
+  }
+
+  /** 总开关现在是不是开着。 */
+  static enabled(): boolean {
+    return AppProxy.enabledFlag;
+  }
+
+  /** 当前选中的那一份（没有则 null）。 */
+  static currentEntry(): ProxyEntry | null {
+    if (AppProxy.activeIndexValue < 0 || AppProxy.activeIndexValue >= AppProxy.entries.length) {
+      return null;
+    }
+    return AppProxy.entries[AppProxy.activeIndexValue];
+  }
+
+  /** 添加一份：自动成为选中项；开关已开时立即生效。 */
+  static add(entry: ProxyEntry): boolean {
+    if (!entry.enabled()) {
+      return false;
+    }
+    AppProxy.entries.push(entry);
+    AppProxy.activeIndexValue = AppProxy.entries.length - 1;
+    AppProxy.persistEntries();
+    if (AppProxy.enabledFlag) {
+      AppProxy.applyEntry(entry);
+    }
+    return true;
+  }
+
+  /** 选中第 index 份。 */
+  static select(index: number): boolean {
+    if (index < 0 || index >= AppProxy.entries.length) {
+      return false;
+    }
+    AppProxy.activeIndexValue = index;
+    AppProxy.persistEntries();
+    if (AppProxy.enabledFlag) {
+      return AppProxy.applyEntry(AppProxy.entries[index]);
+    }
+    return true;
+  }
+
+  /** 打开/关闭总开关（开启时必须有选中的代理）。 */
+  static setEnabled(value: boolean): boolean {
+    const entry: ProxyEntry | null = AppProxy.currentEntry();
+    if (value && entry === null) {
+      return false;
+    }
+    AppProxy.enabledFlag = value;
+    AppStorage.setOrCreate(PROXY_ON, value);
+    if (!value) {
+      return AppProxy.apply(new AppProxyConfig());
+    }
+    return entry === null ? false : AppProxy.applyEntry(entry);
+  }
+
+  // ---------------- 内部 ----------------
+
+  private static applyEntry(entry: ProxyEntry): boolean {
+    const config: AppProxyConfig = new AppProxyConfig();
+    config.host = entry.host;
+    config.port = entry.port;
+    config.username = entry.username;
+    config.password = entry.password;
+    return AppProxy.apply(config);
   }
 
   private static apply(config: AppProxyConfig): boolean {
@@ -105,15 +230,14 @@ export class AppProxy {
     }
   }
 
-  /** 落盘（当前用 AppStorage；接 preferences 时只改这一个方法）。 */
-  private static persist(config: AppProxyConfig): void {
+  private static persistSingle(config: AppProxyConfig): void {
     AppStorage.setOrCreate(PROXY_HOST, config.host);
     AppStorage.setOrCreate(PROXY_PORT, config.port);
     AppStorage.setOrCreate(PROXY_USER, config.username);
     AppStorage.setOrCreate(PROXY_PASS, config.password);
   }
 
-  private static load(): AppProxyConfig {
+  private static loadSingle(): AppProxyConfig {
     const config: AppProxyConfig = new AppProxyConfig();
     const host: string | undefined = AppStorage.get<string>(PROXY_HOST);
     const port: number | undefined = AppStorage.get<number>(PROXY_PORT);
@@ -125,5 +249,47 @@ export class AppProxy {
     config.password = pass === undefined ? '' : pass;
     return config;
   }
-}
 
+  private static persistEntries(): void {
+    const plain: Array<ProxyRow> = [];
+    for (let i: number = 0; i < AppProxy.entries.length; i++) {
+      const one: ProxyEntry = AppProxy.entries[i];
+      const row: ProxyRow = new ProxyRow();
+      row.name = one.name;
+      row.host = one.host;
+      row.port = one.port;
+      row.username = one.username;
+      row.password = one.password;
+      plain.push(row);
+    }
+    AppStorage.setOrCreate(PROXY_LIST, JSON.stringify(plain));
+    AppStorage.setOrCreate(PROXY_ACTIVE, AppProxy.activeIndexValue);
+  }
+
+  private static loadEntries(): void {
+    const out: Array<ProxyEntry> = [];
+    const raw: string | undefined = AppStorage.get<string>(PROXY_LIST);
+    if (raw !== undefined && raw.length > 0) {
+      try {
+        const plain: Array<ProxyRow> = JSON.parse(raw) as Array<ProxyRow>;
+        for (let i: number = 0; i < plain.length; i++) {
+          const row: ProxyRow = plain[i];
+          const one: ProxyEntry = new ProxyEntry();
+          one.name = row.name;
+          one.host = row.host;
+          one.port = row.port;
+          one.username = row.username;
+          one.password = row.password;
+          out.push(one);
+        }
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'proxy list parse failed');
+      }
+    }
+    AppProxy.entries = out;
+    const active: number | undefined = AppStorage.get<number>(PROXY_ACTIVE);
+    AppProxy.activeIndexValue = active === undefined ? -1 : active;
+    const enabled: boolean | undefined = AppStorage.get<boolean>(PROXY_ON);
+    AppProxy.enabledFlag = enabled === undefined ? false : enabled;
+  }
+}
