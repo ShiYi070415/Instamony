@@ -235,6 +235,9 @@ export struct SettingsPanel {
         .padding({ left: CARD_ROW_PADDING, right: 8 })
       }
       .width('100%')
+
+      // **卡片结尾的描述**（与"诊断"分类同款）：讲清作用范围与生效方式。
+      this.groupHint($r('app.string.settings_proxy_hint'))
     }
     .width('100%')
     // 整块用本页统一的卡片边框包裹（需求：和其它设置项一样用 border，不用沉浸光感）。

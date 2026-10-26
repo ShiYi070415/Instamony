@@ -949,5 +949,7 @@
     {"name": "settings_proxy_add", "value": "添加"}
 ,
     {"name": "settings_group_proxy", "value": "代理"}
+,
+    {"name": "settings_proxy_hint", "value": "代理只作用于本 App 的网络请求，保存后立即生效；关闭开关即恢复直连"}
 ]
 }
