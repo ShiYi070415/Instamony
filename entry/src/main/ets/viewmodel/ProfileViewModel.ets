@@ -1404,8 +1404,8 @@ export class ProfileViewModel {
   /**
    * 精选快拍（个人页高光那排）的加载入口与结果。
    *
-   * 只对**本人**页面拉（别人的主页这一版不做高光）；一发 `highlights_tray/<pk>/`，
-   * 失败就保持空（界面上那一排只留「+ 新」那颗，不报错）。
+   * **本人和别人主页都拉**（需求：其他用户主页也要有 highlight 列表）；一发
+   * `highlights_tray/<pk>/`，失败就保持空（界面那一排不报错）。
    */
   onHighlights: (items: Array<ProfileHighlight>) => void = (items: Array<ProfileHighlight>): void => {
   };
@@ -1418,11 +1418,21 @@ export class ProfileViewModel {
     return this.highlightItems;
   }
 
-  private async loadHighlights(): Promise<void> {
-    if (!this.target.isSelf()) {
-      return;
+  /** 这一页高光的主人 id（本人取 selfId，别人取 target 的 id）。 */
+  private highlightsOwnerId(): string {
+    if (this.target.isSelf()) {
+      return this.selfId.length > 0 ? this.selfId : NativeProfile.ownIdCached();
     }
-    const uid: string = this.selfId.length > 0 ? this.selfId : NativeProfile.ownIdCached();
+    return this.target.id;
+  }
+
+  private async loadHighlights(): Promise<void> {
+    /*
+     * 用**这个主页主人的 id**：本人页就是 selfId，别人页是 target 带的 id。
+     * 以前这里直接 `if (!target.isSelf()) return` 把别人页整条跳过了 —— 于是别人主页
+     * 永远没有高光（界面那一排是空的）。
+     */
+    const uid: string = this.highlightsOwnerId();
     if (uid.length === 0 || this.highlightsFor === uid) {
       return;
     }
@@ -1442,7 +1452,7 @@ export class ProfileViewModel {
 
   /** 这一发回来时账号是不是已经换了（换了就丢掉，别把上一个人的高光画上去）。 */
   private staleOfHighlights(uid: string): boolean {
-    const now: string = this.selfId.length > 0 ? this.selfId : NativeProfile.ownIdCached();
+    const now: string = this.highlightsOwnerId();
     return now !== uid;
   }
 
