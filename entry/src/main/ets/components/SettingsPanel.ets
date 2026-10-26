@@ -47,6 +47,8 @@ import {
   SETTING_VIDEO_QUALITY
 } from '../core/AppSettings';
 import { MATERIAL_PILL_HEIGHT, MaterialIconButton, SelectSurfaceModifier, SurfaceModifier } from './MaterialSurface';
+// 半模态的系统材质（SheetOptions.systemMaterial，API 26+）。
+import { uiMaterial } from '@kit.ArkUI';
 // 应用级代理（设置页的数据与生效逻辑，见 core/AppProxy）。
 import { AppProxy, ProxyEntry } from '../core/AppProxy';
 import { PlatformCap } from '../core/PlatformCap';
@@ -242,23 +244,16 @@ export struct SettingsPanel {
     .width('100%')
     // 整块用本页统一的卡片边框包裹（需求：和其它设置项一样用 border，不用沉浸光感）。
     .cardStyle()
-    .bindSheet($$this.proxySheet, this.proxyAddSheet(), {
-      /*
-       * **交回系统原生半模态外观**（"华为那种"）。
-       *
-       * 之前为了让面板"深色模糊 + 自绘关闭按钮"，把 showClose 关掉、内容上自己铺了一层
-       * backgroundColor + backgroundBlurStyle —— 那是"自绘面板"，和系统面板的圆角、拖拽条、
-       * 遮罩、动效都不一致。这里全部交回系统：
-       *   · dragBar = true      → 顶部那条可拖拽指示条（原生标志）；
-       *   · showClose = true    → 系统右上角关闭按钮；
-       *   · 底色/模糊/圆角/遮罩 → 用系统默认，不再覆盖。
-       * 代价：系统关闭按钮加不了沉浸光感材质（材质只对 Toggle/Slider/Select 生效），
-       * 这是"要原生外观"必然的取舍。
-       */
-      height: SheetSize.MEDIUM,
-      dragBar: true,
-      showClose: true
-    })
+        /*
+     * **半模态外观**：系统原生面板 + 系统沉浸光感材质（见 proxySheetOptions）。
+     *
+     * 文档（半模态转场 · SheetOptions）里有两档做法：
+     *   · `blurStyle`：只给面板加模糊；
+     *   · `systemMaterial`（API 26 起）：`uiMaterial.ImmersiveMaterial`，**这才是沉浸光感**，
+     *     而且圆角/拖拽条/遮罩/动效仍是原生的 —— 正好是"华为那种 + 光感"。
+     * 低版本设备拿不到 systemMaterial，退回厚模糊（观感接近）。
+     */
+    .bindSheet($$this.proxySheet, this.proxyAddSheet(), this.proxySheetOptions())
     .onAppear((): void => {
       this.refreshProxyNames();
     })
@@ -295,6 +290,35 @@ export struct SettingsPanel {
     this.draftUser = '';
     this.draftPass = '';
     this.proxySheet = true;
+  }
+
+  /**
+   * 半模态的外观：**系统原生面板 + 系统沉浸光感材质**。
+   *
+   * 文档（半模态转场 · SheetOptions）：
+   *   · `blurStyle`：面板背景模糊强度（默认无模糊）；
+   *   · `systemMaterial`（API 26 起）：`uiMaterial.ImmersiveMaterial` —— **这才是"沉浸光感"**，
+   *     由系统给面板本体上材质，圆角/拖拽条/遮罩/动效仍是原生的，等于"原生外观 + 光感"。
+   *     低版本设备拿不到这个字段，退回 `blurStyle` 的厚模糊，观感接近。
+   *
+   * 注意：文档明确 systemMaterial 不要和 backgroundColor / borderWidth / shadow 一起用
+   * （会被覆盖或显示不符预期），所以开了材质时背景给透明。
+   */
+  private proxySheetOptions(): SheetOptions {
+    const options: SheetOptions = {
+      height: SheetSize.MEDIUM,
+      dragBar: true,
+      showClose: true
+    };
+    if (PlatformCap.hasArkMaterial()) {
+      options.systemMaterial = new uiMaterial.ImmersiveMaterial({
+        style: uiMaterial.ImmersiveStyle.ULTRA_THIN
+      });
+      options.backgroundColor = Color.Transparent;
+    } else {
+      options.blurStyle = BlurStyle.COMPONENT_THICK;
+    }
+    return options;
   }
 
   /** 半模态：添加代理（标题 + 右上角关闭 + 交叉排布的文本/输入 + 添加）。 */
