@@ -485,7 +485,7 @@ export class NativeSearch {
      * 一个都没命中就是 0，界面按 0 把那颗数字整颗不画（见 model/MediaPost.shareCount）。
      */
     const shareCount: number = NativeSearch.firstCount(node, ['share_count', 'shares_count',
-      'media_share_count']);
+      'media_share_count', 'reshare_count']);
     const saveCount: number = NativeSearch.firstCount(node, ['save_count', 'saves_count',
       'media_save_count']);
     return new SearchPost(code, picked.url, picked.width, picked.height, videos.length > 0,

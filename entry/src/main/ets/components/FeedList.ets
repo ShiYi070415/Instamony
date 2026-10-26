@@ -658,7 +658,8 @@ struct PostActions {
       Button() {
         Row({ space: 4 }) {
           SaveIcon({ saved: this.ui.saved, iconSize: ICON_BOOKMARK })
-          if (this.ui.saveCount > 0) {
+          // **需求：feeds 流不显示收藏数**（IG 前端也不画；载荷里的 save_count 仍然解析、只是不上屏）。
+      if (false && this.ui.saveCount > 0) {
             Text(countText(this.ui.saveCount))
               .fontSize(13)
               .fontWeight(FontWeight.Medium)

@@ -690,7 +690,7 @@ export class NativeTimelineParser {
       media.reshare_count, media.reshares_count
     ]);
     const share: number = NativeTimelineParser.firstCount([
-      media.share_count, media.shares_count, media.media_share_count,
+      media.share_count, media.shares_count, media.media_share_count, media.reshare_count,
       // GraphQL 老形状：分享数包在 `edge_media_to_share { count }` 里（见 IgCountEdge）。
       NativeTimelineParser.edgeCount(media.edge_media_to_share)
     ]);

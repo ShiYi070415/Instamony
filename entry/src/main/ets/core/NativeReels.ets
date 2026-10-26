@@ -115,6 +115,8 @@ interface IgClipsMedia {
   share_count?: number | null;
   shares_count?: number | null;
   media_share_count?: number | null;
+  /** IG 公开载荷里真实存在的"转发/分享"计数（见取证文件：clips 里出现过 12307）。 */
+  reshare_count?: number | null;
   /**
    * "关闭分享"的**开关**，不是计数（布尔值）；列在这里只是提醒别把它当成数。
    */
@@ -1061,7 +1063,7 @@ export class NativeReels {
      * 猜出来的数字是假的，而 0 的语义是"数据源没说"。
      */
     const share: number = NativeReels.firstCount([
-      media.share_count, media.shares_count, media.media_share_count,
+      media.share_count, media.shares_count, media.media_share_count, media.reshare_count,
       NativeReels.edgeCount(media.edge_media_to_share)
     ]);
     const save: number = NativeReels.firstCount([
