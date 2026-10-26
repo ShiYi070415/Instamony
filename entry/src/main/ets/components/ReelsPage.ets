@@ -19,7 +19,11 @@ import { display } from '@kit.ArkUI';
 import { Reel, ReelStreamVm } from '../model/Reel';
 import { ReelsViewModel } from '../viewmodel/ReelsViewModel';
 import { VideoSurface } from './VideoSurface';
-import { MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS, SETTING_VIDEO_MUTED } from '../core/AppSettings';
+import {
+  MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS,
+  // 画面亮度结论（官方「叠字反色」那套的输入，见 BackdropTone）：ReelOverlay 的前景色跟着它翻。
+  SETTING_OVERLAY_BACKDROP_LIGHT, SETTING_VIDEO_MUTED
+} from '../core/AppSettings';
 import { ReelsAction } from '../core/ReelsAction';
 import {
   MaterialIconButton, MaterialLabelButton, SurfaceModifier, trackMaterialTouch
@@ -314,6 +318,27 @@ struct ReelOverlay {
    * 天然同步；而且这两层本来就是"钉在屏幕底部"的浮层，挪一段最省事。
    */
   @Prop overlaySink: number = 0;
+  /**
+   * **背景反色**：官方那套"叠在画面上时的前景色自动反色"（见 core/BackdropTone）。
+   *
+   * 做法和首页 FeedList 完全一致：BackdropTone 每秒对当前画面采样一次平均亮度，
+   * 只把结论（亮底 / 暗底）写进 AppStorage，这里用 @StorageProp 订阅 —— 于是
+   *   · 暗底：正文 **白**、次要文字 **浅灰**（#BFBFBF）；
+   *   · 亮底：正文 **黑**、次要文字 **灰**（#8A8A8A）。
+   * 正好是需求要的那两组对立色（白↔黑、灰↔浅灰），而不是跟主题走（主题是"界面底色"的事，
+   * 这里压着的是一张随时在变的视频画面）。
+   */
+  @StorageProp(SETTING_OVERLAY_BACKDROP_LIGHT) backdropLight: boolean = false;
+
+  /** 正文/主图标的前景色（反色）。 */
+  private primaryInk(): ResourceColor {
+    return this.backdropLight ? '#000000' : '#FFFFFF';
+  }
+
+  /** 次要文字的前景色（反色：灰 ↔ 浅灰）。 */
+  private secondaryInk(): ResourceColor {
+    return this.backdropLight ? '#8A8A8A' : '#BFBFBF';
+  }
   /**
    * 信息层（作者行 / 关注按钮 / 正文）的**底部留白**（vp；0 = 用默认 INFO_BOTTOM）。
    *
@@ -807,9 +832,9 @@ struct ReelOverlay {
         if (this.captionExpanded) {
           Text() {
             Span(this.captionTranslation.length > 0 ? this.captionTranslation : this.reel.caption)
-              .fontColor(Color.White)
+              .fontColor(this.primaryInk())
             Span(CAPTION_LESS)
-              .fontColor('#BFBFBF')
+              .fontColor(this.secondaryInk())
           }
           .fontSize(CAPTION_FONT_SIZE)
           .lineHeight(CAPTION_LINE_HEIGHT)
@@ -824,11 +849,11 @@ struct ReelOverlay {
           Text() {
             Span(this.prefixOfText(this.captionTranslation.length > 0
               ? this.captionTranslation : this.reel.caption))
-              .fontColor(Color.White)
+              .fontColor(this.primaryInk())
             if (this.textTruncated(this.captionTranslation.length > 0
               ? this.captionTranslation : this.reel.caption)) {
               Span(CAPTION_MORE)
-                .fontColor('#BFBFBF')
+                .fontColor(this.secondaryInk())
             }
           }
           .fontSize(CAPTION_FONT_SIZE)
@@ -850,9 +875,9 @@ struct ReelOverlay {
         // 展开态：全文 + 结尾灰色的" 收起"。行数不设限 —— 展开就是为了看全。
         Text() {
           Span(this.reel.caption)
-            .fontColor(Color.White)
+            .fontColor(this.primaryInk())
           Span(CAPTION_LESS)
-            .fontColor('#BFBFBF')
+            .fontColor(this.secondaryInk())
         }
         .fontSize(CAPTION_FONT_SIZE)
         .lineHeight(CAPTION_LINE_HEIGHT)
@@ -867,10 +892,10 @@ struct ReelOverlay {
         // 折叠态：正文（最多两行）+ 结尾灰色的" ... 展开"。
         Text() {
           Span(this.captionPrefix())
-            .fontColor(Color.White)
+            .fontColor(this.primaryInk())
           if (this.captionTruncated()) {
             Span(CAPTION_MORE)
-              .fontColor('#BFBFBF')
+              .fontColor(this.secondaryInk())
           }
         }
         .fontSize(CAPTION_FONT_SIZE)
@@ -970,7 +995,7 @@ struct ReelOverlay {
         if (this.reel.likeCount > 0) {
           Text(this.countText(this.reel.likeCount))
             .fontSize(11)
-            .fontColor(Color.White)
+            .fontColor(this.primaryInk())
             .maxLines(1)
         }
       }
@@ -991,7 +1016,7 @@ struct ReelOverlay {
         if (this.reel.commentCount > 0) {
           Text(this.countText(this.reel.commentCount))
             .fontSize(11)
-            .fontColor(Color.White)
+            .fontColor(this.primaryInk())
             .maxLines(1)
         }
       }
@@ -1013,7 +1038,7 @@ struct ReelOverlay {
         if (this.reel.repostCount > 0) {
           Text(this.countText(this.reel.repostCount))
             .fontSize(11)
-            .fontColor(Color.White)
+            .fontColor(this.primaryInk())
             .maxLines(1)
         }
       }
@@ -1602,6 +1627,14 @@ export struct ReelsPage {
        */
       .width('calc(100% - 32vp)')
       .borderRadius(16)
+      /*
+       * **边缘阴影**（需求：视频卡片要有一圈外阴影 —— 卡片浮在模糊背景上，边界才立得住）。
+       *
+       * 参数理由：半径 24 / 下移 10 是"看得出投影但不脏"的一档（再大就在模糊背景上糊成一片黑边）；
+       * 颜色用 40% 黑，深色夜景视频上不会显出一条灰边。
+       * 顺序上放在 `.clip(true)` **之前**没影响：clip 裁的是内容，阴影画在盒子之外。
+       */
+      .shadow({ radius: 24, color: '#66000000', offsetX: 0, offsetY: 10 })
       .aspectRatio(this.videoAspect(reel))
       /*
        * **画面高度上限 90%**：让背景在上下各露出约 5%（留出来的是高模糊封面，不是黑边）。
