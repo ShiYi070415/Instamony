@@ -391,6 +391,16 @@ struct ReelSlide {
    * 与其和 ArkUI 的重建机制拔河，不如记住位置、恢复时 seek 回去。
    */
   private lastPosMs: number = 0;
+  /**
+   * **播放器一旦挂上就不再摘**（锁存）。
+   *
+   * 官方文档（AVPlayer.surfaceId）：初始化后可以在 prepared/playing/paused 状态下**重新设置**，
+   * 重新设置后视频在**新窗口**渲染 —— 也就是说 XComponent 一被重建，播放位置就回 0。
+   * 而真机探针证实暂停/恢复时 `VideoSurface` 被反复 teardown/create：那是上面这个 if 分支
+   * 在"playing / paused"之间翻转、把整棵子树摘掉再建回来。锁存之后分支只进不出，
+   * 播放器与表面都不再重建 —— 这是"暂停后重头播"的根因修法（不是记住位置再回传）。
+   */
+  private mountedOnce: boolean = false;
   /** 原生触摸：按下时刻（毫秒）、长按是否已成立、长按定时器句柄（见 onRawTouch）。 */
   private rawDownMs: number = 0;
   private rawHoldFired: boolean = false;
@@ -718,6 +728,13 @@ struct ReelSlide {
    * 播放器挂好之后会 seek 到那个位置，用户看到的就是"接着播"。
    * 暂停沿只记一次位置（避免把已经停在的位置又往前推）。
    */
+  /** 一旦这一条成为"该播的"就锁住挂载（见 mountedOnce）。 */
+  private latchMount(): void {
+    if (!this.mountedOnce && (this.playing || this.preload)) {
+      this.mountedOnce = true;
+    }
+  }
+
   private onPauseEdge(): void {
     const paused: boolean = this.hostPaused || this.hostHold;
     if (paused) {
@@ -882,7 +899,7 @@ struct ReelSlide {
           .height('100%')
           .objectFit(ImageFit.Contain)
         if (this.reel.playable()
-          && (this.playing || this.preload || this.hostPaused || this.hostHold)) {
+          && (this.playing || this.preload || this.hostPaused || this.hostHold || this.mountedOnce)) {
           // 播放器换成 AVPlayer + XComponent 的共用组件，理由见 VideoSurface 的说明：
           // 它能在 prepare 阶段就把首帧送到表面上（showFirstFrameOnPrepare），
           // 所以下面那层封面是在"首帧真的上屏"之后才撤的，不再有黑闪。
