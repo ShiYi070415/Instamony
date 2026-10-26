@@ -1194,6 +1194,14 @@ struct ReelOverlay {
    */
   @StorageLink(REELS_CHROME_HIDDEN) @Watch('onChromeHiddenChanged') chromeHidden: boolean = false;
   /**
+   * 隐藏那一刻的"底栏下沉量"（冻结值）。
+   *
+   * 需求：隐藏动画要在**原地**淡出，不能先归位再消失。底栏下沉量是实时变化的，
+   * 隐藏期间继续跟随就会带着这一层上下游动（看起来像抽搐）；冻结住它，位移就不动了，
+   * 只剩透明度补间。
+   */
+  private frozenSink: number = -1;
+  /**
    * 信息层的实际透明度（0 = 藏起来）。
    *
    * 为什么不直接用 `opacity(this.chromeHidden ? 0 : 1)` + 通用 `.animation()`：那个属性动画
@@ -1306,7 +1314,16 @@ struct ReelOverlay {
    * —— 透明度是 `@State`，`animateTo` 会给它补间；位移那边跟着同一个 `chromeHidden` 变，属于
    * "布局属性瞬间变"，但只差 CHROME_SHIFT_VP 十几 vp，眼睛看着就是跟着淡出一起往下缩了一点。
    */
+  /** 隐藏中取冻结值；没冻结过就用当前值（首帧安全）。 */
+  private holdSinkNow(): number {
+    return this.frozenSink >= 0 ? this.frozenSink : this.overlaySink;
+  }
+
   private onChromeHiddenChanged(): void {
+    // 隐藏的那一刻把下沉量冻结住（见 frozenSink 的说明）。
+    if (this.chromeHidden) {
+      this.frozenSink = this.overlaySink;
+    }
     this.getUIContext().animateTo({ duration: CHROME_FADE_MS, curve: Curve.EaseOut }, (): void => {
       this.chromeAlpha = this.chromeHidden ? 0 : 1;
     });
@@ -1934,7 +1951,8 @@ struct ReelOverlay {
        * 而隐藏控件只该是一次性位移。两者相加会让这一层每帧都被底栏的中间值推着走 ——
        * 观感就是"卡"。所以隐藏期间位移只取 CHROME_SHIFT_VP，忽略 overlaySink。
        */
-      .translate({ y: this.chromeHidden ? CHROME_SHIFT_VP : this.overlaySink })
+      // 隐藏时位移**冻结**在隐藏那一刻（原地淡出）；显示时跟随底栏下沉。
+      .translate({ y: this.chromeHidden ? this.holdSinkNow() : this.overlaySink })
       // 隐藏全局控件：整块淡出（透明度由 @State + animateTo 补间）。
       .opacity(this.chromeAlpha)
       // 文字不吃手势：竖向滑动照旧交给 Swiper。
@@ -1968,7 +1986,8 @@ struct ReelOverlay {
        * 而隐藏控件只该是一次性位移。两者相加会让这一层每帧都被底栏的中间值推着走 ——
        * 观感就是"卡"。所以隐藏期间位移只取 CHROME_SHIFT_VP，忽略 overlaySink。
        */
-      .translate({ y: this.chromeHidden ? CHROME_SHIFT_VP : this.overlaySink })
+      // 隐藏时位移**冻结**在隐藏那一刻（原地淡出）；显示时跟随底栏下沉。
+      .translate({ y: this.chromeHidden ? this.holdSinkNow() : this.overlaySink })
       // 隐藏全局控件：整块淡出（和左边资讯区同一条曲线，见 onChromeHiddenChanged）。
       .opacity(this.chromeAlpha)
       // 不吃手势（按钮自己要能点，见 actionColumn 里的材质按钮）。
@@ -2777,7 +2796,11 @@ export struct ReelsPage {
              * 卡片内部（含压在 XComponent 上的命中层）收不到事件。延迟一个双击窗口再执行，
              * 否则双击会顺带把播放暂停掉（见 scheduleSingleTap）。 */
       TapGesture({ count: 1, distanceThreshold: DOUBLE_TAP_DISTANCE_VP })
-        .onAction((): void => {
+        .onAction((event: GestureEvent): void => {
+          // 资讯区 / 动作区上的单击不算画面手势（与长按同一套坐标判据，见 holdZoneHit）。
+          if (this.holdZoneHit(event)) {
+            return;
+          }
           this.scheduleSingleTap();
         }),
       /**
@@ -2811,6 +2834,26 @@ export struct ReelsPage {
    * 用一次长按 + 坐标判分域，而不是两条长按进并行组：并行组里两条都会成立，
    * 还得再写一套"谁优先"的排他逻辑，反而更容易出错。
    */
+  /**
+   * **这个落点是不是"资讯区 / 动作区"**（是则不该触发画面手势）。
+   *
+   * 单击与长按共用同一套判据：右侧动作栏一条 + 屏幕底部一段。
+   * 这样"按在信息上"和"按在画面上"才有一致的边界。
+   */
+  private holdZoneHit(event: GestureEvent): boolean {
+    const fingers: FingerInfo[] = event.fingerList;
+    if (fingers.length === 0) {
+      return false;
+    }
+    const gx: number = fingers[0].globalX;
+    const gy: number = fingers[0].globalY;
+    const inActionColumn: boolean = this.screenWidthVp > 0
+      && gx > this.screenWidthVp - ACTION_COLUMN_ZONE_VP;
+    const inInfoArea: boolean = this.screenHeightVp > 0
+      && gy > this.screenHeightVp * INFO_AREA_BOTTOM_RATIO;
+    return inActionColumn || inInfoArea;
+  }
+
   private pageHoldStart(event: GestureEvent): void {
     const fingers: Array<FingerInfo> = event.fingerList;
     const x: number = fingers.length > 0 ? fingers[0].globalX : -1;
@@ -2825,17 +2868,8 @@ export struct ReelsPage {
      *   · 屏幕底部一段（作者行 + 正文 + 底栏）→ 资讯区。
      * 两个阈值都取保守值，宁可少触发也不要误触发（画面主体仍在大片区域里）。
      */
-    const fingersForZone: FingerInfo[] = event.fingerList;
-    if (fingersForZone.length > 0) {
-      const gx: number = fingersForZone[0].globalX;
-      const gy: number = fingersForZone[0].globalY;
-      const inActionColumn: boolean = this.screenWidthVp > 0
-        && gx > this.screenWidthVp - ACTION_COLUMN_ZONE_VP;
-      const inInfoArea: boolean = this.screenHeightVp > 0
-        && gy > this.screenHeightVp * INFO_AREA_BOTTOM_RATIO;
-      if (inActionColumn || inInfoArea) {
-        return;
-      }
+    if (this.holdZoneHit(event)) {
+      return;
     }
     this.holdFired = true;
     if (side) {
