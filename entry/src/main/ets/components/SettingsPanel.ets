@@ -46,7 +46,7 @@ import {
   SETTING_MATERIAL_THICKNESS,
   SETTING_VIDEO_QUALITY
 } from '../core/AppSettings';
-import { MATERIAL_PILL_HEIGHT, SelectSurfaceModifier, SurfaceModifier } from './MaterialSurface';
+import { MATERIAL_PILL_HEIGHT, MaterialIconButton, SelectSurfaceModifier, SurfaceModifier } from './MaterialSurface';
 // 应用级代理（设置页的数据与生效逻辑，见 core/AppProxy）。
 import { AppProxy, ProxyEntry } from '../core/AppProxy';
 import { PlatformCap } from '../core/PlatformCap';
@@ -245,8 +245,8 @@ export struct SettingsPanel {
     .bindSheet($$this.proxySheet, this.proxyAddSheet(), {
       height: SheetSize.MEDIUM,
       dragBar: false,
-      showClose: true,
-      backgroundColor: Color.Transparent
+      // **关闭按钮自己画**（要用沉浸光感，系统那颗没法加材质）。
+      showClose: false
     })
     .onAppear((): void => {
       this.refreshProxyNames();
@@ -290,12 +290,26 @@ export struct SettingsPanel {
   @Builder
   proxyAddSheet() {
     Column({ space: 12 }) {
-      Text($r('app.string.settings_proxy_add_title'))
-        .fontSize(17)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.primary_text'))
-        .width('100%')
-        .textAlign(TextAlign.Start)
+      Row() {
+        Text($r('app.string.settings_proxy_add_title'))
+          .fontSize(17)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.primary_text'))
+        Blank()
+        // 右上角关闭：沉浸光感图标按钮（点它收起半模态）。
+        MaterialIconButton({
+          symbol: $r('sys.symbol.xmark'),
+          isOn: false,
+          autoInvert: false,
+          buttonSize: 36,
+          iconSize: 18,
+          onTap: (on: boolean): void => {
+            this.proxySheet = false;
+          }
+        })
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
 
       this.proxyInput($r('app.string.settings_proxy_name'), this.draftName, 'name')
       this.proxyInput($r('app.string.settings_proxy_host'), this.draftHost, 'host')
@@ -321,6 +335,14 @@ export struct SettingsPanel {
     }
     .width('100%')
     .padding({ left: 16, right: 16, top: 16, bottom: 20 })
+    /*
+     * **深色高斯模糊底**（原来透明，面板和背后的列表糊在一起看不清层级）。
+     * 写在内容容器上而不是 SheetOptions 里：当前 SDK 的 SheetOptions 不接受
+     * backgroundColor / backgroundBlurStyle 这两个字段。
+     */
+    .backgroundColor('#CC121212')
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+    .borderRadius({ topLeft: 20, topRight: 20 })
   }
 
   /** 一行输入：标题在上、输入框在下（"文本 / 输入框"交叉排布）。 */
@@ -332,13 +354,18 @@ export struct SettingsPanel {
         .fontColor($r('app.color.secondary_text'))
         .width('100%')
         .textAlign(TextAlign.Start)
-      TextInput({ text: value })
-        .width('100%')
-        .height(42)
-        .fontSize(15)
-        .borderRadius(12)
-        .backgroundColor($r('sys.color.comp_background_secondary'))
-        .onChange((text: string): void => {
+      /*
+       * **沉浸光感胶囊**：材质只能由 Toggle 承载（官方生效范围），所以输入框套在
+       * Toggle(Button) 里、自身透明 —— 胶囊的圆角/材质由外层给。
+       */
+      Toggle({ type: ToggleType.Button, isOn: false }) {
+        TextInput({ text: value })
+          .width('100%')
+          .height(42)
+          .fontSize(15)
+          .padding({ left: 14, right: 14 })
+          .backgroundColor(Color.Transparent)
+          .onChange((text: string): void => {
           if (which === 'name') {
             this.draftName = text;
           } else if (which === 'host') {
@@ -347,10 +374,18 @@ export struct SettingsPanel {
             this.draftPort = text;
           } else if (which === 'user') {
             this.draftUser = text;
-          } else {
-            this.draftPass = text;
-          }
-        })
+            } else {
+              this.draftPass = text;
+            }
+          })
+      }
+      .width('100%')
+      .height(42)
+      .padding(0)
+      .borderRadius(21)
+      .attributeModifier(new SurfaceModifier(this.materialThickness, true))
+      .onChange((): void => {
+      })
     }
     .width('100%')
   }
