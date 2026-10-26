@@ -175,6 +175,9 @@ export const REELS_SEEK_DX: string = 'reels_seek_dx';
 export const REELS_SEEK_TARGET: string = 'reels_seek_target';
 /** 点正中"继续"按钮时递增的计数（见 ReelSlide.pauseButton）。 */
 export const REELS_RESUME_TICK: string = 'reels_resume_tick';
+/** 单击画面切换暂停：tick 触发 + wanted 目标值（**只有当前这一条**消费它）。 */
+export const REELS_PAUSE_TICK: string = 'reels_pause_tick';
+export const REELS_PAUSED: string = 'reels_paused';
 export const REELS_CHROME_HIDDEN: string = 'reels_chrome_hidden';
 
 /**
@@ -953,6 +956,7 @@ struct ReelSlide {
          */
         this.userPaused = false;
         this.holdPaused = false;
+        AppStorage.setOrCreate(REELS_PAUSED, false);
         AppStorage.setOrCreate(REELS_RESUME_TICK, Date.now());
       }
     })
@@ -1021,7 +1025,7 @@ struct ReelSlide {
              * 只是 `pause()`；恢复时 `play()`，位置因此不会回到 0。
              * 用户单击 / 长按 / 页面级暂停四个来源在这里汇总。
              */
-            paused: this.userPaused || this.holdPaused || this.hostPaused || this.hostHold,
+            paused: this.userPaused || this.holdPaused || this.hostHold,
             segment: this.segment,
             preload: this.preload,
             muted: this.muted,
@@ -1112,8 +1116,7 @@ struct ReelSlide {
        * 而且节点不在树上时**不占触摸**（常驻改 opacity 的话它虽然看不见，照样要小心命中区域）。
        * 它自己不吃触摸（见 pauseButton 的说明），点它 = 点画面 = 继续播放。
        */
-      if (this.playing && this.reel.playable()
-        && (this.userPaused || this.hostPaused)) {
+      if (this.playing && this.reel.playable() && this.userPaused) {
         this.pauseButton()
       }
 
@@ -3043,7 +3046,16 @@ export struct ReelsPage {
     }
     this.singleTapTimer = setTimeout((): void => {
       this.singleTapTimer = -1;
+      /*
+       * **指令化**：暂停状态只属于"当前这一条"。
+       *
+       * 以前这里直接翻页面级 pagePaused，而它是所有 slide 共享的 —— 于是暂停按钮会
+       * 同时出现在别的视频上（它们只是"不是当前条"而已）。现在只发一条指令，
+       * 由**当前条自己**落到本地 userPaused（见 ReelSlide.onPauseTick）。
+       */
       this.pagePaused = !this.pagePaused;
+      AppStorage.setOrCreate(REELS_PAUSED, this.pagePaused);
+      AppStorage.setOrCreate(REELS_PAUSE_TICK, Date.now());
     }, SINGLE_TAP_DELAY_MS);
   }
 
@@ -3056,6 +3068,7 @@ export struct ReelsPage {
   /** 正中继续按钮被点：解掉页面级暂停（只影响当前这条）。 */
   private onResumeTap(): void {
     this.pagePaused = false;
+    AppStorage.setOrCreate(REELS_PAUSED, false);
     this.pageHold = false;
   }
 
