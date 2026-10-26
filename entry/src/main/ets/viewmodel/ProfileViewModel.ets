@@ -305,6 +305,8 @@ export class ProfileViewModel {
   /** 做没做过"后台预取另外三个分页"（只做一次）。 */
   /** 媒体的全分页预加载**正在跑**（见 preloadAllSegments，防重入）。 */
   private precaching: boolean = false;
+  /** 其余分段的"第一页预取"是否在跑（B1：提前到 load 入口，避免重复排队）。 */
+  private prefetchingOthers: boolean = false;
   /** 已经为哪些媒体 id 试过补封面了（见 backfillVideoCovers：同一个 id 只试一次）。 */
   private coverTried: Array<string> = [];
   /** 这一轮是不是靠"真的打开一次网页"换来的数据（状态行据此措辞）。 */
@@ -679,6 +681,23 @@ export class ProfileViewModel {
      */
     this.loadHighlights().catch((): void => {
     });
+    /*
+     * **其余分段的第一页也提前开跑**（B1 批次：只等当前段）。
+     *
+     * 原来这条排在"当前段首屏回来之后"（见 prefetchOthersSequential 的调用点），
+     * 于是切段时那一段往往还在排队 —— 用户看到的是"切过去再转一次圈"。
+     *
+     * 为什么仍然**串行**（不改成并发）：真机上四条重查询并发会互相插队，反而更慢
+     * （见 prefetchOthersSequential 的注释）。这里只是把它**提前**到入口并发地"排上队"，
+     * UI 不等它，当前段一回来就能显示。
+     */
+    if (!this.prefetchingOthers) {
+      this.prefetchingOthers = true;
+      this.prefetchOthersSequential().catch((): void => {
+      }).then((): void => {
+        this.prefetchingOthers = false;
+      });
+    }
     try {
       // 本人：网格请求体的目标键也要回正（见 ensureOwnName），所以发请求前先落实"我是谁"。
       // 同样先确认这份本人状态属于当前账号（换账号后必须作废，见 ensureSelfScope）。
@@ -781,8 +800,14 @@ export class ProfileViewModel {
       this.backfillVideoCovers(tab);
       // 首屏到手之后：① 顺手把另外三个分页也备好（**顺序**拉，模板已有的才拉，
       //    见 prefetchOthersSequential）；② 把本分页的**下一页**也预取上（需求："缓存页加载"）。
-      this.prefetchOthersSequential().catch((): void => {
-      });
+      // 兜底再排一次（幂等：已 loaded/loading 的分段会直接跳过；正常情况下入口那次已排上）。
+      if (!this.prefetchingOthers) {
+        this.prefetchingOthers = true;
+        this.prefetchOthersSequential().catch((): void => {
+        }).then((): void => {
+          this.prefetchingOthers = false;
+        });
+      }
       this.prefetchNext(tab);
       // 精选快拍（高光）：首屏之后的那一发保留（缓存未命中时这里才真正走网络）。
     } catch (error) {
