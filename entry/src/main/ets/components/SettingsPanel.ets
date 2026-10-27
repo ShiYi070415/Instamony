@@ -48,7 +48,7 @@ import {
 } from '../core/AppSettings';
 import { MATERIAL_PILL_HEIGHT, MaterialIconButton, SelectSurfaceModifier, SurfaceModifier } from './MaterialSurface';
 // 半模态的系统材质（SheetOptions.systemMaterial，API 26+）。
-import { curves, uiMaterial } from '@kit.ArkUI';
+import { curves, LengthMetrics, uiMaterial } from '@kit.ArkUI';
 // 应用级代理（设置页的数据与生效逻辑，见 core/AppProxy）。
 import { AppProxy, ProxyEntry } from '../core/AppProxy';
 import { PlatformCap } from '../core/PlatformCap';
@@ -124,8 +124,17 @@ const PROXY_CARD_ICON: number = 20;
  *
  * 半模态用的是 FIT_CONTENT（高度跟着内容走），代理一多会把底部按钮挤出屏幕 ——
  * 所以列表本身设一个上限，卡片再多也只是它自己滚。
+ * 取 420：四到六份代理都能**整屏放下、完全不滚动**（不滚动就不会有视口裁边），
+ * 再多的才进内部滚动。
  */
-const PROXY_MANAGE_LIST_MAX: number = 300;
+const PROXY_MANAGE_LIST_MAX: number = 420;
+/**
+ * 列表滚动边界的**渐隐长度**（vp）。
+ *
+ * 滚动视图的视口必然会裁掉越过边界的子节点（`clip` 是滚动容器的固有行为，padding 只能
+ * 保证"静止时"不被裁）。滚动中那一下硬切就用边缘渐隐盖住 —— 观感是"淡出"，不是被切一刀。
+ */
+const PROXY_FADE_LENGTH: number = 12;
 /**
  * 左滑露出的操作**圆形按钮**尺寸（需求："用圆形按钮 + sys.symbol 图标，图标白色"）。
  *
@@ -559,10 +568,18 @@ export struct SettingsPanel {
       }
       .width('100%')
       .constraintSize({ maxHeight: PROXY_MANAGE_LIST_MAX })
-      // 上下留白：见 PROXY_MANAGE_LIST_PAD（左滑时卡片上下边缘/阴影不再被 List 裁掉）。
+      // 上下留白：见 PROXY_MANAGE_LIST_PAD —— 静止时第一张/最后一张卡片和它们的阴影不会被切。
       .padding({ top: PROXY_MANAGE_LIST_PAD, bottom: PROXY_MANAGE_LIST_PAD })
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.None)
+      /*
+       * 滚动中的边界用**渐隐**代替硬切（见 PROXY_FADE_LENGTH）。
+       *
+       * 为什么光靠 padding 不够：滚动容器的视口天然会裁掉越过边界的子节点，padding 只解决
+       * "静止时"那一条；手指上下拽动让卡片滚出视口时，顶部/底部那一刀还在。渐隐把那一刀
+       * 变成"淡出"，观感上是滚出去的，而不是被切掉。
+       */
+      .fadingEdge(true, { fadingEdgeLength: LengthMetrics.vp(PROXY_FADE_LENGTH) })
 
       // 最底部：确定（和添加面板底部的「添加」同款沉浸光感文字按钮）。
       Toggle({ type: ToggleType.Button, isOn: false }) {
@@ -627,14 +644,11 @@ export struct SettingsPanel {
     })
   }
 
-  /** 列表末尾的「添加代理」卡片（同款圆角模糊底，内容用强调色区分）。 */
+  /** 列表末尾的「添加代理」卡片（同款圆角模糊底，文字用强调色；需求：去掉前面的 + 图标）。 */
   @Builder
   proxyManageAddCard() {
     Toggle({ type: ToggleType.Button, isOn: false }) {
-      Row({ space: 8 }) {
-        SymbolGlyph($r('sys.symbol.plus'))
-          .fontSize(16)
-          .fontColor([$r('app.color.accent')])
+      Row() {
         Text($r('app.string.settings_proxy_add'))
           .fontSize(15)
           .fontColor($r('app.color.accent'))
