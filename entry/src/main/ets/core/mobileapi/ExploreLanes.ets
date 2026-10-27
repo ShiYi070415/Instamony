@@ -29,6 +29,13 @@ const LANES: Array<string> = [EXPLORE_LANE_FEED, EXPLORE_LANE_REELS, EXPLORE_LAN
 const CLAIM_TTL_MS: number = 10 * 60 * 1000;
 /** 台账条目上限：到了就整体清一次（条目很小，不值得写 LRU）。 */
 const MAX_CLAIMS: number = 800;
+/**
+ * 去重之后至少剩这么多条才采用去重结果；不足就原样放行（见 claim）。
+ *
+ * 3 条 ≈ 半屏：低于这个数说明这一页基本都被别的入口拿走了，此时"不重复"不如
+ * "有内容"重要（尤其 Reels：过滤过头就是"下滑好久没有新视频"）。
+ */
+const MIN_KEEP_IDS: number = 3;
 
 export class ExploreLanes {
   /** key = `${lane}|${mediaId}` → 占住时刻（毫秒）。 */
@@ -59,7 +66,14 @@ export class ExploreLanes {
         kept.push(ids[index]);
       }
     }
-    const finalIds: Array<string> = kept.length === 0 ? ids : kept;
+    /*
+     * 去重之后剩得太少就**原样放行**。
+     *
+     * 三张入口同时在线时（首页推荐 + Reels + 搜索），一页里大半可能已经被别的入口拿走；
+     * 这时还硬去重，最直接的后果是 Reels 那侧"过滤完只剩一两条视频" —— 用户看到的
+     * 就是下滑之后半天没有新视频。宁可偶尔重复一条，也要保证每条入口都有货。
+     */
+    const finalIds: Array<string> = kept.length < MIN_KEEP_IDS ? ids : kept;
     for (let index: number = 0; index < finalIds.length; index++) {
       ExploreLanes.claims.set(`${lane}|${finalIds[index]}`, now);
     }

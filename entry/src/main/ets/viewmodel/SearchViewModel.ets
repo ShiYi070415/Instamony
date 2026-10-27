@@ -109,6 +109,10 @@ export class SearchViewModel {
    * 只存**一页**：第一页之外的页仍由 prefetchMore 排队，别把内存和请求密度一起放大。
    */
   private prefetchedFirst: SearchPostPage | null = null;
+  /** 刷新进行中（下拉刷新的重入闸，见 refresh）。 */
+  private refreshingRecommend: boolean = false;
+  /** 预取连续遇到"空页 / 回带页"的次数（见 prefetchMore）。 */
+  private prefetchSkips: number = 0;
 
   onUsers: (users: Array<SearchUser>) => void = (users: Array<SearchUser>): void => {
   };
@@ -232,19 +236,49 @@ export class SearchViewModel {
    * 回来时整页替换 —— 不会出现"新旧混排 / 旧内容还挂在下面"。
    */
   async refresh(): Promise<void> {
-    this.posts = [];
-    this.cursor = '';
-    this.hasMore = false;
-    this.prefetched = [];
-    this.prefetchedFirst = null;
-    this.recommendLoaded = false;
-    this.savedCount = 0;
-    // 缓存标记也复位：刷新失败时还允许它把落盘那份再铺一次（比空屏好）。
-    this.cacheTried = false;
-    this.onPosts(this.posts);
-    this.onMore(false);
+    if (this.refreshingRecommend) {
+      return;
+    }
+    this.refreshingRecommend = true;
     this.onStatus('正在刷新推荐…');
-    await this.loadRecommended();
+    try {
+      /*
+       * **保留当前内容，成功之后再覆盖**（需求："下拉刷新做成保留当前探索流，等成功刷新再覆盖新的"）。
+       *
+       * 所以这里**不先清空** anything：直接发第一页，回来了才整体替换；失败/超时就保持原样，
+       * 只在状态行留一句原因。用户下拉时看到的是"转圈 + 原来的瀑布流"，不会先白屏。
+       */
+      const page: SearchPostPage | null = await NativeSearch.recommendedPage('', EXPLORE_LANE_SEARCH);
+      if (page === null || page.posts.length === 0) {
+        this.onStatus('刷新失败：' + NativeSearch.lastDiag());
+        hilog.info(DOMAIN, TAG, 'refresh miss, keep %{public}d post(s)', this.posts.length);
+        return;
+      }
+      // ---- 成功：整页覆盖（游标/预取队列/首屏预加载都换成新的这一份）----
+      this.posts = page.posts;
+      this.cursor = page.cursor;
+      this.hasMore = page.hasMore;
+      this.prefetched = [];
+      this.prefetchedFirst = null;
+      this.recommendLoaded = true;
+      this.savedCount = this.posts.length;
+      this.onPosts(this.posts);
+      this.onMore(this.hasMore);
+      this.onStatus('');
+      if (page.source.indexOf('feed:') !== 0) {
+        SearchCache.savePage(this.posts, this.cursor, this.hasMore);
+      }
+      hilog.info(DOMAIN, TAG, 'refresh replaced n=%{public}d hasMore=%{public}s cursor=%{public}d',
+        this.posts.length, `${this.hasMore}`, this.cursor.length);
+      // 铺完接着预取下一页 + 补满一屏（和新进页面同一条收尾）。
+      this.prefetchMore();
+      this.fillGrid();
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'refresh threw: %{public}s', (error as Error).message);
+      this.onStatus('刷新出错');
+    } finally {
+      this.refreshingRecommend = false;
+    }
   }
 
   /**
@@ -465,11 +499,28 @@ export class SearchViewModel {
         return;
       }
       if (page.posts.length === 0) {
-        // 空页：后面确实没有了，别再翻（也免得队列里堆一串空页）。
-        this.hasMore = false;
-        this.onMore(false);
+        /*
+         * **空页不等于到底**（用户报："搜索探索流还是出现没有更多了"）。
+         *
+         * IG 会给"有游标但这一页没内容"的回带页；三条入口做了跨入口去重之后，
+         * 也可能出现"这页剩下的都给别人拿走了"。所以这里只在**游标没前进**（或连跳够了）
+         * 时才真的收手，否则顺着新游标继续预取。
+         */
+        const advanced: boolean = page.cursor.length > 0 && page.cursor !== cursor;
+        if (!advanced || this.prefetchSkips >= SKIP_DUP_PAGES) {
+          this.prefetchSkips = 0;
+          this.hasMore = false;
+          this.onMore(false);
+          return;
+        }
+        this.prefetchSkips++;
+        this.cursor = page.cursor;
+        hilog.info(DOMAIN, TAG, 'prefetch empty page, skip (cursor advanced, skip=%{public}d)',
+          this.prefetchSkips);
+        this.prefetchMore();
         return;
       }
+      this.prefetchSkips = 0;
       this.prefetched.push(page);
       hilog.info(DOMAIN, TAG, 'prefetch recommend n=%{public}d depth=%{public}d',
         page.posts.length, this.prefetched.length);

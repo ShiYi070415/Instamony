@@ -39,6 +39,13 @@ const NAV_READY_TIMEOUT_MS: number = 20000;
  * **两页**抓好放队列里 → 上滑切换时直接吃队列，切换本身不再等网络。
  * 预热那份超过 2 分钟就当旧了（app 可能在后台躺很久）。
  */
+/**
+ * 缓冲里**够几条就先上屏**（见 requestMore 的"提前收手"）。
+ *
+ * 取 3：正好一屏多一点。等"两家作者"往往要多花 5~8 秒（下一发是现拉探索流），
+ * 用户报的"下滑等好久才出现新的视频"就是这段等待。
+ */
+const REELS_READY_MIN: number = 3;
 const NATIVE_PAGE_COUNT: number = 7;
 /**
  * 内存里**排着队的页数**（上滑一次吃一页）。
@@ -596,6 +603,17 @@ export class ReelsViewModel implements ReelStreamVm {
        */
       let rounds: number = 0;
       while (rounds < 3 && (this.pendingAuthors() < 2 || this.pending.length < DRAIN_PER_REQUEST)) {
+        /*
+         * **别为了"够两家作者"把用户晾在那儿**（用户报："下滑等好久才出现新的视频"）。
+         *
+         * 缓冲里已经有几条、而队列里没有现成的页（下一发要去现拉探索流，5~8 秒）时，
+         * 直接把现有的铺出去 —— 打散仍然由 drainInterleaved 负责，只是不再强求攒两页。
+         */
+        if (this.pending.length >= REELS_READY_MIN && this.nativeQueue.length === 0) {
+          hilog.info(DOMAIN, TAG, 'reels fill stop: pending=%{public}d queue=0 (skip live wait)',
+            this.pending.length);
+          break;
+        }
         const page: NativeReelsPage | null = await this.nextPage(limited);
         if (page === null) {
           break;

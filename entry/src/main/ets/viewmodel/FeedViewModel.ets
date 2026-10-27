@@ -469,20 +469,6 @@ export class FeedViewModel {
     // 刷新重新试一次关注流（它可能上一轮被判成"全是推荐帖"，见 followingDry）。
     this.followingDry = false;
     /*
-     * **探索流那一段一起重置**（需求："触发刷新时**直接覆盖**数据流"）。
-     *
-     * 原先下拉刷新只重置了时间线：探索流那一段（`explore` / 游标 / 预取队列）原样留着，
-     * 于是刷新之后"旧的推荐还在上面、新的往下接" —— 看着像没刷新，也把旧内容钉死在第一屏。
-     * 现在整段清掉、游标归零：刷新完之后推荐那一段就是**新的一页**（和搜索/Reels 的覆盖式一致）。
-     */
-    this.explore = [];
-    this.exploreCursor = '';
-    this.exploreHasMore = false;
-    this.exploreQueue = [];
-    this.exploreSeeded = false;
-    this.exploreWanted = false;
-    this.wantExploreNext = false;
-    /*
      * **不再等网页就绪**：刷新走的是原生 `feed/timeline/`（core/NativeFeed），
      * 一个字节都不经过隐藏网页。以前这里先 `awaitPageReady(6000)` —— 网页正在水合 /
      * 被别的功能导航 / 后台挂起时白白多等最多 6 秒，用户看到的就是"下拉之后半天不刷新"。
