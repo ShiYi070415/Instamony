@@ -1,0 +1,1 @@
+docs: 补 AGC 商店文案（docs/store-listing.md）—— 英文/中文各一份 Brief introduction（<=80 字符）与 Full introduction，含功能清单、HarmonyOS 设计说明、隐私说明与免责声明，并标注审核敏感点的备选写法
