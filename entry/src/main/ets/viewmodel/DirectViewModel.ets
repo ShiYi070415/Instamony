@@ -14,6 +14,7 @@ import { LoadGate } from '../core/LoadGate';
 import { NativeDirect } from '../core/NativeDirect';
 // 新私信的本地通知（见 core/PushCenter）。
 import { PushCenter } from '../core/PushCenter';
+import { DirectCache, CachedInbox } from '../core/DirectCache';
 import { DirectMessage, DirectThread } from '../model/Direct';
 import { DirectInboxPage } from '../model/Direct';
 
@@ -145,10 +146,14 @@ export class DirectViewModel {
         return false;
       }
       this.threads = this.withReadLedger(page.threads);
+      // 落一份快照：下次进私信页先铺它（见 core/DirectCache 的文件头）。
+      DirectCache.save(page);
       this.endCursor = page.endCursor;
       this.more = page.hasMore && page.endCursor.length > 0;
       this.loadedAtMs = Date.now();
       this.onThreads(this.threads, this.more);
+      // 轮询也顺手刷新快照（列表变了才有必要，省 IO）。
+      DirectCache.save(new DirectInboxPage(this.threads, this.endCursor, this.more));
       hilog.info(DOMAIN, TAG, 'poll refresh n=%{public}d', this.threads.length);
       this.noteNewUnread();
       return true;

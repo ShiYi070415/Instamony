@@ -44,6 +44,7 @@ import { webview } from '@kit.ArkWeb';
 import { AppConfig } from '../config/AppConfig';
 import { AppProxy } from '../core/AppProxy';
 import { ReelsCrashLog } from '../core/ReelsCrashLog';
+import { DirectCache } from '../core/DirectCache';
 import { DeepLink, DeepLinkIntent } from '../core/DeepLink';
 import { Translator } from '../core/Translator';
 // 通知（Push Kit 注册 + 本地通知），见 core/PushCenter。
@@ -96,6 +97,8 @@ export default class EntryAbility extends UIAbility {
     AppSettings.init(this.context);
     // Reels 崩溃现场日志（同步写、只追加；见 core/ReelsCrashLog 的文件头）。
     ReelsCrashLog.init(this.context.filesDir);
+    // 私信收件箱的落盘快照（冷启动先铺一屏，网络回来再换）。
+    DirectCache.init(this.context);
     // ---- 材质能力诊断（一次性）----
     // 标题栏背板一直是一块偏黑的板子、看不到"渐变模糊"：官方 FAQ 说材质的**模糊/折射**
     // （materialFilter）只在**高/中算力**设备上渲染，低算力设备只保留背景色/边框/阴影。

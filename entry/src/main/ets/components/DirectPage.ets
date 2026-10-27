@@ -14,6 +14,7 @@
  */
 
 import { display } from '@kit.ArkUI';
+import { CachedInbox, DirectCache } from '../core/DirectCache';
 import { DirectThread } from '../model/Direct';
 import { DirectViewModel } from '../viewmodel/DirectViewModel';
 import { ScrollDelta } from '../core/ScrollReport';
@@ -161,6 +162,13 @@ export struct DirectPage {
       this.status = text;
     };
     // 先回填视图模型里已有的数据（切 tab 会重建这个组件，取数结果留在视图模型里）。
+    /*
+     * **先铺落盘快照**（需求："私信列表加载很久"）：收件箱那一发 30KB 起、还要在全局
+     * 闸门排队，冷启动第一次进来能干等好几秒。快照读盘几十毫秒，铺上就有画面，
+     * 网络回来再由 onThreads 整份替换 —— 和搜索页推荐流 / Reels 首屏同一套做法。
+     */
+    this.hydrateFromCache();
+
     this.syncFromVm();
     /*
      * **列表自动刷新**（需求："私信列表不会实时刷新状态"）：挂载期间每
@@ -191,10 +199,36 @@ export struct DirectPage {
       });
   }
 
+  /** 铺一份落盘快照（只在"手上没有内容"时做一次，见 core/DirectCache）。 */
+  private hydrateFromCache(): void {
+    if (this.threads.length > 0 || this.cacheTried) {
+      return;
+    }
+    this.cacheTried = true;
+    const cached: CachedInbox | null = DirectCache.load();
+    if (cached === null || cached.page.threads.length === 0) {
+      return;
+    }
+    this.threads = cached.page.threads;
+    this.hasMore = cached.page.hasMore;
+    this.status = '';
+  }
+
+  /** 这一轮进程试过"铺落盘快照"了没有（只做一次，见 hydrateFromCache）。 */
+  private cacheTried: boolean = false;
+
   /** 从视图模型回读当前数据（唯一的数据出口）。 */
   private syncFromVm(): void {
-    this.threads = this.vm.list();
-    this.hasMore = this.vm.hasMore();
+    const list: Array<DirectThread> = this.vm.list();
+    /*
+     * **视图模型是空的时候不要覆盖本地快照**：`aboutToAppear` 里顺序是
+     * "先铺落盘快照 → 再从视图模型回读"，而冷启动那一刻视图模型还是空的 ——
+     * 无条件赋值会把刚铺上的那一屏又清掉（表现就是"快照白读、还是空白等网络"）。
+     */
+    if (list.length > 0) {
+      this.threads = list;
+    }
+    this.hasMore = this.vm.hasMore() || this.hasMore;
     this.busy = this.vm.isBusy();
   }
 
