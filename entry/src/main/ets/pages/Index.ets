@@ -6884,15 +6884,82 @@ struct Index {
    */
   private handleDestinationBack(): boolean {
     /*
-     * **挂起中的面板不算"开着"**：用户主页压在上面、评论面板正为它让位（见
-     * suspendCommentsForPages），这时返回键该关掉这一页，而不是去关一层看不见的面板
-     * （不然第一次返回像是"没反应"）。
+     * **模态先于页面**（需求："用户页面的 highlight 卡片返回要优先收起卡片，而不是退出用户页面"）。
+     *
+     * 之前这里只处理了评论面板，于是压在整屏页面（用户主页 / 帖子页）上的快拍、highlight、
+     * 账号选单按返回时会被 Navigation 直接 pop 掉整页 —— 卡片还在，页面没了。
+     * 现在统一走 closeTopModal()：和首页那条是**同一份**分层逻辑。
      */
+    if (this.closeTopModal()) {
+      return true;
+    }
+    // 没有模态 → 交给 Navigation 去 pop 这一页（返回 false 就是"我不接管"）。
+    return false;
+  }
+
+  /**
+   * 收起"最上面那一层模态"，收到了返回 true。
+   *
+   * 为什么抽出来共用：页面级 `onBackPress`（tab 内）和每个 NavDestination 的
+   * `onBackPressed`（整屏页面）都会先问它一遍 —— 否则同一层模态在两种上下文里的行为不一致
+   * （真机上表现就是"在用户主页上点开的 highlight，按返回直接退出了用户页"）。
+   *
+   * 顺序 = 层级从高到低（见 build 末尾各层的 zIndex）：
+   *   · 快拍 / highlight 播放浮层（zIndex 80）：发信号让它走自己的收起动画；
+   *   · 评论面板（70）：滑下去 + 遮罩淡出，**挂起中的不算开着**（见 commentsSuspended）；
+   *   · 调试探针面板（60）；
+   *   · 账号选单浮层（80，只在"我的"页出现过）；
+   *   · 网页层（30，登录 / 安全验证）：先按网页自身历史后退，退不动才整层关掉。
+   */
+  private closeTopModal(): boolean {
+    if (this.storyOpen) {
+      this.requestStoryClose();
+      return true;
+    }
     if (this.commentsVisible && !this.commentsSuspended) {
       this.closeComments();
       return true;
     }
+    if (this.probeVisible) {
+      this.probeVisible = false;
+      return true;
+    }
+    if (this.accountMenuOpen) {
+      this.closeAccountMenu();
+      return true;
+    }
+    if (this.webVisible) {
+      if (this.bridge.canGoBack()) {
+        this.bridge.goBack();
+        return true;
+      }
+      this.closeWeb();
+      return true;
+    }
     return false;
+  }
+
+  /**
+   * 回到主页 tab（返回键用）。
+   *
+   * **两个状态都要改**：切页真正看的是 `selectedIndex`（内容层与底栏都按它走），
+   * `selectedTab` 只是给"当前是哪一页"的语义用的。之前返回只调了 `selectTab`，
+   * 于是页面根本没切 —— 表现就是"在 Reels/私信/搜索/我的 按返回直接退出 App"。
+   */
+  private backToHomeTab(): void {
+    let homeIndex: number = 0;
+    for (let i: number = 0; i < TAB_ITEMS.length; i++) {
+      if (TAB_ITEMS[i].tab === AppTab.Home) {
+        homeIndex = i;
+        break;
+      }
+    }
+    if (this.selectedIndex === homeIndex) {
+      return;
+    }
+    this.selectedIndex = homeIndex;
+    // 切页的收尾（底栏复位、Reels 全局控件复位、验证态检查…）都在 selectTab 里。
+    this.selectTab(AppTab.Home);
   }
 
   /**
@@ -10188,35 +10255,19 @@ struct Index {
   }
 
   onBackPress(): boolean {
-    // 快拍浮层最先收（它是最上面那一层，见 build 末尾的 zIndex 80）。
-    if (this.storyOpen) {
-      /*
-       * **发信号让它自己收**，不在这里直接删浮层：返回键要和下滑手势、播完自动收走
-       * 走同一套动画（朝当前这一位的托盘头像收缩 / 不在托盘里就整页下滑，见
-       * StoryViewer.requestClose）。动画播完浮层会叫 onClose → closeStory()。
-       *
-       * 连按两下：第二下什么都不做（`storyClosing` 已经立起来了），不然会叠一次动画；
-       * 中途被打断展开时浮层会回调 onReopen，把这一位清掉（见那里的说明）。
-       */
-      this.requestStoryClose();
-      return true;
-    }
-    // 评论面板（点正文进来时它里面还带着那张帖子卡片）比快拍低一档，快拍收完之后收它。
-    if (this.commentsVisible) {
-      this.closeComments();
-      return true;
-    }
-    if (this.probeVisible) {
-      this.probeVisible = false;
-      return true;
-    }
-    // 账号选单浮层（「我的」标题栏那颗按钮弹出来的）也是模态，比页面先收。
-    if (this.accountMenuOpen) {
-      this.closeAccountMenu();
+    /*
+     * **1) 先收模态**：和整屏页面那条共用 closeTopModal()（见那里的顺序说明）。
+     *
+     * 快拍 / highlight 走"发信号让它自己收"：返回键要和下滑手势、播完自动收走同一套动画
+     * （朝当前这一位的托盘头像收缩 / 不在托盘里就整页下滑，见 StoryViewer.requestClose）。
+     * 动画播完浮层会叫 onClose → closeStory()。连按两下第二下什么都不做（storyClosing
+     * 已经立起来了），不然会叠一次动画。
+     */
+    if (this.closeTopModal()) {
       return true;
     }
     /*
-     * **搜索有结果时，返回键先回"推荐流"，不退出 App**（需求）。
+     * **2) 搜索有结果时，返回键先回"推荐流"，不退出 App**（需求）。
      *
      * 搜索页是 tab 内的一个状态（关键词非空 = 结果列表，空 = 推荐瀑布流），不是压栈的页面，
      * 所以系统返回手势原来会直接冒到"退出 App"那条路上。这里把它接住：清掉关键词、回到
@@ -10226,29 +10277,20 @@ struct Index {
       this.searchVm.clear();
       return true;
     }
-    if (this.webVisible) {
-      // 网页层（登录/验证）也是模态：先按网页自己的返回历史走，退不动才整层关掉。
-      if (this.bridge.canGoBack()) {
-        this.bridge.goBack();
-        return true;
-      }
-      this.closeWeb();
-      return true;
-    }
     /*
-     * **不在主页 → 回主页**（需求："若无模态则优先返回主页"）。
+     * **3) 不在主页 → 回主页**（需求："reels/私信/搜索/我的 页面返回优先返回主页"）。
      *
-     * Reels / 私信 / 搜索 / 通知 / 我的 都是 tab 内的状态、不是压栈页面，所以系统返回原来
-     * 直接冒到"退出 App"。这里改成先切回 Home；切页动画、底栏复位都由 selectTab 负责。
+     * 这些 tab 都是页面内的状态、不是压栈页面，所以系统返回原来直接冒到"退出 App"。
+     * 注意要用 backToHomeTab()：切页真正看的是 `selectedIndex`，只改 selectedTab 页面不动。
      */
     if (this.currentTab() !== AppTab.Home) {
-      this.selectTab(AppTab.Home);
+      this.backToHomeTab();
       return true;
     }
     /*
-     * **已经在主页：两次返回才退出**（需求："在主页则用系统气泡通知显示'再一次返回关闭app'"）。
+     * **4) 已经在主页：两次返回才退出**（需求："在主页则用系统气泡通知显示'再一次返回关闭app'"）。
      *
-     * 第一次返回只弹 toast 并吃掉这次返回（return true），2 秒内再按一次才放行
+     * 第一次返回只弹 toast 并吃掉这次返回（return true），BACK_EXIT_WINDOW_MS 内再按一次才放行
      * （return false = 交给系统退到后台/关闭）。
      */
     const now: number = Date.now();
