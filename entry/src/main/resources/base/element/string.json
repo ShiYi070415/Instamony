@@ -967,5 +967,9 @@
     {"name": "settings_proxy_edit_action", "value": "编辑"},
     {"name": "settings_proxy_delete_action", "value": "删除"},
     {"name": "settings_proxy_deleted", "value": "已删除"}
+,
+    {"name": "settings_proxy_verifying", "value": "正在验证代理…"},
+    {"name": "settings_proxy_verify_failed", "value": "代理无法连接：%s"},
+    {"name": "settings_proxy_invalid", "value": "主机和端口必须填"}
 ]
 }

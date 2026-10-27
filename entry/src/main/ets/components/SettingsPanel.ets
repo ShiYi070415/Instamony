@@ -51,6 +51,8 @@ import { MATERIAL_PILL_HEIGHT, MaterialIconButton, SelectSurfaceModifier, Surfac
 import { curves, LengthMetrics, uiMaterial } from '@kit.ArkUI';
 // 应用级代理（设置页的数据与生效逻辑，见 core/AppProxy）。
 import { AppProxy, ProxyEntry } from '../core/AppProxy';
+// 保存前的连通性探测（TCP + HTTP CONNECT，见 core/ProxyProbe）。
+import { ProxyCheckResult, ProxyProbe } from '../core/ProxyProbe';
 import { PlatformCap } from '../core/PlatformCap';
 import { StoryDiag } from '../core/StoryDiag';
 import { StoryTray } from '../model/Story';
@@ -237,6 +239,8 @@ export struct SettingsPanel {
   @State private draftPort: string = '';
   @State private draftUser: string = '';
   @State private draftPass: string = '';
+  /** 正在验证第几份代理的连通性（保存按钮此时显示「正在验证代理…」并忽略重复点击）。 */
+  @State private proxyChecking: boolean = false;
   /** 点「退出登录」。 */
   onSignOut: () => void = (): void => {
   };
@@ -846,11 +850,19 @@ export struct SettingsPanel {
       : $r('app.string.settings_proxy_add_title');
   }
 
-  /** 底部按钮文案：编辑态「保存」，新增态「添加」。 */
+  /** 底部按钮文案：编辑态「保存」，新增态「添加」，验证中「正在验证代理…」。 */
   private proxySubmitLabel(): ResourceStr {
     return this.editingIndex >= 0
       ? $r('app.string.settings_proxy_save')
       : $r('app.string.settings_proxy_add');
+  }
+
+  /** 底部按钮上真正显示的文字（验证中优先）。 */
+  private proxySubmitText(): ResourceStr {
+    if (this.proxyChecking) {
+      return $r('app.string.settings_proxy_verifying');
+    }
+    return this.proxySubmitLabel();
   }
 
   /**
@@ -906,11 +918,11 @@ export struct SettingsPanel {
         $r('app.string.proxy_ph_optional'))
 
       Toggle({ type: ToggleType.Button, isOn: false }) {
-        // 编辑态显示「保存」，新增态显示「添加」（标题同理，见 proxySheetTitle）。
-        Text(this.proxySubmitLabel())
+        // 编辑态显示「保存」，新增态显示「添加」；验证中显示「正在验证代理…」（见 proxySubmitText）。
+        Text(this.proxySubmitText())
           .fontSize(16)
           .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.accent'))
+          .fontColor(this.proxyChecking ? $r('app.color.secondary_text') : $r('app.color.accent'))
       }
       .width('100%')
       .height(SIGN_OUT_HEIGHT)
@@ -979,12 +991,20 @@ export struct SettingsPanel {
   }
 
   /**
-   * 提交：**新增或编辑**（看 `editingIndex`）。
+   * 提交：**先验连通性，再新增或编辑**（看 `editingIndex`）。
+   *
+   * 需求："添加代理的时候需要确认代理通信是否正常，若无法连接则添加失败"。
+   * 探测走 `core/ProxyProbe`（TCP + HTTP CONNECT，不碰全局代理设置），最长约 12 秒；
+   * 期间按钮变成「正在验证代理…」并忽略重复点击，失败就 toast 具体原因、**面板不关**，
+   * 用户可以就地改主机/端口/账号再试。
    *
    * 新增：入库 + 打开总开关（保存即生效，不需要重启 App）。
    * 编辑：原地替换，**不动总开关**；改的若是当前选中项且开关开着，AppProxy 会立刻重新应用。
    */
   private submitProxy(): void {
+    if (this.proxyChecking) {
+      return;
+    }
     const entry: ProxyEntry = new ProxyEntry();
     entry.name = this.draftName.trim().length > 0 ? this.draftName.trim() : this.draftHost.trim();
     entry.host = this.draftHost.trim();
@@ -992,22 +1012,47 @@ export struct SettingsPanel {
     entry.port = Number.isNaN(port) ? 0 : port;
     entry.username = this.draftUser.trim();
     entry.password = this.draftPass;
+    if (entry.host.length === 0 || entry.port <= 0) {
+      // 之前这里静默 return，用户点了没反应；现在直接说清楚。
+      this.toast($r('app.string.settings_proxy_invalid'));
+      return;
+    }
+    // 面板/编辑态在 await 期间可能被用户关掉，所以先记下来。
     const editing: number = this.editingIndex;
-    if (editing >= 0) {
-      if (!AppProxy.update(editing, entry)) {
+    this.proxyChecking = true;
+    this.verifyThenSave(entry, editing);
+  }
+
+  /** 真正的异步流程：探测 → 失败就提示，成功才入库。 */
+  private async verifyThenSave(entry: ProxyEntry, editing: number): Promise<void> {
+    try {
+      const result: ProxyCheckResult = await ProxyProbe.check(entry.host, entry.port,
+        entry.username, entry.password);
+      if (!result.reachable) {
+        this.toast($r('app.string.settings_proxy_verify_failed', result.reason));
         return;
       }
-      this.editingIndex = -1;
+      if (editing >= 0) {
+        if (!AppProxy.update(editing, entry)) {
+          return;
+        }
+        this.editingIndex = -1;
+        this.proxySheet = false;
+        this.refreshProxyNames();
+        return;
+      }
+      if (!AppProxy.add(entry)) {
+        return;
+      }
       this.proxySheet = false;
       this.refreshProxyNames();
-      return;
+      this.proxyOn = AppProxy.setEnabled(true);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'proxy verify failed: %{public}s', (error as Error).message ?? '-');
+      this.toast($r('app.string.settings_proxy_verify_failed', 'unknown'));
+    } finally {
+      this.proxyChecking = false;
     }
-    if (!AppProxy.add(entry)) {
-      return;
-    }
-    this.proxySheet = false;
-    this.refreshProxyNames();
-    this.proxyOn = AppProxy.setEnabled(true);
   }
   @Builder
   actionRow(label: ResourceStr, action: () => void) {

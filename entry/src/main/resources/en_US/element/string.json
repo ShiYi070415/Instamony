@@ -711,5 +711,9 @@
     {"name": "settings_proxy_edit_action", "value": "Edit"},
     {"name": "settings_proxy_delete_action", "value": "Delete"},
     {"name": "settings_proxy_deleted", "value": "Deleted"}
+,
+    {"name": "settings_proxy_verifying", "value": "Checking proxy…"},
+    {"name": "settings_proxy_verify_failed", "value": "Proxy unreachable: %s"},
+    {"name": "settings_proxy_invalid", "value": "Host and port are required"}
 ]
 }
