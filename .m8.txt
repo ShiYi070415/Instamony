@@ -1,1 +1,0 @@
-feat(agc): 加一个 AGC 自检工具 tools/agc/agc.js（零依赖）—— 用 Connect API 与 Push Kit 的 OAuth 凭据把“推送为什么不工作”从猜变成事实：--token 验凭据能否换到两类 token、--app 查应用在 AGC 里登记的信息（含证书指纹等身份字段）、--certs 查证书列表、--push 直接给手机发一条测试推送；凭据放 tools/agc/credentials.json，已加进 .gitignore（连同 relay 的 config/state/lock）

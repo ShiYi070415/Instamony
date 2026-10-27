@@ -1,0 +1,1 @@
+feat(relay): webhook 通道支持免审批的 IM 机器人格式（wecom 企业微信 / feishu 飞书 / bark + 默认 generic）—— HarmonyOS 原生推送要走 AGC 审核，走不通时最实际的是推到手机上本来就有通知能力的 App，企业微信与飞书在 HarmonyOS 上都有原生客户端、群机器人只要一个 webhook URL，零审批零费用；config.example.json 的 webhook 段改成 format + url 两栏；顺手修掉 relay.js 被 PowerShell 写入的 BOM（会让 node 报 Invalid or unexpected token）

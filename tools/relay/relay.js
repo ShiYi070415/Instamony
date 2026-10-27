@@ -322,14 +322,40 @@ async function pushTelegram(cfg, title, body) {
   log('Telegram 推送：' + res.body.slice(0, 120));
 }
 
+/**
+ * 通用 webhook —— 顺手支持几种**不需要向华为申请任何权限**的 IM 机器人。
+ *
+ * 为什么要这几个格式：HarmonyOS 原生推送（Push Kit）要走 AGC 审核，走不通时最实际的办法
+ * 是"推到手机上一个本来就有通知能力的 App"。企业微信 / 飞书在 HarmonyOS 上都有原生客户端，
+ * 群机器人只要一个 webhook URL，零审批、零费用，所以这里按它们的报文格式发：
+ *   format = "wecom"  企业微信群机器人      {"msgtype":"text","text":{"content":"…"}}
+ *   format = "feishu" 飞书自定义机器人      {"msg_type":"text","content":{"text":"…"}}
+ *   format = "bark"   Bark（iOS 用）        GET /{key}/{text}
+ *   format = "generic" 默认，原样 POST {title, body, threadId, url}
+ */
 async function pushWebhook(cfg, title, body, threadId) {
   const hook = cfg.notify.webhook;
-  const payload = JSON.stringify({
-    title: title,
-    body: body,
-    threadId: threadId,
-    url: cfg.openUrl || 'instamony://direct'
-  });
+  const format = String(hook.format || 'generic');
+  const text = title + '\n' + body;
+  const link = cfg.openUrl || 'instamony://direct';
+
+  if (format === 'bark') {
+    const base = hook.url.replace(/\/+$/, '');
+    const url = base + '/' + encodeURIComponent(title) + '/' + encodeURIComponent(body) +
+      '?url=' + encodeURIComponent(link);
+    const res = await request(url, {});
+    log('Bark 推送：' + res.body.slice(0, 120));
+    return;
+  }
+
+  let payload;
+  if (format === 'wecom') {
+    payload = JSON.stringify({ msgtype: 'text', text: { content: text } });
+  } else if (format === 'feishu') {
+    payload = JSON.stringify({ msg_type: 'text', content: { text: text } });
+  } else {
+    payload = JSON.stringify({ title: title, body: body, threadId: threadId, url: link });
+  }
   const headers = {
     'Content-Type': 'application/json; charset=UTF-8',
     'Content-Length': Buffer.byteLength(payload)
@@ -337,7 +363,7 @@ async function pushWebhook(cfg, title, body, threadId) {
   const extra = hook.headers || {};
   for (const key of Object.keys(extra)) headers[key] = String(extra[key]);
   const res = await request(hook.url, { method: 'POST', headers: headers }, payload);
-  log('Webhook 推送：' + res.body.slice(0, 120));
+  log('Webhook(' + format + ') 推送：' + res.body.slice(0, 120));
 }
 
 async function send(cfg, title, body, threadId) {

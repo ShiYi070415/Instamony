@@ -22,10 +22,9 @@
       "chatId": "你的数字 chat id"
     },
     "webhook": {
-      "url": "https://example.com/hook（channel=webhook 时用）",
-      "headers": {
-        "Authorization": "Bearer xxx"
-      }
+      "format": "wecom",
+      "url": "企业微信群机器人 或 飞书自定义机器人的 webhook 地址",
+      "headers": {}
     },
 
     "quietHours": [23, 7]
