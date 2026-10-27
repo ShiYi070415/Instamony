@@ -274,7 +274,7 @@ const SPEED_ZONE_RATIO: number = 0.3;
  * 于是"长按 2 倍速 → 再点一下"就成了双击点赞（用户报的就是这个）。
  * 600ms：比双击窗口宽一点，又短到"松手马上真想双击"也不至于被误吞太多。
  */
-const HOLD_TAP_GUARD_MS: number = 600;
+const HOLD_TAP_GUARD_MS: number = 2000;
 
 /**
  * 长按结束时刻的**跨组件共享门闩**。
@@ -285,18 +285,36 @@ const HOLD_TAP_GUARD_MS: number = 600;
  */
 export class ReelHoldGate {
   static lastEndMs: number = 0;
+  /**
+   * **还有一次"长按补出来的 Tap"没被吞掉**。
+   *
+   * 长按松手时系统会补一次 Tap：连续两次长按 = 两个 Tap，双击识别器会把它们凑成双击 → 点赞。
+   * 这个标记在每次长按结束时置位，由下一位消费者（双击回调 / 单击回调）清掉 ——
+   * 比"结束时间 + 时间窗"稳：连续长按时第二次松手可能已经超出任何固定的短窗口。
+   */
+  static pendingTapSwallow: boolean = false;
 
-  /** 记一次"长按刚结束"。 */
+  /** 记一次"长按刚结束"：置上待吞标记。 */
   static markEnd(): void {
     ReelHoldGate.lastEndMs = Date.now();
+    ReelHoldGate.pendingTapSwallow = true;
   }
 
-  /** 最近 windowMs 内长按刚结束吗（双击点赞据此跳过）。 */
-  static recent(windowMs: number): boolean {
-    if (ReelHoldGate.lastEndMs <= 0) {
+  /**
+   * 取用待吞标记：还有没被吞的长按 Tap、且是最近 windowMs 内的就返回 true 并清掉。
+   * 超过窗口的残留不算（避免很久以后的一次真双击被吞），顺手清掉。
+   */
+  static consumeTapSwallow(windowMs: number): boolean {
+    if (!ReelHoldGate.pendingTapSwallow) {
       return false;
     }
-    return Date.now() - ReelHoldGate.lastEndMs < windowMs;
+    ReelHoldGate.pendingTapSwallow = false;
+    return ReelHoldGate.lastEndMs > 0 && Date.now() - ReelHoldGate.lastEndMs <= windowMs;
+  }
+
+  /** 别处已经吞掉了这一下（单击路径），把标记清掉。 */
+  static clearTapSwallow(): void {
+    ReelHoldGate.pendingTapSwallow = false;
   }
 }
 
@@ -614,6 +632,7 @@ struct ReelSlide {
    */
   private onVideoTap(event: GestureEvent): void {
     if (this.longPressFired) {
+      ReelHoldGate.clearTapSwallow();
       // 长按抬手时系统还会补一次单击：吞掉（否则"长按暂停"松手后会立刻又切一次播放态）。
       this.longPressFired = false;
       return;
@@ -3030,7 +3049,7 @@ export struct ReelsPage {
            * 会被双击识别器记成第一下，再点一下就变成点赞。长按刚结束的
            * HOLD_TAP_GUARD_MS 内直接跳过（时间戳见 ReelHoldGate）。
            */
-          if (ReelHoldGate.recent(HOLD_TAP_GUARD_MS)) {
+          if (ReelHoldGate.consumeTapSwallow(HOLD_TAP_GUARD_MS)) {
             hilog.info(DOMAIN, TAG, 'double tap ignored right after hold');
             return;
           }
@@ -3196,6 +3215,8 @@ export struct ReelsPage {
     // 长按松手时系统常会补一次单击：这里把那一口吞掉，否则长按结束会顺带暂停。
     if (this.holdFired) {
       this.holdFired = false;
+      // 这一下已经被单击路径吞掉了：清掉"待吞"标记，别让下一次真双击被误吞。
+      ReelHoldGate.clearTapSwallow();
       return;
     }
     if (this.singleTapTimer >= 0) {
