@@ -715,5 +715,7 @@
     {"name": "settings_proxy_verifying", "value": "Checking proxy…"},
     {"name": "settings_proxy_verify_failed", "value": "Proxy unreachable: %s"},
     {"name": "settings_proxy_invalid", "value": "Host and port are required"}
+,
+    {"name": "back_press_exit_hint", "value": "Press back again to exit"}
 ]
 }

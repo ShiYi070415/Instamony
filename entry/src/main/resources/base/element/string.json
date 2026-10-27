@@ -971,5 +971,7 @@
     {"name": "settings_proxy_verifying", "value": "正在验证代理…"},
     {"name": "settings_proxy_verify_failed", "value": "代理无法连接：%s"},
     {"name": "settings_proxy_invalid", "value": "主机和端口必须填"}
+,
+    {"name": "back_press_exit_hint", "value": "再一次返回关闭app"}
 ]
 }

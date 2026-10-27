@@ -376,6 +376,14 @@ const PROBE_DUMP_MIN_INTERVAL_MS: number = 60000;
  */
 const REFRESH_NAV_WAIT_MS: number = 8000;
 const REFRESH_NAV_POLL_MS: number = 200;
+/**
+ * 「两次返回退出」的时间窗（毫秒）。
+ *
+ * 在主页按返回时：第一次只弹「再一次返回关闭app」的气泡（吃掉这次返回），
+ * 这个窗口内再按一次才真正退出。取 2000 与系统 toast 的停留时间一致 —— 气泡还在的时候
+ * 按下去才算"看到了提示并确认"。
+ */
+const BACK_EXIT_WINDOW_MS: number = 2000;
 /** 页面级导航（去帖子页 / 回首页）的等待上限，以及帖子页上读评论的上限。 */
 const NAV_READY_TIMEOUT_MS: number = 20000;
 /**
@@ -2648,6 +2656,12 @@ struct Index {
    * 每步都是一次网络 + 一次 JSON 解析，而解析跑在 JS 线程上，正在滑的时候做这些就是掉帧。
    */
   private lastInteractionMs: number = 0;
+  /**
+   * 上一次"在主页按返回"的时刻（毫秒，0 = 没有待确认的返回）。
+   *
+   * 见 onBackPress 的最后一段：第一次按只弹气泡，BACK_EXIT_WINDOW_MS 内再按一次才退出。
+   */
+  private lastBackAtMs: number = 0;
 
   /** 排一次自动重试（已经在排队、或次数用尽就直接返回）。 */
   private scheduleFeedRetry(): void {
@@ -10196,6 +10210,11 @@ struct Index {
       this.probeVisible = false;
       return true;
     }
+    // 账号选单浮层（「我的」标题栏那颗按钮弹出来的）也是模态，比页面先收。
+    if (this.accountMenuOpen) {
+      this.closeAccountMenu();
+      return true;
+    }
     /*
      * **搜索有结果时，返回键先回"推荐流"，不退出 App**（需求）。
      *
@@ -10207,15 +10226,39 @@ struct Index {
       this.searchVm.clear();
       return true;
     }
-    if (!this.webVisible) {
-      return false;
-    }
-    if (this.bridge.canGoBack()) {
-      this.bridge.goBack();
+    if (this.webVisible) {
+      // 网页层（登录/验证）也是模态：先按网页自己的返回历史走，退不动才整层关掉。
+      if (this.bridge.canGoBack()) {
+        this.bridge.goBack();
+        return true;
+      }
+      this.closeWeb();
       return true;
     }
-    this.closeWeb();
-    return true;
+    /*
+     * **不在主页 → 回主页**（需求："若无模态则优先返回主页"）。
+     *
+     * Reels / 私信 / 搜索 / 通知 / 我的 都是 tab 内的状态、不是压栈页面，所以系统返回原来
+     * 直接冒到"退出 App"。这里改成先切回 Home；切页动画、底栏复位都由 selectTab 负责。
+     */
+    if (this.currentTab() !== AppTab.Home) {
+      this.selectTab(AppTab.Home);
+      return true;
+    }
+    /*
+     * **已经在主页：两次返回才退出**（需求："在主页则用系统气泡通知显示'再一次返回关闭app'"）。
+     *
+     * 第一次返回只弹 toast 并吃掉这次返回（return true），2 秒内再按一次才放行
+     * （return false = 交给系统退到后台/关闭）。
+     */
+    const now: number = Date.now();
+    if (now - this.lastBackAtMs > BACK_EXIT_WINDOW_MS) {
+      this.lastBackAtMs = now;
+      this.toast($r('app.string.back_press_exit_hint'));
+      return true;
+    }
+    this.lastBackAtMs = 0;
+    return false;
   }
 
   /**
