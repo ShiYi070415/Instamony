@@ -48,7 +48,7 @@ import {
 } from '../core/AppSettings';
 import { MATERIAL_PILL_HEIGHT, MaterialIconButton, SelectSurfaceModifier, SurfaceModifier } from './MaterialSurface';
 // 半模态的系统材质（SheetOptions.systemMaterial，API 26+）。
-import { LengthMetrics, uiMaterial } from '@kit.ArkUI';
+import { curves, LengthMetrics, uiMaterial } from '@kit.ArkUI';
 // 应用级代理（设置页的数据与生效逻辑，见 core/AppProxy）。
 import { AppProxy, ProxyEntry } from '../core/AppProxy';
 import { PlatformCap } from '../core/PlatformCap';
@@ -367,6 +367,8 @@ export struct SettingsPanel {
             .selectedOptionFontColor($r('app.color.dropdown_selected_text'))
             .attributeModifier(new SelectSurfaceModifier(this.materialThickness, this.selectWidthOf(this.proxyValueText),
               SELECT_WIDTH_SPRING_MS))
+            // 宽度弹性过渡（见 SelectSurfaceModifier 的 widthAnimationMs 说明）。
+            .animation({ duration: SELECT_WIDTH_SPRING_MS, curve: curves.springMotion() })
             // 首帧量出系统的"文字以外占宽"，之后宽度就按它算（见 selectChrome）。
             .onAreaChange((oldValue: Area, newValue: Area): void => {
               this.calibrateSelectChrome(newValue.width, this.proxyValueText);
@@ -385,7 +387,9 @@ export struct SettingsPanel {
               }
               if (AppProxy.select(index)) {
                 this.proxyActive = index;
-                this.proxyValueText = this.proxyValueLabel();
+                this.animateSelectWidth((): void => {
+                  this.proxyValueText = this.proxyValueLabel();
+                });
               }
             })
         }
@@ -1318,6 +1322,23 @@ export struct SettingsPanel {
   }
 
   /**
+   * 在**弹簧动画作用域**里执行这次改动，让下拉按钮的宽度变化被补间。
+   *
+   * 为什么不能只靠组件上的 `.animation()`：宽度是 `SelectSurfaceModifier` 里设的，而
+   * `.animation()` 只覆盖"它之前设置的属性"，修饰器什么时候被应用取决于框架内部时序 ——
+   * 实测（用户反馈）那样宽度是**跳变**的。`animateTo` 是显式动画作用域：闭包里引起的
+   * 所有可动画属性变化（含修饰器设的宽度）都会在这一帧被补间。
+   */
+  private animateSelectWidth(action: () => void): void {
+    try {
+      this.getUIContext().animateTo({ duration: SELECT_WIDTH_SPRING_MS, curve: curves.springMotion() }, action);
+    } catch (error) {
+      // 拿不到 UIContext 就退化成直接改（没有动画，但不影响功能）。
+      action();
+    }
+  }
+
+  /**
    * 下拉按钮的目标宽度：标定前返回 0（= 不设宽度，系统自适应），见 SelectSurfaceModifier。
    *
    * 不管标定没标定都先算一遍文字宽：**这是唯一会调 measureText 的地方**，而它只会在
@@ -1389,6 +1410,8 @@ export struct SettingsPanel {
         // 走 SelectSurfaceModifier：API < 26 的设备上没有系统材质，它会自动退化成纯色底。
         .attributeModifier(new SelectSurfaceModifier(this.materialThickness, this.selectWidthOf(this.thicknessDisplay()),
           SELECT_WIDTH_SPRING_MS))
+        // 宽度弹性过渡（见 SelectSurfaceModifier 的 widthAnimationMs 说明）。
+        .animation({ duration: SELECT_WIDTH_SPRING_MS, curve: curves.springMotion() })
         // 首帧量出系统的"文字以外占宽"，之后宽度就按它算（见 selectChrome）。
         .onAreaChange((oldValue: Area, newValue: Area): void => {
           this.calibrateSelectChrome(newValue.width, this.thicknessDisplay());
@@ -1399,7 +1422,10 @@ export struct SettingsPanel {
         .selectedOptionFontColor($r('app.color.dropdown_selected_text'))
         .onSelect((index: number, value?: string): void => {
           if (index >= 0 && index < MATERIAL_THICKNESS_ORDER.length) {
-            AppSettings.setMaterialThickness(MATERIAL_THICKNESS_ORDER[index]);
+            // 宽度变化放在动画作用域里（见 animateSelectWidth）。
+            this.animateSelectWidth((): void => {
+              AppSettings.setMaterialThickness(MATERIAL_THICKNESS_ORDER[index]);
+            });
           }
         })
     }
@@ -1445,6 +1471,8 @@ export struct SettingsPanel {
         // 两者都交给 SelectSurfaceModifier：不支持系统材质时退化成纯色底（API < 26）。
         .attributeModifier(new SelectSurfaceModifier(this.materialThickness, this.selectWidthOf(this.materialDisplay()),
           SELECT_WIDTH_SPRING_MS))
+        // 宽度弹性过渡（见 SelectSurfaceModifier 的 widthAnimationMs 说明）。
+        .animation({ duration: SELECT_WIDTH_SPRING_MS, curve: curves.springMotion() })
         // 首帧量出系统的"文字以外占宽"，之后宽度就按它算（见 selectChrome）。
         .onAreaChange((oldValue: Area, newValue: Area): void => {
           this.calibrateSelectChrome(newValue.width, this.materialDisplay());
@@ -1457,7 +1485,9 @@ export struct SettingsPanel {
         .selectedOptionFontColor($r('app.color.dropdown_selected_text'))
         .onSelect((index: number, value?: string): void => {
           if (index >= 0 && index < MATERIAL_LEVEL_ORDER.length) {
-            AppSettings.setMaterialLevel(MATERIAL_LEVEL_ORDER[index]);
+            this.animateSelectWidth((): void => {
+              AppSettings.setMaterialLevel(MATERIAL_LEVEL_ORDER[index]);
+            });
           }
         })
     }
@@ -1492,6 +1522,8 @@ export struct SettingsPanel {
         .fontColor($r('app.color.primary_text'))
         .attributeModifier(new SelectSurfaceModifier(this.materialThickness, this.selectWidthOf(this.qualityDisplay(this.imageQuality)),
           SELECT_WIDTH_SPRING_MS))
+        // 宽度弹性过渡（见 SelectSurfaceModifier 的 widthAnimationMs 说明）。
+        .animation({ duration: SELECT_WIDTH_SPRING_MS, curve: curves.springMotion() })
         // 首帧量出系统的"文字以外占宽"，之后宽度就按它算（见 selectChrome）。
         .onAreaChange((oldValue: Area, newValue: Area): void => {
           this.calibrateSelectChrome(newValue.width, this.qualityDisplay(this.imageQuality));
@@ -1502,7 +1534,9 @@ export struct SettingsPanel {
         .selectedOptionFontColor($r('app.color.dropdown_selected_text'))
         .onSelect((index: number, value?: string): void => {
           if (index >= 0 && index < MEDIA_QUALITY_ORDER.length) {
-            AppSettings.setImageQuality(MEDIA_QUALITY_ORDER[index]);
+            this.animateSelectWidth((): void => {
+              AppSettings.setImageQuality(MEDIA_QUALITY_ORDER[index]);
+            });
             this.onQualityChanged();
           }
         })
@@ -1527,6 +1561,8 @@ export struct SettingsPanel {
         .fontColor($r('app.color.primary_text'))
         .attributeModifier(new SelectSurfaceModifier(this.materialThickness, this.selectWidthOf(this.qualityDisplay(this.videoQuality)),
           SELECT_WIDTH_SPRING_MS))
+        // 宽度弹性过渡（见 SelectSurfaceModifier 的 widthAnimationMs 说明）。
+        .animation({ duration: SELECT_WIDTH_SPRING_MS, curve: curves.springMotion() })
         // 首帧量出系统的"文字以外占宽"，之后宽度就按它算（见 selectChrome）。
         .onAreaChange((oldValue: Area, newValue: Area): void => {
           this.calibrateSelectChrome(newValue.width, this.qualityDisplay(this.videoQuality));
@@ -1537,7 +1573,9 @@ export struct SettingsPanel {
         .selectedOptionFontColor($r('app.color.dropdown_selected_text'))
         .onSelect((index: number, value?: string): void => {
           if (index >= 0 && index < MEDIA_QUALITY_ORDER.length) {
-            AppSettings.setVideoQuality(MEDIA_QUALITY_ORDER[index]);
+            this.animateSelectWidth((): void => {
+              AppSettings.setVideoQuality(MEDIA_QUALITY_ORDER[index]);
+            });
             this.onQualityChanged();
           }
         })
