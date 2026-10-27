@@ -38,6 +38,17 @@ function Get-LogText([string]$path) {
   return [string]$t
 }
 
+# 剪贴板两条路：Set-Clipboard（PowerShell 自带），失败再退回 cmd 的 clip.exe。
+# 安静失败是这里最讨厌的情况（粘出来还是上一条内容），所以调用方会读回来比对。
+function Copy-Text([string]$text) {
+  try { Set-Clipboard -Value $text -ErrorAction Stop; return $true } catch { }
+  try {
+    $text | & clip.exe
+    if ($LASTEXITCODE -eq 0) { return $true }
+  } catch { }
+  return $false
+}
+
 # ---------- 1. 找 cloudflared ----------
 $cfTarget = Join-Path $env:LOCALAPPDATA 'cloudflared\cloudflared.exe'
 $cf = $null
@@ -155,10 +166,23 @@ try {
   Say '================ 手机打开下面这条链接 ================' 'White'
   Say $phoneUrl 'Green'
   Say '=====================================================' 'White'
-  Say "本机打开：$localUrl"
+  Say "本机打开（不用发手机）：$localUrl" 'DarkGray'
   Say ("隧道自检：HTTP {0} {1}" -f $code, $(if ($ok) { '（通）' } else { '（还没通：等 10~20 秒再点一次；502 一般是回源没起好）' })) $(if ($ok) { 'Green' } else { 'Yellow' })
   Set-Content -Path $urlFile -Value @($phoneUrl, $localUrl, "domain=$domain", "port=$Port") -Encoding UTF8
-  try { Set-Clipboard -Value $phoneUrl; Say '（已复制到剪贴板）' 'DarkGray' } catch { }
+
+  # 剪贴板里必须是**隧道那条**，不是 127.0.0.1 那条（本机直接开就行的链接粘到手机上是打不开的）
+  $copied = Copy-Text $phoneUrl
+  if ($copied) {
+    $readback = ''
+    try { $readback = (Get-Clipboard -Raw -ErrorAction Stop) } catch { }
+    if ($readback -and $readback.Trim() -eq $phoneUrl) {
+      Say '（已复制到剪贴板：隧道链接，直接粘贴到手机浏览器）' 'DarkGray'
+    } else {
+      Say '（已写入剪贴板，但读回来不一致 —— 粘之前先核一下域名是不是 trycloudflare.com）' 'Yellow'
+    }
+  } else {
+    Say '（复制到剪贴板失败：手动选中上面那条复制）' 'Yellow'
+  }
 
   Say ''
   Say '保持这个窗口开着：关掉窗口 = 隧道和 dsh 一起停。' 'Yellow'
