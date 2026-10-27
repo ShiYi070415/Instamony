@@ -274,3 +274,17 @@
       目录改名不影响它们（要让证书也改名，得改完文件后同步改 `build-profile.json5` 三处路径）。
       **Git 远端不受影响**（远端是 `ShiYi070415/Instamony`），改完目录名 `git status` 应当仍是干净的。
 
+## 打测试包的交付约定（用户明确要求，别忘）
+
+- **产物用 `.app`（App Pack），不要 `.hap`**（2026-10-27 用户："下次记得用 .app 格式的包"）。
+  命令：`hvigorw --mode project -p product=default -p buildMode=release assembleApp --no-daemon`，
+  产物在 `build/outputs/app/<工程目录名>-default-signed.app`（目录名还是 Instarmony，所以叫
+  `Instarmony-default-signed.app`；改名后自动变 `Instamony-default-signed.app`）。
+- **链接要单独一行、不加粗、后面不紧跟任何字符**：之前在链接后面接 `**（2,324,548 B）`，
+  点开时星号和括号被算进 URL，变成 `...hap**（2,324,548` 这种带尾巴的地址。
+- 每次附两条：`files.catbox.moe` 的直链 + MeoW 推送链接（昵称 `Yijin`，格式
+  `https://api.chuckfang.com/Yijin/<title>/<msg>?url=<encode(直链)>`）。
+- **MeoW 推送只能由用户的网络发出**：本机出口 IP 被 MeoW 全局拦截（连未注册昵称都回
+  `429 IP限制`，GET/POST/表单都试过），要么用户点链接自己发，要么把本机 IP 加进白名单
+  （见 MeoW 文档第 6 节「公共 IP 提示」）。
+
