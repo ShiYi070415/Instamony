@@ -131,6 +131,7 @@ import {
 import { ProfilePage } from '../components/ProfilePage';
 import { ProfileSegmentBar, SEGMENT_MODE_REELS, SEGMENT_MODE_USER } from '../components/ProfileSegmentBar';
 import { DirectPage } from '../components/DirectPage';
+import { ReelsCrashLog } from '../core/ReelsCrashLog';
 import { DirectThreadPage } from '../components/DirectThreadPage';
 import { SearchPage } from '../components/SearchPage';
 import { StoriesTray } from '../components/StoriesTray';
@@ -3352,6 +3353,9 @@ struct Index {
     }
     const inList: boolean = this.directVm.applyRealtimeMessage(incoming.threadId,
       incoming.message, readHere);
+    // 面包屑：实时补丁到底有没有落到列表那一行（导出的诊断里能看到）。
+    ReelsCrashLog.note(`direct realtime inList=${inList} readHere=${readHere}`
+      + ` mine=${incoming.message.mine} ts=${incoming.message.tsMs}`);
     if (!inList) {
       this.scheduleDirectInboxRefresh();
     }
@@ -9242,8 +9246,9 @@ struct Index {
      * 把私信列表那一行的未读标记（粗体 + 右侧蓝点）立刻清掉 ——
      * 不用等下一次整表刷新（见 core/mobileapi/MobileDirect.markSeen）。
      */
-    this.directThreadVm.onSeen = (threadId: string): void => {
-      this.directVm.markThreadRead(threadId);
+    this.directThreadVm.onSeen = (threadId: string, tsMs: number): void => {
+      // tsMs = 会话页读到的那条消息时间：列表用它记本地已读台账（见 DirectViewModel.readUpTo）。
+      this.directVm.markThreadRead(threadId, tsMs);
     };
     this.navStack.pushPath({ name: DIRECT_THREAD_PAGE, param: thread.id });
   }

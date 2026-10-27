@@ -24,6 +24,8 @@ import { NativeDirect } from '../core/NativeDirect';
 import { MobileDirect } from '../core/mobileapi/MobileDirect';
 import { DirectMessage, DirectThreadView } from '../model/Direct';
 import { AppLifecycle } from '../core/AppLifecycle';
+// mark_seen 的结果写一行面包屑（导出的诊断里能看到"已读到底成没成"，见 markThreadSeen）。
+import { ReelsCrashLog } from '../core/ReelsCrashLog';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'DirectThreadViewModel';
@@ -139,7 +141,8 @@ export class DirectThreadViewModel {
   /** 已经报过"已读"的那条（`threadId:messageId`，见 markThreadSeen）。 */
   private seenSentFor: string = '';
   /** "这条会话已在服务端标成已读" → 收件箱列表把它的未读标记清掉（见 pages/Index 的接线）。 */
-  onSeen: (threadId: string) => void = (threadId: string): void => {
+  /** 这条会话已在服务端标成已读（tsMs = 读到的那条消息时间，列表用它记本地台账）。 */
+  onSeen: (threadId: string, tsMs: number) => void = (threadId: string, tsMs: number): void => {
   };
   private busy: boolean = false;
   /** 现在这一发是给哪条会话读的（见 load 里的 busyFor 判断）。 */
@@ -498,10 +501,16 @@ export class DirectThreadViewModel {
     this.seenSentFor = key;
     MobileDirect.markSeen(view.id, newest.id).then((ok: boolean): void => {
       hilog.info(DOMAIN, TAG, 'seen reported id=%{public}s ok=%{public}s', view.id, `${ok}`);
-      if (ok) {
-        this.onSeen(view.id);
-      }
-    }).catch((): void => {
+      /*
+       * **无论服务端成没成，本地都要记一笔已读**（见 DirectViewModel.markThreadRead 的台账）。
+       * 成了当然要记；没成（限流 / 接口抖动）更要记 —— 否则用户读完退出、列表 20 秒后
+       * 轮询回来又把它画成未读，看起来就是"已读没生效"。
+       */
+      ReelsCrashLog.note(`direct seen id=${view.id} ok=${ok} ts=${newest.tsMs}`);
+      this.onSeen(view.id, newest.tsMs);
+    }).catch((error: Error): void => {
+      ReelsCrashLog.note(`direct seen FAILED id=${view.id} ${error.message ?? '-'}`);
+      this.onSeen(view.id, newest.tsMs);
     });
   }
 

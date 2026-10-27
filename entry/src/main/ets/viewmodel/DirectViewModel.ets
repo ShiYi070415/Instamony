@@ -39,6 +39,7 @@ export class DirectViewModel {
     this.loadedAtMs = 0;
     this.diag = '-';
     this.notifiedTs = new Map<string, number>();
+    this.readUpTo = new Map<string, number>();
   }
 
   private threads: Array<DirectThread> = [];
@@ -63,6 +64,17 @@ export class DirectViewModel {
    * "同一条会话继续来新消息"，于是出现"突然不弹通知"。
    */
   private notifiedTs: Map<string, number> = new Map<string, number>();
+  /**
+   * **本地"已读到哪条"台账**：会话 id → 已读到的消息时间戳（毫秒）。
+   *
+   * 为什么需要：已读除了发给服务端（mark_seen），本地也必须留一份事实 ——
+   * 服务端那份会慢半拍，甚至在限流/接口失败时**一直不更新**；而收件箱每 20 秒轮询一次、
+   * 每次都用服务端数据整份覆盖列表，于是刚读完退出的会话又被画成未读
+   * （用户报的"进入会话已读后退出仍然是未读"）。
+   * 有了这张表：只要本地记过"这条会话在 X 时刻已读"，服务端回来的最新消息不晚于 X
+   * 就一律按已读渲染。
+   */
+  private readUpTo: Map<string, number> = new Map<string, number>();
   /**
    * 上次**成功**拉到收件箱的时刻（毫秒；0 = 还没拉到过）。
    *
@@ -132,7 +144,7 @@ export class DirectViewModel {
       if (DirectViewModel.sameThreads(this.threads, page.threads)) {
         return false;
       }
-      this.threads = page.threads;
+      this.threads = this.withReadLedger(page.threads);
       this.endCursor = page.endCursor;
       this.more = page.hasMore && page.endCursor.length > 0;
       this.loadedAtMs = Date.now();
@@ -188,8 +200,11 @@ export class DirectViewModel {
         message.tsMs, old.tsMs);
       return true;
     }
-    const unread: boolean = readHere || message.mine ? false : true;
-    const unreadCount: number = readHere || message.mine
+    // 台账里记过"读到这里"的：这条推送再新也不算未读（离线补丁重放常见）。
+    const readAt: number | undefined = this.readUpTo.get(threadId);
+    const alreadyRead: boolean = readAt !== undefined && message.tsMs > 0 && message.tsMs <= readAt;
+    const unread: boolean = readHere || message.mine || alreadyRead ? false : true;
+    const unreadCount: number = readHere || message.mine || alreadyRead
       ? 0 : Math.min(4, Math.max(1, old.unreadCount + 1));
     const updated: DirectThread = new DirectThread(old.id, old.key, old.title, old.avatarUrl,
       old.isGroup, unread, old.muted, old.pinned,
@@ -256,6 +271,37 @@ export class DirectViewModel {
     return true;
   }
 
+  /**
+   * 过一遍本地已读台账：本地记过已读的会话，服务端若仍说未读，以本地为准。
+   *
+   * 判据用**时间戳**比较：台账里记的是"读到的最后一条消息时间"，服务端那条会话的
+   * 最新消息时间不晚于它 → 已经读过（哪怕服务端 read_state 还没刷新）。
+   */
+  private withReadLedger(threads: Array<DirectThread>): Array<DirectThread> {
+    if (this.readUpTo.size === 0 || threads.length === 0) {
+      return threads;
+    }
+    const out: Array<DirectThread> = [];
+    let changed: boolean = false;
+    for (let index: number = 0; index < threads.length; index++) {
+      const one: DirectThread = threads[index];
+      const readAt: number | undefined = this.readUpTo.get(one.id);
+      if (readAt === undefined || (!one.unread && one.unreadCount === 0)) {
+        out.push(one);
+        continue;
+      }
+      // 服务端这条会话的最新消息不晚于"本地已读时刻"→ 读过了。
+      if (one.tsMs > 0 && one.tsMs <= readAt) {
+        out.push(new DirectThread(one.id, one.key, one.title, one.avatarUrl, one.isGroup,
+          false, one.muted, one.pinned, one.tsMs, one.text, one.kind, one.username, 0));
+        changed = true;
+        continue;
+      }
+      out.push(one);
+    }
+    return changed ? out : threads;
+  }
+
   /** 两份列表"看着一样"吗（轮询用它决定要不要重绘）。 */
   private static sameThreads(older: Array<DirectThread>,
                              newer: Array<DirectThread>): boolean {
@@ -278,7 +324,23 @@ export class DirectViewModel {
    *
    * 由 `DirectThreadViewModel.onSeen` 在服务端 `mark_seen` 成功之后回调（见 pages/Index）。
    */
-  markThreadRead(threadId: string): void {
+  markThreadRead(threadId: string, tsMs: number = 0): void {
+    /*
+     * 先记台账：哪怕服务端那条 mark_seen 失败/慢，本地也认"这条会话已经读到这里"。
+     * tsMs 传 0 时退回用列表里这条会话自己的最新消息时间。
+     */
+    let readAt: number = tsMs;
+    if (readAt <= 0) {
+      for (let index: number = 0; index < this.threads.length; index++) {
+        if (this.threads[index].id === threadId) {
+          readAt = this.threads[index].tsMs;
+          break;
+        }
+      }
+    }
+    if (readAt > 0) {
+      this.readUpTo.set(threadId, readAt);
+    }
     let changed: boolean = false;
     const next: Array<DirectThread> = [];
     for (let index: number = 0; index < this.threads.length; index++) {
@@ -430,7 +492,7 @@ export class DirectViewModel {
         this.onStatus('读取失败：' + this.diag);
         return;
       }
-      this.threads = page.threads;
+      this.threads = this.withReadLedger(page.threads);
       this.endCursor = page.endCursor;
       // 没有游标就当到底了：触底哨兵只看 more，不看清游标，会让它一直空转。
       this.more = page.hasMore && page.endCursor.length > 0;
@@ -483,7 +545,7 @@ export class DirectViewModel {
         this.onThreads(this.threads, this.more);
         return;
       }
-      this.threads = this.threads.concat(page.threads);
+      this.threads = this.withReadLedger(this.threads.concat(page.threads));
       this.endCursor = page.endCursor;
       this.more = page.hasMore && page.endCursor.length > 0;
       this.onThreads(this.threads, this.more);
