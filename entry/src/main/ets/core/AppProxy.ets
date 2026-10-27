@@ -200,6 +200,54 @@ export class AppProxy {
     return true;
   }
 
+  /**
+   * 改掉第 index 份（「管理代理」页左滑的编辑）。
+   *
+   * 改的若是**当前选中**那一份、且开关开着，就立刻重新应用到系统接口 ——
+   * 否则用户改完 IP 却还在走旧隧道（这类"改了没生效"的反馈最难查）。
+   */
+  static update(index: number, entry: ProxyEntry): boolean {
+    if (index < 0 || index >= AppProxy.entries.length || !entry.enabled()) {
+      return false;
+    }
+    AppProxy.entries[index] = entry;
+    AppProxy.persistEntries();
+    if (AppProxy.enabledFlag && index === AppProxy.activeIndexValue) {
+      return AppProxy.applyEntry(entry);
+    }
+    return true;
+  }
+
+  /**
+   * 删掉第 index 份（「管理代理」页左滑的删除）。
+   *
+   * 删的若是当前选中项：选中位往后顺延一位（没有后一位就往前取），列表空了就清成 -1；
+   * 开关开着的话，新的选中项立刻生效；一份不剩时回到直连（开关本身也置回关）。
+   */
+  static remove(index: number): boolean {
+    if (index < 0 || index >= AppProxy.entries.length) {
+      return false;
+    }
+    AppProxy.entries.splice(index, 1);
+    if (AppProxy.entries.length === 0) {
+      AppProxy.activeIndexValue = -1;
+      AppProxy.enabledFlag = false;
+      AppProxy.persistEntries();
+      return AppProxy.apply(new AppProxyConfig());
+    }
+    if (index < AppProxy.activeIndexValue) {
+      AppProxy.activeIndexValue -= 1;
+    } else if (index === AppProxy.activeIndexValue) {
+      AppProxy.activeIndexValue = index < AppProxy.entries.length ? index : AppProxy.entries.length - 1;
+    }
+    AppProxy.persistEntries();
+    const current: ProxyEntry | null = AppProxy.currentEntry();
+    if (AppProxy.enabledFlag && current !== null) {
+      return AppProxy.applyEntry(current);
+    }
+    return true;
+  }
+
   /** 打开/关闭总开关（开启时必须有选中的代理）。 */
   static setEnabled(value: boolean): boolean {
     const entry: ProxyEntry | null = AppProxy.currentEntry();

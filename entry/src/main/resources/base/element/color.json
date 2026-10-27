@@ -96,5 +96,14 @@
       "name": "comments_scrim",
       "value": "#66FFFFFF"
     }
-  ]
+  ,
+    {
+      "name": "proxy_action_edit",
+      "value": "#FFCC00"
+    },
+    {
+      "name": "proxy_action_delete",
+      "value": "#ED4956"
+    }
+]
 }

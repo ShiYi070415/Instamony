@@ -108,22 +108,26 @@ const PROXY_FIELD_HEIGHT: number = 42;
 const CARD_BORDER: number = 1;
 
 /**
- * 「选择代理」半模态里的卡片尺寸（需求：圆角 + blur 模糊卡片，只显示代理名称）。
+ * 「管理代理」半模态里的卡片尺寸（需求：圆角 + blur 模糊卡片，卡片之间留间距，单选）。
  *
  * 高度取 52：和设置页里其它可点行的观感接近，又是"卡片"而不是"按钮"那一档；
  * 圆角沿用卡片档 CARD_RADIUS（16），全页圆角只有三档，这里不新造一档。
  */
-const PROXY_PICK_CARD_HEIGHT: number = 52;
-const PROXY_PICK_CARD_RADIUS: number = CARD_RADIUS;
-/** 卡片之间的间距（vp）。 */
-const PROXY_PICK_CARD_GAP: number = 10;
+const PROXY_CARD_HEIGHT: number = 52;
+const PROXY_CARD_RADIUS: number = CARD_RADIUS;
+/** 卡片之间的间距（vp；需求："每个卡片之间保持距离"）。 */
+const PROXY_CARD_GAP: number = 10;
+/** 卡片左侧的单选图标尺寸（需求：图标显示在卡片左边）。 */
+const PROXY_CARD_ICON: number = 20;
 /**
  * 列表区最大高度（vp）：超了就内部滚动。
  *
- * 半模态用的是 FIT_CONTENT（高度跟着内容走），代理一多会把按钮挤出屏幕 ——
+ * 半模态用的是 FIT_CONTENT（高度跟着内容走），代理一多会把底部按钮挤出屏幕 ——
  * 所以列表本身设一个上限，卡片再多也只是它自己滚。
  */
-const PROXY_PICK_LIST_MAX: number = 300;
+const PROXY_MANAGE_LIST_MAX: number = 300;
+/** 左滑露出的操作按钮尺寸（vp）：宽 64、高度与卡片齐平。 */
+const PROXY_SWIPE_WIDTH: number = 64;
 
 /**
  * 下拉里四档的**顺序**（也是下标 → 取值 的映射表）。
@@ -153,23 +157,18 @@ export struct SettingsPanel {
   @State private proxyOn: boolean = false;
   @State private proxyNames: Array<string> = [];
   @State private proxyActive: number = -1;
+  /** 添加 / 编辑面板（同一个半模态：`editingIndex < 0` 是添加，否则是编辑那一份）。 */
   @State private proxySheet: boolean = false;
-  /**
-   * 「选择代理」半模态（点「已保存的代理」那一行打开）。
-   *
-   * 需求：原来那一行是 `Select` 下拉菜单，改成和「添加代理」同一套半模态面板 ——
-   * 列表是圆角 blur 卡片（只显示代理名称），最底部一颗「确定」。
-   */
-  @State private proxyPick: boolean = false;
-  /** 面板里**草稿**选中的下标：点卡片只改它，点「确定」才真正切过去。 */
-  @State private pickDraft: number = -1;
-  /**
-   * 列表里点了「添加代理」：等选择面板**关完**再开添加面板。
-   *
-   * 为什么不能当场开：同一个页面里两个半模态不能同时挂（后开的那个不显示或状态错乱），
-   * 所以这里只置标记，由选择面板的 onDisappear 接力打开添加面板。
-   */
-  private pickWantsAdd: boolean = false;
+  /** 正在编辑第几份（-1 = 新增）。 */
+  @State private editingIndex: number = -1;
+  /** 「管理代理」半模态（从下拉菜单最后一项进入）。 */
+  @State private proxyManage: boolean = false;
+  /** 管理面板里**草稿**选中的下标：点卡片只改它，点「确定」才真正切过去。 */
+  @State private manageDraft: number = -1;
+  /** 管理面板里点了「添加代理」：等它**关完**再开添加面板（两个半模态不能同时开）。 */
+  private manageWantsAdd: boolean = false;
+  /** 管理面板里点了「编辑」：同上，关完再开编辑面板（-1 = 没有）。 */
+  private manageEditIndex: number = -1;
   @State private draftName: string = '';
   @State private draftHost: string = '';
   @State private draftPort: string = '';
@@ -269,33 +268,47 @@ export struct SettingsPanel {
       .width('100%')
 
       Column() {
-        Row() {
+        Row({ space: 12 }) {
           Text($r('app.string.settings_proxy_saved'))
             .fontSize(16)
             .fontColor($r('app.color.primary_text'))
           Blank()
-          Text(this.currentProxyLabel())
-            .fontSize(14)
-            .fontColor($r('app.color.secondary_text'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .constraintSize({ maxWidth: 180 })
-          // 尾巴上的"下拉"箭头（需求：点下拉按钮打开面板）——整行都可点，箭头只是提示。
-          SymbolGlyph($r('sys.symbol.chevron_down'))
-            .fontSize(14)
-            .fontColor([$r('app.color.secondary_text')])
-            .margin({ left: 4 })
+          /*
+           * **下拉按钮（回到原来的样式）**：`Select` 的下拉菜单。
+           *
+           * 选单最后一项固定是"功能入口"，随状态变：
+           *   · 一份代理都没有 → 「添加代理」（点了直接开添加面板）；
+           *   · 已经有代理     → 「管理代理」（点了开管理面板：编辑 / 删除 / 换选中）。
+           * `.selected` 必须夹在下标范围内：选中项只在"已保存的代理"里，从不落在最后那一项上。
+           */
+          Select(this.proxyOptions())
+            .selected(this.proxyActive >= 0 && this.proxyActive < this.proxyNames.length
+              ? this.proxyActive
+              : -1)
+            .value(this.currentProxyLabel())
+            .font({ size: 14 })
+            .onSelect((index: number, value: string): void => {
+              if (index === this.proxyNames.length) {
+                // 选单最后一项：没有代理就是「添加代理」，有代理就是「管理代理」。
+                if (this.proxyNames.length === 0) {
+                  this.openProxySheet();
+                } else {
+                  this.openProxyManage();
+                }
+                return;
+              }
+              if (AppProxy.select(index)) {
+                this.proxyActive = index;
+              }
+            })
         }
         .width('100%')
         .height(SIGN_OUT_HEIGHT)
-        .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING })
-        .onClick((): void => {
-          this.openProxyPick();
-        })
+        .padding({ left: CARD_ROW_PADDING, right: 8 })
       }
       .width('100%')
-      // 选择面板挂在这一行上（添加面板挂在外层 Column 上），两个半模态各有各的状态。
-      .bindSheet($$this.proxyPick, this.proxyPickSheet(), this.proxyPickOptions())
+      // 管理面板挂在这一行上（添加/编辑面板挂在外层 Column 上），两个半模态各有各的状态。
+      .bindSheet($$this.proxyManage, this.proxyManageSheet(), this.proxyManageOptions())
 
       // **卡片结尾的描述**（与"诊断"分类同款）：讲清作用范围与生效方式。
       this.groupHint($r('app.string.settings_proxy_hint'))
@@ -328,54 +341,112 @@ export struct SettingsPanel {
   }
 
   /**
-   * 打开「选择代理」面板。
+   * 下拉选项：已保存代理的别名 + **末尾固定一个功能入口**。
    *
-   * 一份代理都没有时直接去添加面板：用户点这一行就是要配代理，先给一个空列表让他
-   * 自己再点一次"添加"没有意义。
+   * 功能入口随状态变（需求）：
+   *   · 一份都没保存 → 「添加代理」；
+   *   · 已经保存过   → 「管理代理」。
    */
-  private openProxyPick(): void {
+  private proxyOptions(): Array<SelectOption> {
+    const out: Array<SelectOption> = [];
+    for (let i: number = 0; i < this.proxyNames.length; i++) {
+      const one: SelectOption = { value: this.proxyNames[i] };
+      out.push(one);
+    }
+    let trailing: ResourceStr = $r('app.string.settings_proxy_manage_title');
+    if (this.proxyNames.length === 0) {
+      trailing = $r('app.string.settings_proxy_add');
+    }
+    const action: SelectOption = { value: trailing };
+    out.push(action);
+    return out;
+  }
+
+  /** 打开「管理代理」面板（下拉菜单最后一项进入）。 */
+  private openProxyManage(): void {
     this.refreshProxyNames();
     if (this.proxyNames.length === 0) {
+      // 理论上进不来（没代理时最后一项是「添加代理」），留个兜底。
       this.openProxySheet();
       return;
     }
-    this.pickDraft = this.proxyActive;
-    this.proxyPick = true;
+    this.manageDraft = this.proxyActive;
+    this.proxyManage = true;
   }
 
   /**
-   * 面板最底部那颗「确定」：把草稿选中落实。
+   * 管理面板最底部那颗「确定」：把草稿选中落实。
    *
    * 只有**真的换了一份**才走 AppProxy.select（它会落盘，开关开着时还会立刻换隧道）；
-   * 没选（pickDraft 仍是 -1）就只是关面板。
+   * 没选（manageDraft 仍是 -1）就只是关面板。
    */
-  private confirmProxyPick(): void {
-    const index: number = this.pickDraft;
+  private confirmProxyManage(): void {
+    const index: number = this.manageDraft;
     if (index >= 0 && index < this.proxyNames.length && index !== this.proxyActive) {
       if (AppProxy.select(index)) {
         this.proxyActive = index;
       }
     }
-    this.proxyPick = false;
+    this.proxyManage = false;
   }
 
-  /** 列表里点了「添加代理」：关掉选择面板，由它的 onDisappear 接力开添加面板。 */
-  private requestAddFromPick(): void {
-    this.pickWantsAdd = true;
-    this.proxyPick = false;
+  /** 管理面板里点了「添加代理」：关掉它，由 onDisappear 接力开添加面板。 */
+  private requestAddFromManage(): void {
+    this.manageWantsAdd = true;
+    this.proxyManage = false;
   }
 
-  /** 选择面板的外观（和添加面板同一套：系统原生面板 + 沉浸光感材质，见 proxySheetOptions）。 */
-  private proxyPickOptions(): SheetOptions {
+  /** 管理面板里左滑点了「编辑」：关掉它，由 onDisappear 接力开编辑面板。 */
+  private requestEditFromManage(index: number): void {
+    this.manageEditIndex = index;
+    this.proxyManage = false;
+  }
+
+  /**
+   * 管理面板里左滑点了「删除」：直接删（系统里这类左滑删除都是立即生效的）。
+   *
+   * 删完要把草稿下标对齐：删掉的是草稿项就置回"没选"，删在草稿前面就往前挪一位 ——
+   * 否则「确定」会把用户选中的那份换成相邻的另一份。
+   */
+  private deleteProxy(index: number): void {
+    if (!AppProxy.remove(index)) {
+      return;
+    }
+    this.refreshProxyNames();
+    if (this.manageDraft === index) {
+      this.manageDraft = -1;
+    } else if (this.manageDraft > index) {
+      this.manageDraft -= 1;
+    }
+    if (this.manageDraft >= this.proxyNames.length) {
+      this.manageDraft = this.proxyNames.length > 0 ? this.proxyNames.length - 1 : -1;
+    }
+    this.toast($r('app.string.settings_proxy_deleted'));
+    // 一份都不剩就没得管理了：直接收面板（下拉最后一项也会自己变回「添加代理」）。
+    if (this.proxyNames.length === 0) {
+      this.proxyManage = false;
+    }
+  }
+
+  /** 管理面板的外观（和添加面板同一套：系统原生面板 + 沉浸光感材质）。 */
+  private proxyManageOptions(): SheetOptions {
     const options: SheetOptions = {
       height: SheetSize.FIT_CONTENT,
       dragBar: true,
       showClose: true
     };
-    options.title = { title: $r('app.string.settings_proxy_pick_title') };
+    // HDS 标题（需求："要 hdstitle"）：和添加面板一样交给半模态自带的标题区。
+    options.title = { title: $r('app.string.settings_proxy_manage_title') };
     options.onDisappear = (): void => {
-      if (this.pickWantsAdd) {
-        this.pickWantsAdd = false;
+      // 关完再接力开另一个半模态（同一页面两个半模态不能同时挂）。
+      if (this.manageEditIndex >= 0) {
+        const index: number = this.manageEditIndex;
+        this.manageEditIndex = -1;
+        this.openProxyEdit(index);
+        return;
+      }
+      if (this.manageWantsAdd) {
+        this.manageWantsAdd = false;
         this.openProxySheet();
       }
     };
@@ -401,32 +472,48 @@ export struct SettingsPanel {
   }
 
   /**
-   * 半模态：**选择已保存的代理**。
+   * 半模态：**管理代理**（下拉菜单最后一项进入，参考添加面板的样式）。
    *
-   * 需求：卡片用圆角 + blur 模糊卡片、只显示代理名称；最底部一颗「确定」。
-   * 点卡片只改草稿（画个勾），点「确定」才真正切换 —— 和系统设置里"选完再确认"的
-   * 面板一致，也避免误触一下就换了隧道。
+   * 需求逐条对应：
+   *   · HDS 标题 → `proxyManageOptions` 里的 `options.title`；
+   *   · 内容用 blur 模糊圆角卡片、卡片之间保持距离 → `proxyManageCard` + List 的 `space`；
+   *   · 左滑显示「编辑」（黄底）和「删除」（红底） → `swipeAction` + `proxySwipeActions`；
+   *   · 卡片是单选的、图标在卡片左边 → 左侧 `circle` / `checkmark_circle_fill` 单选图标；
+   *   · 底部「确定」 → 面板最下面那颗按钮（点了才真正切换）。
    */
   @Builder
-  proxyPickSheet() {
+  proxyManageSheet() {
     Column({ space: 12 }) {
-      // 列表本身设上限：FIT_CONTENT 会跟着内容长高，代理一多就把「确定」顶出屏幕。
-      Scroll() {
-        Column({ space: PROXY_PICK_CARD_GAP }) {
-          ForEach(this.proxyNames, (name: string, index: number) => {
-            this.proxyPickCard(name, index)
-          }, (name: string, index: number): string => `${index}-${name}`)
-          // 末尾固定一个「添加代理」（原来下拉菜单里它也是最后一项）。
-          this.proxyAddCard()
+      // 用 List 而不是 Column：左滑操作只挂在 ListItem 上。列表设上限，FIT_CONTENT 不会把按钮顶出屏幕。
+      List({ space: PROXY_CARD_GAP }) {
+        ForEach(this.proxyNames, (name: string, index: number) => {
+          ListItem() {
+            this.proxyManageCard(name, index)
+          }
+          .swipeAction({
+            end: {
+              builder: (): void => {
+                this.proxySwipeActions(index);
+              },
+              // 左滑露出的总宽度 = 两个按钮 + 中间间隙。
+              actionAreaDistance: PROXY_SWIPE_WIDTH * 2 + 6
+            },
+            edgeEffect: SwipeEdgeEffect.Spring
+          })
+        }, (name: string, index: number): string => `${index}-${name}`)
+
+        // 末尾固定「添加代理」：有代理之后下拉最后一项变成了「管理代理」，
+        // 不给一个添加入口就再也加不了第二份了。
+        ListItem() {
+          this.proxyManageAddCard()
         }
-        .width('100%')
       }
       .width('100%')
-      .constraintSize({ maxHeight: PROXY_PICK_LIST_MAX })
+      .constraintSize({ maxHeight: PROXY_MANAGE_LIST_MAX })
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.None)
 
-      // 最底部：确定（同一颗沉浸光感文字按钮，和添加面板底部的「添加」同款）。
+      // 最底部：确定（和添加面板底部的「添加」同款沉浸光感文字按钮）。
       Toggle({ type: ToggleType.Button, isOn: false }) {
         Text($r('app.string.settings_proxy_confirm'))
           .fontSize(16)
@@ -442,7 +529,7 @@ export struct SettingsPanel {
       .backgroundColor(Color.Transparent)
       // 只挂 onClick：Toggle(Button) 的 onChange 在真机上不一定来（见 MaterialSurface 的说明）。
       .onClick((): void => {
-        this.confirmProxyPick();
+        this.confirmProxyManage();
       })
     }
     .width('100%')
@@ -450,16 +537,21 @@ export struct SettingsPanel {
   }
 
   /**
-   * 一行代理卡片：**圆角 + blur 模糊卡片**，只显示名称。
+   * 一行代理卡片：**圆角 + blur 模糊卡片**，图标在左、名称在右。
    *
    * 材质只能由 Toggle 承载（官方生效范围，见 MaterialSurface 文件头），所以卡片本体是
-   * 一颗透明的 Toggle(Button)，圆角/模糊/材质都由它给；选中态靠右侧那颗勾，不改底色
-   * （材质是"透"的，再垫一层色会发灰）。
+   * 一颗透明的 Toggle(Button)，圆角/模糊/材质都由它给；选中态靠左边的单选图标，
+   * **不改底色**（材质是"透"的，再垫一层色会发灰）。
    */
   @Builder
-  proxyPickCard(name: string, index: number) {
+  proxyManageCard(name: string, index: number) {
     Toggle({ type: ToggleType.Button, isOn: false }) {
       Row({ space: 10 }) {
+        SymbolGlyph(index === this.manageDraft
+          ? $r('sys.symbol.checkmark_circle_fill')
+          : $r('sys.symbol.circle'))
+          .fontSize(PROXY_CARD_ICON)
+          .fontColor([index === this.manageDraft ? $r('app.color.accent') : $r('app.color.secondary_text')])
         Text(name)
           .fontSize(15)
           .maxLines(1)
@@ -467,31 +559,26 @@ export struct SettingsPanel {
           .textAlign(TextAlign.Start)
           .layoutWeight(1)
           .fontColor($r('app.color.primary_text'))
-        if (index === this.pickDraft) {
-          SymbolGlyph($r('sys.symbol.checkmark'))
-            .fontSize(16)
-            .fontColor([$r('app.color.accent')])
-        }
       }
       .width('100%')
-      .height(PROXY_PICK_CARD_HEIGHT)
+      .height(PROXY_CARD_HEIGHT)
       .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING })
     }
     .width('100%')
-    .height(PROXY_PICK_CARD_HEIGHT)
+    .height(PROXY_CARD_HEIGHT)
     .padding(0)
-    .borderRadius(PROXY_PICK_CARD_RADIUS)
+    .borderRadius(PROXY_CARD_RADIUS)
     .backgroundColor(Color.Transparent)
     .selectedColor(Color.Transparent)
     .attributeModifier(new SurfaceModifier(this.materialThickness, true))
     .onClick((): void => {
-      this.pickDraft = index;
+      this.manageDraft = index;
     })
   }
 
   /** 列表末尾的「添加代理」卡片（同款圆角模糊底，内容用强调色区分）。 */
   @Builder
-  proxyAddCard() {
+  proxyManageAddCard() {
     Toggle({ type: ToggleType.Button, isOn: false }) {
       Row({ space: 8 }) {
         SymbolGlyph($r('sys.symbol.plus'))
@@ -502,19 +589,60 @@ export struct SettingsPanel {
           .fontColor($r('app.color.accent'))
       }
       .width('100%')
-      .height(PROXY_PICK_CARD_HEIGHT)
+      .height(PROXY_CARD_HEIGHT)
       .justifyContent(FlexAlign.Center)
     }
     .width('100%')
-    .height(PROXY_PICK_CARD_HEIGHT)
+    .height(PROXY_CARD_HEIGHT)
     .padding(0)
-    .borderRadius(PROXY_PICK_CARD_RADIUS)
+    .borderRadius(PROXY_CARD_RADIUS)
     .backgroundColor(Color.Transparent)
     .selectedColor(Color.Transparent)
     .attributeModifier(new SurfaceModifier(this.materialThickness, true))
     .onClick((): void => {
-      this.requestAddFromPick();
+      this.requestAddFromManage();
     })
+  }
+
+  /**
+   * 左滑露出的两颗按钮：编辑（黄底黑字）+ 删除（红底白字）。
+   *
+   * 为什么用 `Button` 而不是材质按钮：SlidableItem 的操作区是**独立的一块**，按需求要
+   * 明确的色块（黄/红），材质是"透"的、上去反而不黄不红。圆角卡片档（16）和卡片对齐。
+   */
+  @Builder
+  proxySwipeActions(index: number) {
+    Row({ space: 6 }) {
+      Button({ type: ButtonType.Normal }) {
+        Text($r('app.string.settings_proxy_edit_action'))
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#000000')
+      }
+      .width(PROXY_SWIPE_WIDTH)
+      .height(PROXY_CARD_HEIGHT)
+      .borderRadius(PROXY_CARD_RADIUS)
+      .backgroundColor($r('app.color.proxy_action_edit'))
+      .onClick((): void => {
+        this.requestEditFromManage(index);
+      })
+
+      Button({ type: ButtonType.Normal }) {
+        Text($r('app.string.settings_proxy_delete_action'))
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Color.White)
+      }
+      .width(PROXY_SWIPE_WIDTH)
+      .height(PROXY_CARD_HEIGHT)
+      .borderRadius(PROXY_CARD_RADIUS)
+      .backgroundColor($r('app.color.proxy_action_delete'))
+      .onClick((): void => {
+        this.deleteProxy(index);
+      })
+    }
+    .height(PROXY_CARD_HEIGHT)
+    .margin({ left: 6 })
   }
 
   private refreshProxyNames(): void {
@@ -528,14 +656,52 @@ export struct SettingsPanel {
     this.proxyOn = AppProxy.enabled();
   }
 
+  /** 打开添加面板（空表单）。 */
   private openProxySheet(): void {
     this.refreshProxyNames();
+    this.editingIndex = -1;
     this.draftName = '';
     this.draftHost = '';
     this.draftPort = '';
     this.draftUser = '';
     this.draftPass = '';
     this.proxySheet = true;
+  }
+
+  /**
+   * 打开编辑面板：把第 index 份代理的字段灌进草稿。
+   *
+   * 密码是明文存的（`ProxyEntry.password`），所以编辑时能原样回填；
+   * 用户不动它就直接保存，不会因为"看不到密码"被悄悄清空。
+   */
+  private openProxyEdit(index: number): void {
+    const list: Array<ProxyEntry> = AppProxy.list();
+    if (index < 0 || index >= list.length) {
+      return;
+    }
+    const one: ProxyEntry = list[index];
+    this.refreshProxyNames();
+    this.editingIndex = index;
+    this.draftName = one.name;
+    this.draftHost = one.host;
+    this.draftPort = one.port > 0 ? `${one.port}` : '';
+    this.draftUser = one.username;
+    this.draftPass = one.password;
+    this.proxySheet = true;
+  }
+
+  /** 面板标题：编辑态「编辑代理」，新增态「添加代理」（都走半模态的 HDS 标题）。 */
+  private proxySheetTitle(): ResourceStr {
+    return this.editingIndex >= 0
+      ? $r('app.string.settings_proxy_edit_title')
+      : $r('app.string.settings_proxy_add_title');
+  }
+
+  /** 底部按钮文案：编辑态「保存」，新增态「添加」。 */
+  private proxySubmitLabel(): ResourceStr {
+    return this.editingIndex >= 0
+      ? $r('app.string.settings_proxy_save')
+      : $r('app.string.settings_proxy_add');
   }
 
   /**
@@ -563,8 +729,11 @@ export struct SettingsPanel {
      * 添加成功那条路由 submitProxy 里的 setEnabled(true) 落实，这里只做兜底。
      */
     // **标题走 HDS 标题样式**（半模态自带的 title 区域），比自绘 Text 更贴规范。
-    options.title = { title: $r('app.string.settings_proxy_add_title') };
+    // 标题跟着模式走：编辑那一份时是「编辑代理」。
+    options.title = { title: this.proxySheetTitle() };
     options.onDisappear = (): void => {
+      // 关面板（取消/完成）都要清掉"编辑第几份"，否则下一次点「添加」会变成编辑。
+      this.editingIndex = -1;
       this.proxyOn = AppProxy.enabled();
     };
     return this.applySheetLook(options);
@@ -588,7 +757,8 @@ export struct SettingsPanel {
         $r('app.string.proxy_ph_optional'))
 
       Toggle({ type: ToggleType.Button, isOn: false }) {
-        Text($r('app.string.settings_proxy_add'))
+        // 编辑态显示「保存」，新增态显示「添加」（标题同理，见 proxySheetTitle）。
+        Text(this.proxySubmitLabel())
           .fontSize(16)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.accent'))
@@ -603,7 +773,8 @@ export struct SettingsPanel {
       .attributeModifier(new SurfaceModifier(this.materialThickness, true))
       // 取消额外底色（需求）：材质本身就是表面，再垫一层会发灰。
       .backgroundColor(Color.Transparent)
-      .onChange((): void => {
+      // 只挂 onClick：Toggle(Button) 的 onChange 在真机上不一定来（见 MaterialSurface 的说明）。
+      .onClick((): void => {
         this.submitProxy();
       })
     }
@@ -658,7 +829,12 @@ export struct SettingsPanel {
     .width('100%')
   }
 
-  /** 添加：入库并打开总开关（保存即生效，不需要重启 App）。 */
+  /**
+   * 提交：**新增或编辑**（看 `editingIndex`）。
+   *
+   * 新增：入库 + 打开总开关（保存即生效，不需要重启 App）。
+   * 编辑：原地替换，**不动总开关**；改的若是当前选中项且开关开着，AppProxy 会立刻重新应用。
+   */
   private submitProxy(): void {
     const entry: ProxyEntry = new ProxyEntry();
     entry.name = this.draftName.trim().length > 0 ? this.draftName.trim() : this.draftHost.trim();
@@ -667,6 +843,16 @@ export struct SettingsPanel {
     entry.port = Number.isNaN(port) ? 0 : port;
     entry.username = this.draftUser.trim();
     entry.password = this.draftPass;
+    const editing: number = this.editingIndex;
+    if (editing >= 0) {
+      if (!AppProxy.update(editing, entry)) {
+        return;
+      }
+      this.editingIndex = -1;
+      this.proxySheet = false;
+      this.refreshProxyNames();
+      return;
+    }
     if (!AppProxy.add(entry)) {
       return;
     }

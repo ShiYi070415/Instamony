@@ -704,5 +704,12 @@
     {"name": "settings_proxy_pick_title", "value": "Choose proxy"},
     {"name": "settings_proxy_confirm", "value": "Confirm"},
     {"name": "settings_proxy_selected", "value": "Selected"}
+,
+    {"name": "settings_proxy_manage_title", "value": "Manage proxies"},
+    {"name": "settings_proxy_edit_title", "value": "Edit proxy"},
+    {"name": "settings_proxy_save", "value": "Save"},
+    {"name": "settings_proxy_edit_action", "value": "Edit"},
+    {"name": "settings_proxy_delete_action", "value": "Delete"},
+    {"name": "settings_proxy_deleted", "value": "Deleted"}
 ]
 }

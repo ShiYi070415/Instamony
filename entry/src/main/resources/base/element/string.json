@@ -960,5 +960,12 @@
     {"name": "settings_proxy_pick_title", "value": "选择代理"},
     {"name": "settings_proxy_confirm", "value": "确定"},
     {"name": "settings_proxy_selected", "value": "已选中"}
+,
+    {"name": "settings_proxy_manage_title", "value": "管理代理"},
+    {"name": "settings_proxy_edit_title", "value": "编辑代理"},
+    {"name": "settings_proxy_save", "value": "保存"},
+    {"name": "settings_proxy_edit_action", "value": "编辑"},
+    {"name": "settings_proxy_delete_action", "value": "删除"},
+    {"name": "settings_proxy_deleted", "value": "已删除"}
 ]
 }
