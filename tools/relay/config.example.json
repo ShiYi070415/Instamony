@@ -1,0 +1,20 @@
+{
+  "ig": {
+    "cookie": "粘贴 App 里「复制中转材料」得到的 cookie 整串",
+    "pollSeconds": 90
+  },
+  "notify": {
+    "channel": "agc",
+    "agc": {
+      "appId": "AGC 里的 App ID（数字）",
+      "clientId": "AGC 的 OAuth Client ID",
+      "clientSecret": "AGC 的 OAuth Client Secret"
+    },
+    "pushToken": "粘贴 App 里「复制中转材料」得到的 pushToken",
+    "meow": {
+      "nickname": "MeoW 昵称（channel=meow 时才用）"
+    }
+  },
+  "stateFile": "state.json",
+  "openUrl": "instamony://direct"
+}

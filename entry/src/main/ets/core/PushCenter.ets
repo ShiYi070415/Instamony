@@ -1,4 +1,4 @@
-/*
+﻿/*
  * **消息通知**：Push Kit（远端推送）+ NotificationKit（本地通知）。
  *
  * ## 两层各管什么
@@ -196,6 +196,11 @@ export class PushCenter {
   /** 有没有拿到推送 token（设置页/诊断可以显示）。 */
   static hasToken(): boolean {
     return PushCenter.token.length > 0;
+  }
+
+  /** 推送 token 本身（空串 = 还没拿到；BYO 中转要把它抄走，见设置页的「复制中转材料」）。 */
+  static tokenNow(): string {
+    return PushCenter.token;
   }
 
   /**

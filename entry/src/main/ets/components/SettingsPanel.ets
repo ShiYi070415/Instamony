@@ -1,4 +1,4 @@
-/*
+﻿/*
  * 「设定」页面的内容（装在 NavDestination 里，见 pages/Index.ets 的 destinationBuilder）。
  *
  * 结构（标题栏由 HdsNavDestination 提供，正文是一个 List）：
@@ -59,6 +59,9 @@ import { ReelsCrashLog } from '../core/ReelsCrashLog';
 import { StoryTray } from '../model/Story';
 import { NativeStories } from '../core/NativeStories';
 import { MobileProbe } from '../core/mobileapi/MobileProbe';
+// BYO 中转要的两样东西：这份登录态（IG 的 Cookie）与这台设备的推送 token（AGC 的 Push Kit）。
+import { InstagramCookieJar, InstagramCookieSnapshot } from '../core/InstagramCookieJar';
+import { PushCenter } from '../core/PushCenter';
 import { fileIo, picker } from '@kit.CoreFileKit';
 import { pasteboard, BusinessError } from '@kit.BasicServicesKit';
 import { promptAction } from '@kit.ArkUI';
@@ -1196,6 +1199,42 @@ export struct SettingsPanel {
     });
   }
 
+  /**
+   * **复制 BYO 中转需要的东西**（一次性搬运，不进诊断文件）。
+   *
+   * 两样：
+   *   · `cookie`：这台设备的 IG 会话串 —— **等同账号密码**，中转用它发只读请求；
+   *   · `pushToken`：AGC Push Kit 的 token —— 中转用它把通知推到这台设备。
+   *
+   * 格式就是一份 JSON，粘进中转的配置文件即可，不用手工拆 Cookie。
+   * 提醒：粘完记得清一下剪贴板（系统剪贴板是明文）。
+   */
+  private async copyRelayMaterial(): Promise<void> {
+    try {
+      const snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
+      const material: RelayMaterial = new RelayMaterial();
+      material.cookie = snapshot.signedIn ? snapshot.cookie : '';
+      material.pushToken = PushCenter.tokenNow();
+      material.signedIn = snapshot.signedIn;
+      const text: string = JSON.stringify(material, null, 2);
+      hilog.info(DOMAIN, TAG, 'relay material copy signedIn=%{public}s cookie=%{public}d token=%{public}d',
+        `${snapshot.signedIn}`, material.cookie.length, material.pushToken.length);
+      const data: pasteboard.PasteData =
+        pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text);
+      pasteboard.getSystemPasteboard().setData(data, (err: BusinessError | undefined) => {
+        if (err !== undefined && err !== null) {
+          hilog.warn(DOMAIN, TAG, 'relay material copy failed: %{public}s', err.message);
+          this.toast($r('app.string.diag_export_failed', err.message));
+          return;
+        }
+        this.toast($r('app.string.diag_copied'));
+      });
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'relay material copy threw: %{public}s', (error as Error).message);
+      this.toast($r('app.string.diag_export_failed', (error as Error).message));
+    }
+  }
+
   /** 把移动 API 自检结论复制走（和「复制诊断摘要」同一条路：剪贴板不需要权限）。 */
   private copyMobileProbe(): void {
     const text: string = MobileProbe.lastSummary();
@@ -1894,6 +1933,17 @@ export struct SettingsPanel {
           })
           this.cardDivider()
           /*
+           * **BYO 中转要的两样东西**（一次性复制走，粘到中转的配置文件里）。
+           *
+           * 为什么放在诊断这一组：它不是日常功能，只是「自己搭中转」时的一次性搬运 ——
+           * 里面装的是**等同于账号密码的会话 Cookie**，所以只在需要时点一次、点完立刻
+           * 粘到自己的机器上，别留在剪贴板里。
+           */
+          this.actionRow('复制中转材料（会话 + 推送 token）', (): void => {
+            this.copyRelayMaterial();
+          })
+          this.cardDivider()
+          /*
            * **抓一次"故事页"的模板**（诊断 + 手动救急）。
            *
            * 为什么要有这个入口：`reels_media` 那条私有 REST 在部分会话上被 IG 回 500，
@@ -1986,4 +2036,18 @@ export struct SettingsPanel {
       ]
     })
   }
+}
+
+/**
+ * **BYO 中转的配置片段**（见 copyRelayMaterial）。
+ *
+ * 为什么是一个类而不是裸对象字面量：ArkTS 严格模式下 `{...}` 无类型字面量过不了编译，
+ * 而这份东西要原样 `JSON.stringify` 出来给中转脚本读，字段名就是脚本那边的键名。
+ */
+class RelayMaterial {
+  /** IG 会话 Cookie 串（`name=value; name=value; …`）。空串 = 当前没登录。 */
+  cookie: string = '';
+  /** AGC Push Kit 的设备 token。空串 = 还没拿到（多半是 AGC 没配置，见 PushCenter.registerPush）。 */
+  pushToken: string = '';
+  signedIn: boolean = false;
 }
