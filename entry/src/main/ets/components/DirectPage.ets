@@ -15,6 +15,8 @@
 
 import { display } from '@kit.ArkUI';
 import { CachedInbox, DirectCache } from '../core/DirectCache';
+// 列表换过一版就在崩溃日志里记一行（诊断"VM 换了但界面没换"，见 noteRows）。
+import { ReelsCrashLog } from '../core/ReelsCrashLog';
 import { DirectThread } from '../model/Direct';
 import { DirectViewModel } from '../viewmodel/DirectViewModel';
 import { ScrollDelta } from '../core/ScrollReport';
@@ -153,6 +155,8 @@ export struct DirectPage {
     }
     this.vm.onThreads = (threads: Array<DirectThread>, hasMore: boolean): void => {
       this.threads = threads;
+      // 面包屑：视图模型换了列表（带未读总数），界面这一层确实收到了。
+      this.noteRows(threads);
       this.hasMore = hasMore;
     };
     this.vm.onBusy = (busy: boolean): void => {
@@ -216,6 +220,39 @@ export struct DirectPage {
 
   /** 这一轮进程试过"铺落盘快照"了没有（只做一次，见 hydrateFromCache）。 */
   private cacheTried: boolean = false;
+
+  /**
+   * 一行的 ForEach 键。
+   *
+   * ⚠️ **不能只用会话 id**（原来就是 `thread.id`）：`DirectThread` 是不可变实例，
+   * 新消息/已读都是"整条换成新实例"，而**键没变 → ArkUI 直接复用旧子树、不重跑
+   * 这一行的 builder** —— 界面就会一直显示旧对象：
+   *   · 收到新消息：摘要/时间/加粗不变（看起来"列表没实时更新"）；
+   *   · 进会话读完退出来：未读标记不消失（看起来"已读没生效"）。
+   * 把会变的那几项塞进键里，变化时自然重建这一行（同 FeedList / SearchPage 的做法）。
+   */
+  /** 上一次写进日志的未读总数（只在变化时记一行，别把日志写满）。 */
+  private lastUnreadLogged: number = -1;
+
+  /** 列表换过一次时记一行（诊断用）。 */
+  private noteRows(threads: Array<DirectThread>): void {
+    let unread: number = 0;
+    for (let index: number = 0; index < threads.length; index++) {
+      if (threads[index].unread) {
+        unread += 1;
+      }
+    }
+    if (unread === this.lastUnreadLogged) {
+      return;
+    }
+    this.lastUnreadLogged = unread;
+    ReelsCrashLog.note(`direct list rows=${threads.length} unread=${unread}`);
+  }
+
+  private static rowKey(thread: DirectThread): string {
+    return `${thread.id}|${thread.tsMs}|${thread.unread ? 1 : 0}|${thread.unreadCount}`
+      + `|${thread.pinned ? 1 : 0}|${thread.text.length}|${thread.title.length}`;
+  }
 
   /** 从视图模型回读当前数据（唯一的数据出口）。 */
   private syncFromVm(): void {
@@ -433,7 +470,7 @@ export struct DirectPage {
             ListItem() {
               this.threadRow(thread)
             }
-          }, (thread: DirectThread): string => thread.id)
+          }, (thread: DirectThread): string => DirectPage.rowKey(thread))
 
           if (this.threads.length > 0) {
             // 触底哨兵：进到可见范围就翻页；到底了给一句"没有更多了"。
