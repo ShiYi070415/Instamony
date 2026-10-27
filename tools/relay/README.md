@@ -135,3 +135,74 @@ sudo systemctl enable --now instamony-relay
 - `config.json`、`state.json` 只放在**自己的机器**上，别提交到 git（本目录已加 `.gitignore`）；
 - 不要把这个脚本公开成"代挂服务"：那是替别人保管 IG 凭据，风险与责任都落在运营者身上；
 - 轮询间隔别低于 60 秒；一天 24 小时连续跑本身就已经比正常用户密集，出现验证就先停一天。
+
+## 七、跨平台 / 低功耗（Windows · Linux · Android）
+
+同一个 `relay.js`，只要 Node ≥ 14，三个平台都不用改代码。**低功耗设计**：
+
+| 手段 | 作用 |
+|---|---|
+| keepAlive 连接复用 | 每轮不再重新 TLS 握手（长轮询里最费电的一步），实测能省掉绝大部分唤醒开销 |
+| `Accept-Encoding: gzip` | 收件箱几十 KB 压到几 KB，无线电唤醒时间更短 |
+| 自适应间隔 | 有动静 90 秒一轮；一直安静逐步退到 `idleMaxSeconds`（默认 300 秒） |
+| 一轮一批 | 同轮多条新私信只推一条汇总，手机少被连续唤醒 |
+| quietHours | 例如 `[23, 7]` 夜里只记账不推送，也不会攒着早上一起弹 |
+| 脏写才落盘 | state 只在真的变了才写（tmp + rename 原子替换），避免每分钟一次磁盘写 |
+| 单实例锁 | `.relay.lock` 里记 pid，重复启动会直接退出（不会两份在跑互相抢） |
+
+### Windows（你现在的机器）
+
+```powershell
+# 前台跑（先验配置）
+node tools\relay\relay.js --once
+node tools\relay\relay.js
+
+# 常驻、不弹窗：开机自启（pythonw 换成 node 的等价物是 wscript 包一层，最省事的是用计划任务隐藏窗口）
+schtasks /create /tn InstamonyRelay /tr "node C:\HMStudy\Instamony\tools\relay\relay.js --quiet" /sc onlogon /rl highest /f
+```
+> 想彻底无窗口：把命令写成 `relay.vbs`（`CreateObject("WScript.Shell").Run "...node ...", 0, False`）交给计划任务。
+
+### Linux（小主机 / NAS / 树莓派）
+
+```ini
+# /etc/systemd/system/instamony-relay.service
+[Unit]
+Description=Instamony BYO relay
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/node /opt/relay/relay.js --quiet
+Restart=always
+RestartSec=30
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable --now instamony-relay
+journalctl -u instamony-relay -f      # 看日志
+```
+
+`Nice=10` 让它在 CPU 上和别的服务抢的时候主动让步，进一步降低对整机的影响。
+
+### Android（Termux）
+
+```bash
+pkg update && pkg install nodejs termux-api
+termux-wake-lock            # 关键：不加这个，系统 doze 会掐掉定时器
+mkdir -p ~/relay && cd ~/relay
+# 把 relay.js 与 config.json 放进来（可以从电脑 scp / 用 termux 的剪贴板粘）
+node relay.js --once        # 先验
+node relay.js --quiet &     # 后台跑
+termux-wake-unlock          # 要停的时候
+```
+
+Android 上的省电建议：Termux 加进电池优化白名单（设置 → 应用 → Termux → 电池 → 不受限制），配置里把
+`pollSeconds` 放到 120~180、`idleMaxSeconds` 放到 600 —— 手机息屏时 Doze 会合并唤醒，间隔太短反而更耗电。
+
+### 一天的代价（估算）
+
+`pollSeconds=90`、白天约 16 小时活跃：约 640 次请求/天，gzip 后每次几 KB → **每天约几 MB 流量**；
+CPU 只在解析那几毫秒用一下；夜间退到 300 秒后约 96 次/天。真正耗电的是网络唤醒，不是脚本本身。

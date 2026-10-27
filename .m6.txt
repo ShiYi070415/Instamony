@@ -1,1 +1,0 @@
-feat(relay): 中转脚本改为 Node 版（tools/relay/relay.js，零依赖、node relay.js 直接跑）—— 本机没装 Python，DevEco 自带与系统 PATH 的 node 都能用；支持四种推送通道 agc / meow / telegram / webhook，只读低频轮询 direct_v2/inbox，state 只存最后一条消息 id 与时间戳、首轮只记账不推送；config.example.json 补齐四种通道模板；App 侧「复制中转材料」的 JSON 增加 pushError（取 token 的错误码，例如 1000900010），方便判断 AGC 是否就绪
