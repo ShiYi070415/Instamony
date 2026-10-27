@@ -534,15 +534,23 @@ struct ReelSlide {
    * 拿不到坐标时返回 false（宁可响应，也不要"点了没反应"）。
    */
   private overOverlay(fingers: Array<FingerInfo>): boolean {
+    return this.overActionColumn(fingers) || this.overBottomArea(fingers);
+  }
+
+  /** 落点是不是压在右侧那一列动作按钮上（按钮自己已经 `swallowLongPress`，只有空白处才算）。 */
+  private overActionColumn(fingers: Array<FingerInfo>): boolean {
     if (this.chromeHidden || fingers.length === 0) {
       return false;
     }
-    const x: number = fingers[0].globalX;
-    const y: number = fingers[0].globalY;
-    if (x >= this.screenW - OVERLAY_GUARD_RIGHT_VP) {
-      return true;
+    return fingers[0].globalX >= this.screenW - OVERLAY_GUARD_RIGHT_VP;
+  }
+
+  /** 落点是不是压在底部信息区（作者行 / 正文 / 音乐）上。 */
+  private overBottomArea(fingers: Array<FingerInfo>): boolean {
+    if (this.chromeHidden || fingers.length === 0) {
+      return false;
     }
-    return y >= this.screenH - this.overlayGuardBottomVp;
+    return fingers[0].globalY >= this.screenH - this.overlayGuardBottomVp;
   }
 
   /** 手势落点相对屏幕宽度的位置（0..1，拿不到坐标按正中算）。 */
@@ -611,9 +619,6 @@ struct ReelSlide {
       return;
     }
     const fingers: Array<FingerInfo> = event.fingerList;
-    if (this.overOverlay(fingers)) {
-      return;
-    }
     const ratio: number = this.pointRatioX(fingers);
     const inMiddle: boolean = ratio > SPEED_ZONE_RATIO && ratio < 1 - SPEED_ZONE_RATIO;
     if (side) {
@@ -621,13 +626,23 @@ struct ReelSlide {
         // 中间那 40% 归"暂停 + 隐藏控件"（见下面的 else 分支）。
         return;
       }
+      /*
+       * **倍速热区只挡底部信息区，不挡右侧动作栏**（用户报："屏幕右侧 10% 热区长按没有反应"）。
+       *
+       * 原来这里用的是 `overOverlay()`，它把右侧一整条（动作栏宽 + 内边距 + 12vp）都挡掉 ——
+       * 而那正好是"右侧 30% 倍速热区"里最靠边的一段，于是右边怎么长按都没 2 倍速、也没有震动。
+       * 现在右侧只剩"压住按钮本体"的情况会被挡，而那几颗按钮自己挂了
+       * `swallowLongPress`（见 MaterialIconButton），长按落在按钮上由按钮吃掉，不会打架。
+       */
+      if (this.overBottomArea(fingers)) {
+        return;
+      }
       this.longPressMode = 'speed';
       this.longPressFired = true;
       this.speedBoost = true;
       /*
-       * **触感反馈**（需求："长按倍速新增手机震动"）：
-       * 用户长按两侧时画面不会有任何视觉变化（只有右上角胶囊），
-       * 这一下轻点让人确认"倍速真的生效了"，不用盯着屏幕。
+       * **触感反馈**（需求："长按倍速新增手机震动"）：挂在"倍速真的生效"这一刻，
+       * 用户不用盯着右上角胶囊也能确认。
        */
       Haptics.speedHold();
       hilog.info(DOMAIN, TAG, 'hold side → 2.0x code=%{public}s', this.reel.shortcode);
@@ -635,6 +650,10 @@ struct ReelSlide {
     }
     if (!inMiddle) {
       // 两侧归 2 倍速（上面那一条）。
+      return;
+    }
+    // 中间那条（暂停 + 隐藏控件）仍按信息层整体挡掉：压在动作栏/正文上时长按不该暂停。
+    if (this.overOverlay(fingers)) {
       return;
     }
     this.longPressMode = 'pause';
