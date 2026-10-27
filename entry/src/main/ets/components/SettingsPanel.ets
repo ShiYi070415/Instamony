@@ -48,7 +48,7 @@ import {
 } from '../core/AppSettings';
 import { MATERIAL_PILL_HEIGHT, MaterialIconButton, SelectSurfaceModifier, SurfaceModifier } from './MaterialSurface';
 // 半模态的系统材质（SheetOptions.systemMaterial，API 26+）。
-import { uiMaterial } from '@kit.ArkUI';
+import { curves, uiMaterial } from '@kit.ArkUI';
 // 应用级代理（设置页的数据与生效逻辑，见 core/AppProxy）。
 import { AppProxy, ProxyEntry } from '../core/AppProxy';
 import { PlatformCap } from '../core/PlatformCap';
@@ -117,8 +117,6 @@ const PROXY_CARD_HEIGHT: number = 52;
 const PROXY_CARD_RADIUS: number = CARD_RADIUS;
 /** 卡片之间的间距（vp；需求："每个卡片之间保持距离"）。 */
 const PROXY_CARD_GAP: number = 10;
-/** 下拉按钮换选项的过渡时长（毫秒；短促的淡入，不要太慢）。 */
-const SELECT_PULSE_MS: number = 200;
 /** 卡片左侧的单选图标尺寸（需求：图标显示在卡片左边）。 */
 const PROXY_CARD_ICON: number = 20;
 /**
@@ -139,12 +137,28 @@ const PROXY_SWIPE_ICON: number = 20;
 /** 两颗圆形按钮之间、以及按钮与卡片之间的间距（vp）。 */
 const PROXY_SWIPE_GAP: number = 8;
 /**
- * 列表上下留白（vp，需求："卡片顶部边缘和底部边缘拽动时会被外部容器裁剪，增加 padding top bottom"）。
+ * 列表上下留白（vp，需求："拽动 listitem 时会被 list 边界裁剪，增加 padding top bottom"）。
  *
- * List 会把子节点裁在自己的边界上，左滑时卡片边缘/阴影一旦越过边界就被切掉；
- * 上下各留 8vp 就有余量了。
+ * List 会把子节点裁在自己的边界上，左滑时卡片边缘/阴影一旦越过边界就被切掉。
+ * 上一版留 8vp 仍然会切到，用户实测后要求再 +5 → 13。
  */
-const PROXY_MANAGE_LIST_PAD: number = 8;
+const PROXY_MANAGE_LIST_PAD: number = 13;
+
+// ---------------- 下拉按钮的"长度弹性过渡" ----------------
+
+/** 下拉按钮的字体大小（vp；和 Select 的 `.font({ size })` 保持一致，量文字宽度要用它）。 */
+const SELECT_FONT_SIZE: number = 15;
+/**
+ * 下拉按钮上"文字以外"的固定占宽（vp）：右侧箭头 + 左右内边距。
+ *
+ * Select 是系统组件，量不到它的内部布局，所以这部分按经验值留；多留一点只是宽一点，
+ * 少了会把文字裁掉，所以宁可偏大。
+ */
+const SELECT_CHROME_WIDTH: number = 46;
+/** 再补一点余量（vp）：不同字体的字宽略有差异，避免最后一两个字被吞掉。 */
+const SELECT_WIDTH_SLACK: number = 8;
+/** 长度过渡的时长（毫秒）：弹性曲线配 320ms，观感是"弹一下到位"。 */
+const SELECT_WIDTH_SPRING_MS: number = 320;
 
 /**
  * 下拉里四档的**顺序**（也是下标 → 取值 的映射表）。
@@ -192,17 +206,13 @@ export struct SettingsPanel {
   @State private draftUser: string = '';
   @State private draftPass: string = '';
   /**
-   * 五个下拉按钮各自的**切换动画进度**（1 = 静止，0 = 刚换完选项的那一帧）。
+   * 下拉按钮上量过的文字宽度缓存（vp）。
    *
-   * 需求："设置页所有下拉按钮选项变化时需要动画"。Select 的文字是内容、不是可动画属性
-   * （宽度由框架过渡，文字是直接换的），所以这里用一次短促的淡入 + 上浮把"换字"包住；
-   * 每个下拉一份状态，改一个不会带着另一个一起闪。
+   * 宽度是绑在 `.width()` 上的：换选项时文字变了 → 宽度变 → `.animation(springMotion)`
+   * 把这段长度变化补间成"弹性伸缩"（需求："改成按钮长度变化的弹性过渡动画"）。
+   * 量文字要走 measureText（px → vp），每帧都量没必要，按文案缓存。
    */
-  @State private proxyPulse: number = 1;
-  @State private thicknessPulse: number = 1;
-  @State private levelPulse: number = 1;
-  @State private imagePulse: number = 1;
-  @State private videoPulse: number = 1;
+  private measuredWidths: Map<string, number> = new Map();
   /** 点「退出登录」。 */
   onSignOut: () => void = (): void => {
   };
@@ -316,13 +326,10 @@ export struct SettingsPanel {
               : -1)
             .value(this.currentProxyLabel())
             .font({ size: 14 })
-            // 换选项时的淡入 + 上浮（见 pulseSelect）。
-            .opacity(this.pulseOpacity(this.proxyPulse))
-            .translate({ y: this.pulseLift(this.proxyPulse) })
+            // 长度弹性过渡：宽度跟着当前选项文字变，换选项时由下面的 .animation 补间（见 selectWidth）。
+            .width(this.selectWidth(this.currentProxyLabel()))
+            .animation({ duration: SELECT_WIDTH_SPRING_MS, curve: curves.springMotion() })
             .onSelect((index: number, value: string): void => {
-              this.pulseSelect((v: number): void => {
-                this.proxyPulse = v;
-              });
               if (index === this.proxyNames.length) {
                 // 选单最后一项：没有代理就是「添加代理」，有代理就是「管理代理」。
                 if (this.proxyNames.length === 0) {
@@ -534,11 +541,13 @@ export struct SettingsPanel {
               actionAreaDistance: PROXY_SWIPE_SIZE * 2 + PROXY_SWIPE_GAP * 2
             },
             /*
-             * **禁用右滑**（需求）：没有 `start` 时右滑本来就没有操作区，但 `Spring` 会让卡片
-             * 跟着手指弹性位移一段；`None` 是官方"滑到边界没有效果"那一档，右滑完全不动，
-             * 顺带也消掉了回弹把卡片顶出 List 边界、被裁掉一截的现象。
+             * **右滑也要有弹性**（需求："卡片右滑和恢复时新增弹性动画"）：没有 `start` 时右滑
+             * 不会露出任何操作区，但 `Spring` 会让卡片跟手做一段弹性位移、松手弹回 ——
+             * 手上有反馈、又不会误触发操作。
+             * 顺带说明：上一版为了防止"拽动时被 List 边界裁剪"把它设成了 `None`，现在改成
+             * Spring 之后靠列表上下的 padding（PROXY_MANAGE_LIST_PAD）留出回弹空间。
              */
-            edgeEffect: SwipeEdgeEffect.None
+            edgeEffect: SwipeEdgeEffect.Spring
           })
         }, (name: string, index: number): string => `${index}-${name}`)
 
@@ -1177,34 +1186,73 @@ export struct SettingsPanel {
     .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING })
   }
 
-  // ---------------- 下拉按钮的切换动画 ----------------
+  // ---------------- 下拉按钮的长度弹性过渡 ----------------
 
   /**
-   * 下拉换选项时跑一次"淡入 + 轻微上浮"（见那五个 Pulse 状态的说明）。
+   * 下拉按钮的目标宽度（vp）。
    *
-   * 为什么用 `animateTo` 而不是在 Select 上挂 `.animation()`：`.animation()` 会把**所有**
-   * 属性变化都补间（包括这次清零），两条曲线互相打架、看起来像抖一下。这里先把进度
-   * 直接归零（不补间），下一帧再动画回 1，方向单一、只看到"淡入"这一半。
+   * 做法：把"当前选项文字"的宽度量出来（精确的 `measureText` 与保守的字宽估算取**较大值**，
+   * 量不到时不会把文字裁掉），加上箭头/内边距与余量，绑到 `.width()` 上；换选项时宽度变了，
+   * 组件上的 `.animation({ curve: curves.springMotion() })` 就把这段长度变化补间成
+   * **弹性伸缩**（需求："改成按钮长度变化的弹性过渡动画，而非重新弹出"）。
    *
-   * @param set 把进度写回对应那个 `@State` 的回调（值类型不能传引用，只能传 setter）。
+   * 为什么要显式给宽度：Select 的宽度本来是跟着文字自动算的，自动算出来的值**不参与**
+   * 属性动画（内容驱动的布局变化不会被 `.animation()` 补间），必须自己算出数字给它。
    */
-  private pulseSelect(set: (value: number) => void): void {
-    set(0);
-    setTimeout((): void => {
-      this.getUIContext().animateTo({ duration: SELECT_PULSE_MS, curve: Curve.EaseOut }, (): void => {
-        set(1);
-      });
-    }, 16);
+  private selectWidth(label: ResourceStr): number {
+    const text: string = this.resText(label);
+    const measured: number = this.measureTextWidth(text);
+    const estimated: number = this.estimateTextWidth(text, SELECT_FONT_SIZE);
+    const body: number = measured > estimated ? measured : estimated;
+    return Math.round(body + SELECT_CHROME_WIDTH + SELECT_WIDTH_SLACK);
   }
 
-  /** 进度 → 透明度（0 时 0.25，1 时 1）。 */
-  private pulseOpacity(pulse: number): number {
-    return 0.25 + 0.75 * pulse;
+  /** ResourceStr → 纯文本（宽度计算要用；资源解析失败时返回空串，调用方会退回估算值）。 */
+  private resText(value: ResourceStr): string {
+    if (typeof value === 'string') {
+      return value;
+    }
+    try {
+      return getContext(this).resourceManager.getStringSync((value as Resource).id);
+    } catch (error) {
+      return '';
+    }
   }
 
-  /** 进度 → 竖向位移（0 时下移 6vp，1 时归位）。 */
-  private pulseLift(pulse: number): number {
-    return 6 * (1 - pulse);
+  /** 精确量一行文字的宽度（vp）；量不到就是 0，交给估算兜底。 */
+  private measureTextWidth(text: string): number {
+    if (text.length === 0) {
+      return 0;
+    }
+    const cached: number | undefined = this.measuredWidths.get(text);
+    if (cached !== undefined) {
+      return cached;
+    }
+    let width: number = 0;
+    try {
+      // measureText 挂在 UIContext.getMeasureUtils() 上（API 12+），返回 px；
+      // 字号用数字（数字按 fp 处理），和 Select 的 .font({ size }) 对齐。
+      const px: number = this.getUIContext().getMeasureUtils()
+        .measureText({ textContent: text, fontSize: SELECT_FONT_SIZE });
+      width = px2vp(px);
+    } catch (error) {
+      width = 0;
+    }
+    this.measuredWidths.set(text, width);
+    return width;
+  }
+
+  /**
+   * 字宽估算（兜底用）：CJK 按 1 个字号宽算，其它（拉丁字母/数字/符号）按 0.55 个字号。
+   *
+   * 只用来"保底不裁字"：真实宽度取它和 measureText 的较大值，所以偏大一点没关系。
+   */
+  private estimateTextWidth(text: string, fontSize: number): number {
+    let units: number = 0;
+    for (let i: number = 0; i < text.length; i++) {
+      units += text.charCodeAt(i) >= 0x2E80 ? 1 : 0.55;
+    }
+    return units * fontSize;
   }
 
   /**
@@ -1225,10 +1273,10 @@ export struct SettingsPanel {
         .selected(this.thicknessIndex())
         .value(this.thicknessDisplay())
         .font({ size: 15 })
+        // 长度弹性过渡：宽度跟着当前选项文字变，换选项时由下面的 .animation 补间（见 selectWidth）。
+        .width(this.selectWidth(this.thicknessDisplay()))
+        .animation({ duration: SELECT_WIDTH_SPRING_MS, curve: curves.springMotion() })
         .fontColor($r('app.color.primary_text'))
-        // 换选项时的淡入 + 上浮（见 pulseSelect）。
-        .opacity(this.pulseOpacity(this.thicknessPulse))
-        .translate({ y: this.pulseLift(this.thicknessPulse) })
         // 按钮/菜单材质的厚薄都取本行选的厚度；颜色统一**透明**（需求：
         // 各材质等级的颜色一致，等级不再改颜色，见 materialRow 的说明）。
         // 走 SelectSurfaceModifier：API < 26 的设备上没有系统材质，它会自动退化成纯色底。
@@ -1238,9 +1286,6 @@ export struct SettingsPanel {
         .selectedOptionFont({ size: 15, weight: FontWeight.Bold })
         .selectedOptionFontColor($r('app.color.dropdown_selected_text'))
         .onSelect((index: number, value?: string): void => {
-          this.pulseSelect((v: number): void => {
-            this.thicknessPulse = v;
-          });
           if (index >= 0 && index < MATERIAL_THICKNESS_ORDER.length) {
             AppSettings.setMaterialThickness(MATERIAL_THICKNESS_ORDER[index]);
           }
@@ -1281,10 +1326,10 @@ export struct SettingsPanel {
         .selected(this.materialIndex())
         .value(this.materialDisplay())
         .font({ size: 15 })
+        // 长度弹性过渡：宽度跟着当前选项文字变，换选项时由下面的 .animation 补间（见 selectWidth）。
+        .width(this.selectWidth(this.materialDisplay()))
+        .animation({ duration: SELECT_WIDTH_SPRING_MS, curve: curves.springMotion() })
         .fontColor($r('app.color.primary_text'))
-        // 换选项时的淡入 + 上浮（见 pulseSelect）。
-        .opacity(this.pulseOpacity(this.levelPulse))
-        .translate({ y: this.pulseLift(this.levelPulse) })
         // 按钮的光边来自这层材质（别加 backgroundColor，会把它盖住）。
         // 厚薄 = 「材质」那行选的厚度；颜色透明（各等级统一）。
         // 下拉菜单自己的材质（与按钮相互独立）：同样厚度 + 透明色；**点光源不开**（需求）。
@@ -1297,9 +1342,6 @@ export struct SettingsPanel {
         .selectedOptionFont({ size: 15, weight: FontWeight.Bold })
         .selectedOptionFontColor($r('app.color.dropdown_selected_text'))
         .onSelect((index: number, value?: string): void => {
-          this.pulseSelect((v: number): void => {
-            this.levelPulse = v;
-          });
           if (index >= 0 && index < MATERIAL_LEVEL_ORDER.length) {
             AppSettings.setMaterialLevel(MATERIAL_LEVEL_ORDER[index]);
           }
@@ -1333,19 +1375,16 @@ export struct SettingsPanel {
         .selected(this.qualityIndex(this.imageQuality))
         .value(this.qualityDisplay(this.imageQuality))
         .font({ size: 15 })
+        // 长度弹性过渡：宽度跟着当前选项文字变，换选项时由下面的 .animation 补间（见 selectWidth）。
+        .width(this.selectWidth(this.qualityDisplay(this.imageQuality)))
+        .animation({ duration: SELECT_WIDTH_SPRING_MS, curve: curves.springMotion() })
         .fontColor($r('app.color.primary_text'))
-        // 换选项时的淡入 + 上浮（见 pulseSelect）。
-        .opacity(this.pulseOpacity(this.imagePulse))
-        .translate({ y: this.pulseLift(this.imagePulse) })
         .attributeModifier(new SelectSurfaceModifier(this.materialThickness))
         .menuAlign(MenuAlignType.END, { dx: 0, dy: MENU_OFFSET_Y })
         .selectedOptionBgColor($r('app.color.dropdown_selected_bg'))
         .selectedOptionFont({ size: 15, weight: FontWeight.Bold })
         .selectedOptionFontColor($r('app.color.dropdown_selected_text'))
         .onSelect((index: number, value?: string): void => {
-          this.pulseSelect((v: number): void => {
-            this.imagePulse = v;
-          });
           if (index >= 0 && index < MEDIA_QUALITY_ORDER.length) {
             AppSettings.setImageQuality(MEDIA_QUALITY_ORDER[index]);
             this.onQualityChanged();
@@ -1369,19 +1408,16 @@ export struct SettingsPanel {
         .selected(this.qualityIndex(this.videoQuality))
         .value(this.qualityDisplay(this.videoQuality))
         .font({ size: 15 })
+        // 长度弹性过渡：宽度跟着当前选项文字变，换选项时由下面的 .animation 补间（见 selectWidth）。
+        .width(this.selectWidth(this.qualityDisplay(this.videoQuality)))
+        .animation({ duration: SELECT_WIDTH_SPRING_MS, curve: curves.springMotion() })
         .fontColor($r('app.color.primary_text'))
-        // 换选项时的淡入 + 上浮（见 pulseSelect）。
-        .opacity(this.pulseOpacity(this.videoPulse))
-        .translate({ y: this.pulseLift(this.videoPulse) })
         .attributeModifier(new SelectSurfaceModifier(this.materialThickness))
         .menuAlign(MenuAlignType.END, { dx: 0, dy: MENU_OFFSET_Y })
         .selectedOptionBgColor($r('app.color.dropdown_selected_bg'))
         .selectedOptionFont({ size: 15, weight: FontWeight.Bold })
         .selectedOptionFontColor($r('app.color.dropdown_selected_text'))
         .onSelect((index: number, value?: string): void => {
-          this.pulseSelect((v: number): void => {
-            this.videoPulse = v;
-          });
           if (index >= 0 && index < MEDIA_QUALITY_ORDER.length) {
             AppSettings.setVideoQuality(MEDIA_QUALITY_ORDER[index]);
             this.onQualityChanged();
