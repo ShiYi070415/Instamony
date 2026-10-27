@@ -26,9 +26,15 @@ import { DirectMessage, DirectThreadView } from '../model/Direct';
 import { AppLifecycle } from '../core/AppLifecycle';
 // mark_seen 的结果写一行面包屑（导出的诊断里能看到"已读到底成没成"，见 markThreadSeen）。
 import { ReelsCrashLog } from '../core/ReelsCrashLog';
+// 分享卡片一出现就预取它的帖子详情（见 prefetchShareCards）。
+import { NativeMediaInfo } from '../core/NativeMediaInfo';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'DirectThreadViewModel';
+/** 一次会话里最多预取几条分享卡片的详情（见 prefetchShareCards）。 */
+const SHARE_PREFETCH_MAX: number = 3;
+/** 预取两条之间错开的时间（毫秒）：别和会话首屏那一发抢（见 prefetchShareCards）。 */
+const SHARE_PREFETCH_GAP_MS: number = 400;
 /**
  * 会话页**可见时**的轮询间隔（毫秒）：**随机**取 `[MIN, MAX)`，不用固定值。
  *
@@ -307,6 +313,10 @@ export class DirectThreadViewModel {
     this.dropConfirmedPending();
     hilog.info(DOMAIN, TAG, 'live append id=%{public}d msgs=%{public}d mine=%{public}s',
       message.id.length, messages.length, `${message.mine}`);
+    // 推送进来的新卡片也一样预取（需求："卡片出现在会话时预加载"）。
+    if (message.shareCode.length > 0) {
+      NativeMediaInfo.prefetch('', message.shareCode);
+    }
     return true;
   }
 
@@ -431,6 +441,8 @@ export class DirectThreadViewModel {
       this.view = view;
       // 分享卡片的现场（诊断用）：卡片没画出来时，这一行能区分"解析没认出作者/正文"还是"界面没画"。
       this.noteShareCards(view);
+      // 卡片在屏上了就顺手把帖子详情预取起来（需求："卡片出现在会话时预加载"）。
+      this.prefetchShareCards(view);
       // 记下"刚拉过"，让轮询第一拍别紧跟着再发一发（见 pollOnce 的说明）。
       this.lastLoadAtMs = Date.now();
       this.onView(view);
@@ -522,6 +534,37 @@ export class DirectThreadViewModel {
   /** 这条会话的网页地址（读不出来时界面拿它回落网页，见 DirectThreadPage）。 */
   webUrl(): string {
     return 'https://www.instagram.com/direct/t/' + encodeURIComponent(this.threadId) + '/';
+  }
+
+  /**
+   * **卡片一出现在会话里就预取它的帖子详情**（需求："进入帖子/视频页尽量省去加载过程，
+   * 视频/帖子卡片出现在会话时预加载"）。
+   *
+   * 怎么取：从**最新**那几条开始，最多 `SHARE_PREFETCH_MAX` 条，每条隔 `SHARE_PREFETCH_GAP_MS`
+   * 发一发（`NativeMediaInfo.prefetch` 内部按 pk/短码去重并缓存，重复调用不会多发）。
+   *
+   * 为什么要错开而不是一股脑发：会话首屏刚读完时正在排别的请求，同时再打几发
+   * `media/{pk}/info/` 会跟它抢（见 core/ApiThrottle）；错开发既不影响首屏，
+   * 等用户真点进去时（一般也要一两秒）那一份数据已经在缓存里了。
+   *
+   * 只做"预取"：失败什么都不做，进页后仍会按 pk 再取一次（见 ProfileReelsViewModel.ensureDetail）。
+   */
+  private prefetchShareCards(view: DirectThreadView): void {
+    const codes: Array<string> = [];
+    for (let index: number = view.messages.length - 1;
+         index >= 0 && codes.length < SHARE_PREFETCH_MAX; index--) {
+      const one: DirectMessage = view.messages[index];
+      if (one.shareCode.length > 0 && codes.indexOf(one.shareCode) < 0) {
+        codes.push(one.shareCode);
+      }
+    }
+    for (let index: number = 0; index < codes.length; index++) {
+      const code: string = codes[index];
+      setTimeout((): void => {
+        NativeMediaInfo.prefetch('', code);
+        hilog.info(DOMAIN, TAG, 'share prefetch code=%{public}s', code);
+      }, SHARE_PREFETCH_GAP_MS * (index + 1));
+    }
   }
 
   /**
