@@ -360,7 +360,14 @@ export struct SettingsPanel {
               ? this.proxyActive
               : -1)
             .value(this.proxyValueText)
-            .font({ size: 14 })
+            .font({ size: SELECT_FONT_SIZE })
+            // 选中项样式**必须和本页其它四个下拉完全一致**（需求）：系统默认是主题蓝底白字，
+            // 这里统一成「浅白半透底 + 粗体高对比字」，颜色都走资源（明暗两套）。
+            .fontColor($r('app.color.primary_text'))
+            .menuAlign(MenuAlignType.END, { dx: 0, dy: MENU_OFFSET_Y })
+            .selectedOptionBgColor($r('app.color.dropdown_selected_bg'))
+            .selectedOptionFont({ size: SELECT_FONT_SIZE, weight: FontWeight.Bold })
+            .selectedOptionFontColor($r('app.color.dropdown_selected_text'))
             // 长度弹性过渡：宽度跟着当前选项文字变，换选项时由下面的 .animation 补间（见 selectWidth）。
             .width(this.selectWidth(this.proxyValueText))
             .animation({ duration: SELECT_WIDTH_SPRING_MS, curve: curves.springMotion() })
