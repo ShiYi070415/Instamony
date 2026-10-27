@@ -1,4 +1,4 @@
-/*
+﻿/*
 /**
  * Instamony native shell.
  *
@@ -609,11 +609,11 @@ const WARM_START_DELAY_MS: number = 1200;
 /**
  * 私信收件箱的**预取延迟**（毫秒，见 prefetchInboxWhenIdle）。
  *
- * 900ms：比首屏那几发晚一点（别抢冷启动的第一波），又不能太晚 —— 用户的真实节奏是
+ * 600ms：比首屏那几发晚一点（别抢冷启动的第一波），又不能太晚 —— 用户的真实节奏是
  * "开 app → 看两眼 → 点私信"，通常 2~4 秒就到了。以前要等首屏有帖子 + 手停下来，
  * 基本踩不上，这才是"初次打开 app 私信列表加载很慢"的直接原因。
  */
-const INBOX_PREFETCH_DELAY_MS: number = 900;
+const INBOX_PREFETCH_DELAY_MS: number = 600;
 /**
  * "用户点开的这一发快拍取数失败"之后隔多久重试（毫秒，见 playStoryAt）。
  *
