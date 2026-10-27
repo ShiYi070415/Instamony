@@ -120,6 +120,15 @@ const PROXY_CARD_GAP: number = 10;
 /** 卡片左侧的单选图标尺寸（需求：图标显示在卡片左边）。 */
 const PROXY_CARD_ICON: number = 20;
 /**
+ * 管理页卡片要不要**材质自带的阴影**。
+ *
+ * 关掉（false）的原因：材质那圈阴影是画在卡片边界**之外**的，而卡片在 List/ListItem 里，
+ * 超出裁剪框的那部分会被切掉 —— 用户看到的就是"最上面和最下面的卡片被裁剪"，
+ * 加 padding 能缓解但消不掉（ListItem 自己的裁剪框只到卡片矩形）。
+ * 关掉之后卡片只剩本体（材质底色 + 模糊 + 圆角），边界清晰、怎么拽都不会被切。
+ */
+const PROXY_CARD_SHADOW: boolean = false;
+/**
  * 列表区最大高度（vp）：超了就内部滚动。
  *
  * 半模态用的是 FIT_CONTENT（高度跟着内容走），代理一多会把底部按钮挤出屏幕 ——
@@ -146,12 +155,13 @@ const PROXY_SWIPE_ICON: number = 20;
 /** 两颗圆形按钮之间、以及按钮与卡片之间的间距（vp）。 */
 const PROXY_SWIPE_GAP: number = 8;
 /**
- * 列表上下留白（vp，需求："拽动 listitem 时会被 list 边界裁剪，增加 padding top bottom"）。
+ * 列表上下留白（vp，需求："拽动 listitem 时会被 list 边界裁剪"）。
  *
- * List 会把子节点裁在自己的边界上，左滑时卡片边缘/阴影一旦越过边界就被切掉。
- * 上一版留 8vp 仍然会切到，用户实测后要求再 +5 → 13。
+ * 两版都不够之后取 20：**材质自带的阴影是画在卡片边界之外的**（`applyShadow`），
+ * 卡片本体在 List 内部，那圈阴影会越过 List/ListItem 的裁剪框，看起来就是"卡片被切了"。
+ * 所以这里两手一起下：留白加大给阴影腾地方（见 PROXY_CARD_SHADOW 的说明）。
  */
-const PROXY_MANAGE_LIST_PAD: number = 13;
+const PROXY_MANAGE_LIST_PAD: number = 20;
 
 // ---------------- 下拉按钮的"长度弹性过渡" ----------------
 
@@ -197,6 +207,14 @@ export struct SettingsPanel {
   @State private proxyOn: boolean = false;
   @State private proxyNames: Array<string> = [];
   @State private proxyActive: number = -1;
+  /**
+   * 下拉按钮上显示的文字（**不要**直接绑 `currentProxyLabel()`）。
+   *
+   * 系统 Select 在用户点选项后会把按钮文字换成"点中的那一项"，如果 `.value` 传的字符串没变，
+   * 它不会重排 —— 点「管理代理 / 添加代理」时按钮上就会残留那个动作词（需求：应该显示
+   * "暂无代理"或当前代理名）。绑一个状态、点完再改回去就能压住（见 restoreProxyValueText）。
+   */
+  @State private proxyValueText: string = '';
   /** 添加 / 编辑面板（同一个半模态：`editingIndex < 0` 是添加，否则是编辑那一份）。 */
   @State private proxySheet: boolean = false;
   /** 正在编辑第几份（-1 = 新增）。 */
@@ -260,6 +278,9 @@ export struct SettingsPanel {
    */
   aboutToAppear(): void {
     this.mobileProbeResult = MobileProbe.lastSummary();
+    // 代理列表/选中/下拉按钮文字：进页面就读一次（不要等 proxySection 的 onAppear，
+    // 否则第一帧按钮上的文字是空的）。
+    this.refreshProxyNames();
   }
 
   /**
@@ -322,21 +343,26 @@ export struct SettingsPanel {
             .fontColor($r('app.color.primary_text'))
           Blank()
           /*
-           * **下拉按钮（回到原来的样式）**：`Select` 的下拉菜单。
+           * **下拉按钮**：`Select` 的下拉菜单。
            *
            * 选单最后一项固定是"功能入口"，随状态变：
            *   · 一份代理都没有 → 「添加代理」（点了直接开添加面板）；
            *   · 已经有代理     → 「管理代理」（点了开管理面板：编辑 / 删除 / 换选中）。
            * `.selected` 必须夹在下标范围内：选中项只在"已保存的代理"里，从不落在最后那一项上。
+           *
+           * **`.value` 绑的是自己的一个状态**（`proxyValueText`），不是直接读当前代理：
+           * 系统 Select 在用户点选项后会把按钮文字换成一个**点中的选项**，点「管理代理/添加代理」
+           * 那一项时按钮上就会显示"管理代理"（需求：这种情况应显示"暂无代理"或当前代理名）。
+           * 绑状态之后在 onSelect 里把它改回去即可（见 restoreProxyValueText）。
            */
           Select(this.proxyOptions())
             .selected(this.proxyActive >= 0 && this.proxyActive < this.proxyNames.length
               ? this.proxyActive
               : -1)
-            .value(this.currentProxyLabel())
+            .value(this.proxyValueText)
             .font({ size: 14 })
             // 长度弹性过渡：宽度跟着当前选项文字变，换选项时由下面的 .animation 补间（见 selectWidth）。
-            .width(this.selectWidth(this.currentProxyLabel()))
+            .width(this.selectWidth(this.proxyValueText))
             .animation({ duration: SELECT_WIDTH_SPRING_MS, curve: curves.springMotion() })
             .onSelect((index: number, value: string): void => {
               if (index === this.proxyNames.length) {
@@ -346,10 +372,13 @@ export struct SettingsPanel {
                 } else {
                   this.openProxyManage();
                 }
+                // 按钮文字立刻改回"当前代理 / 暂无代理"，不留「管理代理」这种动作文案。
+                this.restoreProxyValueText();
                 return;
               }
               if (AppProxy.select(index)) {
                 this.proxyActive = index;
+                this.proxyValueText = this.proxyValueLabel();
               }
             })
         }
@@ -382,13 +411,29 @@ export struct SettingsPanel {
     })
   }
 
-  /** 「已保存的代理」那一行右侧显示的名字（没选中 → 暂无代理）。 */
-  private currentProxyLabel(): ResourceStr {
+  /** 同上，但一定返回纯文本：Select 的 `.value` 绑状态、宽度计算也要字符串。 */
+  private proxyValueLabel(): string {
     const index: number = this.proxyActive;
     if (index >= 0 && index < this.proxyNames.length) {
       return this.proxyNames[index];
     }
-    return $r('app.string.settings_proxy_none');
+    return this.resText($r('app.string.settings_proxy_none'));
+  }
+
+  /**
+   * 把下拉按钮的文字改回"当前代理 / 暂无代理"。
+   *
+   * 为什么要绕一圈：系统 Select 在用户点中某一项后，会把按钮上显示的文字换成**那一项**，
+   * 而 `.value` 传的还是老字符串时它**不会**重排（属性值没变）。所以先塞一个尾巴
+   * （零宽空格，肉眼无差）让属性真的变化一次、把按钮的重绘逼出来，下一帧再设回原值。
+   * 于是点「管理代理 / 添加代理」之后，按钮上不会残留这两个动作词。
+   */
+  private restoreProxyValueText(): void {
+    const label: string = this.proxyValueLabel();
+    this.proxyValueText = `${label}\u200B`;
+    setTimeout((): void => {
+      this.proxyValueText = label;
+    }, 16);
   }
 
   /**
@@ -638,13 +683,14 @@ export struct SettingsPanel {
     .borderRadius(PROXY_CARD_RADIUS)
     .backgroundColor(Color.Transparent)
     .selectedColor(Color.Transparent)
-    .attributeModifier(new SurfaceModifier(this.materialThickness, true))
+    // 材质自带阴影关掉（见 PROXY_CARD_SHADOW）：超出卡片矩形的那圈会被 List/ListItem 裁掉。
+    .attributeModifier(new SurfaceModifier(this.materialThickness, true, PROXY_CARD_SHADOW))
     .onClick((): void => {
       this.manageDraft = index;
     })
   }
 
-  /** 列表末尾的「添加代理」卡片（同款圆角模糊底，文字用强调色；需求：去掉前面的 + 图标）。 */
+  /** 列表末尾的「添加代理」卡片（和条目卡片**同结构同高度**，只是文字用强调色、无单选图标）。 */
   @Builder
   proxyManageAddCard() {
     Toggle({ type: ToggleType.Button, isOn: false }) {
@@ -652,10 +698,13 @@ export struct SettingsPanel {
         Text($r('app.string.settings_proxy_add'))
           .fontSize(15)
           .fontColor($r('app.color.accent'))
+          .width('100%')
+          .textAlign(TextAlign.Center)
       }
       .width('100%')
       .height(PROXY_CARD_HEIGHT)
-      .justifyContent(FlexAlign.Center)
+      // 和 proxyManageCard 一样的左右内边距，保证两边的盒子完全一致（高度不会差一截）。
+      .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING })
     }
     .width('100%')
     .height(PROXY_CARD_HEIGHT)
@@ -663,7 +712,8 @@ export struct SettingsPanel {
     .borderRadius(PROXY_CARD_RADIUS)
     .backgroundColor(Color.Transparent)
     .selectedColor(Color.Transparent)
-    .attributeModifier(new SurfaceModifier(this.materialThickness, true))
+    // 材质自带阴影关掉（见 PROXY_CARD_SHADOW），和上面那些卡片一致。
+    .attributeModifier(new SurfaceModifier(this.materialThickness, true, PROXY_CARD_SHADOW))
     .onClick((): void => {
       this.requestAddFromManage();
     })
@@ -725,6 +775,8 @@ export struct SettingsPanel {
     this.proxyNames = names;
     this.proxyActive = AppProxy.activeIndex();
     this.proxyOn = AppProxy.enabled();
+    // 下拉按钮上的文字：当前代理名（没有就是"暂无代理"），见 restoreProxyValueText 的说明。
+    this.proxyValueText = this.proxyValueLabel();
   }
 
   /** 打开添加面板（空表单）。 */
