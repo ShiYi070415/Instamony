@@ -37,3 +37,6 @@ tools/relay/.relay.lock
 signing/*.p12
 signing/*.cer
 signing/*.p7b
+*.bak
+signing/*.pem
+signing/*.backup.p12
