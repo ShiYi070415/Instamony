@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Instamony 隐私政策 / Privacy Policy</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 40px 20px 80px;
+    font: 16px/1.75 -apple-system, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+    color: #111; background: #fff; max-width: 820px; margin-inline: auto;
+  }
+  h1 { font-size: 28px; margin: 0 0 6px; letter-spacing: -0.2px; }
+  h2 { font-size: 19px; margin: 36px 0 10px; padding-top: 18px; border-top: 1px solid #eee; }
+  h3 { font-size: 16px; margin: 22px 0 6px; }
+  .meta { color: #777; font-size: 14px; }
+  ul { padding-left: 22px; }
+  li { margin: 4px 0; }
+  code { background: #f4f4f5; padding: 1px 5px; border-radius: 4px; font-size: 14px; }
+  .box { background: #f7f7f8; border-radius: 12px; padding: 16px 18px; margin: 18px 0; }
+  .lang { color: #666; font-size: 14px; }
+  a { color: #0b62d6; }
+  hr { border: 0; border-top: 1px solid #eee; margin: 48px 0; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #0b0b0d; color: #e9e9ec; }
+    h2 { border-color: #232327; }
+    code, .box { background: #17171b; }
+    .meta, .lang { color: #9a9aa2; }
+    a { color: #6ea8ff; }
+    hr { border-color: #232327; }
+  }
+</style>
+</head>
+<body>
+
+<h1>Instamony 隐私政策</h1>
+<p class="meta">生效日期：2026-10-28 · 适用版本：1.3.0 及以后 · 开发者：ShiYi</p>
+
+<div class="box">
+  <strong>一句话概括：</strong>Instamony 是一个<strong>在本机运行</strong>的客户端。你用你自己的账号登录，
+  登录态只保存在你的设备上；我们没有任何服务器，因此<strong>不会、也无法</strong>收集或上传你的账号、
+  聊天内容、照片或使用记录。应用里没有任何分析、广告或第三方跟踪 SDK。
+</div>
+
+<h2>1. 我们是谁</h2>
+<p>
+  Instamony（以下称"本应用"）是一个面向 HarmonyOS NEXT 的第三方客户端，由个人开发者
+  ShiYi 开发与维护。本应用是<strong>独立的非官方项目</strong>，与 Instagram、Meta Platforms, Inc.
+  没有任何隶属、授权或赞助关系；相关商标归各自所有者。
+</p>
+
+<h2>2. 本应用会处理哪些数据，为什么</h2>
+<h3>2.1 登录凭据（会话 Cookie）</h3>
+<ul>
+  <li><strong>处理什么：</strong>你在应用内登录后，服务方（Instagram）下发的会话 Cookie（含 sessionid 等）。</li>
+  <li><strong>存在哪：</strong>只存在你的设备上（系统 Cookie 存储 + 应用私有目录）。</li>
+  <li><strong>做什么：</strong>代替你在应用里请求信息流、Reels、私信、通知等数据。</li>
+  <li><strong>会不会上传：</strong>不会上传给开发者或任何第三方；请求只直接发往服务方自己的域名。</li>
+</ul>
+
+<h3>2.2 本地缓存</h3>
+<ul>
+  <li>为让"点开就有画面"，应用会在<strong>本机</strong>保存少量缓存：私信收件箱快照、会话页最后一屏（仅内存）、
+      媒体信息、图片与视频的临时文件、你的设置项。</li>
+  <li>这些缓存<strong>不包含</strong>你的密码，也不会上传；卸载应用即被系统删除。</li>
+</ul>
+
+<h3>2.3 权限</h3>
+<ul>
+  <li><code>ohos.permission.INTERNET</code>：访问网络（必需，否则无法加载任何内容）。</li>
+  <li><code>ohos.permission.GET_NETWORK_INFO</code>：判断当前是否有网络，避免无谓请求。</li>
+  <li><code>ohos.permission.VIBRATE</code>：长按等手势的触感反馈。</li>
+</ul>
+<p>本应用不申请通讯录、位置、麦克风、相机、相册读取、设备标识等权限。</p>
+
+<h2>3. 我们不做什么</h2>
+<ul>
+  <li><strong>不收集</strong>：不收集你的姓名、手机号、邮箱、通讯录、位置、设备标识符。</li>
+  <li><strong>不统计</strong>：没有崩溃上报 SDK、没有埋点、没有广告 SDK、没有第三方跟踪器。</li>
+  <li><strong>不变现</strong>：不出售、不出租、不交换任何数据，不做用户画像与精准投放。</li>
+  <li><strong>不代管</strong>：开发者不会、也无法访问你的账号；没有"我们的服务器"。</li>
+</ul>
+
+<h2>4. 数据会发给谁</h2>
+<p>
+  只有一方：<strong>你所使用的服务方（Instagram / Meta）</strong>。原因是本应用必须请求它才能显示内容，
+  这与你使用其官方客户端时的数据流向一致，并同样受其隐私政策约束。
+</p>
+
+<h2>5. 留存与删除</h2>
+<ul>
+  <li>本地缓存：应用在运行期间自动更新，不需要时随应用卸载一并删除。</li>
+  <li>登录态：应用内<strong>退出登录</strong>即清除会话 Cookie 与账号分区数据。</li>
+  <li>彻底删除：<strong>卸载本应用</strong>即可清除全部本地数据（开发者侧没有任何副本可删）。</li>
+</ul>
+
+<h2>6. 安全</h2>
+<ul>
+  <li>与服务方的通信走 HTTPS；登录态保存在系统提供的 Cookie 存储中。</li>
+  <li>应用内的内嵌网页<strong>被限制在服务方域名</strong>内；站外链接会交给系统浏览器打开，
+      不会在持有登录态的网页里加载。</li>
+  <li>需要提醒的是：任何设备上的本地数据都无法做到绝对安全，请为设备设置锁屏密码。</li>
+</ul>
+
+<h2>7. 未成年人</h2>
+<p>
+  本应用不面向 13 岁以下的儿童，也不会有意收集儿童信息。若你未达到所在地区使用相应服务的
+  最低年龄，请不要使用本应用。
+</p>
+
+<h2>8. 你的选择</h2>
+<ul>
+  <li>可以随时在应用内退出登录，或卸载应用来终止一切数据处理。</li>
+  <li>应用不提供"个性化推荐开关"，因为它本身不做推荐、不做画像。</li>
+</ul>
+
+<h2>9. 政策变更</h2>
+<p>
+  如果本应用的处理方式发生变化（例如新增云端功能），我们会在本页面更新内容并修改"生效日期"。
+  重大变更会在应用内提示。
+</p>
+
+<h2>10. 联系方式</h2>
+<p>
+  对本政策或数据处理有任何问题，可通过以下方式联系开发者：
+  <br>· 邮箱：<strong>请替换为你的邮箱</strong>
+  <br>· 或在本项目仓库提交 Issue：<strong>请替换为你的仓库地址</strong>
+</p>
+
+<hr>
+
+<h2 class="lang">Privacy Policy (English summary)</h2>
+<p class="lang">
+  Instamony is a native client that runs entirely on your device. You sign in with your own
+  account; the session cookie is kept locally and is sent only to the service you are signing
+  in to — never to the developer or any third party. There is no developer server, no analytics,
+  no advertising and no tracking SDK. Local caches (inbox snapshot, last conversation screen,
+  media metadata, settings) stay on the device and are removed when you sign out or uninstall
+  the app. The app requests only three permissions: network access, network state and vibration.
+  The embedded web view is restricted to the service's own domains; external links are opened in
+  your system browser. This is an independent, unofficial project and is not affiliated with
+  Instagram or Meta Platforms, Inc. For any question, contact the developer at the address above.
+</p>
+
+<hr>
+<p class="meta">© 2026 Instamony · 本页面为静态页面，不包含任何脚本、Cookie 或第三方资源。</p>
+
+</body>
+</html>

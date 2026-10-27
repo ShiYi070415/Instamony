@@ -99,6 +99,13 @@ export struct InstagramWebHost {
    * 一次导航到位，补发那一步也会被 `markAttached` 认出来跳过。
    */
   @Prop startUrl: string = AppConfig.INSTAGRAM_HOME_URL;
+  /**
+   * **站外地址的出口**：内置网页只允许去 WebPolicy 白名单里的域，别的地址会在这里被拦下来，
+   * 交给 pages/Index 用**系统浏览器**打开（见 core/WebPolicy 的文件头：
+   * 应用不能自带一个能访问任意网页的浏览器，这一问在上架审核里会直接问）。
+   */
+  onBlockedUrl: (url: string) => void = (url: string): void => {
+  };
   onPageReady: () => void = (): void => {
   };
   onSessionChanged: (signedIn: boolean) => void = (signedIn: boolean): void => {
@@ -347,9 +354,19 @@ export struct InstagramWebHost {
       .onLoadIntercept((event) => {
         try {
           const url: string = event.data.getRequestUrl();
-          if (url.indexOf('instagram.com') >= 0) {
-            this.bridge.publishRoute(url);
+          if (!WebPolicy.isAllowed(url)) {
+            /*
+             * **站外地址：拦下，交给系统浏览器**（返回值 true = 不在这里加载）。
+             *
+             * 以前这里无条件 `return false`：内置网页能加载任意地址，等于一个握着用户
+             * Instagram 会话的通用浏览器 —— 既是安全问题，也是上架审核会问的那条
+             * "unrestricted Internet access"。
+             */
+            hilog.info(DOMAIN, TAG, 'blocked external url: %{public}d chars', url.length);
+            this.onBlockedUrl(url);
+            return true;
           }
+          this.bridge.publishRoute(url);
         } catch (error) {
         }
         return false;
@@ -359,7 +376,12 @@ export struct InstagramWebHost {
           const target: string = event.targetUrl;
           event.handler.setWebController(null);
           if (target.length > 0) {
-            this.bridge.loadUrl(target);
+            if (WebPolicy.isAllowed(target)) {
+              this.bridge.loadUrl(target);
+            } else {
+              // 新窗口里的站外地址同样不进内置网页（见 onLoadIntercept 的说明）。
+              this.onBlockedUrl(target);
+            }
           }
         } catch (error) {
           hilog.warn(0x0000, TAG, 'new window hand-off failed');

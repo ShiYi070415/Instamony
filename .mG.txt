@@ -1,0 +1,1 @@
+docs: 新增可直接托管的隐私政策页（docs/privacy.html，单文件、无脚本/无 Cookie/无外部资源）+ 发布说明（docs/privacy-README.md：GitHub Pages 步骤、要替换的占位、内容口径必须与代码一致）
