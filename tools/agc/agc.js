@@ -217,15 +217,75 @@ async function cmdPush(cred, text) {
   console.log(res.body.slice(0, 600));
 }
 
+/**
+ * **服务账号（Service Account）实验路径**：用 key 文件里的私钥签一个 RS256 JWT，
+ * 走 client_assertion 换 token。华为各产品线的服务账号流程不完全一样，所以这里
+ * **把原始响应原样打出来**（成功就记下、失败也不猜）—— 这是"能不能用服务账号替代
+ * OAuth 客户端"这条问题的探针。
+ *
+ * credentials.json 里加一行即可启用：
+ *   "serviceAccountFile": "sa.json"
+ * sa.json 就是 AGC 下载的密钥文件（通常含 project_id / key_id / private_key）。
+ */
+async function cmdServiceAccount(cred) {
+  const crypto = require('crypto');
+  const file = path.join(__dirname, cred.serviceAccountFile || 'sa.json');
+  if (!fs.existsSync(file)) {
+    console.error('缺少服务账号密钥文件 ' + file);
+    process.exit(2);
+  }
+  const sa = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const projectId = sa.project_id || sa.projectId || cred.appId || '';
+  const keyId = sa.key_id || sa.keyId || '';
+  const privateKey = sa.private_key || sa.privateKey || '';
+  if (!privateKey) {
+    console.error('sa.json 里找不到 private_key。');
+    process.exit(2);
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT', kid: keyId }))
+    .toString('base64url');
+  const body = Buffer.from(JSON.stringify({
+    iss: projectId,
+    sub: projectId,
+    aud: 'https://oauth-login.cloud.huawei.com/oauth2/v3/token',
+    iat: now,
+    exp: now + 3600
+  })).toString('base64url');
+  const signing = header + '.' + body;
+  const signer = crypto.createSign('RSA-SHA256');
+  signer.update(signing);
+  const assertion = signing + '.' + signer.sign(privateKey, 'base64url');
+
+  const payload = querystring.stringify({
+    grant_type: 'client_credentials',
+    client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+    client_assertion: assertion,
+    project_id: projectId
+  });
+  const res = await request('https://oauth-login.cloud.huawei.com/oauth2/v3/token', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Content-Length': Buffer.byteLength(payload)
+    }
+  }, payload);
+  console.log('HTTP ' + res.status);
+  console.log(res.body.slice(0, 600));
+  console.log('（若这里回 error=invalid_client，说明服务账号换不了消费级 token；'
+    + '那就以「API 客户端」的 client_id/secret 为准，用 --token 那条。）');
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const cred = loadCredentials();
   if (argv.indexOf('--token') >= 0) return cmdToken(cred);
   if (argv.indexOf('--app') >= 0) return cmdApp(cred);
   if (argv.indexOf('--certs') >= 0) return cmdCerts(cred);
+  if (argv.indexOf('--sa-token') >= 0) return cmdServiceAccount(cred);
   const at = argv.indexOf('--push');
   if (at >= 0) return cmdPush(cred, argv[at + 1]);
-  console.log('用法：node agc.js --token | --app | --certs | --push "文本"');
+  console.log('用法：node agc.js --token | --app | --certs | --sa-token | --push 文本');
 }
 
 main().catch((error) => {
