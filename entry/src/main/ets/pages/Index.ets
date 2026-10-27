@@ -189,6 +189,8 @@ import { IrisState, MobileRealtime, RealtimeEvent } from '../core/mobileapi/Mobi
 // 实时私信补丁 → 「某条会话多了条消息」（见 onRealtimeMessage）。
 import { DirectRealtime, RealtimeMessage } from '../core/DirectRealtime';
 import { MobileDirect } from '../core/mobileapi/MobileDirect';
+// 私信分享卡片：短码 → 媒体 pk（本地算，不发请求），见 openDirectShare。
+import { MobileEngage } from '../core/mobileapi/MobileEngage';
 import { PROFILE_TAB_POSTS, PROFILE_TAB_REELS, PROFILE_TAB_TAGGED, ProfileViewModel } from '../viewmodel/ProfileViewModel';
 import { DirectViewModel } from '../viewmodel/DirectViewModel';
 import { DirectThreadViewModel } from '../viewmodel/DirectThreadViewModel';
@@ -9250,40 +9252,46 @@ struct Index {
    */
   private openDirectShare(message: DirectMessage): void {
     const code: string = message.shareCode;
-    const cover: string = message.shareCover.length > 0 ? message.shareCover : message.mediaUrl;
-    const playable: string = message.sharePlayable;
-    const isVideo: boolean = playable.length > 0 || message.shareIsVideo
-      || message.shareKind === 'video';
     // 站外链接（链接卡片）：这一条确实该用浏览器打开。
     if (message.shareKind === 'link' && message.shareUrl.length > 0
       && code.length === 0) {
       this.openWeb(message.shareUrl);
       return;
     }
-    if (cover.length === 0 && playable.length === 0) {
-      // 载荷只给了文字/没有画面：给一句提示，别让用户觉得"点了没反应"。
-      hilog.info(DOMAIN, TAG, 'direct share no media kind=%{public}s', message.shareKind);
+    if (code.length === 0) {
+      // 连短码都没有 = 没法按 pk 取数：给一句提示，别让用户觉得"点了没反应"。
+      hilog.info(DOMAIN, TAG, 'direct share no shortcode kind=%{public}s', message.shareKind);
       this.toast('这条分享没有可打开的内容');
       return;
     }
-    const key: string = code.length > 0 ? code : `dm-${message.id}`;
+    /*
+     * **只带短码和 pk 进页**（需求："视频/图片/用户信息不要从会话里取数，需要媒体 pk 获取加载"）。
+     *
+     * 封面 / 视频 / 作者 / 正文一律不从这里塞：进页后 `ProfileReelsViewModel.ensureDetail`
+     * 按 pk 打一发 `media/{pk}/info/`，把整份数据取回来贴到这一条上。
+     *
+     * pk **本地算**（短码就是 pk 的 64 进制写法，见 MobileEngage.pkFromCode），不额外发请求 ——
+     * 这是"进入页面后数据获取很慢"的一半原因：以前要先 oembed 换 pk、再取媒体信息，两发串着走。
+     */
+    const pk: string = MobileEngage.pkFromCode(code);
     const init: MediaPostInit = {
-      id: key,
-      shortcode: key,
-      caption: message.shareCaption,
-      mediaType: isVideo ? 'clips' : 'image',
-      displayUrl: cover,
+      id: pk.length > 0 ? pk : code,
+      shortcode: code,
+      caption: '',
+      mediaType: message.shareKind === 'video' ? 'clips' : 'image',
+      displayUrl: '',
       likeCount: 0,
       commentCount: 0,
-      takenAtMs: message.tsMs,
-      ownerUsername: message.shareUser,
-      ownerAvatarUrl: message.shareAvatar,
-      videoUrl: playable
+      takenAtMs: 0,
+      ownerUsername: '',
+      ownerAvatarUrl: ''
     };
-    this.profileReelsVm = new ProfileReelsViewModel([new MediaPost(init)], key, false,
+    this.profileReelsVm = new ProfileReelsViewModel([new MediaPost(init)], code, false,
       (): Promise<ProfileStreamPage> => Promise.resolve(new ProfileStreamPage([], false)));
-    hilog.info(DOMAIN, TAG, 'direct share open reels kind=%{public}s video=%{public}d cover=%{public}d',
-      message.shareKind, playable.length, cover.length);
+    // **压页面的同一帧就预取详情**：页面滑上来这半秒里请求已经在路上（进页后复用同一份）。
+    NativeMediaInfo.prefetch(pk, code);
+    hilog.info(DOMAIN, TAG, 'direct share open reels code=%{public}d pk=%{public}d',
+      code.length, pk.length);
     const names: Array<string> = this.navStack.getAllPathName();
     if (names.length > 0 && names[names.length - 1] === PROFILE_REELS_PAGE) {
       return;

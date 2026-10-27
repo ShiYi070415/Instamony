@@ -1,4 +1,4 @@
-﻿/*
+/*
  * 一条媒体的**视频地址**：按需去 IG 的 REST 取一次。
  *
  * ## 为什么需要它
@@ -244,6 +244,11 @@ interface MediaInfoDto {
 export class NativeMediaInfo {
   /** 最近一次失败的原因（诊断用，界面/日志里能看出是"没会话"还是"IG 回 HTML"）。 */
   private static detail: string = '-';
+  /** 已经取到的详情（键见 detailKey；最多 24 条，见 detailFor）。 */
+  private static cache: Map<string, MediaDetail> = new Map<string, MediaDetail>();
+  /** 正在飞的请求（同一条并发要两次时合并成一次，见 detailFor）。 */
+  private static inflight: Map<string, Promise<MediaDetail | null>> =
+    new Map<string, Promise<MediaDetail | null>>();
 
   static lastDetail(): string {
     return NativeMediaInfo.detail;
@@ -291,15 +296,77 @@ export class NativeMediaInfo {
   }
 
   /**
-   * 取一条媒体的**整份详情**（视频 + 多图 + 发布时间 + 作者头像 + 收藏状态）。
+   * 取一条媒体的**整份详情**（视频 + 多图 + 发布时间 + 作者头像/名字 + 正文 + 三个计数）。
    *
    * 这是这条端点的主入口（`videoFor` 只是它的一层薄包装）。帖子页用它一次补齐四样东西，
    * 原因见 MediaDetail 的说明。
+   *
+   * ## 三条加速（用户报："点击进入 reels 类页面后数据获取很慢"）
+   *   1. **短码本地换 pk**：`media/{pk}/info/` 只认数字 pk，短码那条以前要先发一发 oembed
+   *      换 id，两次往返串着走；现在 `MobileEngage.mediaPkFor` 先本地算（见它的说明），
+   *      只剩这一次请求；
+   *   2. **在飞的请求合并**：同一条媒体被两处同时要（卡片点击时预取 + 进页后视图模型补数据）
+   *      时，第二处直接等第一处的那个 Promise，不会重复发；
+   *   3. **拿到就缓存**（内存，最多 24 条）：退出再进同一条分享是立刻有画面的。
    */
   static async detailFor(mediaId: string, shortcode: string = ''): Promise<MediaDetail | null> {
+    const key: string = NativeMediaInfo.detailKey(mediaId, shortcode);
+    if (key.length > 0) {
+      const cached: MediaDetail | undefined = NativeMediaInfo.cache.get(key);
+      if (cached !== undefined) {
+        return cached;
+      }
+      const flying: Promise<MediaDetail | null> | undefined = NativeMediaInfo.inflight.get(key);
+      if (flying !== undefined) {
+        return await flying;
+      }
+    }
+    const task: Promise<MediaDetail | null> =
+      NativeMediaInfo.fetchDetail(mediaId, shortcode);
+    if (key.length > 0) {
+      NativeMediaInfo.inflight.set(key, task);
+      task.then((one: MediaDetail | null): void => {
+        NativeMediaInfo.inflight.delete(key);
+        if (one !== null) {
+          if (NativeMediaInfo.cache.size >= 24) {
+            NativeMediaInfo.cache.clear();
+          }
+          NativeMediaInfo.cache.set(key, one);
+        }
+      }).catch((): void => {
+        NativeMediaInfo.inflight.delete(key);
+      });
+    }
+    return await task;
+  }
+
+  /**
+   * 先把这一条的详情**预取**起来（不关心结果，失败就当没有）。
+   *
+   * 用途：私信里点开一张分享卡片时，在**压页面的同一帧**就把它发出去 —— 页面滑上来这
+   * 半秒里请求已经在路上，进页后视图模型要同一份数据时直接复用（见 detailFor 的合并）。
+   */
+  static prefetch(mediaId: string, shortcode: string = ''): void {
+    NativeMediaInfo.detailFor(mediaId, shortcode).then((): void => {
+    }).catch((): void => {
+    });
+  }
+
+  /** 缓存 / 合并用的键（能拿到 pk 就用 pk，否则用短码；都没有给空串 = 不缓存）。 */
+  private static detailKey(mediaId: string, shortcode: string): string {
+    const pk: string = NativeMediaInfo.pkOf(mediaId);
+    if (pk.length > 0) {
+      return pk;
+    }
+    return (shortcode ?? '').trim();
+  }
+
+  /** 真正发请求那一段（见 detailFor 的三条加速）。 */
+  private static async fetchDetail(mediaId: string,
+                                  shortcode: string = ''): Promise<MediaDetail | null> {
     let id: string = NativeMediaInfo.pkOf(mediaId);
     if (id.length === 0 && shortcode.trim().length > 0) {
-      // 短码 → 真 pk（个人页 / 视频分页那种"只有短码"的条目走这里）。
+      // 短码 → 真 pk（先本地算，算不出来才 oembed；见 MobileEngage.mediaPkFor）。
       id = await MobileEngage.mediaPkFor(shortcode);
     }
     if (id.length === 0) {

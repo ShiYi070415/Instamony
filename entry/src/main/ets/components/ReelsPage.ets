@@ -1092,6 +1092,18 @@ struct ReelSlide {
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Contain)
+        /*
+         * **"还没从 pk 取到数据"的加载态**（需求：视频/图片/用户信息都不从会话里取，按 pk 现取）。
+         *
+         * 这一条刚进页时既没有封面也没有视频地址（都还在路上），画 `startIcon` 看着像一条坏数据；
+         * 给一颗转圈，数据回来就换掉 —— 用户至少知道"正在取"，而不是"打不开"。
+         */
+        if (this.reel.coverUrl.length === 0 && !this.reel.playable()) {
+          LoadingProgress()
+            .width(44)
+            .height(44)
+            .color(Color.White)
+        }
         if (this.reel.playable()
           && (this.playing || this.preload || this.hostPaused || this.hostHold || this.mountedOnce)) {
           // 播放器换成 AVPlayer + XComponent 的共用组件，理由见 VideoSurface 的说明：

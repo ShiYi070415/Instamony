@@ -74,9 +74,12 @@ export class MobileEngage {
   }
 
   /**
-   * shortcode → 媒体数字 pk（`GET oembed/?url=<短码链接>`，instagrapi 的 `media_pk_from_code`）。
+   * shortcode → 媒体数字 pk。
    *
-   * 成功就缓存；失败返回空串（调用方当成"这条没有 id"，照旧回滚并如实提示）。
+   * **先本地算**（短码本身就是 pk 的 64 进制写法，见 pkFromCode），算不出来才去问 oembed。
+   * 为什么加这一步（用户报："点击进入 reels 类页面后数据获取很慢"）：从私信卡片点开的那条
+   * 一开始只有短码，`media/{pk}/info/` 又只认数字 pk —— 以前是「oembed 一发 + media info 一发」
+   * 串着走，等于两次往返；本地能算出来就只剩 media info 那一发。
    */
   static async mediaPkFor(shortcode: string): Promise<string> {
     const code: string = (shortcode ?? '').trim();
@@ -86,6 +89,12 @@ export class MobileEngage {
     const known: string | undefined = MobileEngage.pks.get(code);
     if (known !== undefined) {
       return known;
+    }
+    const local: string = MobileEngage.pkFromCode(code);
+    if (local.length > 0) {
+      MobileEngage.pks.set(code, local);
+      hilog.info(DOMAIN, TAG, 'shortcode code=%{public}s → pk(local)=%{public}s', code, local);
+      return local;
     }
     const link: string = MobileEngage.linkOf(code);
     const result: MobileResult = await MobileRequest.send('oembed/', '', `url=${encodeURIComponent(link)}`,
@@ -103,6 +112,53 @@ export class MobileEngage {
     MobileEngage.pks.set(code, id);
     hilog.info(DOMAIN, TAG, 'oembed code=%{public}s → pk=%{public}s', code, id);
     return id;
+  }
+
+  /**
+   * **短码 → 媒体数字 pk**，纯本地计算（不发请求）。
+   *
+   * IG 的短码就是 pk 的 64 进制表示，字母表和 URL-safe base64 一样：
+   * `ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_`。
+   * 例：`C_kN9hmpQ2g` → 一串 18~19 位的十进制数字。
+   *
+   * 为什么不直接用 `Number` 算：pk 有 18~19 位，**超过 Number 能精确表示的位数**
+   * （2^53 ≈ 9e15），乘 64 会掉精度，换出来的 id 是错的。所以按十进制逐位乘加
+   * （数码数组，低位在前），全程只用小整数。
+   *
+   * 算不出来（空串 / 含字母表外的字符 / 太长）就返回空串，调用方退回 oembed。
+   */
+  static pkFromCode(shortcode: string): string {
+    const alphabet: string = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    const code: string = (shortcode ?? '').trim();
+    if (code.length === 0 || code.length > 20) {
+      return '';
+    }
+    // digits[0] 是个位。
+    let digits: Array<number> = [0];
+    for (let index: number = 0; index < code.length; index++) {
+      const value: number = alphabet.indexOf(code.charAt(index));
+      if (value < 0) {
+        return '';
+      }
+      // digits = digits * 64 + value
+      let carry: number = value;
+      for (let at: number = 0; at < digits.length; at++) {
+        const next: number = digits[at] * 64 + carry;
+        digits[at] = next % 10;
+        carry = Math.floor(next / 10);
+      }
+      while (carry > 0) {
+        digits.push(carry % 10);
+        carry = Math.floor(carry / 10);
+      }
+    }
+    let out: string = '';
+    for (let at: number = digits.length - 1; at >= 0; at--) {
+      out += `${digits[at]}`;
+    }
+    // 前导 0 不会出现（首字符的 value 可能为 0，但 t≤20 位的短码不会整串为 0），
+    // 万一出现也去掉，免得拼出 "0..." 这种非法 id。
+    return out.replace(/^0+(?=\d)/, '');
   }
 
   /**
