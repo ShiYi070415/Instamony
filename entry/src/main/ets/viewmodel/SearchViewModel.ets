@@ -257,7 +257,7 @@ export class SearchViewModel {
       // ---- 成功：整页覆盖（游标/预取队列/首屏预加载都换成新的这一份）----
       this.posts = page.posts;
       this.cursor = page.cursor;
-      this.hasMore = page.hasMore;
+      this.hasMore = page.cursor.length > 0;
       this.prefetched = [];
       this.prefetchedFirst = null;
       this.recommendLoaded = true;
@@ -316,12 +316,17 @@ export class SearchViewModel {
     }
     this.posts = cached.posts;
     this.cursor = cached.cursor;
-    this.hasMore = cached.hasMore;
+    /*
+     * 缓存里那个 `hasMore` **不可信**（很可能是上次被错判成 false 时存下来的），
+     * 这里只按游标判断：有游标就允许继续翻（见 loadMore 的说明）。
+     * 否则一进搜索页 footer 就写着「没有更多了」，而后面其实还有几十页。
+     */
+    this.hasMore = cached.cursor.length > 0;
     this.onPosts(this.posts);
     this.onMore(this.hasMore);
     this.onStatus('');
-    hilog.info(DOMAIN, TAG, 'hydrated from cache n=%{public}d age=%{public}dms',
-      cached.posts.length, cached.ageMs);
+    hilog.info(DOMAIN, TAG, 'hydrated from cache n=%{public}d more=%{public}s age=%{public}dms',
+      cached.posts.length, `${this.hasMore}`, cached.ageMs);
   }
 
   /**
@@ -418,7 +423,7 @@ export class SearchViewModel {
     this.recommendLoaded = true;
     this.posts = page.posts;
     this.cursor = page.cursor;
-    this.hasMore = page.hasMore;
+    this.hasMore = page.cursor.length > 0;
     this.onPosts(this.posts);
     this.onMore(this.hasMore);
     this.onStatus(page.posts.length === 0 ? '没有推荐内容' : '');
@@ -641,12 +646,16 @@ export class SearchViewModel {
       }
       this.cursor = cursor;
       // **只在"游标没前进"或"服务端说没有更多"时收手** —— 整页重复不再等于到底。
-      this.hasMore = page.hasMore && cursor !== startCursor;
+      // hasMore 只看游标（见下方说明）：游标前进了就还有下一页。
+      this.hasMore = cursor.length > 0 && cursor !== startCursor;
       this.onPosts(this.posts);
       this.onMore(this.hasMore);
       hilog.info(DOMAIN, TAG,
-        'loadMore +%{public}d total=%{public}d hasMore=%{public}s cached=%{public}s tries=%{public}d',
-        fresh.length, this.posts.length, `${this.hasMore}`, cachedUsed ? 'y' : 'n', attempts);
+        'loadMore +%{public}d total=%{public}d hasMore=%{public}s reason=%{public}s'
+        + ' cursor=%{public}d cached=%{public}s tries=%{public}d',
+        fresh.length, this.posts.length, `${this.hasMore}`,
+        cursor.length === 0 ? 'cursor-empty' : (cursor === startCursor ? 'cursor-stuck' : 'ok'),
+        cursor.length, cachedUsed ? 'y' : 'n', attempts);
       // 网格明显长起来了就**再存一份更满的缓存**（见 savedCount）：下次冷启动/切页一进来
       // 就有十几格，而不是只有第一页那 4 格。
       if (this.posts.length - this.savedCount >= CACHE_RESAVE_STEP) {

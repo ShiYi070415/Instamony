@@ -248,7 +248,13 @@ export class MobileDiscover {
       }
     }
     const cursorNext: string = MobileDiscover.exploreCursor(parsed);
-    const more: boolean = MobileDiscover.boolOf(parsed, 'more_available');
+    /*
+     * **有游标就算「还有更多」**（IG 的 `more_available` 会瞎写）：
+     * 探索流实测经常「给了 max_id 却把 more_available 写成 false」，按它拦就是
+     * 用户报的「探索流拉到底显示没有更多了」—— 明明还能继续翻。
+     * 真正的「到底」由**游标是否为空**表达（下一页取不到游标 = 到头）。
+     */
+    const more: boolean = MobileDiscover.boolOf(parsed, 'more_available') || cursorNext.length > 0;
     /*
      * **跨入口去重**（见 ExploreLanes）：这一页里已经被**别的**入口拿走的帖子剔掉，
      * 剩下的记到本入口名下。全被占住时 claim 会原样放行（宁可重复一次也别空屏）。
