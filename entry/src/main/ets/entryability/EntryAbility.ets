@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Copyright (c) 2026 Huawei Device Co., Ltd.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,8 @@ import { deviceInfo } from '@kit.BasicServicesKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { window, uiMaterial } from '@kit.ArkUI';
 import { AppLifecycle } from '../core/AppLifecycle';
+// 退到后台后仍能再跑几分钟（短时任务 + 后台收件箱检查），见 core/BackgroundKeep。
+import { BackgroundInbox, BackgroundKeep } from '../core/BackgroundKeep';
 // 点私信通知要直接进那条会话：这里只负责把 want 里的会话 id 交给 core/NotifyRoute。
 import { NotifyRoute } from '../core/NotifyRoute';
 import { AppSettings } from '../core/AppSettings';
@@ -465,6 +467,12 @@ export default class EntryAbility extends UIAbility {
     // Ability has brought to foreground
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
     /*
+     * 回到前台：后台那几分钟的额度**立刻交还**（额度是单日有限的，留着不省也不划算），
+     * 后台轮询也停掉 —— 前台由私信页自己的轮询接手（见 core/BackgroundKeep 的文件头）。
+     */
+    BackgroundInbox.stop();
+    BackgroundKeep.cancel();
+    /*
      * 让常驻的 WebView 恢复 JS 定时器与媒体（见 InstagramWebHost.applyVisibility），
      * 同时让**所有**监听者知道（视频播放器据此重建解码器，见 VideoSurface）。
      * 这里不再用 `isRegistered()` 拦：Web 宿主可能还没挂载，而播放器已经在跑了。
@@ -478,6 +486,15 @@ export default class EntryAbility extends UIAbility {
     // 离开应用（回桌面/切走）就把预下载的媒体清掉：那些是"这次浏览用的"，留着只会占磁盘
     // （见 MediaPrefetch.clearCache）。下次进来滑到哪几张再重新预下载。
     MediaPrefetch.clearCache();
+    /*
+     * **退到后台后还要能再跑一会儿**（需求："消息推送可以挂后台吗"）：申请一段短时任务额度，
+     * 并开始隔 45 秒看一眼收件箱 —— 未读变多就由 core/PushCenter 发本地通知。
+     *
+     * 额度是分钟级、单日还有总配额（见 core/BackgroundKeep 的文件头），所以这不是"常驻后台"：
+     * 真正"应用被杀也能收到"要靠 Push Kit + 服务端，单机做不到。
+     */
+    BackgroundKeep.request('检查新私信');
+    BackgroundInbox.start();
     /*
      * **必须无条件通知**：以前这里挂着 `isRegistered()`，而那个标志只由 Web 宿主设置 ——
      * 结果"视频在后台继续解码"这条就漏掉了（真机实测：退到桌面后进程仍吃 69% CPU、

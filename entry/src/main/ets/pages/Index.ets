@@ -203,6 +203,8 @@ import { ProfileReelsViewModel } from '../viewmodel/ProfileReelsViewModel';
 import { MediaDetail, NativeMediaInfo } from '../core/NativeMediaInfo';
 import { NativeUserInfo } from '../core/NativeUserInfo';
 import { ApiThrottle } from '../core/ApiThrottle';
+// 退到后台后仍能再跑几分钟：短时任务 + 后台收件箱检查（见 core/BackgroundKeep）。
+import { BackgroundInbox, BackgroundKeep } from '../core/BackgroundKeep';
 // 降噪度量（临时 toast 用，见 aboutToAppear 末尾那段）。
 import { MobileRequest } from '../core/mobileapi/MobileRequest';
 // 首页时间线"能不能走移动端"的一次性实验（见 core/mobileapi/MobileFeedProbe）。
@@ -5774,6 +5776,20 @@ struct Index {
     this.consumePendingDeepLink();
     // 点私信通知进 App：直接进那条会话（见 core/NotifyRoute / consumeNotifyRoute）。
     this.consumeNotifyRoute();
+    /*
+     * **把"后台看一眼收件箱"绑到私信视图模型上**（见 core/BackgroundKeep 的 BackgroundInbox）。
+     *
+     * 退到后台那几分钟里没有页面在跑，由它每 45 秒替私信页轮询一次；未读变多就由
+     * core/PushCenter 发本地通知。这里每次 onPageShow 都绑一次：`directVm` 是同一个实例，
+     * 重复绑没有副作用（只是换掉那个闭包）。
+     */
+    BackgroundInbox.bind((): void => {
+      if (!this.signedIn) {
+        return;
+      }
+      this.directVm.refreshQuietly().catch((): void => {
+      });
+    });
   }
 
   // ==========================================================================
