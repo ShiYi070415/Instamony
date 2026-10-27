@@ -190,6 +190,13 @@ export struct SearchPage {
   /** 正在加载下一页（尾部转圈）。 */
   @State private loadingMore: boolean = false;
   /**
+   * 下拉刷新中。
+   *
+   * 需求："触发刷新时**直接覆盖**数据流"：下拉之后先把整条推荐流清空，再整页替换，
+   * 不会出现"旧内容还挂在下面"（见 SearchViewModel.refresh）。
+   */
+  @State private refreshing: boolean = false;
+  /**
    * 瀑布流的可用宽度（vp）。
    *
    * 为什么必须先知道宽度：格子高度 = 列宽 ÷ 封面比例，而**这个高度必须在 FlowItem 进布局
@@ -597,6 +604,15 @@ export struct SearchPage {
         .animation({ duration: SEARCH_BOX_ANIM_MS, curve: Curve.EaseOut })))
   }
 
+  /** 下拉刷新：整条推荐流**覆盖式**重建（见 SearchViewModel.refresh）。 */
+  private refreshRecommended(): void {
+    this.vm.refresh().then((): void => {
+      this.refreshing = false;
+    }).catch((): void => {
+      this.refreshing = false;
+    });
+  }
+
   /**
    * 瀑布流的尾部：正在加载下一页时转圈，到底了显示"没有更多了"。
    *
@@ -654,7 +670,12 @@ export struct SearchPage {
     .columnsGap(GRID_GAP)
     .rowsGap(GRID_GAP)
     .width('100%')
-    .layoutWeight(1)
+    /*
+     * **高度写 100% 而不是 layoutWeight(1)**：这条瀑布流现在住在 `Refresh` 里（见 build），
+     * 而 `layoutWeight` 只在 Row/Column 的直接子节点上才有意义 —— 放进 Refresh 会被忽略，
+     * 网格可能塌成 0 高（一屏空白）。外层那颗 Refresh 自己吃 layoutWeight(1)。
+     */
+    .height('100%')
     .scrollBar(BarState.Off)
     .edgeEffect(EdgeEffect.Spring)
     .contentEndOffset(SEARCH_BOTTOM_OFFSET)
@@ -767,7 +788,17 @@ export struct SearchPage {
           if (this.posts.length === 0) {
             this.emptyHint()
           } else {
-            this.recommendFlow()
+            /*
+             * **下拉刷新**（需求："触发刷新时直接覆盖数据流"）：Refresh 里只放一条瀑布流
+             * （官方要求子节点是滚动容器），刷新时交给视图模型整页替换。
+             */
+            Refresh({ refreshing: $$this.refreshing }) {
+              this.recommendFlow()
+            }
+            .onRefreshing((): void => {
+              this.refreshRecommended();
+            })
+            .layoutWeight(1)
           }
         }
       }

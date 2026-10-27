@@ -195,7 +195,7 @@ import { NativeDirect } from '../core/NativeDirect';
 import { SearchViewModel } from '../viewmodel/SearchViewModel';
 import { ReelsViewModel } from '../viewmodel/ReelsViewModel';
 // 两条流的标识（需求："把关注流和探索流分开两页"，见 core/NativeReels 的 REELS_SOURCE_*）。
-import { REELS_SOURCE_EXPLORE, REELS_SOURCE_FOLLOWING } from '../core/NativeReels';
+import { NativeReels, REELS_SOURCE_EXPLORE, REELS_SOURCE_FOLLOWING } from '../core/NativeReels';
 import { ProfileReelsViewModel } from '../viewmodel/ProfileReelsViewModel';
 import { MediaDetail, NativeMediaInfo } from '../core/NativeMediaInfo';
 import { NativeUserInfo } from '../core/NativeUserInfo';
@@ -375,6 +375,12 @@ const PROBE_DUMP_MIN_INTERVAL_MS: number = 60000;
  * 隐藏网页在活动页/帖子页时读信息流必定失败；等它回首页再读，比直接放弃（用户看到
  * "拉了一下什么也没发生"）好。上限给 8 秒，超了就照常试一次，由取数流程自己报状态。
  */
+/**
+ * 预热 Reels 探索流时先要几条（与 EntryAbility 里那份预热同一个数量）。
+ *
+ * 取值 7：够铺满首屏（一屏约 1 条），又不会把那一发撑得太大。
+ */
+const WARM_EXPLORE_REELS: number = 7;
 const REFRESH_NAV_WAIT_MS: number = 8000;
 const REFRESH_NAV_POLL_MS: number = 200;
 /**
@@ -2925,6 +2931,21 @@ struct Index {
      * 它启动时那 2~3 发（news/inbox → show_many → ayml）对首屏没有任何帮助，
      * 纯粹抬高请求密度；用户点标题栏那颗爱心时 `loadNotifications` 自己会拉。
      */
+    /*
+     * 2) **探索流预加载**（需求："reels 页和搜索页探索流的预加载做一下"）。
+     *
+     * 两条入口各一发、互不共用（见 core/mobileapi/ExploreLanes：不同 session_id + 跨入口去重）：
+     *   · 搜索页推荐网格：`searchVm.prefetch()` —— 第一页拉回来存着，切过去零等待；
+     *   · Reels 探索流：`NativeReels.warmStart` —— 结果留在内存，ReelsViewModel 用 takeWarm 取。
+     * 挂在预热链里（`warmStep` 会等用户手停下来、并在未登录时整体跳过），所以不会和首屏抢通道。
+     */
+    await this.warmStep('explore', (): boolean => {
+      return this.reelsVm.list().length > 0 && this.searchVm.postList().length > 0;
+    }, async (): Promise<void> => {
+      NativeReels.warmStart(REELS_SOURCE_EXPLORE, WARM_EXPLORE_REELS);
+      await this.searchVm.prefetch();
+    });
+
     // 2) Reels / 搜索 / 我的：**启动不再预热**（降噪，见 `FINGERPRINT_ANALYSIS.md` 阶段一）。
     //
     // 这三页原来在冷启动时各打 1~3 发（reels 的 clips 查询、搜索推荐 1.26MB、我的四个分页），

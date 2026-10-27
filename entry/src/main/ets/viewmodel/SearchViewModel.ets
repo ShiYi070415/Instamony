@@ -19,6 +19,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { LoadGate } from '../core/LoadGate';
 import { SearchPost, SearchUser } from '../model/Search';
 import { NativeSearch, SearchPostPage } from '../core/NativeSearch';
+import { EXPLORE_LANE_SEARCH } from '../core/mobileapi/ExploreLanes';
 import { CachedSearchPage, SearchCache } from '../core/SearchCache';
 import { ApiThrottle } from '../core/ApiThrottle';
 
@@ -43,6 +44,12 @@ const PREFETCH_DEPTH: number = 1;
 const MIN_GRID_POSTS: number = 12;
 /** 网格每长这么多条就再落盘一份缓存（见 loadMore；一次写几 KB，不值得每条都写）。 */
 const CACHE_RESAVE_STEP: number = 6;
+/**
+ * 一整页都是重复时，最多再连要几页（见 loadMore）。
+ *
+ * 3 页足够穿过 IG 常见的"游标回带"；再多就说明服务端确实在原地打转，收手更省流量。
+ */
+const SKIP_DUP_PAGES: number = 3;
 
 export class SearchViewModel {
   private users: Array<SearchUser> = [];
@@ -92,6 +99,16 @@ export class SearchViewModel {
    */
   private prefetched: Array<SearchPostPage> = [];
   private prefetching: boolean = false;
+  /**
+   * 后台**预加载**到的推荐第一页（见 prefetch）。
+   *
+   * 需求："搜索页探索流的预加载做一下"：启动时（app 起来、用户还在首页）就把第一页拉回来
+   * 放在这儿，用户切到搜索页的那一刻直接铺上（`open()` → `loadRecommendedOnce` 先吃它），
+   * 不用再等一次 1MB / 1~3 秒的网络。
+   *
+   * 只存**一页**：第一页之外的页仍由 prefetchMore 排队，别把内存和请求密度一起放大。
+   */
+  private prefetchedFirst: SearchPostPage | null = null;
 
   onUsers: (users: Array<SearchUser>) => void = (users: Array<SearchUser>): void => {
   };
@@ -169,6 +186,65 @@ export class SearchViewModel {
      * 真正的第一页等用户**切到搜索页**时再拉（`open()` → `loadRecommended()`）。
      */
     hilog.info(DOMAIN, TAG, 'warm: cache only (%{public}d cached post(s))', this.posts.length);
+  }
+
+  /**
+   * **后台预加载推荐第一页**（需求："搜索页探索流的预加载做一下"）。
+   *
+   * 与 `warm()` 的区别：`warm()` 只读盘、不发网络（那一版是为了降噪）；这个会真的发一发，
+   * 但要等**首屏画完、用户手停下**之后（调用点在 `Index.warmOtherTabs` 的预热链里），
+   * 所以不会和首屏抢通道。拿到之后放在 `prefetchedFirst`，`open()` 直接消费。
+   *
+   * 已经加载过 / 正在加载 / 有搜索词 / 没有会话时都直接返回（幂等）。
+   */
+  async prefetch(): Promise<void> {
+    if (this.prefetchedFirst !== null || this.recommendLoaded || this.query.length > 0) {
+      return;
+    }
+    if (!NativeSearch.hasRecommendedSource()) {
+      return;
+    }
+    // 限流期间别硬发（移动端探索流不受 CLIPS 那把锁管，判据和 loadRecommendedOnce 一致）。
+    if (!NativeSearch.mobileRecommendedUsable() && ApiThrottle.blocked(ApiThrottle.CLIPS)) {
+      hilog.info(DOMAIN, TAG, 'prefetch skipped: rate limited');
+      return;
+    }
+    const started: number = Date.now();
+    try {
+      const page: SearchPostPage | null = await NativeSearch.recommendedPage('', EXPLORE_LANE_SEARCH);
+      if (page === null || page.posts.length === 0) {
+        hilog.info(DOMAIN, TAG, 'prefetch miss (%{public}s)', NativeSearch.lastDiag());
+        return;
+      }
+      this.prefetchedFirst = page;
+      hilog.info(DOMAIN, TAG, 'prefetch ready n=%{public}d hasMore=%{public}s ms=%{public}d',
+        page.posts.length, `${page.hasMore}`, Date.now() - started);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'prefetch threw: %{public}s', (error as Error).message);
+    }
+  }
+
+  /**
+   * **刷新推荐流**（搜索页下拉刷新；需求："触发刷新时直接覆盖数据流"）。
+   *
+   * 和 `retryRecommend()` 的区别：那个只是"没加载出来时再试一次"，加载过就是空操作；
+   * 这个会**先清空整条流**（列表、游标、hasMore、预取队列、首屏预加载），再拉第一页，
+   * 回来时整页替换 —— 不会出现"新旧混排 / 旧内容还挂在下面"。
+   */
+  async refresh(): Promise<void> {
+    this.posts = [];
+    this.cursor = '';
+    this.hasMore = false;
+    this.prefetched = [];
+    this.prefetchedFirst = null;
+    this.recommendLoaded = false;
+    this.savedCount = 0;
+    // 缓存标记也复位：刷新失败时还允许它把落盘那份再铺一次（比空屏好）。
+    this.cacheTried = false;
+    this.onPosts(this.posts);
+    this.onMore(false);
+    this.onStatus('正在刷新推荐…');
+    await this.loadRecommended();
   }
 
   /**
@@ -291,7 +367,14 @@ export class SearchViewModel {
       return;
     }
     this.onStatus('正在读取推荐…');
-    const page: SearchPostPage | null = await NativeSearch.recommendedPage('');
+    /*
+     * **优先吃后台预加载的那一页**（见 prefetch）：切到搜索页时它多半已经在手里，
+     * 直接铺上就是"零等待"。取走即清空，避免同一页被用两次。
+     */
+    const warmed: SearchPostPage | null = this.prefetchedFirst;
+    this.prefetchedFirst = null;
+    const page: SearchPostPage | null = warmed !== null
+      ? warmed : await NativeSearch.recommendedPage('', EXPLORE_LANE_SEARCH);
     if (page === null) {
       // 读不出来时也争取给点内容：缓存那份至少是"上次真实拉到的瀑布流"。
       this.hydrateFromCache();
@@ -396,6 +479,24 @@ export class SearchViewModel {
     });
   }
 
+  /** 这一页里**还没显示过**的条目（按 code 去重，见 loadMore）。 */
+  private freshOf(posts: Array<SearchPost>): Array<SearchPost> {
+    const seen: Array<string> = [];
+    for (let index: number = 0; index < this.posts.length; index++) {
+      seen.push(this.posts[index].code);
+    }
+    const fresh: Array<SearchPost> = [];
+    for (let index: number = 0; index < posts.length; index++) {
+      const one: SearchPost = posts[index];
+      if (seen.indexOf(one.code) >= 0) {
+        continue;
+      }
+      seen.push(one.code);
+      fresh.push(one);
+    }
+    return fresh;
+  }
+
   /**
    * 瀑布流滑到底部时接着拉下一页（需求："上滑到底部时瀑布流不刷新"）。
    *
@@ -439,39 +540,62 @@ export class SearchViewModel {
     this.loadingMore = true;
     this.onLoadingMore(true);
     try {
-      // **有缓存页就直接用**（毫秒级）：没有再发请求（见 prefetchMore 的说明）。
-      let cached: SearchPostPage | null = null;
-      if (this.prefetched.length > 0) {
-        cached = this.prefetched[0];
-        this.prefetched = this.prefetched.slice(1);
+      const startCursor: string = this.cursor;
+      let cursor: string = startCursor;
+      let page: SearchPostPage | null = null;
+      let fresh: Array<SearchPost> = [];
+      let cachedUsed: boolean = false;
+      let attempts: number = 0;
+      /*
+       * **整页都是重复时继续往下翻**（用户报："搜索页推荐流会出现没有更多了"）。
+       *
+       * IG 探索流的游标会回带：下一页常常整页都是已经显示过的那几条。原先的判据是
+       * `fresh.length > 0`，于是只要撞上这种回带页，`hasMore` 立刻被拍成 false ——
+       * 用户滑到底就永久停在"没有更多了"，哪怕后面还有几十页。而且我们给三条入口做了
+       * 跨入口去重（ExploreLanes），去重后也可能出现"这页剩下的都是别人拿走的"。
+       *
+       * 现在改成**只看游标有没有前进**：游标变了就再要一页（最多连跳 SKIP_DUP_PAGES 页），
+       * 游标没变、或服务端明说没有了，才真的收手。
+       */
+      while (attempts <= SKIP_DUP_PAGES) {
+        attempts++;
+        // **有缓存页就直接用**（毫秒级）：没有再发请求（见 prefetchMore 的说明）。
+        let cached: SearchPostPage | null = null;
+        if (this.prefetched.length > 0) {
+          cached = this.prefetched[0];
+          this.prefetched = this.prefetched.slice(1);
+        }
+        cachedUsed = cached !== null;
+        const fetched: SearchPostPage | null = cached !== null
+          ? cached : await NativeSearch.recommendedPage(cursor, EXPLORE_LANE_SEARCH);
+        if (fetched === null) {
+          break;
+        }
+        page = fetched;
+        fresh = this.freshOf(fetched.posts);
+        this.posts = this.posts.concat(fresh);
+        if (fetched.cursor.length > 0) {
+          cursor = fetched.cursor;
+        }
+        const moved: boolean = cursor !== startCursor;
+        if (fresh.length > 0 || !fetched.hasMore || !moved || fetched.cursor.length === 0) {
+          break;
+        }
+        hilog.info(DOMAIN, TAG, 'loadMore all-duplicate page, skip (attempt %{public}d cursor=%{public}d)',
+          attempts, cursor.length);
       }
-      const page: SearchPostPage | null = cached !== null
-        ? cached : await NativeSearch.recommendedPage(this.cursor);
       if (page === null) {
         this.onStatus('加载更多失败：' + NativeSearch.lastDiag());
         return;
       }
-      const seen: Array<string> = [];
-      for (let index: number = 0; index < this.posts.length; index++) {
-        seen.push(this.posts[index].code);
-      }
-      const fresh: Array<SearchPost> = [];
-      for (let index: number = 0; index < page.posts.length; index++) {
-        const one: SearchPost = page.posts[index];
-        if (seen.indexOf(one.code) >= 0) {
-          continue;
-        }
-        seen.push(one.code);
-        fresh.push(one);
-      }
-      this.posts = this.posts.concat(fresh);
-      this.cursor = page.cursor;
-      // 拿到的新条目一条都没加进去（全是重复）时也收手，免得在"最后一页会重复"的情况下无限翻。
-      this.hasMore = page.hasMore && (fresh.length > 0 || page.posts.length === 0);
+      this.cursor = cursor;
+      // **只在"游标没前进"或"服务端说没有更多"时收手** —— 整页重复不再等于到底。
+      this.hasMore = page.hasMore && cursor !== startCursor;
       this.onPosts(this.posts);
       this.onMore(this.hasMore);
-      hilog.info(DOMAIN, TAG, 'loadMore +%{public}d total=%{public}d hasMore=%{public}s cached=%{public}s',
-        fresh.length, this.posts.length, `${this.hasMore}`, cached !== null ? 'y' : 'n');
+      hilog.info(DOMAIN, TAG,
+        'loadMore +%{public}d total=%{public}d hasMore=%{public}s cached=%{public}s tries=%{public}d',
+        fresh.length, this.posts.length, `${this.hasMore}`, cachedUsed ? 'y' : 'n', attempts);
       // 网格明显长起来了就**再存一份更满的缓存**（见 savedCount）：下次冷启动/切页一进来
       // 就有十几格，而不是只有第一页那 4 格。
       if (this.posts.length - this.savedCount >= CACHE_RESAVE_STEP) {
