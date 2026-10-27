@@ -39,6 +39,16 @@ const TAG: string = 'MobileDirect';
 
 /** 一页会话几条（instagrapi 的 `amount`，默认 20）。 */
 const INBOX_PAGE_SIZE: number = 20;
+/**
+ * **第一页**只带这么多条会话 / 这么多条预览消息（见 inbox 的说明）。
+ *
+ * 用户报："初次打开 app 私信列表加载很慢"。第一页那一发是整个私信页唯一的阻塞请求，
+ * 而一页 20 条 × 每条 10 条消息 = 几百 KB 的响应，装进来还要在 TaskPool 里解析一遍。
+ * 列表本身只画"最后一条预览"，多带的那些消息没人看 —— 所以第一页收小：
+ * 15 条会话 × 5 条预览，后面的页照旧按原来的参数取（翻页/轮询都没变）。
+ */
+const INBOX_FIRST_PAGE_SIZE: number = 15;
+const INBOX_FIRST_MESSAGE_LIMIT: number = 5;
 /** 每个会话先带几条最近消息（instagrapi 的 `thread_message_limit`，默认 10）。 */
 const THREAD_MESSAGE_LIMIT: number = 10;
 /** 打开一条会话时先取几条消息（instagrapi 的 `amount`，默认 20）。 */
@@ -69,37 +79,45 @@ export class MobileDirect {
    *
    * @param cursor 上一页的游标（空串 = 第一页）
    */
-  static async inbox(cursor: string = ''): Promise<DirectInboxPage | null> {
+  static async inbox(cursor: string = '',
+                     priority: number = ApiThrottle.warm()): Promise<DirectInboxPage | null> {
+    const startedAt: number = Date.now();
     const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
     if (identity === null) {
       hilog.info(DOMAIN, TAG, 'inbox skipped: no session');
       return null;
     }
+    // 第一页（没有游标）用更小的那一套：列表只画"最后一条预览"，多带的没人看（见常量说明）。
+    const first: boolean = cursor.length === 0;
+    const messageLimit: number = first ? INBOX_FIRST_MESSAGE_LIMIT : THREAD_MESSAGE_LIMIT;
+    const pageSize: number = first ? INBOX_FIRST_PAGE_SIZE : INBOX_PAGE_SIZE;
     const data: Record<string, Object> = MobileRequest.withExtraData(identity);
     data['visual_message_return_type'] = 'unseen';
-    data['thread_message_limit'] = THREAD_MESSAGE_LIMIT;
+    data['thread_message_limit'] = messageLimit;
     data['persistentBadging'] = 'true';
-    data['limit'] = INBOX_PAGE_SIZE;
+    data['limit'] = pageSize;
     /*
      * 游标**只走查询串**（实测：表单体里带 `cursor` 会被忽略 —— 回 200 但又是第一页，
      * 这种"原地打转"最坑，翻页看着成功、内容一模一样）。参数名就用 `cursor`，
      * 值取响应里的 `oldest_cursor`（见 CURSOR_KEYS 的实测表）。
      */
     let query: string = 'visual_message_return_type=unseen'
-      + `&thread_message_limit=${THREAD_MESSAGE_LIMIT}&persistentBadging=true&limit=${INBOX_PAGE_SIZE}`;
+      + `&thread_message_limit=${messageLimit}&persistentBadging=true&limit=${pageSize}`;
     if (cursor.length > 0) {
       query += `&cursor=${encodeURIComponent(cursor)}`;
     }
     const result: MobileResult = await MobileRequest.send(
       'direct_v2/inbox/', MobileRequest.formOf(data), query, true, null,
-      new MobileOptions(ApiThrottle.DIRECT, ApiThrottle.warm()));
+      new MobileOptions(ApiThrottle.DIRECT, priority));
     if (!result.ok) {
       hilog.warn(DOMAIN, TAG, 'inbox failed: %{public}s', result.summary());
       return null;
     }
     // 请求带没带游标、翻页回来的第一会话是谁 —— 排查"加载更多到底动没动"就看这一行。
-    hilog.info(DOMAIN, TAG, 'inbox req cursorLen=%{public}d bytes=%{public}d',
-      cursor.length, result.bytes);
+    // `q=` 是从发起（含会话材料准备与排队）到拿到响应的毫秒数：用户报"初次进私信很慢"就看它。
+    const gotAt: number = Date.now();
+    hilog.info(DOMAIN, TAG, 'inbox req cursorLen=%{public}d bytes=%{public}d q=%{public}dms',
+      cursor.length, result.bytes, gotAt - startedAt);
     const page: DirectInboxPage | null = await MobileDirect.parseInboxOffThread(result.body);
     if (page === null) {
       hilog.warn(DOMAIN, TAG, 'inbox parse failed bytes=%{public}d head=%{public}s',
@@ -108,8 +126,8 @@ export class MobileDirect {
     }
     const fixed: DirectInboxPage = page;
     // 位点已在线程池那次解析里带走（见 parseInboxOffThread），这里不再 parse 整页。
-    hilog.info(DOMAIN, TAG, 'inbox ok n=%{public}d more=%{public}s cursor=%{public}d',
-      fixed.threads.length, `${fixed.hasMore}`, fixed.endCursor.length);
+    hilog.info(DOMAIN, TAG, 'inbox ok n=%{public}d more=%{public}s cursor=%{public}d parse=%{public}dms',
+      fixed.threads.length, `${fixed.hasMore}`, fixed.endCursor.length, Date.now() - gotAt);
     if (fixed.threads.length > 0) {
       hilog.info(DOMAIN, TAG, 'inbox first title=%{public}s avatar=%{public}s',
         fixed.threads[0].title, fixed.threads[0].avatarUrl.substring(0, 90));

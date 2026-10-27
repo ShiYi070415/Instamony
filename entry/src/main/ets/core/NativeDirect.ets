@@ -42,14 +42,17 @@ export class NativeDirect {
    * 拉一页收件箱。
    *
    * @param after 翻页游标（空串 = 第一页）。
+   * @param priority 限速优先级：**首屏用 interactive**（用户正看着这一页，别排 warm 那 1.5~3.5 秒的队），
+   *                 翻页/轮询/预取仍走 warm（见 DirectViewModel.fetchInbox 的说明）。
    */
-  static async inbox(after: string): Promise<DirectInboxPage | null> {
+  static async inbox(after: string,
+                     priority: number = ApiThrottle.warm()): Promise<DirectInboxPage | null> {
     const cooled: string = NativeDirect.cooling('inbox');
     if (cooled.length > 0) {
       NativeDirect.detail = cooled;
       return null;
     }
-    const page: DirectInboxPage | null = await MobileDirect.inbox(after);
+    const page: DirectInboxPage | null = await MobileDirect.inbox(after, priority);
     if (page === null) {
       NativeDirect.detail = NativeDirect.mobileDetail('inbox');
       return null;

@@ -1,4 +1,4 @@
-﻿/*
+/*
 /**
  * Instamony native shell.
  *
@@ -606,6 +606,14 @@ const PRELOAD_PAGE_WAIT_MS: number = 8000;
  * 这几件事都在 JS/渲染线程上，后台这时候插进来读四个页面只会让首屏更慢。
  */
 const WARM_START_DELAY_MS: number = 1200;
+/**
+ * 私信收件箱的**预取延迟**（毫秒，见 prefetchInboxWhenIdle）。
+ *
+ * 900ms：比首屏那几发晚一点（别抢冷启动的第一波），又不能太晚 —— 用户的真实节奏是
+ * "开 app → 看两眼 → 点私信"，通常 2~4 秒就到了。以前要等首屏有帖子 + 手停下来，
+ * 基本踩不上，这才是"初次打开 app 私信列表加载很慢"的直接原因。
+ */
+const INBOX_PREFETCH_DELAY_MS: number = 900;
 /**
  * "用户点开的这一发快拍取数失败"之后隔多久重试（毫秒，见 playStoryAt）。
  *
@@ -2836,15 +2844,18 @@ struct Index {
    * 任何一步失败都只记一行日志：预热失败不该影响正常路径（用户切过去时页面自己会再读一次）。
    */
   /**
-   * **首屏画完、用户手停下来之后**，再预取私信收件箱（见 warmOtherTabs 里那段说明）。
+   * **早一点预取私信收件箱**（用户报："初次打开 app 私信列表加载很慢"）。
    *
-   * 两道闸：
-   *   1) 等首屏**真的有帖子**（最多等 12 秒；超时就放弃这一轮预热 —— 用户切到私信页时
-   *      `DirectPage` 自己会拉，行为与以前一致）；
-   *   2) 等用户**手停下来**（`waitIdle`：滚动中不要抢那 2 个闸门名额）。
+   * 之前这一发要等"首屏真的有帖子（最多 12 秒）+ 手停下来"，所以真实节奏（开 app → 看两眼
+   * → 点私信）几乎总是踩不上：用户切过去时列表还是空的，只能干等这一发。
    *
-   * 收益：首屏之后那几发（快拍、后续翻页）不再被一发 800KB 的收件箱顶到后面。
-   * 代价：预热晚十几秒开始 —— 用户在这段时间里点进私信，就走页面自己的加载。
+   * 现在改成：开 app 后 `INBOX_PREFETCH_DELAY_MS` 就发，**不等首屏、不等手停**。
+   *   · 请求数不变（还是那么一发）；
+   *   · 首屏那一发照样先发（它更早、且是 urgent/interactive），只是不再独占整条队列；
+   *   · 用户点私信时数据通常已经在 vm 里（`DirectPage` 会看到 `isFresh` 并直接用），
+   *     最差也是"同一发正在飞"而不是"从零开始"。
+   *
+   * 顺序上仍然让首屏先走一步：等 `INBOX_PREFETCH_DELAY_MS` 就是为了躲开冷启动那几发。
    */
   private async prefetchInboxWhenIdle(): Promise<void> {
     try {
@@ -2852,10 +2863,7 @@ struct Index {
         return;
       }
       const started: number = Date.now();
-      const deadline: number = started + 12000;
-      while (this.viewModel.list().length === 0 && Date.now() < deadline) {
-        await this.delay(150);
-      }
+      await this.delay(INBOX_PREFETCH_DELAY_MS);
       if (!this.signedIn) {
         return;
       }
@@ -2863,13 +2871,8 @@ struct Index {
         hilog.info(DOMAIN, TAG, 'direct prefetch skip (already loaded)');
         return;
       }
-      // 等手停（滚动中不抢名额）：`waitIdle` 自己有上限，不会无限等。
-      await this.waitIdle();
-      if (!this.signedIn) {
-        return;
-      }
       await this.directVm.load(false);
-      hilog.info(DOMAIN, TAG, 'direct prefetch done n=%{public}d (after first paint +%{public}dms)',
+      hilog.info(DOMAIN, TAG, 'direct prefetch done n=%{public}d (+%{public}dms from launch)',
         this.directVm.list().length, Date.now() - started);
     } catch (error) {
       hilog.info(DOMAIN, TAG, 'direct prefetch failed: %{public}s', (error as Error).message);

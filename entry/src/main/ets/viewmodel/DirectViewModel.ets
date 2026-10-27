@@ -1,4 +1,4 @@
-/*
+﻿/*
  * 私信（收件箱）的视图模型。
  *
  * 取数只有一条链：`NativeDirect.inbox` → 移动端 `direct_v2/inbox/`（core/mobileapi/MobileDirect）。
@@ -14,6 +14,7 @@ import { LoadGate } from '../core/LoadGate';
 import { NativeDirect } from '../core/NativeDirect';
 // 新私信的本地通知（见 core/PushCenter）。
 import { PushCenter } from '../core/PushCenter';
+import { ApiThrottle } from '../core/ApiThrottle';
 import { DirectCache, CachedInbox } from '../core/DirectCache';
 import { DirectMessage, DirectThread } from '../model/Direct';
 import { DirectInboxPage } from '../model/Direct';
@@ -563,9 +564,17 @@ export class DirectViewModel {
     }
   }
 
-  /** 取一页（只有移动端这一条路；拿不到就把原因记在 `diag` 里）。 */
+  /**
+   * 取一页（只有移动端这一条路；拿不到就把原因记在 `diag` 里）。
+   *
+   * **首屏那一发用 interactive 优先级**（用户报："初次打开 app 私信列表加载很慢"）：
+   * 空列表 = 用户正等着这一页出画面，不该排 warm 那 1.5~3.5 秒的起发间隔；
+   * 已经有一屏内容时的翻页 / 轮询 / 后台预热仍走默认的 warm（别跟别处的请求抢）。
+   */
   private async fetchInbox(cursor: string): Promise<DirectInboxPage | null> {
-    const page: DirectInboxPage | null = await NativeDirect.inbox(cursor);
+    const first: boolean = this.threads.length === 0;
+    const page: DirectInboxPage | null = await NativeDirect.inbox(cursor,
+      first ? ApiThrottle.interactive() : ApiThrottle.warm());
     this.diag = page === null ? NativeDirect.lastDetail() : '-';
     return page;
   }
