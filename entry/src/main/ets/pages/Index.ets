@@ -3096,6 +3096,14 @@ struct Index {
       DirectRealtime.onThreadChange((): void => {
         this.scheduleDirectInboxRefresh();
       });
+      /*
+       * **形状认不出的 direct 补丁也让列表刷一次**：IG 在收件箱级别推的补丁路径与
+       * 会话内不同（见 DirectRealtime.threadIdOf 的说明），解析器认不出时以前直接丢掉，
+       * 表现就是"收到新消息，私信列表毫无反应"。
+       */
+      DirectRealtime.onUnknownDirect((): void => {
+        this.scheduleDirectInboxRefresh();
+      });
       // 解析自检（只打一行日志，不派发）：真实补丁要等别人发消息才有，先验证形状解析没问题。
       DirectRealtime.selfTest();
     }
@@ -3375,7 +3383,7 @@ struct Index {
       return;
     }
     const now: number = Date.now();
-    if (now - this.realtimeInboxAt < 3000) {
+    if (now - this.realtimeInboxAt < 1500) {
       return;
     }
     this.realtimeInboxAt = now;

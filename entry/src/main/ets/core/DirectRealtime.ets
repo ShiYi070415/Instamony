@@ -23,6 +23,8 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { DirectMessage, DirectMapper } from '../model/Direct';
 import { JsonRead } from './JsonRead';
+// 认不出的 direct 补丁路径写一行现场（随「导出诊断」带出，见 applyPatch）。
+import { ReelsCrashLog } from './ReelsCrashLog';
 import { RealtimeEvent } from './mobileapi/MobileRealtime';
 import { MobileSession } from './mobileapi/MobileSession';
 
@@ -50,12 +52,23 @@ export class DirectRealtime {
   private static messageHandlers: Array<(incoming: RealtimeMessage) => void> = [];
   /** 收到"某条会话有别的变化"（已读/改名/加人）的回调 —— 列表据此刷新。 */
   private static threadHandlers: Array<(threadId: string) => void> = [];
+  /**
+   * 收到**认不出形状的 direct 补丁**的回调（列表据此补一次静默刷新）。
+   *
+   * IG 的私信补丁在不同 topic 上有好几种路径形状（`/direct_v2/inbox/threads/<tid>`、
+   * `/direct_v2/threads/<tid>/items/<iid>`、甚至没有前导斜杠）。解析器认不出的那些
+   * 以前是**直接丢掉**的 —— 表现就是"收到新消息，列表一点反应都没有"。现在至少能让
+   * 列表刷一次（有节流，见 Index.scheduleDirectInboxRefresh）。
+   */
+  private static unknownHandlers: Array<() => void> = [];
   /** 自己的 user id（判断气泡左右；懒加载一次）。 */
   private static ownId: string = '';
   /** 累计解析出多少条消息（诊断用）。 */
   private static messageCount: number = 0;
   /** 累计看到多少条"非消息"补丁（诊断用）。 */
   private static updateCount: number = 0;
+  /** 累计看到多少条"认不出形状的 direct 补丁"（诊断用，见 applyPatch）。 */
+  private static unknownCount: number = 0;
 
   static onMessage(handler: (incoming: RealtimeMessage) => void): void {
     DirectRealtime.messageHandlers.push(handler);
@@ -63,6 +76,11 @@ export class DirectRealtime {
 
   static onThreadChange(handler: (threadId: string) => void): void {
     DirectRealtime.threadHandlers.push(handler);
+  }
+
+  /** 注册"认不出的 direct 补丁"回调（列表据此补刷一次）。 */
+  static onUnknownDirect(handler: () => void): void {
+    DirectRealtime.unknownHandlers.push(handler);
   }
 
   /**
@@ -121,6 +139,14 @@ export class DirectRealtime {
     }
     const threadId: string = DirectRealtime.threadIdOf(path);
     if (threadId.length === 0) {
+      // 路径里提到 direct 但我们认不出 id：记一行现场，并让列表补刷一次（见 onUnknownDirect）。
+      if (path.indexOf('direct') >= 0) {
+        DirectRealtime.unknownCount++;
+        if (DirectRealtime.unknownCount <= 8) {
+          ReelsCrashLog.note(`direct patch unknown path=${path.substring(0, 80)}`);
+        }
+        DirectRealtime.emitUnknownDirect();
+      }
       return;
     }
     const value: Record<string, Object> | null = DirectRealtime.recordOfValue(patch);
@@ -161,6 +187,16 @@ export class DirectRealtime {
     for (let index: number = 0; index < DirectRealtime.threadHandlers.length; index++) {
       try {
         DirectRealtime.threadHandlers[index](threadId);
+      } catch (error) {
+      }
+    }
+  }
+
+  /** 通知"有 direct 补丁但形状认不出"：列表据此补刷一次（有节流，见 Index）。 */
+  private static emitUnknownDirect(): void {
+    for (let index: number = 0; index < DirectRealtime.unknownHandlers.length; index++) {
+      try {
+        DirectRealtime.unknownHandlers[index]();
       } catch (error) {
       }
     }
@@ -234,16 +270,34 @@ export class DirectRealtime {
     return JsonRead.asRecord(raw);
   }
 
-  /** 从 path 里拆 `thread_id`（`/direct_v2/threads/<tid>/…`）。 */
+  /**
+   * 从 path 里拆 `thread_id`。
+   *
+   * **三种形状都要认**（IG 在不同 topic 上混着用，实测差异就是"列表不刷新"的根因）：
+   *   · `/direct_v2/threads/<tid>/items/<iid>` —— 会话内某条消息；
+   *   · `/direct_v2/inbox/threads/<tid>` —— **收件箱级别的会话行**（列表要的就是它）；
+   *   · 没有前导斜杠的 `direct_v2/threads/<tid>`（部分载荷会去掉开头的 /）。
+   */
   private static threadIdOf(path: string): string {
-    const marker: string = '/direct_v2/threads/';
-    const at: number = path.indexOf(marker);
-    if (at < 0) {
-      return '';
+    const markers: Array<string> = [
+      '/direct_v2/inbox/threads/',
+      '/direct_v2/threads/',
+      'direct_v2/inbox/threads/',
+      'direct_v2/threads/',
+    ];
+    for (let index: number = 0; index < markers.length; index++) {
+      const at: number = path.indexOf(markers[index]);
+      if (at < 0) {
+        continue;
+      }
+      const rest: string = path.substring(at + markers[index].length);
+      const slash: number = rest.indexOf('/');
+      const id: string = slash < 0 ? rest : rest.substring(0, slash);
+      if (id.length > 0) {
+        return id;
+      }
     }
-    const rest: string = path.substring(at + marker.length);
-    const slash: number = rest.indexOf('/');
-    return slash < 0 ? rest : rest.substring(0, slash);
+    return '';
   }
 
   /** 从 path 里拆 `item_id`（`…/items/<iid>/…`；不是消息补丁就给空串）。 */
