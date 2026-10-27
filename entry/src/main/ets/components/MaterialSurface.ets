@@ -24,7 +24,7 @@
  * 沉浸式视频标题区例外（需求要取消那里的反色），见 immersiveMaterial 的 invert 参数。
  */
 
-import { uiMaterial } from '@kit.ArkUI';
+import { curves, uiMaterial } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS } from '../core/AppSettings';
 import { ARKUI_MATERIAL_COLOR, materialStyleFrom } from '../core/ImmersiveLight';
@@ -451,12 +451,32 @@ export function immersiveMaterial(thickness: string, invert: boolean = true,
  */
 export class SelectSurfaceModifier implements AttributeModifier<SelectAttribute> {
   private readonly thickness: string;
+  /**
+   * 目标宽度（vp）；**<= 0 表示不设宽度**，保持系统自适应。
+   *
+   * 为什么要"不设"这一档：想给"换选项时按钮长度变化"做补间就只能自己给 `.width()`，
+   * 但 Select 把「文字 + 箭头」靠左排，宽度比内容宽时多出来的空白全堆在右侧（左右留白不一致）。
+   * 所以调用方先用一次**不设宽度**的渲染量出系统的占宽，再用"文字宽 + 占宽"算宽度 ——
+   * 这样设出来的宽度和系统自适应完全相等，留白不变，同时换选项时宽度有变化、可以被补间。
+   */
+  private readonly width: number;
+  /** 宽度变化的补间时长（毫秒）；<= 0 不补间。 */
+  private readonly widthAnimationMs: number;
 
-  constructor(thickness: string) {
+  constructor(thickness: string, width: number = 0, widthAnimationMs: number = 0) {
     this.thickness = thickness;
+    this.width = width;
+    this.widthAnimationMs = widthAnimationMs;
   }
 
   applyNormalAttribute(instance: SelectAttribute): void {
+    // 宽度与它的补间**必须写在其它属性之前**：`.animation()` 只覆盖在它之前设置的属性。
+    if (this.width > 0) {
+      instance.width(this.width);
+      if (this.widthAnimationMs > 0) {
+        instance.animation({ duration: this.widthAnimationMs, curve: curves.springMotion() });
+      }
+    }
     if (PlatformCap.hasArkMaterial()) {
       // 同 SurfaceModifier：材质接口声明有、运行时未必有，兜一层（失败就退成纯色底）。
       try {

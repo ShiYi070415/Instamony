@@ -167,6 +167,8 @@ const PROXY_MANAGE_LIST_PAD: number = 20;
 
 /** 下拉按钮的字体大小（vp；和 Select 的 `.font({ size })` 保持一致，量文字宽度要用它）。 */
 const SELECT_FONT_SIZE: number = 15;
+/** 宽度变化的补间时长（毫秒）：弹性曲线配 320ms，观感是"弹一下到位"。 */
+const SELECT_WIDTH_SPRING_MS: number = 320;
 
 /**
  * 下拉里四档的**顺序**（也是下标 → 取值 的映射表）。
@@ -204,6 +206,20 @@ export struct SettingsPanel {
    * "暂无代理"或当前代理名）。绑一个状态、点完再改回去就能压住（见 restoreProxyValueText）。
    */
   @State private proxyValueText: string = '';
+  /**
+   * 系统给 Select 的"文字以外"固定占宽（vp）：右侧箭头 + 左右内边距。**0 = 还没标定**。
+   *
+   * 这个值文档里没有、API 也量不到（Select 的内部布局不公开），但想给"换选项时按钮长度
+   * 变化"做补间就必须自己给 `.width()`；而宽度一旦比内容宽，多出来的空白全堆在右侧，
+   * 左右留白就不一致了（前两版调常量就是这么在不同偏差之间来回）。
+   *
+   * 做法：**首帧先不设宽度**（让系统自己算），用 `onAreaChange` 量到的实际宽度减去文字宽度
+   * 就是这套样式的占宽；标定之后再用"文字宽 + 占宽"算 `.width()` —— 和系统自适应完全相等，
+   * 留白不变，同时换选项时宽度真的变了、可以被弹簧补间。
+   */
+  @State private selectChrome: number = 0;
+  /** 量过的文字宽度缓存（vp），见 textWidthOf。 */
+  private measuredWidths: Map<string, number> = new Map();
   /** 添加 / 编辑面板（同一个半模态：`editingIndex < 0` 是添加，否则是编辑那一份）。 */
   @State private proxySheet: boolean = false;
   /** 正在编辑第几份（-1 = 新增）。 */
@@ -349,6 +365,12 @@ export struct SettingsPanel {
             .selectedOptionBgColor($r('app.color.dropdown_selected_bg'))
             .selectedOptionFont({ size: SELECT_FONT_SIZE, weight: FontWeight.Bold })
             .selectedOptionFontColor($r('app.color.dropdown_selected_text'))
+            .attributeModifier(new SelectSurfaceModifier(this.materialThickness, this.selectWidthOf(this.proxyValueText),
+              SELECT_WIDTH_SPRING_MS))
+            // 首帧量出系统的"文字以外占宽"，之后宽度就按它算（见 selectChrome）。
+            .onAreaChange((oldValue: Area, newValue: Area): void => {
+              this.calibrateSelectChrome(newValue.width, this.proxyValueText);
+            })
             .onSelect((index: number, value: string): void => {
               if (index === this.proxyNames.length) {
                 // 选单最后一项：没有代理就是「添加代理」，有代理就是「管理代理」。
@@ -1252,6 +1274,68 @@ export struct SettingsPanel {
     .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING })
   }
 
+  // ---------------- 下拉按钮的宽度标定与弹性过渡 ----------------
+
+  /**
+   * 标定"文字以外的占宽"（见 `selectChrome` 的说明）。
+   *
+   * 只在还没标定时做一次：此刻下拉是**系统自适应宽度**，`newValue.width` 就是
+   * "文字宽 + 系统占宽"，减出占宽存起来；之后所有下拉都按同一套算，留白和系统一致。
+   */
+  private calibrateSelectChrome(areaWidth: Length, label: ResourceStr): void {
+    if (this.selectChrome > 0) {
+      return;
+    }
+    const width: number = Number(areaWidth);
+    const textWidth: number = this.textWidthOf(this.resText(label));
+    if (textWidth <= 0 || width <= textWidth) {
+      return;
+    }
+    this.selectChrome = width - textWidth;
+  }
+
+  /** 下拉按钮的目标宽度：标定前返回 0（= 不设宽度，系统自适应），见 SelectSurfaceModifier。 */
+  private selectWidthOf(label: ResourceStr): number {
+    if (this.selectChrome <= 0) {
+      return 0;
+    }
+    return Math.round(this.textWidthOf(this.resText(label)) + this.selectChrome);
+  }
+
+  /** 一行文字的宽度（vp）：精确量一次并缓存；量不到就按字宽估。 */
+  private textWidthOf(text: string): number {
+    if (text.length === 0) {
+      return 0;
+    }
+    const cached: number | undefined = this.measuredWidths.get(text);
+    if (cached !== undefined) {
+      return cached;
+    }
+    let width: number = this.estimateTextWidth(text, SELECT_FONT_SIZE);
+    try {
+      // measureText 在 UIContext.getMeasureUtils() 上（API 12+），返回 px，单位换成 vp。
+      const px: number = this.getUIContext().getMeasureUtils()
+        .measureText({ textContent: text, fontSize: SELECT_FONT_SIZE });
+      const measured: number = px2vp(px);
+      if (measured > width) {
+        width = measured;
+      }
+    } catch (error) {
+      // 量不到就用估算值，不影响布局。
+    }
+    this.measuredWidths.set(text, width);
+    return width;
+  }
+
+  /** 字宽估算：CJK 按 1 个字号宽，其它（拉丁/数字/符号）按 0.55。 */
+  private estimateTextWidth(text: string, fontSize: number): number {
+    let units: number = 0;
+    for (let i: number = 0; i < text.length; i++) {
+      units += text.charCodeAt(i) >= 0x2E80 ? 1 : 0.55;
+    }
+    return units * fontSize;
+  }
+
   /**
    * 「材质」下拉行：选**材质厚度**（全局）。
    *
@@ -1274,7 +1358,12 @@ export struct SettingsPanel {
         // 按钮/菜单材质的厚薄都取本行选的厚度；颜色统一**透明**（需求：
         // 各材质等级的颜色一致，等级不再改颜色，见 materialRow 的说明）。
         // 走 SelectSurfaceModifier：API < 26 的设备上没有系统材质，它会自动退化成纯色底。
-        .attributeModifier(new SelectSurfaceModifier(this.materialThickness))
+        .attributeModifier(new SelectSurfaceModifier(this.materialThickness, this.selectWidthOf(this.thicknessDisplay()),
+          SELECT_WIDTH_SPRING_MS))
+        // 首帧量出系统的"文字以外占宽"，之后宽度就按它算（见 selectChrome）。
+        .onAreaChange((oldValue: Area, newValue: Area): void => {
+          this.calibrateSelectChrome(newValue.width, this.thicknessDisplay());
+        })
         .menuAlign(MenuAlignType.END, { dx: 0, dy: MENU_OFFSET_Y })
         .selectedOptionBgColor($r('app.color.dropdown_selected_bg'))
         .selectedOptionFont({ size: 15, weight: FontWeight.Bold })
@@ -1325,7 +1414,12 @@ export struct SettingsPanel {
         // 厚薄 = 「材质」那行选的厚度；颜色透明（各等级统一）。
         // 下拉菜单自己的材质（与按钮相互独立）：同样厚度 + 透明色；**点光源不开**（需求）。
         // 两者都交给 SelectSurfaceModifier：不支持系统材质时退化成纯色底（API < 26）。
-        .attributeModifier(new SelectSurfaceModifier(this.materialThickness))
+        .attributeModifier(new SelectSurfaceModifier(this.materialThickness, this.selectWidthOf(this.materialDisplay()),
+          SELECT_WIDTH_SPRING_MS))
+        // 首帧量出系统的"文字以外占宽"，之后宽度就按它算（见 selectChrome）。
+        .onAreaChange((oldValue: Area, newValue: Area): void => {
+          this.calibrateSelectChrome(newValue.width, this.materialDisplay());
+        })
         .menuAlign(MenuAlignType.END, { dx: 0, dy: MENU_OFFSET_Y })
         // 选中项：低透明度底 + 粗体高对比文字。**颜色走明暗两套资源**（浅色模式适配）：
         //   深色：白 16% 底 + 白字（需求里的观感）；浅色：黑 8% 底 + 近黑字，否则白底白字看不见。
@@ -1367,7 +1461,12 @@ export struct SettingsPanel {
         .value(this.qualityDisplay(this.imageQuality))
         .font({ size: 15 })
         .fontColor($r('app.color.primary_text'))
-        .attributeModifier(new SelectSurfaceModifier(this.materialThickness))
+        .attributeModifier(new SelectSurfaceModifier(this.materialThickness, this.selectWidthOf(this.qualityDisplay(this.imageQuality)),
+          SELECT_WIDTH_SPRING_MS))
+        // 首帧量出系统的"文字以外占宽"，之后宽度就按它算（见 selectChrome）。
+        .onAreaChange((oldValue: Area, newValue: Area): void => {
+          this.calibrateSelectChrome(newValue.width, this.qualityDisplay(this.imageQuality));
+        })
         .menuAlign(MenuAlignType.END, { dx: 0, dy: MENU_OFFSET_Y })
         .selectedOptionBgColor($r('app.color.dropdown_selected_bg'))
         .selectedOptionFont({ size: 15, weight: FontWeight.Bold })
@@ -1397,7 +1496,12 @@ export struct SettingsPanel {
         .value(this.qualityDisplay(this.videoQuality))
         .font({ size: 15 })
         .fontColor($r('app.color.primary_text'))
-        .attributeModifier(new SelectSurfaceModifier(this.materialThickness))
+        .attributeModifier(new SelectSurfaceModifier(this.materialThickness, this.selectWidthOf(this.qualityDisplay(this.videoQuality)),
+          SELECT_WIDTH_SPRING_MS))
+        // 首帧量出系统的"文字以外占宽"，之后宽度就按它算（见 selectChrome）。
+        .onAreaChange((oldValue: Area, newValue: Area): void => {
+          this.calibrateSelectChrome(newValue.width, this.qualityDisplay(this.videoQuality));
+        })
         .menuAlign(MenuAlignType.END, { dx: 0, dy: MENU_OFFSET_Y })
         .selectedOptionBgColor($r('app.color.dropdown_selected_bg'))
         .selectedOptionFont({ size: 15, weight: FontWeight.Bold })
