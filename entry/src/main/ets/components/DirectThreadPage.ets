@@ -20,6 +20,9 @@ import { DirectMessage, DirectThreadView } from '../model/Direct';
 import { DirectThreadViewModel } from '../viewmodel/DirectThreadViewModel';
 import { CommentInputBar, COMMENT_INPUT_BOTTOM_VP } from './CommentInputBar';
 import { ScrollDelta } from '../core/ScrollReport';
+// 分享卡片里的"用户资讯栏"用沉浸光感承载（只能挂在 Toggle 上，见 MaterialSurface）。
+import { SurfaceModifier } from './MaterialSurface';
+import { MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS } from '../core/AppSettings';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'DirectThreadPage';
@@ -624,6 +627,25 @@ export struct DirectThreadPage {
     }
   }
 
+  /** 分享卡片里材质容器的厚度（跟设定页联动）。 */
+  @StorageProp(SETTING_MATERIAL_THICKNESS) cardThickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
+
+  /**
+   * 卡片宽度（需求）：帖子卡片占屏幕 2/3，视频卡片占 1/3。
+   *
+   * 用屏幕宽度而不是气泡宽度：这两种卡片是"内容卡片"，和左右气泡的宽度口径不同。
+   */
+  private shareCardWidth(message: DirectMessage): number {
+    const width: number = this.screenWidthVp > 0 ? this.screenWidthVp : FALLBACK_WIDTH_VP;
+    return message.shareKind === 'video' ? width / 3 : width * 2 / 3;
+  }
+
+  /** 卡片封面高度：按"视频 16:9 竖屏 / 帖子方图略竖"给一个稳定比例（不做裁剪跳变）。 */
+  private shareCardHeight(message: DirectMessage): number {
+    const width: number = this.shareCardWidth(message);
+    return width * (message.shareKind === 'video' ? 1.78 : 1.25);
+  }
+
   private bubbleMaxVp(): number {
     const width: number = this.screenWidthVp > 0 ? this.screenWidthVp : FALLBACK_WIDTH_VP;
     return width * BUBBLE_MAX_RATIO;
@@ -768,11 +790,143 @@ export struct DirectThreadPage {
     return message.shareCode.length > 0 || message.shareUrl.length > 0;
   }
 
+
+  /** 分享卡片的作者行（头像 + 名字）。 */
+  @Builder
+  shareUserRow(message: DirectMessage, fontSize: number, avatarSize: number) {
+    Row({ space: 6 }) {
+      Image(message.shareAvatar.length > 0 ? message.shareAvatar : undefined)
+        .width(avatarSize)
+        .height(avatarSize)
+        .borderRadius(avatarSize / 2)
+        .objectFit(ImageFit.Cover)
+        .draggable(false)
+        .backgroundColor($r('app.color.field_background'))
+      Text(message.shareUser.length > 0 ? message.shareUser
+        : $r('app.string.direct_kind_other'))
+        .fontSize(fontSize)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.primary_text'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .constraintSize({ maxWidth: 120 })
+    }
+  }
+
+  /**
+   * **帖子卡片**（需求）：宽 2/3 屏；封面在上（占满宽度），底部一块**沉浸光感容器**
+   * （圆角）里放作者行 + 正文两行（结尾省略号）。
+   */
+  @Builder
+  sharePostCard(message: DirectMessage) {
+    Column() {
+      Stack({ alignContent: Alignment.Center }) {
+        Image(message.shareCover.length > 0 ? message.shareCover : undefined)
+          .width(this.shareCardWidth(message))
+          .height(this.shareCardHeight(message))
+          .objectFit(ImageFit.Cover)
+          .draggable(false)
+          .alt($r('app.media.grid_placeholder'))
+          .backgroundColor($r('app.color.field_background'))
+      }
+      .width(this.shareCardWidth(message))
+      .height(this.shareCardHeight(message))
+
+      // 底部：沉浸光感容器（材质只能由 Toggle 承载，见 MaterialSurface 文件头）。
+      Toggle({ type: ToggleType.Button, isOn: false }) {
+        Column({ space: 4 }) {
+          this.shareUserRow(message, 13, 22)
+          if (message.shareCaption.length > 0) {
+            Text(message.shareCaption)
+              .fontSize(12)
+              .fontColor($r('app.color.secondary_text'))
+              .maxLines(2)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .width('100%')
+              .textAlign(TextAlign.Start)
+          }
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start)
+        .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+      }
+      .width('100%')
+      .padding(0)
+      .backgroundColor(Color.Transparent)
+      .selectedColor(Color.Transparent)
+      .attributeModifier(new SurfaceModifier(this.cardThickness, true))
+      // 不吃触摸：点击由外层卡片统一处理（否则材质这层会把 click 拦掉一半）。
+      .hitTestBehavior(HitTestMode.None)
+    }
+    .width(this.shareCardWidth(message))
+    .borderRadius(14)
+    .clip(true)
+    .backgroundColor($r('app.color.field_background'))
+    .onClick((): void => {
+      this.onOpenShare(message);
+    })
+  }
+
+  /**
+   * **视频卡片**（需求）：宽 1/3 屏；圆角封面 + 左上角**带光感底**的作者栏 + 居中暂停图标。
+   *
+   * 暂停图标只是"这是个视频"的示意（这里不播放），所以不是按钮、也不吃点击。
+   */
+  @Builder
+  shareVideoCard(message: DirectMessage) {
+    Stack({ alignContent: Alignment.Center }) {
+      Image(message.shareCover.length > 0 ? message.shareCover : undefined)
+        .width(this.shareCardWidth(message))
+        .height(this.shareCardHeight(message))
+        .objectFit(ImageFit.Cover)
+        .draggable(false)
+        .alt($r('app.media.grid_placeholder'))
+        .backgroundColor($r('app.color.field_background'))
+      // 左上角作者栏（光感底、不吃触摸）。
+      Toggle({ type: ToggleType.Button, isOn: false }) {
+        this.shareUserRow(message, 11, 18)
+      }
+      .padding({ left: 6, right: 8, top: 4, bottom: 4 })
+      .borderRadius(12)
+      .backgroundColor(Color.Transparent)
+      .selectedColor(Color.Transparent)
+      .attributeModifier(new SurfaceModifier(this.cardThickness, true))
+      .hitTestBehavior(HitTestMode.None)
+      .position({ x: 8, y: 8 })
+      // 居中的暂停图标（无按钮）。
+      SymbolGlyph($r('sys.symbol.pause_fill'))
+        .fontSize(26)
+        .fontColor([Color.White])
+        .hitTestBehavior(HitTestMode.None)
+    }
+    .width(this.shareCardWidth(message))
+    .height(this.shareCardHeight(message))
+    .borderRadius(14)
+    .clip(true)
+    .backgroundColor($r('app.color.field_background'))
+    .onClick((): void => {
+      this.onOpenShare(message);
+    })
+  }
+
+  /** 分享卡片入口：按形态分发（帖子 / 视频 / 外链都按帖子卡片画）。 */
+  @Builder
+  shareCard(message: DirectMessage) {
+    if (message.shareKind === 'video') {
+      this.shareVideoCard(message)
+    } else {
+      this.sharePostCard(message)
+    }
+  }
+
   /** 气泡内容：有图先画图，文字跟在图下面。 */
   @Builder
   bubbleContent(message: DirectMessage) {
     Column({ space: 6 }) {
-      if (message.mediaUrl.length > 0) {
+      if (message.shareKind.length > 0) {
+        // 分享的帖子/视频：画成卡片（见 sharePostCard / shareVideoCard）。
+        this.shareCard(message)
+      } else if (message.mediaUrl.length > 0) {
         Stack({ alignContent: Alignment.Center }) {
           Image(message.mediaUrl)
             .draggable(false)

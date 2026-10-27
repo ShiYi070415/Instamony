@@ -2001,6 +2001,8 @@ struct Index {
   private downloadReel(source: string): void {
     const url: string = ReelsAction.urlFor(source);
     if (url.length === 0) {
+      // 没有可下载的地址：如实说一句（原来这里什么都不做，点了像没反应）。
+      this.toast($r('app.string.media_save_failed'));
       return;
     }
     const host: common.Context | undefined = this.getUIContext().getHostContext();
@@ -9251,6 +9253,9 @@ struct Index {
       url = message.shareUrl;
     }
     if (url.length === 0) {
+      // 载荷只给了封面、没有短码也没有链接：给一句提示，别让用户觉得"点了没反应"。
+      hilog.info(DOMAIN, TAG, 'direct share no target kind=%{public}s', message.shareKind);
+      this.toast('这条分享没有可打开的链接');
       return;
     }
     hilog.info(DOMAIN, TAG, 'direct share open code=%{public}d url=%{public}s',

@@ -118,10 +118,28 @@ export class DirectMessage {
   readonly shareUrl: string;
   /** 分享的是不是 Reel（决定用 /reel/ 还是 /p/ 打开）。 */
   readonly shareIsVideo: boolean;
+  /**
+   * 分享卡片的**形态**：`post`（图文帖子）/ `video`（视频/Reel）/ `link`（外链卡片）/ 空串（不是分享）。
+   *
+   * 界面上两种卡片长得完全不同（见 components/DirectThreadPage 的 shareCard）：
+   *   · 帖子：宽约 2/3 屏，封面在上，底部一块沉浸光感容器放作者行 + 两行正文；
+   *   · 视频：宽约 1/3 屏，圆角封面 + 左上角作者栏（带光感底）+ 居中暂停图标。
+   */
+  readonly shareKind: string;
+  /** 卡片封面（XMA 的 preview_url / media_share 的封面；空 = 没有封面）。 */
+  readonly shareCover: string;
+  /** 卡片的作者名（分享内容的主人，不是发消息的人）。 */
+  readonly shareUser: string;
+  /** 作者头像（没有就空串，界面上退回占位圆）。 */
+  readonly shareAvatar: string;
+  /** 卡片正文（帖子 caption / XMA 的 caption_body_text；可能为空）。 */
+  readonly shareCaption: string;
 
   constructor(id: string, userId: string, mine: boolean, tsMs: number, kind: string,
               text: string, mediaUrl: string = '', isVideo: boolean = false,
-              shareCode: string = '', shareUrl: string = '', shareIsVideo: boolean = false) {
+              shareCode: string = '', shareUrl: string = '', shareIsVideo: boolean = false,
+              shareKind: string = '', shareCover: string = '', shareUser: string = '',
+              shareAvatar: string = '', shareCaption: string = '') {
     this.id = id;
     this.userId = userId;
     this.mine = mine;
@@ -133,7 +151,24 @@ export class DirectMessage {
     this.shareCode = shareCode;
     this.shareUrl = shareUrl;
     this.shareIsVideo = shareIsVideo;
+    this.shareKind = shareKind;
+    this.shareCover = shareCover;
+    this.shareUser = shareUser;
+    this.shareAvatar = shareAvatar;
+    this.shareCaption = shareCaption;
   }
+}
+
+/** 分享卡片要的字段（由 DirectMapper.shareCardOf 从载荷里抠出来）。 */
+export class ShareCard {
+  /** `post` / `video` / `link` / 空串（不是分享）。 */
+  kind: string = '';
+  cover: string = '';
+  user: string = '';
+  avatar: string = '';
+  caption: string = '';
+  target: string = '';
+  video: boolean = false;
 }
 
 /** 一条会话的消息页（照 REST 那条的形状给）。 */
@@ -981,9 +1016,11 @@ export class DirectMapper {
     const shareCode: string = DirectMapper.shareCodeOf(item);
     const shareUrl: string = DirectMapper.shareUrlOf(item);
     const shareVideo: boolean = DirectMapper.shareIsVideoOf(item);
+    const card: ShareCard = DirectMapper.shareCardOf(item);
     return new DirectMessage(id, userId, ownId.length > 0 && userId === ownId,
       micros > 0 ? Math.round(micros / 1000) : Date.now(), kind, text, mediaUrl,
-      DirectMapper.hasVideoMedia(item), shareCode, shareUrl, shareVideo);
+      DirectMapper.hasVideoMedia(item), shareCode, shareUrl, shareVideo,
+      card.kind, card.cover, card.user, card.avatar, card.caption);
   }
 
   /**
@@ -1181,6 +1218,91 @@ export class DirectMapper {
   }
 
   /** 这条消息的媒体里有没有视频（缩略图上盖一颗播放标记用）。 */
+
+  /** 分享卡片要的那几样东西（见 DirectMessage.shareKind 的说明）。 */
+  private static shareCardOf(item: Record<string, Object>): ShareCard {
+    const type: string = JsonRead.strOf(item, 'item_type');
+    const share: Record<string, Object> | null = JsonRead.recordOf(item, 'media_share');
+    const clip: Record<string, Object> | null = JsonRead.recordOf(item, 'clip');
+    const clipInner: Record<string, Object> | null = clip === null ? null
+      : JsonRead.recordOf(clip, 'clip');
+    const reel: Record<string, Object> | null = JsonRead.recordOf(item, 'reel_share');
+    const reelMedia: Record<string, Object> | null = reel === null ? null
+      : JsonRead.recordOf(reel, 'media');
+    const card: ShareCard = new ShareCard();
+    // ---- 内部帖子 / Reel：从 media 对象里取 ----
+    const holders: Array<Record<string, Object>> = [];
+    if (share !== null) {
+      holders.push(share);
+    }
+    if (clipInner !== null) {
+      holders.push(clipInner);
+    }
+    if (reelMedia !== null) {
+      holders.push(reelMedia);
+    }
+    for (let index: number = 0; index < holders.length; index++) {
+      const one: Record<string, Object> = holders[index];
+      if (card.cover.length === 0) {
+        card.cover = DirectMapper.imageUrlOf(one);
+      }
+      if (card.caption.length === 0) {
+        card.caption = JsonRead.strOf(one, 'caption_text');
+        if (card.caption.length === 0) {
+          const caption: Record<string, Object> | null = JsonRead.recordOf(one, 'caption');
+          if (caption !== null) {
+            card.caption = JsonRead.strOf(caption, 'text');
+          }
+        }
+      }
+      if (card.user.length === 0) {
+        const user: Record<string, Object> | null = JsonRead.recordOf(one, 'user');
+        if (user !== null) {
+          card.user = JsonRead.strOf(user, 'username');
+          card.avatar = DirectMapper.pictureOf(user);
+        }
+      }
+      if (JsonRead.numOf(one, 'media_type') === 2) {
+        card.video = true;
+      }
+    }
+    // ---- XMA：preview_url + title_text + caption_body_text + target_url ----
+    const attachments: Array<Object> = JsonRead.arrayOf(item, type.length > 0 ? type : 'generic_xma');
+    for (let at: number = 0; at < attachments.length && at < 2; at++) {
+      const one: Record<string, Object> | null = JsonRead.asRecord(attachments[at]);
+      if (one === null) {
+        continue;
+      }
+      if (card.cover.length === 0) {
+        card.cover = JsonRead.strOf(one, 'preview_url');
+      }
+      if (card.user.length === 0) {
+        card.user = JsonRead.strOf(one, 'title_text');
+      }
+      if (card.caption.length === 0) {
+        card.caption = JsonRead.strOf(one, 'caption_body_text');
+      }
+      if (card.target.length === 0) {
+        card.target = JsonRead.strOf(one, 'target_url');
+      }
+      if (JsonRead.strOf(one, 'playable_url').length > 0) {
+        card.video = true;
+      }
+    }
+    // ---- 形态 ----
+    const hasTarget: boolean = card.target.length > 0 || DirectMapper.shareCodeOf(item).length > 0;
+    if (!hasTarget && card.cover.length === 0 && card.caption.length === 0) {
+      card.kind = '';
+      return card;
+    }
+    if (type.indexOf('link') >= 0) {
+      card.kind = 'link';
+      return card;
+    }
+    card.kind = card.video ? 'video' : 'post';
+    return card;
+  }
+
   /**
    * 分享卡片的**帖子短码**（拿不到给空串）。
    *
