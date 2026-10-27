@@ -36,7 +36,7 @@ const TAG: string = 'DirectThreadViewModel';
 /** 一次会话里最多预取几条分享卡片的详情（见 prefetchShareCards）。 */
 const SHARE_PREFETCH_MAX: number = 3;
 /** 预取两条之间错开的时间（毫秒）：别和会话首屏那一发抢（见 prefetchShareCards）。 */
-const SHARE_PREFETCH_GAP_MS: number = 400;
+const SHARE_PREFETCH_GAP_MS: number = 250;
 /**
  * 会话页**可见时**的轮询间隔（毫秒）：**随机**取 `[MIN, MAX)`，不用固定值。
  *
@@ -576,7 +576,7 @@ export class DirectThreadViewModel {
       setTimeout((): void => {
         NativeMediaInfo.prefetch('', code);
         hilog.info(DOMAIN, TAG, 'share prefetch code=%{public}s', code);
-      }, SHARE_PREFETCH_GAP_MS * (index + 1));
+      }, SHARE_PREFETCH_GAP_MS * index);
     }
   }
 

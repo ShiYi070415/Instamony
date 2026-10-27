@@ -309,7 +309,9 @@ export class NativeMediaInfo {
    *      时，第二处直接等第一处的那个 Promise，不会重复发；
    *   3. **拿到就缓存**（内存，最多 24 条）：退出再进同一条分享是立刻有画面的。
    */
-  static async detailFor(mediaId: string, shortcode: string = ''): Promise<MediaDetail | null> {
+  static async detailFor(mediaId: string, shortcode: string = '',
+                         priority: number = ApiThrottle.interactive()):
+    Promise<MediaDetail | null> {
     const key: string = NativeMediaInfo.detailKey(mediaId, shortcode);
     if (key.length > 0) {
       const cached: MediaDetail | undefined = NativeMediaInfo.cache.get(key);
@@ -322,7 +324,7 @@ export class NativeMediaInfo {
       }
     }
     const task: Promise<MediaDetail | null> =
-      NativeMediaInfo.fetchDetail(mediaId, shortcode);
+      NativeMediaInfo.fetchDetail(mediaId, shortcode, priority);
     if (key.length > 0) {
       NativeMediaInfo.inflight.set(key, task);
       task.then((one: MediaDetail | null): void => {
@@ -346,8 +348,9 @@ export class NativeMediaInfo {
    * 用途：私信里点开一张分享卡片时，在**压页面的同一帧**就把它发出去 —— 页面滑上来这
    * 半秒里请求已经在路上，进页后视图模型要同一份数据时直接复用（见 detailFor 的合并）。
    */
-  static prefetch(mediaId: string, shortcode: string = ''): void {
-    NativeMediaInfo.detailFor(mediaId, shortcode).then((): void => {
+  static prefetch(mediaId: string, shortcode: string = '',
+                  priority: number = ApiThrottle.interactive()): void {
+    NativeMediaInfo.detailFor(mediaId, shortcode, priority).then((): void => {
     }).catch((): void => {
     });
   }
@@ -362,8 +365,9 @@ export class NativeMediaInfo {
   }
 
   /** 真正发请求那一段（见 detailFor 的三条加速）。 */
-  private static async fetchDetail(mediaId: string,
-                                  shortcode: string = ''): Promise<MediaDetail | null> {
+  private static async fetchDetail(mediaId: string, shortcode: string = '',
+                                   priority: number = ApiThrottle.interactive()):
+    Promise<MediaDetail | null> {
     let id: string = NativeMediaInfo.pkOf(mediaId);
     if (id.length === 0 && shortcode.trim().length > 0) {
       // 短码 → 真 pk（先本地算，算不出来才 oembed；见 MobileEngage.mediaPkFor）。
@@ -379,7 +383,7 @@ export class NativeMediaInfo {
     let out: MediaDetail | null = null;
     try {
       const result: MobileResult = await MobileRequest.send(`media/${encodeURIComponent(id)}/info/`,
-        '', '', true, null, new MobileOptions(ApiThrottle.MEDIA_INFO, ApiThrottle.interactive()));
+        '', '', true, null, new MobileOptions(ApiThrottle.MEDIA_INFO, priority));
       if (!result.ok) {
         NativeMediaInfo.detail = result.summary();
         hilog.info(DOMAIN, TAG, 'media info miss id=%{public}s %{public}s',

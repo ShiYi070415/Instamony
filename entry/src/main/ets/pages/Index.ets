@@ -1,4 +1,4 @@
-/*
+﻿/*
 /**
  * Instamony native shell.
  *
@@ -9289,7 +9289,7 @@ struct Index {
     this.profileReelsVm = new ProfileReelsViewModel([new MediaPost(init)], code, false,
       (): Promise<ProfileStreamPage> => Promise.resolve(new ProfileStreamPage([], false)));
     // **压页面的同一帧就预取详情**：页面滑上来这半秒里请求已经在路上（进页后复用同一份）。
-    NativeMediaInfo.prefetch(pk, code);
+    NativeMediaInfo.prefetch(pk, code, ApiThrottle.urgent());
     hilog.info(DOMAIN, TAG, 'direct share open reels code=%{public}d pk=%{public}d',
       code.length, pk.length);
     const names: Array<string> = this.navStack.getAllPathName();

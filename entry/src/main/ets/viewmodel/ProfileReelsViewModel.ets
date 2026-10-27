@@ -1,4 +1,4 @@
-/*
+﻿/*
  * 「用户 / 我的」页面 → **视频分页**点进去的那个 Reels 页的视图模型。
  *
  * 需求："用户和我的页面的视频分页点进去是新的页面，采用 reels 模板"。所以这一页的界面就是
@@ -23,6 +23,7 @@
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { ApiThrottle } from '../core/ApiThrottle';
 import { EngageState } from '../core/NativeEngage';
 import { Reel, ReelStreamVm } from '../model/Reel';
 import { MediaPost } from '../model/MediaPost';
@@ -191,7 +192,8 @@ export class ProfileReelsViewModel implements ReelStreamVm {
       return;
     }
     this.fetching.add(key);
-    NativeMediaInfo.detailFor(reel.mediaId, reel.shortcode).then((detail: MediaDetail | null): void => {
+    NativeMediaInfo.detailFor(reel.mediaId, reel.shortcode, ApiThrottle.urgent())
+      .then((detail: MediaDetail | null): void => {
       this.fetching.delete(key);
       if (detail === null) {
         hilog.warn(DOMAIN, TAG, 'detail missing key=%{public}s why=%{public}s',
