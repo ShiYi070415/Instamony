@@ -799,7 +799,7 @@ export struct DirectThreadPage {
    * 头像**必须有**时才插 Image：ArkTS 里 `Image(undefined)` 画不出来（上一版就是这么"没绘制好"的）。
    */
   @Builder
-  shareUserRow(message: DirectMessage, fontSize: number, avatarSize: number) {
+  shareUserRow(message: DirectMessage, fontSize: number, avatarSize: number, maxWidth: number) {
     Row({ space: 6 }) {
       if (message.shareAvatar.length > 0) {
         Image(message.shareAvatar)
@@ -810,21 +810,27 @@ export struct DirectThreadPage {
           .draggable(false)
           .backgroundColor(FALLBACK_SURFACE)
       } else {
+        // 没有头像就画一个同尺寸的圆点：作者行的高度不会因为它而塌。
         Column()
           .width(avatarSize)
           .height(avatarSize)
           .borderRadius(avatarSize / 2)
           .backgroundColor(FALLBACK_SURFACE)
       }
-      Text(message.shareUser.length > 0 ? message.shareUser
-        : $r('app.string.direct_kind_other'))
+      /*
+       * 作者名**一定是非空的**（调用方判断过）。不要再退回 `[消息]` 那种占位字 ——
+       * 上一版这一行总是画出来，卡片看起来就是"一张封面 + 一个 [消息] 气泡"（用户报的正是这个）。
+       */
+      Text(message.shareUser)
         .fontSize(fontSize)
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.primary_text'))
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .constraintSize({ maxWidth: 130 })
+        .layoutWeight(1)
     }
+    .width(maxWidth)
+    .alignItems(VerticalAlign.Center)
   }
 
   /** 封面：有地址就画图，没有就画一块带图标的占位（尺寸永远固定，不会塌成 0）。 */
@@ -862,30 +868,36 @@ export struct DirectThreadPage {
   sharePostCard(message: DirectMessage) {
     Column() {
       this.shareCover(message, this.shareCardWidth(message), this.shareCardHeight(message))
-      Toggle({ type: ToggleType.Button, isOn: false }) {
-        Column({ space: 4 }) {
-          this.shareUserRow(message, 13, 22)
-          if (message.shareCaption.length > 0) {
-            Text(message.shareCaption)
-              .fontSize(12)
-              .fontColor($r('app.color.secondary_text'))
-              .maxLines(2)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .width('100%')
-              .textAlign(TextAlign.Start)
+      // 底部那块只有"有作者名或有正文"时才画：两样都没有的分享就只留一张封面，不要画一个空盒子。
+      if (message.shareUser.length > 0 || message.shareCaption.length > 0) {
+        Toggle({ type: ToggleType.Button, isOn: false }) {
+          Column({ space: 4 }) {
+            if (message.shareUser.length > 0) {
+              this.shareUserRow(message, 13, 22, this.shareCardWidth(message) - 20)
+            }
+            if (message.shareCaption.length > 0) {
+              Text(message.shareCaption)
+                .fontSize(12)
+                .fontColor($r('app.color.secondary_text'))
+                .maxLines(2)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .width('100%')
+                .textAlign(TextAlign.Start)
+            }
           }
+          .width('100%')
+          .alignItems(HorizontalAlign.Start)
+          .padding({ left: 10, right: 10, top: 8, bottom: 8 })
         }
-        .width('100%')
-        .alignItems(HorizontalAlign.Start)
-        .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+        .width(this.shareCardWidth(message))
+        .padding(0)
+        // 底色交给材质：材质自己会画背板；不支持材质时 SurfaceModifier 会退回低透明度中性底。
+        // （上一版这里自己铺了一层兜底色，压住材质，看着就是一块死灰的方块。）
+        .backgroundColor(Color.Transparent)
+        .selectedColor(Color.Transparent)
+        .attributeModifier(new SurfaceModifier(this.cardThickness, true))
+        .hitTestBehavior(HitTestMode.None)
       }
-      .width(this.shareCardWidth(message))
-      .padding(0)
-      // 兜底底色 + 材质：不支持材质的设备上这一块仍然看得见（见 SurfaceModifier）。
-      .backgroundColor(FALLBACK_SURFACE)
-      .selectedColor(Color.Transparent)
-      .attributeModifier(new SurfaceModifier(this.cardThickness, true))
-      .hitTestBehavior(HitTestMode.None)
     }
     .width(this.shareCardWidth(message))
     .borderRadius(14)
@@ -897,36 +909,47 @@ export struct DirectThreadPage {
   }
 
   /**
-   * **视频卡片**（需求）：宽 1/3 屏。
-   *   · 圆角封面，高度按 9:16 给死；
-   *   · 左上角作者栏（**带光感底**，垫在封面之上）；
-   *   · 正中一颗暂停图标（纯图标、不吃触摸）。
+   * **视频卡片**（需求）：宽 1/3 屏，形状照参考图 ——
+   *
+   * ```
+   * Stack {
+   *   底层：封面，铺满卡片的完整宽度与高度
+   *   左上角：用户资讯栏（带沉浸光感底）
+   *   正中：暂停图标（只是一个图标，不是按钮）
+   * }
+   * ```
+   *
+   * 三层都**不接触摸**（`hitTestBehavior(None)`），点击统一落在最外层卡片上 → 进 Reels 类页面。
    */
   @Builder
   shareVideoCard(message: DirectMessage) {
     Stack({ alignContent: Alignment.Center }) {
+      // 底层封面：宽高都给死，铺满整张卡片。
       this.shareCover(message, this.shareCardWidth(message), this.shareCardHeight(message))
-      // 左上角作者栏：用 Stack 的 TopStart 对齐 + 内边距定位（比 position 稳，不会画到卡片外）。
-      Column() {
-        Toggle({ type: ToggleType.Button, isOn: false }) {
-          this.shareUserRow(message, 11, 18)
+      // 左上角用户资讯栏：全尺寸透明容器 + TopStart 对齐 + 内边距定位（比 position 稳，不会画到卡片外）。
+      if (message.shareUser.length > 0) {
+        Column() {
+          Toggle({ type: ToggleType.Button, isOn: false }) {
+            this.shareUserRow(message, 10, 16, this.shareCardWidth(message) - 34)
+          }
+          .padding({ left: 5, right: 8, top: 3, bottom: 3 })
+          .borderRadius(11)
+          // 底色交给材质（同帖子卡片那条说明）。
+          .backgroundColor(Color.Transparent)
+          .selectedColor(Color.Transparent)
+          .attributeModifier(new SurfaceModifier(this.cardThickness, true))
+          .hitTestBehavior(HitTestMode.None)
         }
-        .padding({ left: 6, right: 8, top: 4, bottom: 4 })
-        .borderRadius(12)
-        .backgroundColor(FALLBACK_SURFACE)
-        .selectedColor(Color.Transparent)
-        .attributeModifier(new SurfaceModifier(this.cardThickness, true))
+        .width('100%')
+        .height('100%')
+        .alignItems(HorizontalAlign.Start)
+        .justifyContent(FlexAlign.Start)
+        .padding({ left: 7, top: 7 })
         .hitTestBehavior(HitTestMode.None)
       }
-      .width('100%')
-      .height('100%')
-      .alignItems(HorizontalAlign.Start)
-      .justifyContent(FlexAlign.Start)
-      .padding({ left: 8, top: 8 })
-      .hitTestBehavior(HitTestMode.None)
-      // 居中暂停图标（无按钮、不吃触摸）。
+      // 垂直横向置中：暂停图标（纯图标、无按钮、不吃触摸）。
       SymbolGlyph($r('sys.symbol.pause_fill'))
-        .fontSize(26)
+        .fontSize(24)
         .fontColor([Color.White])
         .hitTestBehavior(HitTestMode.None)
     }

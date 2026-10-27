@@ -1241,6 +1241,23 @@ export class DirectMapper {
 
   /** 这条消息的媒体里有没有视频（缩略图上盖一颗播放标记用）。 */
 
+  /**
+   * 依次从这些键里取第一个非空字符串。
+   *
+   * XMA（`xma_media_share` / `generic_xma` …）的字段名每个 App 版本都不一样 —— 同一个"作者名"，
+   * 有的版本写 `header_title_text`、有的写 `title_text`、有的写 `preview_title_text`，
+   * 这也是上一版**只画出一张封面、下面一行 `[消息]`** 的原因：只试了一个键名，取不到就成了空串。
+   */
+  private static firstOf(record: Record<string, Object>, keys: Array<string>): string {
+    for (let index: number = 0; index < keys.length; index++) {
+      const value: string = JsonRead.strOf(record, keys[index]);
+      if (value.length > 0) {
+        return value;
+      }
+    }
+    return '';
+  }
+
   /** 分享卡片要的那几样东西（见 DirectMessage.shareKind 的说明）。 */
   private static shareCardOf(item: Record<string, Object>): ShareCard {
     const type: string = JsonRead.strOf(item, 'item_type');
@@ -1279,12 +1296,21 @@ export class DirectMapper {
       }
       if (card.user.length === 0) {
         const user: Record<string, Object> | null = JsonRead.recordOf(one, 'user');
-        if (user !== null) {
-          card.user = JsonRead.strOf(user, 'username');
+        if (user === null) {
+          // GraphQL 那条把作者放在 `owner` 里。
+          const owner: Record<string, Object> | null = JsonRead.recordOf(one, 'owner');
+          if (owner !== null) {
+            card.user = DirectMapper.firstOf(owner, ['username', 'full_name']);
+            card.avatar = DirectMapper.pictureOf(owner);
+          }
+        } else {
+          card.user = DirectMapper.firstOf(user, ['username', 'full_name']);
           card.avatar = DirectMapper.pictureOf(user);
         }
       }
-      if (JsonRead.numOf(one, 'media_type') === 2) {
+      if (JsonRead.numOf(one, 'media_type') === 2
+        || JsonRead.strOf(one, 'product_type') === 'clips'
+        || JsonRead.arrayOf(one, 'video_versions').length > 0) {
         card.video = true;
       }
     }
@@ -1296,20 +1322,39 @@ export class DirectMapper {
         continue;
       }
       if (card.cover.length === 0) {
-        card.cover = JsonRead.strOf(one, 'preview_url');
+        card.cover = DirectMapper.firstOf(one,
+          ['preview_url', 'preview_image_url', 'thumbnail_url', 'header_icon_url']);
       }
       if (card.user.length === 0) {
-        card.user = JsonRead.strOf(one, 'title_text');
+        // 作者名：IG 自己画在卡片头部那一栏的就是 `header_title_text`，其余按版本依次试。
+        card.user = DirectMapper.firstOf(one, ['header_title_text', 'title_text',
+          'preview_title_text', 'preview_subtitle_text', 'header_subtitle_text']);
+        if (card.user.length === 0) {
+          const author: Record<string, Object> | null = JsonRead.recordOf(one, 'user');
+          if (author !== null) {
+            card.user = DirectMapper.firstOf(author, ['username', 'full_name']);
+            card.avatar = DirectMapper.pictureOf(author);
+          }
+        }
       }
       if (card.caption.length === 0) {
-        card.caption = JsonRead.strOf(one, 'caption_body_text');
+        card.caption = DirectMapper.firstOf(one,
+          ['caption_body_text', 'preview_subtitle_text', 'title_text']);
       }
       if (card.target.length === 0) {
         card.target = JsonRead.strOf(one, 'target_url');
       }
-      if (JsonRead.strOf(one, 'playable_url').length > 0) {
+      if (JsonRead.strOf(one, 'playable_url').length > 0
+        || JsonRead.boolOf(one, 'is_playable')) {
         card.video = true;
       }
+    }
+    // 少数版本把这几栏放在 item 自己身上（不在附件里）。
+    if (card.user.length === 0) {
+      card.user = DirectMapper.firstOf(item, ['header_title_text', 'title_text']);
+    }
+    if (card.caption.length === 0) {
+      card.caption = JsonRead.strOf(item, 'caption_body_text');
     }
     // ---- 形态 ----
     const hasTarget: boolean = card.target.length > 0 || DirectMapper.shareCodeOf(item).length > 0;

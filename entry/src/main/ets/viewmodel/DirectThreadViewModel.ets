@@ -429,6 +429,8 @@ export class DirectThreadViewModel {
         return;
       }
       this.view = view;
+      // 分享卡片的现场（诊断用）：卡片没画出来时，这一行能区分"解析没认出作者/正文"还是"界面没画"。
+      this.noteShareCards(view);
       // 记下"刚拉过"，让轮询第一拍别紧跟着再发一发（见 pollOnce 的说明）。
       this.lastLoadAtMs = Date.now();
       this.onView(view);
@@ -520,6 +522,29 @@ export class DirectThreadViewModel {
   /** 这条会话的网页地址（读不出来时界面拿它回落网页，见 DirectThreadPage）。 */
   webUrl(): string {
     return 'https://www.instagram.com/direct/t/' + encodeURIComponent(this.threadId) + '/';
+  }
+
+  /**
+   * 把这条会话里**分享卡片**的解析现场写进诊断日志（最多 4 条）。
+   *
+   * 为什么要有它：卡片画不出来只有两种可能 —— 解析没认出（作者名/正文/形态是空的），
+   * 或者解析是对的但界面没画。用户导出诊断时，这一行直接给出是哪一种，
+   * 不用再靠猜（上一轮就是猜错了方向）。
+   */
+  private noteShareCards(view: DirectThreadView): void {
+    let told: number = 0;
+    for (let index: number = 0; index < view.messages.length && told < 4; index++) {
+      const one: DirectMessage = view.messages[index];
+      if (one.shareKind.length === 0) {
+        continue;
+      }
+      const cover: string = one.shareCover.length > 0
+        ? one.shareCover.substring(0, Math.min(48, one.shareCover.length)) : '-';
+      ReelsCrashLog.note(`direct share kind=${one.shareKind} user=${one.shareUser.length}`
+        + ` avatar=${one.shareAvatar.length > 0 ? 1 : 0} cap=${one.shareCaption.length}`
+        + ` code=${one.shareCode.length > 0 ? one.shareCode : '-'} cover=${cover}`);
+      told++;
+    }
   }
 
   private static sleep(ms: number): Promise<void> {
