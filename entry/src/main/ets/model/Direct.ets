@@ -476,8 +476,12 @@ export class DirectMapper {
       if (id.length === 0) {
         id = JsonRead.strOf(item, 'id');
       }
+      // GraphQL 这条同理（见 threadFromJson 里的说明）：分享卡片的 share* 字段一个都不能少。
+      const gqlCard: ShareCard = DirectMapper.shareCardOf(item);
       messages.push(new DirectMessage(id, userId, me.length > 0 && userId === me, tsMs, kind,
-        text, mediaUrl, DirectMapper.hasVideoMedia(item)));
+        text, mediaUrl, DirectMapper.hasVideoMedia(item), DirectMapper.shareCodeOf(item),
+        DirectMapper.shareUrlOf(item), DirectMapper.shareIsVideoOf(item),
+        gqlCard.kind, gqlCard.cover, gqlCard.user, gqlCard.avatar, gqlCard.caption));
     }
     if (messages.length === 0) {
       // 找到数组了但一条都没能用 —— 把第一条的原样键名和几个字段打出来（诊断用）。
@@ -965,6 +969,8 @@ export class DirectMapper {
     }
     const items: Array<Object> = JsonRead.arrayOf(thread, 'items');
     const messages: Array<DirectMessage> = [];
+    // 这一页解析出几张分享卡片（写进 hilog：下次"还是不画卡片"时，一眼看出是解析没认出还是界面没画）。
+    let shareCards: number = 0;
     for (let index: number = 0; index < items.length; index++) {
       const item: Record<string, Object> | null = JsonRead.asRecord(items[index]);
       if (item === null) {
@@ -974,18 +980,34 @@ export class DirectMapper {
       const text: string = JsonRead.strOf(item, 'text');
       const mediaUrl: string = DirectMapper.mediaUrlOf(item);
       const isVideo: boolean = DirectMapper.hasVideoMedia(item);
+      /*
+       * **分享卡片字段必须在这里补齐**（用户报："根本没画卡片，还是老样子"）。
+       *
+       * 这一版之前只有 `messageFromItem`（实时补丁那条）带 share* 字段，而**正常打开会话走的是
+       * 本函数**（workers/ThreadParseTask → DirectMapper.threadFromJson）—— 于是 `shareKind` 永远是空串，
+       * 界面上 `bubbleContent` 的 `shareKind.length > 0` 分支一次都进不去，画出来的仍是老封面/灰块。
+       */
+      const card: ShareCard = DirectMapper.shareCardOf(item);
       // 既没文字也没画面的是系统条目（时间戳、加人、已读…）：画出来就是一堆空行，跳过。
-      if (text.length === 0 && mediaUrl.length === 0) {
+      // 分享卡片有封面/正文/目标链接的也留下（外链卡片可能既没有文字也没有预览图以外的画面）。
+      if (text.length === 0 && mediaUrl.length === 0 && card.kind.length === 0) {
         continue;
       }
       const userId: string = JsonRead.strOf(item, 'user_id');
       const micros: number = JsonRead.numOf(item, 'timestamp');
+      if (card.kind.length > 0) {
+        shareCards++;
+      }
       messages.push(new DirectMessage(JsonRead.strOf(item, 'item_id'), userId,
         me.length > 0 && userId === me, micros > 0 ? Math.round(micros / 1000) : 0,
-        kind, text, mediaUrl, isVideo));
+        kind, text, mediaUrl, isVideo, DirectMapper.shareCodeOf(item),
+        DirectMapper.shareUrlOf(item), DirectMapper.shareIsVideoOf(item),
+        card.kind, card.cover, card.user, card.avatar, card.caption));
     }
     // items 是"新在前"，界面上按时间正序排（老的在上）。
     messages.sort((a: DirectMessage, b: DirectMessage): number => a.tsMs - b.tsMs);
+    hilog.info(DOMAIN, TAG, 'thread parse items=%{public}d msgs=%{public}d shareCards=%{public}d',
+      items.length, messages.length, shareCards);
     return new DirectThreadView(id, title, withUsername, withAvatar, withId, messages,
       JsonRead.boolOf(thread, 'has_older'), JsonRead.strOf(thread, 'oldest_cursor'),
       JsonRead.boolOf(thread, 'is_group'), fullName);

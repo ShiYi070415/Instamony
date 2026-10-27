@@ -21,7 +21,7 @@ import { DirectThreadViewModel } from '../viewmodel/DirectThreadViewModel';
 import { CommentInputBar, COMMENT_INPUT_BOTTOM_VP } from './CommentInputBar';
 import { ScrollDelta } from '../core/ScrollReport';
 // 分享卡片里的"用户资讯栏"用沉浸光感承载（只能挂在 Toggle 上，见 MaterialSurface）。
-import { SurfaceModifier } from './MaterialSurface';
+import { FALLBACK_SURFACE, SurfaceModifier } from './MaterialSurface';
 import { MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS } from '../core/AppSettings';
 
 const DOMAIN: number = 0xFF00;
@@ -791,17 +791,31 @@ export struct DirectThreadPage {
   }
 
 
-  /** 分享卡片的作者行（头像 + 名字）。 */
+  // ---------------- 分享卡片（转发的帖子 / Reels） ----------------
+
+  /**
+   * 作者行（头像 + 名字）。
+   *
+   * 头像**必须有**时才插 Image：ArkTS 里 `Image(undefined)` 画不出来（上一版就是这么"没绘制好"的）。
+   */
   @Builder
   shareUserRow(message: DirectMessage, fontSize: number, avatarSize: number) {
     Row({ space: 6 }) {
-      Image(message.shareAvatar.length > 0 ? message.shareAvatar : undefined)
-        .width(avatarSize)
-        .height(avatarSize)
-        .borderRadius(avatarSize / 2)
-        .objectFit(ImageFit.Cover)
-        .draggable(false)
-        .backgroundColor($r('app.color.field_background'))
+      if (message.shareAvatar.length > 0) {
+        Image(message.shareAvatar)
+          .width(avatarSize)
+          .height(avatarSize)
+          .borderRadius(avatarSize / 2)
+          .objectFit(ImageFit.Cover)
+          .draggable(false)
+          .backgroundColor(FALLBACK_SURFACE)
+      } else {
+        Column()
+          .width(avatarSize)
+          .height(avatarSize)
+          .borderRadius(avatarSize / 2)
+          .backgroundColor(FALLBACK_SURFACE)
+      }
       Text(message.shareUser.length > 0 ? message.shareUser
         : $r('app.string.direct_kind_other'))
         .fontSize(fontSize)
@@ -809,30 +823,45 @@ export struct DirectThreadPage {
         .fontColor($r('app.color.primary_text'))
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .constraintSize({ maxWidth: 120 })
+        .constraintSize({ maxWidth: 130 })
     }
   }
 
+  /** 封面：有地址就画图，没有就画一块带图标的占位（尺寸永远固定，不会塌成 0）。 */
+  @Builder
+  shareCover(message: DirectMessage, width: number, height: number) {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%')
+        .height('100%')
+        .backgroundColor(FALLBACK_SURFACE)
+      if (message.shareCover.length > 0) {
+        Image(message.shareCover)
+          .width('100%')
+          .height('100%')
+          .objectFit(ImageFit.Cover)
+          .draggable(false)
+          .alt($r('app.media.grid_placeholder'))
+      } else {
+        SymbolGlyph($r(message.shareKind === 'video' ? 'sys.symbol.play_fill' : 'sys.symbol.photo'))
+          .fontSize(26)
+          .fontColor([$r('app.color.secondary_text')])
+      }
+    }
+    .width(width)
+    .height(height)
+  }
+
   /**
-   * **帖子卡片**（需求）：宽 2/3 屏；封面在上（占满宽度），底部一块**沉浸光感容器**
-   * （圆角）里放作者行 + 正文两行（结尾省略号）。
+   * **帖子卡片**（需求）：宽 2/3 屏。
+   *   · 封面在上：占满卡片宽度、高度按 4:5 给死（不会塌）；
+   *   · 底部一块**圆角沉浸光感容器**：里面是作者行 + 正文两行（超出显示省略号）。
+   * 点击挂在最外层卡片上（里面两层都 `hitTestBehavior(None)`，不拦点击）。
    */
   @Builder
   sharePostCard(message: DirectMessage) {
     Column() {
-      Stack({ alignContent: Alignment.Center }) {
-        Image(message.shareCover.length > 0 ? message.shareCover : undefined)
-          .width(this.shareCardWidth(message))
-          .height(this.shareCardHeight(message))
-          .objectFit(ImageFit.Cover)
-          .draggable(false)
-          .alt($r('app.media.grid_placeholder'))
-          .backgroundColor($r('app.color.field_background'))
-      }
-      .width(this.shareCardWidth(message))
-      .height(this.shareCardHeight(message))
-
-      // 底部：沉浸光感容器（材质只能由 Toggle 承载，见 MaterialSurface 文件头）。
+      this.shareCover(message, this.shareCardWidth(message), this.shareCardHeight(message))
       Toggle({ type: ToggleType.Button, isOn: false }) {
         Column({ space: 4 }) {
           this.shareUserRow(message, 13, 22)
@@ -850,12 +879,12 @@ export struct DirectThreadPage {
         .alignItems(HorizontalAlign.Start)
         .padding({ left: 10, right: 10, top: 8, bottom: 8 })
       }
-      .width('100%')
+      .width(this.shareCardWidth(message))
       .padding(0)
-      .backgroundColor(Color.Transparent)
+      // 兜底底色 + 材质：不支持材质的设备上这一块仍然看得见（见 SurfaceModifier）。
+      .backgroundColor(FALLBACK_SURFACE)
       .selectedColor(Color.Transparent)
       .attributeModifier(new SurfaceModifier(this.cardThickness, true))
-      // 不吃触摸：点击由外层卡片统一处理（否则材质这层会把 click 拦掉一半）。
       .hitTestBehavior(HitTestMode.None)
     }
     .width(this.shareCardWidth(message))
@@ -868,32 +897,34 @@ export struct DirectThreadPage {
   }
 
   /**
-   * **视频卡片**（需求）：宽 1/3 屏；圆角封面 + 左上角**带光感底**的作者栏 + 居中暂停图标。
-   *
-   * 暂停图标只是"这是个视频"的示意（这里不播放），所以不是按钮、也不吃点击。
+   * **视频卡片**（需求）：宽 1/3 屏。
+   *   · 圆角封面，高度按 9:16 给死；
+   *   · 左上角作者栏（**带光感底**，垫在封面之上）；
+   *   · 正中一颗暂停图标（纯图标、不吃触摸）。
    */
   @Builder
   shareVideoCard(message: DirectMessage) {
     Stack({ alignContent: Alignment.Center }) {
-      Image(message.shareCover.length > 0 ? message.shareCover : undefined)
-        .width(this.shareCardWidth(message))
-        .height(this.shareCardHeight(message))
-        .objectFit(ImageFit.Cover)
-        .draggable(false)
-        .alt($r('app.media.grid_placeholder'))
-        .backgroundColor($r('app.color.field_background'))
-      // 左上角作者栏（光感底、不吃触摸）。
-      Toggle({ type: ToggleType.Button, isOn: false }) {
-        this.shareUserRow(message, 11, 18)
+      this.shareCover(message, this.shareCardWidth(message), this.shareCardHeight(message))
+      // 左上角作者栏：用 Stack 的 TopStart 对齐 + 内边距定位（比 position 稳，不会画到卡片外）。
+      Column() {
+        Toggle({ type: ToggleType.Button, isOn: false }) {
+          this.shareUserRow(message, 11, 18)
+        }
+        .padding({ left: 6, right: 8, top: 4, bottom: 4 })
+        .borderRadius(12)
+        .backgroundColor(FALLBACK_SURFACE)
+        .selectedColor(Color.Transparent)
+        .attributeModifier(new SurfaceModifier(this.cardThickness, true))
+        .hitTestBehavior(HitTestMode.None)
       }
-      .padding({ left: 6, right: 8, top: 4, bottom: 4 })
-      .borderRadius(12)
-      .backgroundColor(Color.Transparent)
-      .selectedColor(Color.Transparent)
-      .attributeModifier(new SurfaceModifier(this.cardThickness, true))
+      .width('100%')
+      .height('100%')
+      .alignItems(HorizontalAlign.Start)
+      .justifyContent(FlexAlign.Start)
+      .padding({ left: 8, top: 8 })
       .hitTestBehavior(HitTestMode.None)
-      .position({ x: 8, y: 8 })
-      // 居中的暂停图标（无按钮）。
+      // 居中暂停图标（无按钮、不吃触摸）。
       SymbolGlyph($r('sys.symbol.pause_fill'))
         .fontSize(26)
         .fontColor([Color.White])
@@ -909,7 +940,7 @@ export struct DirectThreadPage {
     })
   }
 
-  /** 分享卡片入口：按形态分发（帖子 / 视频 / 外链都按帖子卡片画）。 */
+  /** 分享卡片入口：按形态分发（外链卡片也按帖子卡片画）。 */
   @Builder
   shareCard(message: DirectMessage) {
     if (message.shareKind === 'video') {
