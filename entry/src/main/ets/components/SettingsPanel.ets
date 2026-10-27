@@ -170,12 +170,19 @@ const SELECT_FONT_SIZE: number = 15;
 /**
  * 下拉按钮上"文字以外"的固定占宽（vp）：右侧箭头 + 左右内边距。
  *
- * Select 是系统组件，量不到它的内部布局，所以这部分按经验值留；多留一点只是宽一点，
- * 少了会把文字裁掉，所以宁可偏大。
+ * Select 是系统组件，量不到它的内部布局，所以这部分按经验值留。**宁可偏大**：
+ * 46 时"暂无代理"（4 个汉字）被吞掉了尾巴，说明系统给箭头和内边距留的空间比估的多，
+ * 提到 66（按真机观感反推：自动宽度 ≈ 文字宽 + 65）。
  */
-const SELECT_CHROME_WIDTH: number = 46;
+const SELECT_CHROME_WIDTH: number = 66;
 /** 再补一点余量（vp）：不同字体的字宽略有差异，避免最后一两个字被吞掉。 */
-const SELECT_WIDTH_SLACK: number = 8;
+const SELECT_WIDTH_SLACK: number = 10;
+/**
+ * 下拉按钮的最小宽度（vp）。
+ *
+ * 兜两件事：① 文案量不出来时（资源还没就绪）别缩成一条线；② 很短的文案也不至于挤成一小块。
+ */
+const SELECT_MIN_WIDTH: number = 104;
 /** 长度过渡的时长（毫秒）：弹性曲线配 320ms，观感是"弹一下到位"。 */
 const SELECT_WIDTH_SPRING_MS: number = 320;
 
@@ -1278,7 +1285,9 @@ export struct SettingsPanel {
     const measured: number = this.measureTextWidth(text);
     const estimated: number = this.estimateTextWidth(text, SELECT_FONT_SIZE);
     const body: number = measured > estimated ? measured : estimated;
-    return Math.round(body + SELECT_CHROME_WIDTH + SELECT_WIDTH_SLACK);
+    const width: number = Math.round(body + SELECT_CHROME_WIDTH + SELECT_WIDTH_SLACK);
+    // 太短的时候兜一下（"暂无代理"这类短文案以前就是被算窄了、尾巴被吞）。
+    return width < SELECT_MIN_WIDTH ? SELECT_MIN_WIDTH : width;
   }
 
   /** ResourceStr → 纯文本（宽度计算要用；资源解析失败时返回空串，调用方会退回估算值）。 */
