@@ -1,0 +1,1 @@
+docs: Brief introduction 改成 AGC 实测的 17 字上限版本（中文推荐 13 字，另附 4 条备选与英文 17 字符写法）
