@@ -471,10 +471,16 @@ export class SelectSurfaceModifier implements AttributeModifier<SelectAttribute>
 
   applyNormalAttribute(instance: SelectAttribute): void {
     // 宽度与它的补间**必须写在其它属性之前**：`.animation()` 只覆盖在它之前设置的属性。
-    if (this.width > 0) {
-      instance.width(this.width);
-      if (this.widthAnimationMs > 0) {
-        instance.animation({ duration: this.widthAnimationMs, curve: curves.springMotion() });
+    // 整个包一层 try：这段是"锦上添花"的宽度过渡，出问题也不该把页面带崩。
+    if (this.width > 0 && Number.isFinite(this.width)) {
+      try {
+        instance.width(this.width);
+        if (this.widthAnimationMs > 0) {
+          instance.animation({ duration: this.widthAnimationMs, curve: curves.springMotion() });
+        }
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'select width skipped: %{public}s',
+          (error as Error).message ?? 'unknown');
       }
     }
     if (PlatformCap.hasArkMaterial()) {

@@ -1281,25 +1281,54 @@ export struct SettingsPanel {
    *
    * 只在还没标定时做一次：此刻下拉是**系统自适应宽度**，`newValue.width` 就是
    * "文字宽 + 系统占宽"，减出占宽存起来；之后所有下拉都按同一套算，留白和系统一致。
+   *
+   * **这里绝对不能再调 `measureText`**：这个回调是在**布局阶段**触发的，而文本测量要求
+   * 不在布局/测量过程中调用 —— 在 onAreaChange 里量文字会直接把进程带走（真机上就是
+   * "打开设置页闪退"）。文字宽度一律取 build 阶段已经量好写进缓存的值（见 selectWidthOf，
+   * 它每次都会先算一遍文字宽，保证缓存是热的）。
    */
   private calibrateSelectChrome(areaWidth: Length, label: ResourceStr): void {
     if (this.selectChrome > 0) {
       return;
     }
-    const width: number = Number(areaWidth);
-    const textWidth: number = this.textWidthOf(this.resText(label));
-    if (textWidth <= 0 || width <= textWidth) {
-      return;
+    try {
+      const width: number = Number(areaWidth);
+      if (!Number.isFinite(width) || width <= 0) {
+        return;
+      }
+      const textWidth: number = this.cachedTextWidth(this.resText(label));
+      if (textWidth <= 0 || width <= textWidth) {
+        return;
+      }
+      this.selectChrome = width - textWidth;
+    } catch (error) {
+      // 标定失败就不标：下拉保持系统自适应宽度（只是没有长度动画），不该为它崩掉页面。
+      hilog.warn(DOMAIN, TAG, 'select chrome calibrate skipped: %{public}s',
+        (error as Error).message ?? '-');
     }
-    this.selectChrome = width - textWidth;
   }
 
-  /** 下拉按钮的目标宽度：标定前返回 0（= 不设宽度，系统自适应），见 SelectSurfaceModifier。 */
+  /** 只读缓存里的文字宽度（布局阶段用；没有就返回 0，等下一帧再说）。 */
+  private cachedTextWidth(text: string): number {
+    if (text.length === 0) {
+      return 0;
+    }
+    const cached: number | undefined = this.measuredWidths.get(text);
+    return cached === undefined ? 0 : cached;
+  }
+
+  /**
+   * 下拉按钮的目标宽度：标定前返回 0（= 不设宽度，系统自适应），见 SelectSurfaceModifier。
+   *
+   * 不管标定没标定都先算一遍文字宽：**这是唯一会调 measureText 的地方**，而它只会在
+   * build 阶段被调用（安全），同时把缓存填热给 calibrateSelectChrome 用。
+   */
   private selectWidthOf(label: ResourceStr): number {
+    const textWidth: number = this.textWidthOf(this.resText(label));
     if (this.selectChrome <= 0) {
       return 0;
     }
-    return Math.round(this.textWidthOf(this.resText(label)) + this.selectChrome);
+    return Math.round(textWidth + this.selectChrome);
   }
 
   /** 一行文字的宽度（vp）：精确量一次并缓存；量不到就按字宽估。 */
