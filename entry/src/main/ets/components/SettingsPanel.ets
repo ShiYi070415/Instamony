@@ -117,6 +117,8 @@ const PROXY_CARD_HEIGHT: number = 52;
 const PROXY_CARD_RADIUS: number = CARD_RADIUS;
 /** 卡片之间的间距（vp；需求："每个卡片之间保持距离"）。 */
 const PROXY_CARD_GAP: number = 10;
+/** 下拉按钮换选项的过渡时长（毫秒；短促的淡入，不要太慢）。 */
+const SELECT_PULSE_MS: number = 200;
 /** 卡片左侧的单选图标尺寸（需求：图标显示在卡片左边）。 */
 const PROXY_CARD_ICON: number = 20;
 /**
@@ -126,8 +128,23 @@ const PROXY_CARD_ICON: number = 20;
  * 所以列表本身设一个上限，卡片再多也只是它自己滚。
  */
 const PROXY_MANAGE_LIST_MAX: number = 300;
-/** 左滑露出的操作按钮尺寸（vp）：宽 64、高度与卡片齐平。 */
-const PROXY_SWIPE_WIDTH: number = 64;
+/**
+ * 左滑露出的操作**圆形按钮**尺寸（需求："用圆形按钮 + sys.symbol 图标，图标白色"）。
+ *
+ * 直径 44：卡片高 52，圆形按钮留 4vp 上下余量，看起来是"浮在卡片旁边的一颗圆"；
+ * 图标 20 与全 app 的图标档位一致（见 MaterialSurface 的 MATERIAL_ICON_SIZE）。
+ */
+const PROXY_SWIPE_SIZE: number = 44;
+const PROXY_SWIPE_ICON: number = 20;
+/** 两颗圆形按钮之间、以及按钮与卡片之间的间距（vp）。 */
+const PROXY_SWIPE_GAP: number = 8;
+/**
+ * 列表上下留白（vp，需求："卡片顶部边缘和底部边缘拽动时会被外部容器裁剪，增加 padding top bottom"）。
+ *
+ * List 会把子节点裁在自己的边界上，左滑时卡片边缘/阴影一旦越过边界就被切掉；
+ * 上下各留 8vp 就有余量了。
+ */
+const PROXY_MANAGE_LIST_PAD: number = 8;
 
 /**
  * 下拉里四档的**顺序**（也是下标 → 取值 的映射表）。
@@ -174,6 +191,18 @@ export struct SettingsPanel {
   @State private draftPort: string = '';
   @State private draftUser: string = '';
   @State private draftPass: string = '';
+  /**
+   * 五个下拉按钮各自的**切换动画进度**（1 = 静止，0 = 刚换完选项的那一帧）。
+   *
+   * 需求："设置页所有下拉按钮选项变化时需要动画"。Select 的文字是内容、不是可动画属性
+   * （宽度由框架过渡，文字是直接换的），所以这里用一次短促的淡入 + 上浮把"换字"包住；
+   * 每个下拉一份状态，改一个不会带着另一个一起闪。
+   */
+  @State private proxyPulse: number = 1;
+  @State private thicknessPulse: number = 1;
+  @State private levelPulse: number = 1;
+  @State private imagePulse: number = 1;
+  @State private videoPulse: number = 1;
   /** 点「退出登录」。 */
   onSignOut: () => void = (): void => {
   };
@@ -287,7 +316,13 @@ export struct SettingsPanel {
               : -1)
             .value(this.currentProxyLabel())
             .font({ size: 14 })
+            // 换选项时的淡入 + 上浮（见 pulseSelect）。
+            .opacity(this.pulseOpacity(this.proxyPulse))
+            .translate({ y: this.pulseLift(this.proxyPulse) })
             .onSelect((index: number, value: string): void => {
+              this.pulseSelect((v: number): void => {
+                this.proxyPulse = v;
+              });
               if (index === this.proxyNames.length) {
                 // 选单最后一项：没有代理就是「添加代理」，有代理就是「管理代理」。
                 if (this.proxyNames.length === 0) {
@@ -495,10 +530,15 @@ export struct SettingsPanel {
               builder: (): void => {
                 this.proxySwipeActions(index);
               },
-              // 左滑露出的总宽度 = 两个按钮 + 中间间隙。
-              actionAreaDistance: PROXY_SWIPE_WIDTH * 2 + 6
+              // 左滑露出的总宽度 = 两颗圆形按钮 + 两个间隙。
+              actionAreaDistance: PROXY_SWIPE_SIZE * 2 + PROXY_SWIPE_GAP * 2
             },
-            edgeEffect: SwipeEdgeEffect.Spring
+            /*
+             * **禁用右滑**（需求）：没有 `start` 时右滑本来就没有操作区，但 `Spring` 会让卡片
+             * 跟着手指弹性位移一段；`None` 是官方"滑到边界没有效果"那一档，右滑完全不动，
+             * 顺带也消掉了回弹把卡片顶出 List 边界、被裁掉一截的现象。
+             */
+            edgeEffect: SwipeEdgeEffect.None
           })
         }, (name: string, index: number): string => `${index}-${name}`)
 
@@ -510,6 +550,8 @@ export struct SettingsPanel {
       }
       .width('100%')
       .constraintSize({ maxHeight: PROXY_MANAGE_LIST_MAX })
+      // 上下留白：见 PROXY_MANAGE_LIST_PAD（左滑时卡片上下边缘/阴影不再被 List 裁掉）。
+      .padding({ top: PROXY_MANAGE_LIST_PAD, bottom: PROXY_MANAGE_LIST_PAD })
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.None)
 
@@ -612,37 +654,43 @@ export struct SettingsPanel {
    */
   @Builder
   proxySwipeActions(index: number) {
-    Row({ space: 6 }) {
+    Row({ space: PROXY_SWIPE_GAP }) {
+      // 编辑：圆形黄底 + 白图标。
       Button({ type: ButtonType.Normal }) {
-        Text($r('app.string.settings_proxy_edit_action'))
-          .fontSize(14)
-          .fontWeight(FontWeight.Medium)
-          .fontColor('#000000')
+        SymbolGlyph($r('sys.symbol.square_and_pencil'))
+          .fontSize(PROXY_SWIPE_ICON)
+          .fontColor([Color.White])
       }
-      .width(PROXY_SWIPE_WIDTH)
-      .height(PROXY_CARD_HEIGHT)
-      .borderRadius(PROXY_CARD_RADIUS)
+      .width(PROXY_SWIPE_SIZE)
+      .height(PROXY_SWIPE_SIZE)
+      .padding(0)
+      .borderRadius(PROXY_SWIPE_SIZE / 2)
       .backgroundColor($r('app.color.proxy_action_edit'))
+      // 纯图标按钮要给读屏留个名字（文案资源本来就是给这里用的）。
+      .accessibilityText($r('app.string.settings_proxy_edit_action'))
       .onClick((): void => {
         this.requestEditFromManage(index);
       })
 
+      // 删除：圆形红底 + 白图标。
       Button({ type: ButtonType.Normal }) {
-        Text($r('app.string.settings_proxy_delete_action'))
-          .fontSize(14)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(Color.White)
+        SymbolGlyph($r('sys.symbol.trash'))
+          .fontSize(PROXY_SWIPE_ICON)
+          .fontColor([Color.White])
       }
-      .width(PROXY_SWIPE_WIDTH)
-      .height(PROXY_CARD_HEIGHT)
-      .borderRadius(PROXY_CARD_RADIUS)
+      .width(PROXY_SWIPE_SIZE)
+      .height(PROXY_SWIPE_SIZE)
+      .padding(0)
+      .borderRadius(PROXY_SWIPE_SIZE / 2)
       .backgroundColor($r('app.color.proxy_action_delete'))
+      .accessibilityText($r('app.string.settings_proxy_delete_action'))
       .onClick((): void => {
         this.deleteProxy(index);
       })
     }
     .height(PROXY_CARD_HEIGHT)
-    .margin({ left: 6 })
+    .alignItems(VerticalAlign.Center)
+    .padding({ left: PROXY_SWIPE_GAP })
   }
 
   private refreshProxyNames(): void {
@@ -1129,6 +1177,36 @@ export struct SettingsPanel {
     .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING })
   }
 
+  // ---------------- 下拉按钮的切换动画 ----------------
+
+  /**
+   * 下拉换选项时跑一次"淡入 + 轻微上浮"（见那五个 Pulse 状态的说明）。
+   *
+   * 为什么用 `animateTo` 而不是在 Select 上挂 `.animation()`：`.animation()` 会把**所有**
+   * 属性变化都补间（包括这次清零），两条曲线互相打架、看起来像抖一下。这里先把进度
+   * 直接归零（不补间），下一帧再动画回 1，方向单一、只看到"淡入"这一半。
+   *
+   * @param set 把进度写回对应那个 `@State` 的回调（值类型不能传引用，只能传 setter）。
+   */
+  private pulseSelect(set: (value: number) => void): void {
+    set(0);
+    setTimeout((): void => {
+      this.getUIContext().animateTo({ duration: SELECT_PULSE_MS, curve: Curve.EaseOut }, (): void => {
+        set(1);
+      });
+    }, 16);
+  }
+
+  /** 进度 → 透明度（0 时 0.25，1 时 1）。 */
+  private pulseOpacity(pulse: number): number {
+    return 0.25 + 0.75 * pulse;
+  }
+
+  /** 进度 → 竖向位移（0 时下移 6vp，1 时归位）。 */
+  private pulseLift(pulse: number): number {
+    return 6 * (1 - pulse);
+  }
+
   /**
    * 「材质」下拉行：选**材质厚度**（全局）。
    *
@@ -1148,6 +1226,9 @@ export struct SettingsPanel {
         .value(this.thicknessDisplay())
         .font({ size: 15 })
         .fontColor($r('app.color.primary_text'))
+        // 换选项时的淡入 + 上浮（见 pulseSelect）。
+        .opacity(this.pulseOpacity(this.thicknessPulse))
+        .translate({ y: this.pulseLift(this.thicknessPulse) })
         // 按钮/菜单材质的厚薄都取本行选的厚度；颜色统一**透明**（需求：
         // 各材质等级的颜色一致，等级不再改颜色，见 materialRow 的说明）。
         // 走 SelectSurfaceModifier：API < 26 的设备上没有系统材质，它会自动退化成纯色底。
@@ -1157,6 +1238,9 @@ export struct SettingsPanel {
         .selectedOptionFont({ size: 15, weight: FontWeight.Bold })
         .selectedOptionFontColor($r('app.color.dropdown_selected_text'))
         .onSelect((index: number, value?: string): void => {
+          this.pulseSelect((v: number): void => {
+            this.thicknessPulse = v;
+          });
           if (index >= 0 && index < MATERIAL_THICKNESS_ORDER.length) {
             AppSettings.setMaterialThickness(MATERIAL_THICKNESS_ORDER[index]);
           }
@@ -1198,6 +1282,9 @@ export struct SettingsPanel {
         .value(this.materialDisplay())
         .font({ size: 15 })
         .fontColor($r('app.color.primary_text'))
+        // 换选项时的淡入 + 上浮（见 pulseSelect）。
+        .opacity(this.pulseOpacity(this.levelPulse))
+        .translate({ y: this.pulseLift(this.levelPulse) })
         // 按钮的光边来自这层材质（别加 backgroundColor，会把它盖住）。
         // 厚薄 = 「材质」那行选的厚度；颜色透明（各等级统一）。
         // 下拉菜单自己的材质（与按钮相互独立）：同样厚度 + 透明色；**点光源不开**（需求）。
@@ -1210,6 +1297,9 @@ export struct SettingsPanel {
         .selectedOptionFont({ size: 15, weight: FontWeight.Bold })
         .selectedOptionFontColor($r('app.color.dropdown_selected_text'))
         .onSelect((index: number, value?: string): void => {
+          this.pulseSelect((v: number): void => {
+            this.levelPulse = v;
+          });
           if (index >= 0 && index < MATERIAL_LEVEL_ORDER.length) {
             AppSettings.setMaterialLevel(MATERIAL_LEVEL_ORDER[index]);
           }
@@ -1244,12 +1334,18 @@ export struct SettingsPanel {
         .value(this.qualityDisplay(this.imageQuality))
         .font({ size: 15 })
         .fontColor($r('app.color.primary_text'))
+        // 换选项时的淡入 + 上浮（见 pulseSelect）。
+        .opacity(this.pulseOpacity(this.imagePulse))
+        .translate({ y: this.pulseLift(this.imagePulse) })
         .attributeModifier(new SelectSurfaceModifier(this.materialThickness))
         .menuAlign(MenuAlignType.END, { dx: 0, dy: MENU_OFFSET_Y })
         .selectedOptionBgColor($r('app.color.dropdown_selected_bg'))
         .selectedOptionFont({ size: 15, weight: FontWeight.Bold })
         .selectedOptionFontColor($r('app.color.dropdown_selected_text'))
         .onSelect((index: number, value?: string): void => {
+          this.pulseSelect((v: number): void => {
+            this.imagePulse = v;
+          });
           if (index >= 0 && index < MEDIA_QUALITY_ORDER.length) {
             AppSettings.setImageQuality(MEDIA_QUALITY_ORDER[index]);
             this.onQualityChanged();
@@ -1274,12 +1370,18 @@ export struct SettingsPanel {
         .value(this.qualityDisplay(this.videoQuality))
         .font({ size: 15 })
         .fontColor($r('app.color.primary_text'))
+        // 换选项时的淡入 + 上浮（见 pulseSelect）。
+        .opacity(this.pulseOpacity(this.videoPulse))
+        .translate({ y: this.pulseLift(this.videoPulse) })
         .attributeModifier(new SelectSurfaceModifier(this.materialThickness))
         .menuAlign(MenuAlignType.END, { dx: 0, dy: MENU_OFFSET_Y })
         .selectedOptionBgColor($r('app.color.dropdown_selected_bg'))
         .selectedOptionFont({ size: 15, weight: FontWeight.Bold })
         .selectedOptionFontColor($r('app.color.dropdown_selected_text'))
         .onSelect((index: number, value?: string): void => {
+          this.pulseSelect((v: number): void => {
+            this.videoPulse = v;
+          });
           if (index >= 0 && index < MEDIA_QUALITY_ORDER.length) {
             AppSettings.setVideoQuality(MEDIA_QUALITY_ORDER[index]);
             this.onQualityChanged();
