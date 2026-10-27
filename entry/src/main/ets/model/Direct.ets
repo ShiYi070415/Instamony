@@ -1,4 +1,4 @@
-﻿/*
+/*
  * 私信（Direct）收件箱的模型。
  *
  * 字段名与页面脚本（WebScripts.directInboxScript）一一对应：脚本在页面里把几百 KB 的响应
@@ -1403,6 +1403,15 @@ export class DirectMapper {
       card.caption = JsonRead.strOf(item, 'caption_body_text');
     }
     // ---- 形态 ----
+    /*
+     * 视频判定的兜底：目标链接是 `/reel/`、`/reels/`，或者条目类型本身带 `clip`（`xma_clip` /
+     * `clip` / `reel_share`）—— 这两种一律当视频（画成那张小卡片、点开进 reels 页）。
+     * 不加这条的话，载荷没给 `media_type`/`playable_url` 的 Reel 会被当成图文帖子画。
+     */
+    if (!card.video && (card.target.indexOf('/reel/') >= 0
+      || card.target.indexOf('/reels/') >= 0 || type.indexOf('clip') >= 0)) {
+      card.video = true;
+    }
     const hasTarget: boolean = card.target.length > 0 || DirectMapper.shareCodeOf(item).length > 0;
     if (!hasTarget && card.cover.length === 0 && card.caption.length === 0) {
       card.kind = '';

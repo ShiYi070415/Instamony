@@ -1,4 +1,4 @@
-﻿/*
+/*
  * 「私信会话」原生页面：消息列表 + 底部悬浮输入条。
  *
  * 版式：进入就定位到最新消息；自己靠右、对方靠左并在"时间段第一条"左侧显示头像；
@@ -863,39 +863,39 @@ export struct DirectThreadPage {
   /**
    * **帖子卡片**（需求）：宽 2/3 屏。
    *
-   * 结构是**一张**卡片（用户报："封面没有包裹在卡片里，显示在卡片容器上方"）：
+   * 三段顺序按需求（用户原话）：**"帖子卡片封面应该在用户资讯栏和正文之间"** ——
    * ```
    * 卡片（圆角 + 裁剪 + 沉浸光感底）
-   *   ├─ 封面   —— 占满卡片宽度，高度按 4:5 给死
-   *   └─ 文字区 —— 作者行 + 正文两行（超出省略号），只有有内容时才画
+   *   ├─ 用户资讯栏（顶部；不需要自己的光感底）
+   *   ├─ 封面      （中间；占满卡片宽度，高度按 4:5 给死）
+   *   └─ 正文      （底部；两行，超出显示省略号）
    * ```
-   * 封面和文字区都放在**材质 Toggle 的内容里**，圆角与裁剪只在外层做一次 ——
-   * 上一版是"封面 + 下面另一个材质块"，两块各自圆角，看起来就是封面悬在卡片外面。
+   * 整张卡是**一个**节点：圆角与裁剪只在外层做一次 —— 上一版是"封面 + 下面另一个材质块"
+   * 两块各自圆角，看起来就是封面悬在卡片外面。
    */
   @Builder
   sharePostCard(message: DirectMessage) {
     Column() {
       Toggle({ type: ToggleType.Button, isOn: false }) {
         Column() {
-          this.shareCover(message, this.shareCardWidth(message), this.shareCardHeight(message))
-          if (message.shareUser.length > 0 || message.shareCaption.length > 0) {
-            Column({ space: 4 }) {
-              if (message.shareUser.length > 0) {
-                this.shareUserRow(message, 13, 22, this.shareCardWidth(message) - 20)
-              }
-              if (message.shareCaption.length > 0) {
-                Text(message.shareCaption)
-                  .fontSize(12)
-                  .fontColor($r('app.color.secondary_text'))
-                  .maxLines(2)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  .width('100%')
-                  .textAlign(TextAlign.Start)
-              }
+          if (message.shareUser.length > 0 || message.shareAvatar.length > 0) {
+            Column() {
+              this.shareUserRow(message, 13, 22, this.shareCardWidth(message) - 20)
             }
             .width(this.shareCardWidth(message))
             .alignItems(HorizontalAlign.Start)
-            .padding({ left: 10, right: 10, top: 8, bottom: 10 })
+            .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+          }
+          this.shareCover(message, this.shareCardWidth(message), this.shareCardHeight(message))
+          if (message.shareCaption.length > 0) {
+            Text(message.shareCaption)
+              .fontSize(12)
+              .fontColor($r('app.color.secondary_text'))
+              .maxLines(2)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .width('100%')
+              .textAlign(TextAlign.Start)
+              .padding({ left: 10, right: 10, top: 8, bottom: 10 })
           }
         }
         .width(this.shareCardWidth(message))
@@ -926,11 +926,13 @@ export struct DirectThreadPage {
    * ```
    * Stack {
    *   底层：封面，铺满卡片的完整宽度与高度
-   *   左上角：用户资讯栏（带沉浸光感底）
+   *   左上角：用户资讯栏 —— **悬浮**在封面左上角（不是排在封面上方的那一行）
    *   正中：暂停图标（只是一个图标，不是按钮）
    * }
    * ```
    *
+   * 资讯栏用 `.position()` 直接压在封面上（并留一点内边距），层叠关系与"悬浮"这件事
+   * 在代码里就是一句话；外层 `clip(true)` 保证它不会画到卡片圆角外面去。
    * 三层都**不接触摸**（`hitTestBehavior(None)`），点击统一落在最外层卡片上 → 进 Reels 类页面。
    */
   @Builder
@@ -938,25 +940,18 @@ export struct DirectThreadPage {
     Stack({ alignContent: Alignment.Center }) {
       // 底层封面：宽高都给死，铺满整张卡片。
       this.shareCover(message, this.shareCardWidth(message), this.shareCardHeight(message))
-      // 左上角用户资讯栏：全尺寸透明容器 + TopStart 对齐 + 内边距定位（比 position 稳，不会画到卡片外）。
-      if (message.shareUser.length > 0) {
-        Column() {
-          Toggle({ type: ToggleType.Button, isOn: false }) {
-            this.shareUserRow(message, 10, 16, this.shareCardWidth(message) - 34)
-          }
-          .padding({ left: 5, right: 8, top: 3, bottom: 3 })
-          .borderRadius(11)
-          // 底色交给材质（同帖子卡片那条说明）。
-          .backgroundColor(Color.Transparent)
-          .selectedColor(Color.Transparent)
-          .attributeModifier(new SurfaceModifier(this.cardThickness, true))
-          .hitTestBehavior(HitTestMode.None)
+      // 悬浮在封面左上角的用户资讯栏（带沉浸光感底）。
+      if (message.shareUser.length > 0 || message.shareAvatar.length > 0) {
+        Toggle({ type: ToggleType.Button, isOn: false }) {
+          this.shareUserRow(message, 10, 16, this.shareCardWidth(message) - 36)
         }
-        .width('100%')
-        .height('100%')
-        .alignItems(HorizontalAlign.Start)
-        .justifyContent(FlexAlign.Start)
-        .padding({ left: 7, top: 7 })
+        .padding({ left: 5, right: 8, top: 3, bottom: 3 })
+        .borderRadius(11)
+        // 底色交给材质（同帖子卡片那条说明）。
+        .backgroundColor(Color.Transparent)
+        .selectedColor(Color.Transparent)
+        .attributeModifier(new SurfaceModifier(this.cardThickness, true))
+        .position({ x: 7, y: 7 })
         .hitTestBehavior(HitTestMode.None)
       }
       // 垂直横向置中：暂停图标（纯图标、无按钮、不吃触摸）。
