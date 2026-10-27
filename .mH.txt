@@ -1,1 +1,0 @@
-feat(1.3.5): 版本号 1.3.5（versionCode 1003005）+ 内置网页域名白名单 —— 新增 core/WebPolicy，InstagramWebHost 的 onLoadIntercept / onWindowNew 只允许 instagram.com / cdninstagram.com / fbcdn.net / facebook.com，站外地址交给 Index.openExternal 用系统浏览器打开（viewData 意图，失败退回内嵌网页）；openWeb 同样先过白名单；这样既能如实回答 AGC 的“是否提供不受限的网络访问”（No），也堵住了“带登录态的网页被任意外链利用”的缺口。另加发布说明 docs/release-notes-1.3.5.md
