@@ -48,7 +48,7 @@ import {
 } from '../core/AppSettings';
 import { MATERIAL_PILL_HEIGHT, MaterialIconButton, SelectSurfaceModifier, SurfaceModifier } from './MaterialSurface';
 // 半模态的系统材质（SheetOptions.systemMaterial，API 26+）。
-import { curves, LengthMetrics, uiMaterial } from '@kit.ArkUI';
+import { LengthMetrics, uiMaterial } from '@kit.ArkUI';
 // 应用级代理（设置页的数据与生效逻辑，见 core/AppProxy）。
 import { AppProxy, ProxyEntry } from '../core/AppProxy';
 import { PlatformCap } from '../core/PlatformCap';
@@ -167,31 +167,6 @@ const PROXY_MANAGE_LIST_PAD: number = 20;
 
 /** 下拉按钮的字体大小（vp；和 Select 的 `.font({ size })` 保持一致，量文字宽度要用它）。 */
 const SELECT_FONT_SIZE: number = 15;
-/**
- * 下拉按钮上"文字以外"的固定占宽（vp）：右侧箭头 + 左右内边距。
- *
- * Select 是系统组件，量不到它的内部布局，只能按经验值给。**这个数越大，按钮越宽、
- * 多出来的空白全堆在右侧**（Select 把 [文字 + 箭头] 靠左排，剩余宽度留在右边），
- * 于是左留白看着比右留白小 —— 之前取 66 就是这么出现的。
- * 现在收到 56：刚好够文字不被吞（46 会吞"暂无代理"的尾巴），又不至于堆出明显空白。
- */
-const SELECT_CHROME_WIDTH: number = 56;
-/**
- * 额外余量（vp）：**故意留 0**。
- *
- * 之前留 10 是为了防不同字体字宽差异，但它同样会变成右侧的空白（见上面那条），
- * 所以改成 0 —— 宽度紧贴"文字 + 箭头"，左右更匀；配 SELECT_MIN_WIDTH 兜住过窄的情况。
- */
-const SELECT_WIDTH_SLACK: number = 0;
-/**
- * 下拉按钮的最小宽度（vp）。
- *
- * 兜两件事：① 文案量不出来时（资源还没就绪）别缩成一条线；② 很短的文案也不至于挤成一小块。
- * 96 是按"两个汉字 + 箭头与内边距"估的，再大就会给短文案带出多余的右侧空白。
- */
-const SELECT_MIN_WIDTH: number = 96;
-/** 长度过渡的时长（毫秒）：弹性曲线配 320ms，观感是"弹一下到位"。 */
-const SELECT_WIDTH_SPRING_MS: number = 320;
 
 /**
  * 下拉里四档的**顺序**（也是下标 → 取值 的映射表）。
@@ -246,14 +221,6 @@ export struct SettingsPanel {
   @State private draftPort: string = '';
   @State private draftUser: string = '';
   @State private draftPass: string = '';
-  /**
-   * 下拉按钮上量过的文字宽度缓存（vp）。
-   *
-   * 宽度是绑在 `.width()` 上的：换选项时文字变了 → 宽度变 → `.animation(springMotion)`
-   * 把这段长度变化补间成"弹性伸缩"（需求："改成按钮长度变化的弹性过渡动画"）。
-   * 量文字要走 measureText（px → vp），每帧都量没必要，按文案缓存。
-   */
-  private measuredWidths: Map<string, number> = new Map();
   /** 点「退出登录」。 */
   onSignOut: () => void = (): void => {
   };
@@ -382,9 +349,6 @@ export struct SettingsPanel {
             .selectedOptionBgColor($r('app.color.dropdown_selected_bg'))
             .selectedOptionFont({ size: SELECT_FONT_SIZE, weight: FontWeight.Bold })
             .selectedOptionFontColor($r('app.color.dropdown_selected_text'))
-            // 长度弹性过渡：宽度跟着当前选项文字变，换选项时由下面的 .animation 补间（见 selectWidth）。
-            .width(this.selectWidth(this.proxyValueText))
-            .animation({ duration: SELECT_WIDTH_SPRING_MS, curve: curves.springMotion() })
             .onSelect((index: number, value: string): void => {
               if (index === this.proxyNames.length) {
                 // 选单最后一项：没有代理就是「添加代理」，有代理就是「管理代理」。
@@ -405,7 +369,9 @@ export struct SettingsPanel {
         }
         .width('100%')
         .height(SIGN_OUT_HEIGHT)
-        .padding({ left: CARD_ROW_PADDING, right: 8 })
+        // **和本页其它下拉行同一套左右内边距**：之前这里右侧是 8，其它行是 CARD_ROW_PADDING(16)，
+        // 于是代理那颗下拉比别的行更贴右边，看上去"留白不一样"。
+        .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING })
       }
       .width('100%')
       // 管理面板挂在这一行上（添加/编辑面板挂在外层 Column 上），两个半模态各有各的状态。
@@ -432,13 +398,25 @@ export struct SettingsPanel {
     })
   }
 
-  /** 同上，但一定返回纯文本：Select 的 `.value` 绑状态、宽度计算也要字符串。 */
+  /** 同上，但一定返回纯文本：Select 的 `.value` 绑的是字符串状态。 */
   private proxyValueLabel(): string {
     const index: number = this.proxyActive;
     if (index >= 0 && index < this.proxyNames.length) {
       return this.proxyNames[index];
     }
     return this.resText($r('app.string.settings_proxy_none'));
+  }
+
+  /** ResourceStr → 纯文本（资源解析失败时返回空串，调用方自己兜底）。 */
+  private resText(value: ResourceStr): string {
+    if (typeof value === 'string') {
+      return value;
+    }
+    try {
+      return getContext(this).resourceManager.getStringSync((value as Resource).id);
+    } catch (error) {
+      return '';
+    }
   }
 
   /**
@@ -1274,77 +1252,6 @@ export struct SettingsPanel {
     .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING })
   }
 
-  // ---------------- 下拉按钮的长度弹性过渡 ----------------
-
-  /**
-   * 下拉按钮的目标宽度（vp）。
-   *
-   * 做法：把"当前选项文字"的宽度量出来（精确的 `measureText` 与保守的字宽估算取**较大值**，
-   * 量不到时不会把文字裁掉），加上箭头/内边距与余量，绑到 `.width()` 上；换选项时宽度变了，
-   * 组件上的 `.animation({ curve: curves.springMotion() })` 就把这段长度变化补间成
-   * **弹性伸缩**（需求："改成按钮长度变化的弹性过渡动画，而非重新弹出"）。
-   *
-   * 为什么要显式给宽度：Select 的宽度本来是跟着文字自动算的，自动算出来的值**不参与**
-   * 属性动画（内容驱动的布局变化不会被 `.animation()` 补间），必须自己算出数字给它。
-   */
-  private selectWidth(label: ResourceStr): number {
-    const text: string = this.resText(label);
-    const measured: number = this.measureTextWidth(text);
-    const estimated: number = this.estimateTextWidth(text, SELECT_FONT_SIZE);
-    const body: number = measured > estimated ? measured : estimated;
-    const width: number = Math.round(body + SELECT_CHROME_WIDTH + SELECT_WIDTH_SLACK);
-    // 太短的时候兜一下（"暂无代理"这类短文案以前就是被算窄了、尾巴被吞）。
-    return width < SELECT_MIN_WIDTH ? SELECT_MIN_WIDTH : width;
-  }
-
-  /** ResourceStr → 纯文本（宽度计算要用；资源解析失败时返回空串，调用方会退回估算值）。 */
-  private resText(value: ResourceStr): string {
-    if (typeof value === 'string') {
-      return value;
-    }
-    try {
-      return getContext(this).resourceManager.getStringSync((value as Resource).id);
-    } catch (error) {
-      return '';
-    }
-  }
-
-  /** 精确量一行文字的宽度（vp）；量不到就是 0，交给估算兜底。 */
-  private measureTextWidth(text: string): number {
-    if (text.length === 0) {
-      return 0;
-    }
-    const cached: number | undefined = this.measuredWidths.get(text);
-    if (cached !== undefined) {
-      return cached;
-    }
-    let width: number = 0;
-    try {
-      // measureText 挂在 UIContext.getMeasureUtils() 上（API 12+），返回 px；
-      // 字号用数字（数字按 fp 处理），和 Select 的 .font({ size }) 对齐。
-      const px: number = this.getUIContext().getMeasureUtils()
-        .measureText({ textContent: text, fontSize: SELECT_FONT_SIZE });
-      width = px2vp(px);
-    } catch (error) {
-      width = 0;
-    }
-    this.measuredWidths.set(text, width);
-    return width;
-  }
-
-  /**
-   * 字宽估算（兜底用）：CJK 按 1 个字号宽算，其它（拉丁字母/数字/符号）按 0.55 个字号。
-   *
-   * 只用来"保底不裁字"：真实宽度取它和 measureText 的较大值，所以偏大一点没关系。
-   */
-  private estimateTextWidth(text: string, fontSize: number): number {
-    let units: number = 0;
-    for (let i: number = 0; i < text.length; i++) {
-      units += text.charCodeAt(i) >= 0x2E80 ? 1 : 0.55;
-    }
-    return units * fontSize;
-  }
-
   /**
    * 「材质」下拉行：选**材质厚度**（全局）。
    *
@@ -1363,9 +1270,6 @@ export struct SettingsPanel {
         .selected(this.thicknessIndex())
         .value(this.thicknessDisplay())
         .font({ size: 15 })
-        // 长度弹性过渡：宽度跟着当前选项文字变，换选项时由下面的 .animation 补间（见 selectWidth）。
-        .width(this.selectWidth(this.thicknessDisplay()))
-        .animation({ duration: SELECT_WIDTH_SPRING_MS, curve: curves.springMotion() })
         .fontColor($r('app.color.primary_text'))
         // 按钮/菜单材质的厚薄都取本行选的厚度；颜色统一**透明**（需求：
         // 各材质等级的颜色一致，等级不再改颜色，见 materialRow 的说明）。
@@ -1416,9 +1320,6 @@ export struct SettingsPanel {
         .selected(this.materialIndex())
         .value(this.materialDisplay())
         .font({ size: 15 })
-        // 长度弹性过渡：宽度跟着当前选项文字变，换选项时由下面的 .animation 补间（见 selectWidth）。
-        .width(this.selectWidth(this.materialDisplay()))
-        .animation({ duration: SELECT_WIDTH_SPRING_MS, curve: curves.springMotion() })
         .fontColor($r('app.color.primary_text'))
         // 按钮的光边来自这层材质（别加 backgroundColor，会把它盖住）。
         // 厚薄 = 「材质」那行选的厚度；颜色透明（各等级统一）。
@@ -1465,9 +1366,6 @@ export struct SettingsPanel {
         .selected(this.qualityIndex(this.imageQuality))
         .value(this.qualityDisplay(this.imageQuality))
         .font({ size: 15 })
-        // 长度弹性过渡：宽度跟着当前选项文字变，换选项时由下面的 .animation 补间（见 selectWidth）。
-        .width(this.selectWidth(this.qualityDisplay(this.imageQuality)))
-        .animation({ duration: SELECT_WIDTH_SPRING_MS, curve: curves.springMotion() })
         .fontColor($r('app.color.primary_text'))
         .attributeModifier(new SelectSurfaceModifier(this.materialThickness))
         .menuAlign(MenuAlignType.END, { dx: 0, dy: MENU_OFFSET_Y })
@@ -1498,9 +1396,6 @@ export struct SettingsPanel {
         .selected(this.qualityIndex(this.videoQuality))
         .value(this.qualityDisplay(this.videoQuality))
         .font({ size: 15 })
-        // 长度弹性过渡：宽度跟着当前选项文字变，换选项时由下面的 .animation 补间（见 selectWidth）。
-        .width(this.selectWidth(this.qualityDisplay(this.videoQuality)))
-        .animation({ duration: SELECT_WIDTH_SPRING_MS, curve: curves.springMotion() })
         .fontColor($r('app.color.primary_text'))
         .attributeModifier(new SelectSurfaceModifier(this.materialThickness))
         .menuAlign(MenuAlignType.END, { dx: 0, dy: MENU_OFFSET_Y })
