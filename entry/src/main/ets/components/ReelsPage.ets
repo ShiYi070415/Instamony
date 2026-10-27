@@ -24,6 +24,7 @@ import { VideoSurface } from './VideoSurface';
 import { MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS, SETTING_VIDEO_MUTED } from '../core/AppSettings';
 import { ReelsAction } from '../core/ReelsAction';
 import { ReelsCrashLog } from '../core/ReelsCrashLog';
+import { Haptics } from '../core/Haptics';
 import {
   MaterialIconButton, MaterialLabelButton, SurfaceModifier
 } from './MaterialSurface';
@@ -623,6 +624,12 @@ struct ReelSlide {
       this.longPressMode = 'speed';
       this.longPressFired = true;
       this.speedBoost = true;
+      /*
+       * **触感反馈**（需求："长按倍速新增手机震动"）：
+       * 用户长按两侧时画面不会有任何视觉变化（只有右上角胶囊），
+       * 这一下轻点让人确认"倍速真的生效了"，不用盯着屏幕。
+       */
+      Haptics.speedHold();
       hilog.info(DOMAIN, TAG, 'hold side → 2.0x code=%{public}s', this.reel.shortcode);
       return;
     }

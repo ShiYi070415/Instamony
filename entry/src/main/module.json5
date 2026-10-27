@@ -19,6 +19,12 @@
       // 官方文档明确 getDefaultNetSync 需要这个权限（normal 级、系统授权，装上即生效）。
       {
         "name": "ohos.permission.GET_NETWORK_INFO"
+      },
+      // 长按倍速的触感反馈（见 core/Haptics）。
+      // normal 级、系统授权：装到设备上即生效，不会弹授权框。
+      // 个别设备没有马达时 startVibration 会失败 —— Haptics 里静默兜住，不影响手势。
+      {
+        "name": "ohos.permission.VIBRATE"
       }
     ],
     // 应用级开启沉浸光感（官方文档「开启沉浸光感」）：
