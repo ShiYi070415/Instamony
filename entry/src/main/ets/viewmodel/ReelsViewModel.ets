@@ -18,6 +18,7 @@ import {
 } from '../core/NativeReels';
 import { ApiThrottle } from '../core/ApiThrottle';
 import { CachedReelsPage, ReelsCache } from '../core/ReelsCache';
+import { ReelsCrashLog } from '../core/ReelsCrashLog';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'ReelsViewModel';
@@ -393,6 +394,12 @@ export class ReelsViewModel implements ReelStreamVm {
 
   /** 首屏那一页：整页收进来再整页上屏（同样打散，首屏里也可能连着同一个人）。 */
   private applyFirstPage(page: NativeReelsPage): number {
+    /*
+     * **整页替换时把"看到第几条"复位**：列表被换成新的那一批之后，旧的 active 可能
+     * 越过新长度 —— Swiper 停在越界索引上就是闪退的典型现场。
+     */
+    this.active = 0;
+    ReelsCrashLog.note(`first page src=${this.source} n=${page.reels.length}`);
     // 首屏 = **整体替换**：旧列表、旧去重表、旧缓冲一起清掉。
     this.reels = [];
     this.shown.clear();
@@ -629,6 +636,8 @@ export class ReelsViewModel implements ReelStreamVm {
         'reels more added=%{public}d pending=%{public}d authors=%{public}d rounds=%{public}d queued=%{public}d limited=%{public}s',
         added, this.pending.length, this.pendingAuthors(), rounds, this.nativeQueue.length,
         `${limited}`);
+      ReelsCrashLog.note(`more added=${added} total=${this.reels.length} pending=${this.pending.length}` + ` queue=${this.nativeQueue.length} limited=${limited}`);
+      ReelsCrashLog.flush();
       if (added > 0) {
         this.more = true;
         this.prefetchNativePage();

@@ -55,6 +55,7 @@ import { AppProxy, ProxyEntry } from '../core/AppProxy';
 import { ProxyCheckResult, ProxyProbe } from '../core/ProxyProbe';
 import { PlatformCap } from '../core/PlatformCap';
 import { StoryDiag } from '../core/StoryDiag';
+import { ReelsCrashLog } from '../core/ReelsCrashLog';
 import { StoryTray } from '../model/Story';
 import { NativeStories } from '../core/NativeStories';
 import { MobileProbe } from '../core/mobileapi/MobileProbe';
@@ -64,6 +65,8 @@ import { promptAction } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { common } from '@kit.AbilityKit';
 
+/** 导出时接在诊断报告后面的分隔行（见 exportDiag）。 */
+const REELS_LOG_SEPARATOR: string = '\n\n===== Reels 崩溃现场日志（Instamony_reels.log）=====\n';
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'SettingsPanel';
 
@@ -1090,7 +1093,14 @@ export struct SettingsPanel {
    * 这也是官方推荐的"把应用文件交给用户"的方式。
    */
   private async exportDiag(): Promise<void> {
-    const text: string = StoryDiag.exportFull();
+    /*
+     * 顺手把 **Reels 崩溃现场日志** 拼进来（core/ReelsCrashLog）：用户反馈"刷 reels 闪退"时，
+     * 这是唯一能拿到现场的通道 —— 真机上 hilog 会被 chromium 冲掉，测试者也没有 hdc。
+     */
+    const reelsLog: string = ReelsCrashLog.read();
+    const base: string = StoryDiag.exportFull();
+    const text: string = reelsLog.length > 0
+      ? `${base}${REELS_LOG_SEPARATOR}${reelsLog}` : base;
     const name: string = StoryDiag.exportFileName();
     try {
       const context: common.UIAbilityContext =

@@ -23,6 +23,7 @@ import { ReelsViewModel } from '../viewmodel/ReelsViewModel';
 import { VideoSurface } from './VideoSurface';
 import { MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS, SETTING_VIDEO_MUTED } from '../core/AppSettings';
 import { ReelsAction } from '../core/ReelsAction';
+import { ReelsCrashLog } from '../core/ReelsCrashLog';
 import {
   MaterialIconButton, MaterialLabelButton, SurfaceModifier
 } from './MaterialSurface';
@@ -2349,6 +2350,18 @@ export struct ReelsPage {
     }
     this.vm.onReels = (reels: Array<Reel>, hasMore: boolean): void => {
       this.reels = reels;
+      /*
+       * **列表变短时把 activeIndex 拉回合法范围**（闪退防线）。
+       *
+       * 首屏被整体替换（`applyFirstPage`：换账号 / 重试 / 限流兜底）时列表会从 N 条变成
+       * M 条；Swiper 停在一个越界的索引上是这类"刷着刷着闪退"最常见的现场。这里连同
+       * 视图模型里的那份一起纠正，Swiper / ReelSlide 就不会拿到不存在的条目。
+       */
+      if (this.activeIndex >= reels.length) {
+        this.activeIndex = reels.length > 0 ? reels.length - 1 : 0;
+        this.settledIndex = this.activeIndex;
+        this.vm.setActiveIndex(this.activeIndex);
+      }
       // 记一份"这几条第一次进入列表的时刻"：载荷没给 `taken_at` 时，评论面板里那张卡片
       // 用它当兜底的发布时间（见 core/ReelSeenTime 与 pages/Index.reelTakenAtMs）。
       ReelSeenTime.note(reels.map((reel: Reel): string => reel.shortcode));
@@ -2461,6 +2474,8 @@ export struct ReelsPage {
     if (index === this.activeIndex) {
       return;
     }
+    ReelsCrashLog.note(`switch -> ${index}/${this.reels.length} src=${this.source}`);
+    ReelsCrashLog.flush();
     this.activeIndex = index;
     // 换条了：新的播放器首帧还没出来，封面叠层要重新盖上（见 reelPage）。
     this.videoReady = false;
@@ -2520,6 +2535,11 @@ export struct ReelsPage {
   private syncFromVm(): void {    const list: Array<Reel> = this.vm.list();
     if (list.length > 0) {
       this.reels = list;
+      // 回填的列表可能比记忆里的位置短：夹紧，别让 Swiper 停在越界索引上（闪退防线）。
+      if (this.activeIndex >= this.reels.length) {
+        this.activeIndex = this.reels.length > 0 ? this.reels.length - 1 : 0;
+        this.settledIndex = this.activeIndex;
+      }
       // 首屏铺完数据也要报一次：这时 activeIndex 可能没变（switchTo 不会被触发），
       // 但"有可播的视频了"这件事变了，标题栏那两颗按钮要跟着出现。
       this.publishAction();
@@ -2852,7 +2872,7 @@ export struct ReelsPage {
         Swiper(this.swiperController) {
           ForEach(this.reels, (reel: Reel, index: number): void => {
             this.reelPage(reel, index)
-          }, (reel: Reel, index: number): string => `${index}-${reel.shortcode}`)
+          }, (reel: Reel, index: number): string => reel.shortcode)
         }
         .width('100%')
         .height('100%')

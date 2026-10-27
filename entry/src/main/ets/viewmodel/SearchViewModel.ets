@@ -277,9 +277,12 @@ export class SearchViewModel {
       }
       hilog.info(DOMAIN, TAG, 'refresh replaced n=%{public}d hasMore=%{public}s cursor=%{public}d',
         this.posts.length, `${this.hasMore}`, this.cursor.length);
-      // 铺完接着预取下一页 + 补满一屏（和新进页面同一条收尾）。
+      /*
+       * 只预取下一页，**不再紧跟 fillGrid 追加**：刷新这一下已经整面换成新数据，
+       * 立刻再追加一批会让 LazyForEach 连着重载两次（观感就是"刷新时画面闪一下"）。
+       * 下一批交给用户滑到底时的 loadMore。
+       */
       this.prefetchMore();
-      this.fillGrid();
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'refresh threw: %{public}s', (error as Error).message);
       this.onStatus('刷新出错');
