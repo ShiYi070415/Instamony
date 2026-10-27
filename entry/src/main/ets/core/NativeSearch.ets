@@ -28,6 +28,7 @@ import { SearchCache } from './SearchCache';
 import { ApiThrottle } from './ApiThrottle';
 import { SessionGate } from './SessionGate';
 import { MobileDiscover, MobileMediaPage, MobileUserPage } from './mobileapi/MobileDiscover';
+import { EXPLORE_LANE_SEARCH } from './mobileapi/ExploreLanes';
 import { MobileFeedPage, MobileFeedTimeline } from './mobileapi/MobileFeedTimeline';
 import { SearchPost, SearchUser } from '../model/Search';
 // 轮播帖的逐页媒体（与时间线那份 DTO 同形，见 readPost / carouselPage）。
@@ -179,9 +180,14 @@ export class NativeSearch {
    *   2) **信息流里的推荐卡片**（`explore_story`）：IG 自己会在首页信息流里插"推荐"帖子
    *      （结构见 core/NativeTimelineParser 的 `explore_story.media`）。上一条拿不到时用它兜底
    *      —— 同样走移动端时间线，不需要新接口。
+   *
+   * @param lane 哪条入口在要（首页为你推荐 / Reels 探索流 / 搜索推荐网格）：
+   *   三条入口打的是**同一个** `discover/topical_explore/`，靠 lane 分开 `session_id` 与
+   *   跨入口去重（见 core/mobileapi/ExploreLanes 的文件头）。默认按搜索页算。
    */
-  static async recommendedPage(cursor: string): Promise<SearchPostPage | null> {
-    const viaMobile: SearchPostPage | null = await NativeSearch.recommendedViaMobile(cursor);
+  static async recommendedPage(cursor: string,
+                               lane: string = EXPLORE_LANE_SEARCH): Promise<SearchPostPage | null> {
+    const viaMobile: SearchPostPage | null = await NativeSearch.recommendedViaMobile(cursor, lane);
     if (viaMobile !== null) {
       return viaMobile;
     }
@@ -253,11 +259,12 @@ export class NativeSearch {
    * 翻页规则：只有当**第一页确实来自移动端**（`mobileUsable`）时，才承认调用方给的游标是
    * 移动端的游标 —— 两条路的游标互不通用，拿错只会白打一发并报"读取失败"。
    */
-  private static async recommendedViaMobile(cursor: string): Promise<SearchPostPage | null> {
+  private static async recommendedViaMobile(cursor: string, lane: string): Promise<SearchPostPage | null> {
     if (cursor.length > 0 && !NativeSearch.mobileUsable) {
       return null;
     }
-    const page: MobileMediaPage | null = await MobileDiscover.explore(cursor, ApiThrottle.interactive());
+    const page: MobileMediaPage | null = await MobileDiscover.explore(cursor, ApiThrottle.interactive(),
+      ApiThrottle.MOBILE, lane);
     if (page === null) {
       if (cursor.length === 0) {
         NativeSearch.mobileUsable = false;

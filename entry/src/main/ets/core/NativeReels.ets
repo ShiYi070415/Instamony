@@ -19,6 +19,7 @@ import { parseReelsItems } from '../workers/ReelsParseTask';
 import { ApiThrottle } from './ApiThrottle';
 import { JsonRead } from './JsonRead';
 import { MobileDiscover, MobileMediaPage } from './mobileapi/MobileDiscover';
+import { EXPLORE_LANE_REELS } from './mobileapi/ExploreLanes';
 // Reels 的移动端通道（对应 instagrapi 的 reels / explore_reels，不需要网页模板）。
 import { MobileClips } from './mobileapi/MobileClips';
 // 主页 Reels 分页（`clips/user/{pk}/`）—— 补货池用它，见 fetchAuthorPage。
@@ -957,7 +958,7 @@ export class NativeReels {
    */
   private static async viaExplore(lane: ReelsLane, cursor: string): Promise<NativeReelsPage | null> {
     const page: MobileMediaPage | null = await MobileDiscover.explore(cursor,
-      ApiThrottle.interactive(), ApiThrottle.CLIPS);
+      ApiThrottle.interactive(), ApiThrottle.CLIPS, EXPLORE_LANE_REELS);
     if (page === null) {
       hilog.info(DOMAIN, TAG, 'explore miss cursor=%{public}d', cursor.length);
       return null;

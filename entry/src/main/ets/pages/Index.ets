@@ -169,6 +169,7 @@ import { SessionService } from '../core/SessionService';
 import { TimelineProbe } from '../core/mobileapi/TimelineProbe';
 // 换号时要清掉探索流的页级短缓存（见 forgetAccountMemory）。
 import { MobileDiscover } from '../core/mobileapi/MobileDiscover';
+import { EXPLORE_LANE_FEED } from '../core/mobileapi/ExploreLanes';
 // 换号时要清掉首页翻页的页级短缓存（同上）。
 import { NativeFeed } from '../core/NativeFeed';
 import { StoryCache } from '../core/StoryCache';
@@ -7085,7 +7086,7 @@ struct Index {
    */
   private async loadHomeRecommended(cursor: string): Promise<FeedRecommendedPage> {
     try {
-      const page: SearchPostPage | null = await NativeSearch.recommendedPage(cursor);
+      const page: SearchPostPage | null = await NativeSearch.recommendedPage(cursor, EXPLORE_LANE_FEED);
       if (page === null || page.posts.length === 0) {
         hilog.info(DOMAIN, TAG, 'home recommended empty cursor=%{public}d (%{public}s)',
           cursor.length, NativeSearch.lastDiag());

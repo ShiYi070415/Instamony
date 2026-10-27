@@ -33,7 +33,9 @@
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { util } from '@kit.ArkTS';
 import { ApiThrottle } from '../ApiThrottle';
+import { ExploreLanes, EXPLORE_LANE_SEARCH } from './ExploreLanes';
 import { MobileRequest, MobileResult, MobileOptions } from './MobileRequest';
 import { MobileSession, MobileIdentity } from './MobileSession';
 import { SearchUser } from '../../model/Search';
@@ -80,8 +82,13 @@ export class MobileUserPage {
 }
 
 export class MobileDiscover {
-  /** 探索流用的会话 id（`session_id` 参数；一份够用，不必每发都换）。 */
-  private static sessionId: string = '';
+  /**
+   * 每条探索入口（首页为你推荐 / Reels / 搜索）各自的一条 `session_id`。
+   *
+   * 之前是一个字段、三条入口共用 —— IG 于是把它们当成同一个探索会话，section 组合与排序
+   * 完全一样（"三个探索流内容重复"的一半原因）。现在按入口分开生成，见 laneSession。
+   */
+  private static laneSessions: Map<string, string> = new Map();
   /** 上次探索流给的 `rank_token`（翻页与搜索帖子都要回传）。 */
   private static rankToken: string = '';
   /**
@@ -115,6 +122,9 @@ export class MobileDiscover {
     MobileDiscover.memoAtMs.clear();
     MobileDiscover.inflightPages.clear();
     MobileDiscover.rankToken = '';
+    // 三条入口的 session_id 与跨入口去重台账都属于"上一个账号的探索状态"，一起清。
+    MobileDiscover.laneSessions.clear();
+    ExploreLanes.clear();
     MobileDiscover.epoch++;
     hilog.info(DOMAIN, TAG, 'explore cache cleared (epoch %{public}d)', MobileDiscover.epoch);
   }
@@ -131,9 +141,15 @@ export class MobileDiscover {
    * @param family 走哪条限速家族（见 core/ApiThrottle）。默认 `MOBILE`（搜索推荐网格用）；
    *               **Reels 传 `CLIPS`** —— 它和搜索推荐共用这一发请求，但"视频频道"和"搜索频道"
    *               被限流的概率不同，混在一条家族里会互相拖死。
+   * @param lane 哪条入口在要（见 ExploreLanes 的 EXPLORE_LANE_*）：
+   *             首页为你推荐 / Reels 探索流 / 搜索推荐网格。**它决定两件事**：
+   *             ① 每个入口用自己的一条 `session_id`（IG 会把它们当不同探索会话，排序分叉）；
+   *             ② 跨入口去重（同一张帖子在 10 分钟内只发给一个入口）。
+   *             这就是"三个探索流内容重复"的修法（详见 ExploreLanes 的文件头）。
    */
   static async explore(cursor: string = '', priority: number = ApiThrottle.warm(),
-                      family: string = ApiThrottle.MOBILE): Promise<MobileMediaPage | null> {
+                      family: string = ApiThrottle.MOBILE,
+                      lane: string = EXPLORE_LANE_SEARCH): Promise<MobileMediaPage | null> {
     /*
      * **同一个探索游标只发一发**（单飞 + 短缓存，见 inflightPages / memoPages）。
      *
@@ -145,9 +161,10 @@ export class MobileDiscover {
      * 每一发 1MB 起、还要在全局闸门排队（并发只有 2），等于首屏在跟它抢通道。
      * 合并之后：同时在飞 → 后来者搭车；刚拿回来过（`EXPLORE_MEMO_MS` 内）→ 直接给回那份。
      *
-     * 只合并**同一游标**：不同游标是不同的页，不能混用。
+     * **合并只在同一条入口内**（key 带 lane）：三条入口要的是"同一页但各自去重后的结果"，
+     * 跨入口共享缓存会让它们拿回一模一样的列表 —— 那正是要修的重复问题。
      */
-    const key: string = `explore|${cursor}`;
+    const key: string = `explore|${lane}|${cursor}`;
     const memo: MobileMediaPage | undefined = MobileDiscover.memoPages.get(key);
     const memoAt: number | undefined = MobileDiscover.memoAtMs.get(key);
     if (memo !== undefined && memoAt !== undefined
@@ -163,7 +180,7 @@ export class MobileDiscover {
       return joined;
     }
     const task: Promise<MobileMediaPage | null> =
-      MobileDiscover.exploreOnce(cursor, priority, family);
+      MobileDiscover.exploreOnce(cursor, priority, family, lane);
     const epoch: number = MobileDiscover.epoch;
     MobileDiscover.inflightPages.set(key, task);
     try {
@@ -191,22 +208,19 @@ export class MobileDiscover {
 
   /** 真正发这一发探索请求（合并/缓存见 explore）。 */
   private static async exploreOnce(cursor: string, priority: number,
-                                   family: string): Promise<MobileMediaPage | null> {
+                                   family: string, lane: string): Promise<MobileMediaPage | null> {
     const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
     if (identity === null) {
       hilog.info(DOMAIN, TAG, 'explore skipped: no session');
       return null;
     }
-    if (MobileDiscover.sessionId.length === 0) {
-      // `session_id` 只是个"这一次探索会话"的标识，用设备 uuid 就够（同一台设备 = 同一个会话）。
-      MobileDiscover.sessionId = identity.uuid.length > 0 ? identity.uuid : identity.phoneId;
-    }
+    const sessionId: string = MobileDiscover.laneSession(lane, identity);
     const params: string = 'is_prefetch=false&omit_cover_media=true'
       + `&max_id=${encodeURIComponent(cursor)}`
       + '&module=explore_popular&reels_configuration=hide_hero&use_sectional_payload=true'
       + `&timezone_offset=${encodeURIComponent(`${identity.timezoneOffset}`)}`
       + `&cluster_id=${encodeURIComponent('explore_all:0')}`
-      + `&session_id=${encodeURIComponent(MobileDiscover.sessionId)}`
+      + `&session_id=${encodeURIComponent(sessionId)}`
       + '&include_fixed_destinations=true';
     const started: number = Date.now();
     const result: MobileResult = await MobileRequest.send(
@@ -235,13 +249,73 @@ export class MobileDiscover {
     }
     const cursorNext: string = MobileDiscover.exploreCursor(parsed);
     const more: boolean = MobileDiscover.boolOf(parsed, 'more_available');
+    /*
+     * **跨入口去重**（见 ExploreLanes）：这一页里已经被**别的**入口拿走的帖子剔掉，
+     * 剩下的记到本入口名下。全被占住时 claim 会原样放行（宁可重复一次也别空屏）。
+     */
+    const kept: Array<Object> = MobileDiscover.claimForLane(lane, medias);
     hilog.info(DOMAIN, TAG,
-      'explore ok sections=%{public}d medias=%{public}d more=%{public}s ms=%{public}d bytes=%{public}d',
-      sections.length, medias.length, `${more}`, Date.now() - started, result.bytes);
-    if (medias.length === 0) {
+      'explore ok lane=%{public}s sections=%{public}d medias=%{public}d kept=%{public}d'
+      + ' more=%{public}s ms=%{public}d bytes=%{public}d',
+      lane, sections.length, medias.length, kept.length, `${more}`,
+      Date.now() - started, result.bytes);
+    if (kept.length === 0) {
       return null;
     }
-    return new MobileMediaPage(medias, cursorNext, more, Date.now() - started);
+    return new MobileMediaPage(kept, cursorNext, more, Date.now() - started);
+  }
+
+  /**
+   * 这一页里能发给定入口的那些媒体（按 ExploreLanes 的规则跨入口去重）。
+   *
+   * id 取法和 pushMedia 一致（`pk` → `id` → `strong_id__` → `code`）；
+   * 取不到 id 的条目**一律保留**（不要因为认不出就丢内容）。
+   */
+  private static claimForLane(lane: string, medias: Array<Object>): Array<Object> {
+    const ids: Array<string> = [];
+    for (let index: number = 0; index < medias.length; index++) {
+      const one: Record<string, Object> | null = MobileDiscover.objectOf(medias[index]);
+      ids.push(one === null ? '' : MobileDiscover.firstText(one, ['pk', 'id', 'strong_id__', 'code']));
+    }
+    const allowed: Array<string> = ExploreLanes.claim(lane, ids);
+    // 没有 id 的条目在 claim 里是空串，可能被误伤 —— 单独放行一次。
+    const keep: Array<Object> = [];
+    for (let index: number = 0; index < medias.length; index++) {
+      const id: string = ids[index];
+      if (id.length === 0 || allowed.indexOf(id) >= 0) {
+        keep.push(medias[index]);
+      }
+    }
+    return keep;
+  }
+
+  /**
+   * 每条入口一个 `session_id`（第一次要的时候生成，之后固定）。
+   *
+   * 为什么要分：三条入口打的是同一个 `discover/topical_explore/`，`session_id` 是 IG 用来
+   * 串"这一次探索会话"的；三条共用一个值时，section 组合与排序完全一样 —— 这就是
+   * "三个探索流内容基本重复"的另一半原因（另一半是缓存/去重，见 explore 与 ExploreLanes）。
+   * 用标准 UUID（不用 `uuid:lane` 这种拼接）：IG 可能校验格式，格式不对整发会被拒。
+   */
+  private static laneSession(lane: string, identity: MobileIdentity): string {
+    const cached: string | undefined = MobileDiscover.laneSessions.get(lane);
+    if (cached !== undefined && cached.length > 0) {
+      return cached;
+    }
+    let created: string = '';
+    try {
+      created = util.generateRandomUUID(false);
+    } catch (error) {
+      created = '';
+    }
+    if (created.length === 0) {
+      // 兜底：设备 uuid（至少保证同一台设备内稳定，不会崩）。
+      created = identity.uuid.length > 0 ? identity.uuid : identity.phoneId;
+    }
+    MobileDiscover.laneSessions.set(lane, created);
+    hilog.info(DOMAIN, TAG, 'explore lane=%{public}s session=%{public}s',
+      lane, created.substring(0, 8));
+    return created;
   }
 
   /**
