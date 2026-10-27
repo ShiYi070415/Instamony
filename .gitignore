@@ -33,3 +33,7 @@ tools/agc/credentials.json
 tools/relay/config.json
 tools/relay/state.json
 tools/relay/.relay.lock
+# release keystore (private key -- never commit)
+signing/*.p12
+signing/*.cer
+signing/*.p7b

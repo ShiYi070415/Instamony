@@ -1,1 +1,0 @@
-feat(agc): agc.js 增加 --sa-token 探针 —— 用 AGC 服务账号 key 文件里的私钥签 RS256 JWT（client_assertion 流程）去换 token，并把原始响应原样打出来，用来回答“只有服务账号/API 客户端、没有 OAuth 客户端时能不能跑通”；--token 仍走 client_id/secret 那条（API 客户端）

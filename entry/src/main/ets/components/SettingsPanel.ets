@@ -1,4 +1,4 @@
-﻿/*
+/*
  * 「设定」页面的内容（装在 NavDestination 里，见 pages/Index.ets 的 destinationBuilder）。
  *
  * 结构（标题栏由 HdsNavDestination 提供，正文是一个 List）：
@@ -1925,23 +1925,23 @@ export struct SettingsPanel {
       }
       ListItem() {
         Column({ space: 0 }) {
+          /*
+           * **BYO 中转要的两样东西**（一次性复制走，粘到中转的配置文件里）。
+           *
+           * 放在**这一组的第一项**：它不是日常功能，只是「自己搭中转」时的一次性搬运，
+           * 但用户常常找不到入口（藏在第三项时要滚动），所以提到最上面。
+           * 里面装的是**等同于账号密码的会话 Cookie**：只在需要时点一次，粘完清剪贴板。
+           */
+          this.actionRow('复制中转材料（会话 + 推送 token）', (): void => {
+            this.copyRelayMaterial();
+          })
+          this.cardDivider()
           this.actionRow($r('app.string.settings_export_diag'), (): void => {
             this.exportDiag();
           })
           this.cardDivider()
           this.actionRow($r('app.string.settings_copy_diag'), (): void => {
             this.copyDiag();
-          })
-          this.cardDivider()
-          /*
-           * **BYO 中转要的两样东西**（一次性复制走，粘到中转的配置文件里）。
-           *
-           * 为什么放在诊断这一组：它不是日常功能，只是「自己搭中转」时的一次性搬运 ——
-           * 里面装的是**等同于账号密码的会话 Cookie**，所以只在需要时点一次、点完立刻
-           * 粘到自己的机器上，别留在剪贴板里。
-           */
-          this.actionRow('复制中转材料（会话 + 推送 token）', (): void => {
-            this.copyRelayMaterial();
           })
           this.cardDivider()
           /*
