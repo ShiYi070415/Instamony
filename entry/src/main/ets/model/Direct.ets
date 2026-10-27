@@ -1,4 +1,4 @@
-/*
+﻿/*
  * 私信（Direct）收件箱的模型。
  *
  * 字段名与页面脚本（WebScripts.directInboxScript）一一对应：脚本在页面里把几百 KB 的响应
@@ -134,12 +134,19 @@ export class DirectMessage {
   readonly shareAvatar: string;
   /** 卡片正文（帖子 caption / XMA 的 caption_body_text；可能为空）。 */
   readonly shareCaption: string;
+  /**
+   * 分享内容的**视频地址**（XMA 的 `playable_url` / 帖子媒体里的 `video_versions[].url`；空串 = 图片）。
+   *
+   * 为什么需要它：卡片点开后进的是**应用内的 reels 类页面**（需求），那一页要真的有东西可播 ——
+   * 只有封面的话点进视频分享就是个静止画面。
+   */
+  readonly sharePlayable: string;
 
   constructor(id: string, userId: string, mine: boolean, tsMs: number, kind: string,
               text: string, mediaUrl: string = '', isVideo: boolean = false,
               shareCode: string = '', shareUrl: string = '', shareIsVideo: boolean = false,
               shareKind: string = '', shareCover: string = '', shareUser: string = '',
-              shareAvatar: string = '', shareCaption: string = '') {
+              shareAvatar: string = '', shareCaption: string = '', sharePlayable: string = '') {
     this.id = id;
     this.userId = userId;
     this.mine = mine;
@@ -156,6 +163,7 @@ export class DirectMessage {
     this.shareUser = shareUser;
     this.shareAvatar = shareAvatar;
     this.shareCaption = shareCaption;
+    this.sharePlayable = sharePlayable;
   }
 }
 
@@ -169,6 +177,8 @@ export class ShareCard {
   caption: string = '';
   target: string = '';
   video: boolean = false;
+  /** 视频地址（见 DirectMessage.sharePlayable；空串 = 图片分享）。 */
+  playable: string = '';
 }
 
 /** 一条会话的消息页（照 REST 那条的形状给）。 */
@@ -481,7 +491,8 @@ export class DirectMapper {
       messages.push(new DirectMessage(id, userId, me.length > 0 && userId === me, tsMs, kind,
         text, mediaUrl, DirectMapper.hasVideoMedia(item), DirectMapper.shareCodeOf(item),
         DirectMapper.shareUrlOf(item), DirectMapper.shareIsVideoOf(item),
-        gqlCard.kind, gqlCard.cover, gqlCard.user, gqlCard.avatar, gqlCard.caption));
+        gqlCard.kind, gqlCard.cover, gqlCard.user, gqlCard.avatar, gqlCard.caption,
+        gqlCard.playable));
     }
     if (messages.length === 0) {
       // 找到数组了但一条都没能用 —— 把第一条的原样键名和几个字段打出来（诊断用）。
@@ -1002,7 +1013,8 @@ export class DirectMapper {
         me.length > 0 && userId === me, micros > 0 ? Math.round(micros / 1000) : 0,
         kind, text, mediaUrl, isVideo, DirectMapper.shareCodeOf(item),
         DirectMapper.shareUrlOf(item), DirectMapper.shareIsVideoOf(item),
-        card.kind, card.cover, card.user, card.avatar, card.caption));
+        card.kind, card.cover, card.user, card.avatar, card.caption,
+        card.playable));
     }
     // items 是"新在前"，界面上按时间正序排（老的在上）。
     messages.sort((a: DirectMessage, b: DirectMessage): number => a.tsMs - b.tsMs);
@@ -1042,7 +1054,8 @@ export class DirectMapper {
     return new DirectMessage(id, userId, ownId.length > 0 && userId === ownId,
       micros > 0 ? Math.round(micros / 1000) : Date.now(), kind, text, mediaUrl,
       DirectMapper.hasVideoMedia(item), shareCode, shareUrl, shareVideo,
-      card.kind, card.cover, card.user, card.avatar, card.caption);
+      card.kind, card.cover, card.user, card.avatar, card.caption,
+      card.playable);
   }
 
   /**
@@ -1242,6 +1255,25 @@ export class DirectMapper {
   /** 这条消息的媒体里有没有视频（缩略图上盖一颗播放标记用）。 */
 
   /**
+   * 一段媒体里的**视频地址**（`video_versions[]` 里第一档；没有就给空串）。
+   *
+   * 用途：卡片点开要进应用内的 reels 类页面，那一页得真有视频可播（见 DirectMessage.sharePlayable）。
+   */
+  private static videoUrlOf(record: Record<string, Object>): string {
+    const versions: Array<Object> = JsonRead.arrayOf(record, 'video_versions');
+    for (let index: number = 0; index < versions.length && index < 2; index++) {
+      const one: Record<string, Object> | null = JsonRead.asRecord(versions[index]);
+      if (one !== null) {
+        const url: string = JsonRead.strOf(one, 'url');
+        if (url.length > 0) {
+          return url;
+        }
+      }
+    }
+    return JsonRead.strOf(record, 'playable_url');
+  }
+
+  /**
    * 依次从这些键里取第一个非空字符串。
    *
    * XMA（`xma_media_share` / `generic_xma` …）的字段名每个 App 版本都不一样 —— 同一个"作者名"，
@@ -1313,6 +1345,9 @@ export class DirectMapper {
         || JsonRead.arrayOf(one, 'video_versions').length > 0) {
         card.video = true;
       }
+      if (card.playable.length === 0) {
+        card.playable = DirectMapper.videoUrlOf(one);
+      }
     }
     // ---- XMA：preview_url + title_text + caption_body_text + target_url ----
     const attachments: Array<Object> = JsonRead.arrayOf(item, type.length > 0 ? type : 'generic_xma');
@@ -1322,8 +1357,10 @@ export class DirectMapper {
         continue;
       }
       if (card.cover.length === 0) {
+        /* 只认"预览图"那几个键名。**`header_icon_url` 不能当封面**：那是卡片左侧那颗小头像
+           （几十像素的方图），放大铺满卡片就是一张糊掉的缩略图。 */
         card.cover = DirectMapper.firstOf(one,
-          ['preview_url', 'preview_image_url', 'thumbnail_url', 'header_icon_url']);
+          ['preview_url', 'preview_image_url', 'thumbnail_url']);
       }
       if (card.user.length === 0) {
         // 作者名：IG 自己画在卡片头部那一栏的就是 `header_title_text`，其余按版本依次试。
@@ -1337,6 +1374,12 @@ export class DirectMapper {
           }
         }
       }
+      if (card.avatar.length === 0) {
+        /* **作者头像**（用户报："用户头像没显示"）：XMA 里就是头部那颗小图 `header_icon_url`，
+           别的版本可能叫 `header_icon` / `sender_image_url`。 */
+        card.avatar = DirectMapper.firstOf(one,
+          ['header_icon_url', 'header_icon', 'sender_image_url', 'preview_icon_url']);
+      }
       if (card.caption.length === 0) {
         card.caption = DirectMapper.firstOf(one,
           ['caption_body_text', 'preview_subtitle_text', 'title_text']);
@@ -1347,6 +1390,9 @@ export class DirectMapper {
       if (JsonRead.strOf(one, 'playable_url').length > 0
         || JsonRead.boolOf(one, 'is_playable')) {
         card.video = true;
+      }
+      if (card.playable.length === 0) {
+        card.playable = JsonRead.strOf(one, 'playable_url');
       }
     }
     // 少数版本把这几栏放在 item 自己身上（不在附件里）。

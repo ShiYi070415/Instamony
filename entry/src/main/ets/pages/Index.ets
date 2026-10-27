@@ -118,7 +118,7 @@ import {
 import { CommentItem, CommentsPayload, LikePayload, SavePayload } from '../model/Comment';
 import { FeedMapper } from '../model/FeedMapper';
 import { FeedStatus } from '../model/FeedStatus';
-import { MediaPost } from '../model/MediaPost';
+import { MediaPost, MediaPostInit } from '../model/MediaPost';
 import {
   FollowClickResult,
   FollowOutcome,
@@ -9238,29 +9238,57 @@ struct Index {
   /**
    * 打开私信里"转发的帖子 / Reel / 链接卡片"。
    *
-   * 目标从 `DirectMessage` 的三个分享字段来（见 model/Direct 的 DirectMapper.shareCodeOf）：
-   *   · 有**帖子短码** → 拼规范的 Instagram 地址（Reel 用 /reel/，其余 /p/）；
-   *   · 只有**外部链接** → 直接用那个链接（链接卡片 / XMA 的 target_url）。
-   * 打开方式与信息流里点帖子一致（`openWeb`）：那条路已经有完整的网页外壳与返回键，
-   * 不需要再为"私信里的一条分享"新造一个原生页。
+   * 需求（用户原话）：**"点击卡片后也是跳转网页，需要根据图片/视频参数跳转 reels 类页面"** ——
+   * 所以不再 `openWeb`，而是用卡片上已经解析出来的那几样东西（封面 / 视频地址 / 作者 / 正文）
+   * **就地合成一条帖子**，进应用内的 reels 类页面（`PROFILE_REELS_PAGE`，整屏竖向翻页 + 光感评论框）。
+   *
+   * 三点讲究：
+   *   · 图片分享也进这一页：那页在没有视频地址时只画封面（见 ReelsPage 的播放分支），
+   *     观感就是"一条竖屏的图"，不用为图片再做一个页面；
+   *   · 短码为空（XMA 只给了链接）时用消息 id 造一个，保证这一页的键唯一、能返回；
+   *   · **外链卡片仍然走网页**：`link` 卡片的目标是站外地址，reels 页面放不了它。
    */
   private openDirectShare(message: DirectMessage): void {
-    let url: string = '';
-    if (message.shareCode.length > 0) {
-      const kind: string = message.shareIsVideo ? 'reel' : 'p';
-      url = `https://www.instagram.com/${kind}/${message.shareCode}/`;
-    } else if (message.shareUrl.length > 0) {
-      url = message.shareUrl;
-    }
-    if (url.length === 0) {
-      // 载荷只给了封面、没有短码也没有链接：给一句提示，别让用户觉得"点了没反应"。
-      hilog.info(DOMAIN, TAG, 'direct share no target kind=%{public}s', message.shareKind);
-      this.toast('这条分享没有可打开的链接');
+    const code: string = message.shareCode;
+    const cover: string = message.shareCover.length > 0 ? message.shareCover : message.mediaUrl;
+    const playable: string = message.sharePlayable;
+    const isVideo: boolean = playable.length > 0 || message.shareIsVideo
+      || message.shareKind === 'video';
+    // 站外链接（链接卡片）：这一条确实该用浏览器打开。
+    if (message.shareKind === 'link' && message.shareUrl.length > 0
+      && code.length === 0) {
+      this.openWeb(message.shareUrl);
       return;
     }
-    hilog.info(DOMAIN, TAG, 'direct share open code=%{public}d url=%{public}s',
-      message.shareCode.length, url.substring(0, 80));
-    this.openWeb(url);
+    if (cover.length === 0 && playable.length === 0) {
+      // 载荷只给了文字/没有画面：给一句提示，别让用户觉得"点了没反应"。
+      hilog.info(DOMAIN, TAG, 'direct share no media kind=%{public}s', message.shareKind);
+      this.toast('这条分享没有可打开的内容');
+      return;
+    }
+    const key: string = code.length > 0 ? code : `dm-${message.id}`;
+    const init: MediaPostInit = {
+      id: key,
+      shortcode: key,
+      caption: message.shareCaption,
+      mediaType: isVideo ? 'clips' : 'image',
+      displayUrl: cover,
+      likeCount: 0,
+      commentCount: 0,
+      takenAtMs: message.tsMs,
+      ownerUsername: message.shareUser,
+      ownerAvatarUrl: message.shareAvatar,
+      videoUrl: playable
+    };
+    this.profileReelsVm = new ProfileReelsViewModel([new MediaPost(init)], key, false,
+      (): Promise<ProfileStreamPage> => Promise.resolve(new ProfileStreamPage([], false)));
+    hilog.info(DOMAIN, TAG, 'direct share open reels kind=%{public}s video=%{public}d cover=%{public}d',
+      message.shareKind, playable.length, cover.length);
+    const names: Array<string> = this.navStack.getAllPathName();
+    if (names.length > 0 && names[names.length - 1] === PROFILE_REELS_PAGE) {
+      return;
+    }
+    this.navStack.pushPath({ name: PROFILE_REELS_PAGE });
   }
 
   private openDirectThread(thread: DirectThread): void {
