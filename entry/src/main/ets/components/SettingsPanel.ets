@@ -512,9 +512,10 @@ export struct SettingsPanel {
    * 否则「确定」会把用户选中的那份换成相邻的另一份。
    */
   private deleteProxy(index: number): void {
-    if (!AppProxy.remove(index)) {
-      return;
-    }
+    // 不管 AppProxy 那边"应用到系统接口"成不成功，**删掉的这一份一定要从界面上消失**：
+    // 之前用 `if (!AppProxy.remove(index)) return;` 挡住了刷新，删最后一份时 apply 抛异常
+    // 就会让面板停在旧列表上（真机表现："点删除没反应，退出设置页再进来才没了"）。
+    AppProxy.remove(index);
     this.refreshProxyNames();
     if (this.manageDraft === index) {
       this.manageDraft = -1;

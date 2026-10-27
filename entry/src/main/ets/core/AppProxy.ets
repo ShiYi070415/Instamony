@@ -187,7 +187,14 @@ export class AppProxy {
     return true;
   }
 
-  /** 选中第 index 份。 */
+  /**
+   * 选中第 index 份。
+   *
+   * **返回值只表示"改动成不成立"，不表示"系统接口应用成功"**。
+   * 之前这里把 `applyEntry` 的结果直接当返回值，于是代理已经切过去、只是
+   * `setAppHttpProxy` 抛了个异常时，UI 会当作"没选中"而不更新 —— 用户看到的是
+   * "点了没反应"。应用结果只记日志（apply 内部已经打了）。
+   */
   static select(index: number): boolean {
     if (index < 0 || index >= AppProxy.entries.length) {
       return false;
@@ -195,7 +202,7 @@ export class AppProxy {
     AppProxy.activeIndexValue = index;
     AppProxy.persistEntries();
     if (AppProxy.enabledFlag) {
-      return AppProxy.applyEntry(AppProxy.entries[index]);
+      AppProxy.applyEntry(AppProxy.entries[index]);
     }
     return true;
   }
@@ -205,6 +212,7 @@ export class AppProxy {
    *
    * 改的若是**当前选中**那一份、且开关开着，就立刻重新应用到系统接口 ——
    * 否则用户改完 IP 却还在走旧隧道（这类"改了没生效"的反馈最难查）。
+   * 返回值同 select：只表示改动成不成立。
    */
   static update(index: number, entry: ProxyEntry): boolean {
     if (index < 0 || index >= AppProxy.entries.length || !entry.enabled()) {
@@ -213,7 +221,7 @@ export class AppProxy {
     AppProxy.entries[index] = entry;
     AppProxy.persistEntries();
     if (AppProxy.enabledFlag && index === AppProxy.activeIndexValue) {
-      return AppProxy.applyEntry(entry);
+      AppProxy.applyEntry(entry);
     }
     return true;
   }
@@ -223,6 +231,10 @@ export class AppProxy {
    *
    * 删的若是当前选中项：选中位往后顺延一位（没有后一位就往前取），列表空了就清成 -1；
    * 开关开着的话，新的选中项立刻生效；一份不剩时回到直连（开关本身也置回关）。
+   *
+   * **返回值同 select/update：只表示删没删掉**，系统接口应用失败不影响（否则
+   * "删掉最后一份时清代理"这一步失败会让外层以为没删，UI 停在旧列表上 ——
+   * 真机上表现就是"点删除没反应，退出设置页再进来才没了"）。
    */
   static remove(index: number): boolean {
     if (index < 0 || index >= AppProxy.entries.length) {
@@ -233,7 +245,8 @@ export class AppProxy {
       AppProxy.activeIndexValue = -1;
       AppProxy.enabledFlag = false;
       AppProxy.persistEntries();
-      return AppProxy.apply(new AppProxyConfig());
+      AppProxy.apply(new AppProxyConfig());
+      return true;
     }
     if (index < AppProxy.activeIndexValue) {
       AppProxy.activeIndexValue -= 1;
@@ -243,7 +256,7 @@ export class AppProxy {
     AppProxy.persistEntries();
     const current: ProxyEntry | null = AppProxy.currentEntry();
     if (AppProxy.enabledFlag && current !== null) {
-      return AppProxy.applyEntry(current);
+      AppProxy.applyEntry(current);
     }
     return true;
   }
