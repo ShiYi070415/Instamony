@@ -27,7 +27,7 @@ import { EngageState } from '../core/NativeEngage';
 import { Reel, ReelStreamVm } from '../model/Reel';
 import { MediaPost } from '../model/MediaPost';
 import { ProfileStreamPage } from '../model/Profile';
-import { MediaVideo, NativeMediaInfo } from '../core/NativeMediaInfo';
+import { MediaDetail, MediaVideo, NativeMediaInfo } from '../core/NativeMediaInfo';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'ProfileReelsVM';
@@ -39,6 +39,8 @@ export class ProfileReelsViewModel implements ReelStreamVm {
   private videos: Map<string, MediaVideo> = new Map<string, MediaVideo>();
   /** 正在取视频地址的 shortcode（防同一集重复请求）。 */
   private fetching: Set<string> = new Set<string>();
+  /** 已经补过整份详情的键（shortcode 优先，见 ensureDetail）—— 同一条不重复请求。 */
+  private fetched: Set<string> = new Set<string>();
   private reels: Array<Reel> = [];
   /** 当前看到第几条（切页/被压住后重建时靠它恢复位置）。 */
   private active: number = 0;
@@ -80,8 +82,8 @@ export class ProfileReelsViewModel implements ReelStreamVm {
     hilog.info(DOMAIN, TAG, 'open n=%{public}d anchor=%{public}d more=%{public}s',
       this.reels.length, at, `${hasMore}`);
     // 当前这条的视频地址马上取（`onReels` 此刻还是空实现，取回来时会已经被组件接上）。
-    this.ensureVideo(this.active);
-    this.ensureVideo(this.active + 1);
+    this.ensureDetail(this.active);
+    this.ensureDetail(this.active + 1);
   }
 
   list(): Array<Reel> {
@@ -107,8 +109,8 @@ export class ProfileReelsViewModel implements ReelStreamVm {
    */
   setActiveIndex(index: number): void {
     this.active = index > 0 ? index : 0;
-    this.ensureVideo(this.active);
-    this.ensureVideo(this.active + 1);
+    this.ensureDetail(this.active);
+    this.ensureDetail(this.active + 1);
   }
 
   /**
@@ -161,49 +163,112 @@ export class ProfileReelsViewModel implements ReelStreamVm {
   }
 
   /**
-   * 第 index 条还没有视频地址就去取一次（见文件头）。
+   * 第 index 条进页时**按短码 / 媒体 id 补一次整份详情**（视频地址、正文、作者、三个计数）。
    *
-   * 拿到之后**原地改这条 Reel**（`videoUrl` 是可变字段，ReelsPage 那一页用 `@ObjectLink`
-   * 订阅它，见 ReelSlide）：补到地址那一刻那一页就地重绘、把播放器挂上。
+   * 为什么从"只补视频地址"扩成"补整份详情"（用户需求原话："进入 reels 类页面后通过对应
+   * 帖子/视频链接获取数据，实现动作区功能和显示正文内容"）：
+   * 从私信卡片点进来的那条**只有封面和一小截正文**（载荷里就这些），动作区下面那几个数字
+   * 全是 0、正文也可能不全。`media/{pk}/info/` 那一发响应里视频地址、正文、作者名/头像、
+   * 点赞数、评论数都有 —— 一次请求补齐四样，比再各开一条路省事，也不额外多发请求。
    *
-   * 为什么不换一条新 Reel、重报整列表：ForEach 认键，键没变时它不会重跑 item builder；
-   * 而把键改成"带有没有视频地址"又会让 Swiper 在替换子节点的过程中把当前页往前带
-   * （实测：一补地址页面自己往下翻了一条）。原地改两头都没有这个问题。
+   * 拿到之后**原地改这条 Reel**：ReelsPage 那一页用 `@ObjectLink` 订阅它（见 ReelSlide），
+   * 补到数据那一刻就地重绘、把播放器挂上。为什么不换一条新 Reel、重报整列表：
+   * ForEach 认键，键没变时它不会重跑 item builder；而把键改成"带不带有数据"又会让 Swiper
+   * 在替换子节点的过程中把当前页往前带（实测：一补数据页面自己往下翻了一条）。
    */
-  private ensureVideo(index: number): void {
+  private ensureDetail(index: number): void {
     if (index < 0 || index >= this.reels.length) {
       return;
     }
     const reel: Reel = this.reels[index];
-    // 短码也算"能定位"：这一页（个人页的视频分页）的条目常常只有短码，
-    // 没有数字 id —— 交给 NativeMediaInfo 用短码去换真 pk（见它的 detailFor）。
-    if (reel.videoUrl.length > 0 || (reel.mediaId.length === 0 && reel.shortcode.length === 0)) {
+    // 短码也算"能定位"：这两条路的条目常常只有短码，没有数字 id ——
+    // 交给 NativeMediaInfo 用短码去换真 pk（见它的 detailFor）。
+    if (reel.mediaId.length === 0 && reel.shortcode.length === 0) {
       return;
     }
-    if (this.fetching.has(reel.shortcode)) {
+    const key: string = reel.shortcode.length > 0 ? reel.shortcode : reel.mediaId;
+    if (this.fetched.has(key) || this.fetching.has(key)) {
       return;
     }
-    this.fetching.add(reel.shortcode);
-    const shortcode: string = reel.shortcode;
-    NativeMediaInfo.videoFor(reel.mediaId, shortcode).then((video: MediaVideo | null): void => {
-      this.fetching.delete(shortcode);
-      if (video === null || !video.ok()) {
-        hilog.warn(DOMAIN, TAG, 'video missing code=%{public}s why=%{public}s',
-          shortcode, NativeMediaInfo.lastDetail());
+    this.fetching.add(key);
+    NativeMediaInfo.detailFor(reel.mediaId, reel.shortcode).then((detail: MediaDetail | null): void => {
+      this.fetching.delete(key);
+      if (detail === null) {
+        hilog.warn(DOMAIN, TAG, 'detail missing key=%{public}s why=%{public}s',
+          key, NativeMediaInfo.lastDetail());
         return;
       }
+      this.fetched.add(key);
+      ProfileReelsViewModel.applyDetail(reel, detail);
       // 翻页重建列表时要能把这地址贴回去（见 toReels）。
-      this.videos.set(shortcode, video);
-      reel.videoUrl = video.display;
-      reel.originalVideoUrl = video.original;
-      // 记一份"这条来自哪张帖子"的封面信息不用重算：Reel 里那几个字段本来就没变。
+      if (detail.hasVideo()) {
+        this.videos.set(key, new MediaVideo(detail.display, detail.original,
+          detail.width, detail.height, detail.avatarUrl));
+      }
       this.publish();
-      hilog.info(DOMAIN, TAG, 'video ready code=%{public}s', shortcode);
+      hilog.info(DOMAIN, TAG,
+        'detail ready key=%{public}s video=%{public}d cap=%{public}d like=%{public}d comment=%{public}d',
+        key, detail.display.length, detail.caption.length, detail.likeCount, detail.commentCount);
     }).catch((error: Error): void => {
-      this.fetching.delete(shortcode);
-      hilog.warn(DOMAIN, TAG, 'video failed code=%{public}s: %{public}s',
-        shortcode, error.message);
+      this.fetching.delete(key);
+      hilog.warn(DOMAIN, TAG, 'detail failed key=%{public}s: %{public}s',
+        key, error.message);
     });
+  }
+
+  /**
+   * 把一份详情**原地**贴到这条 Reel 上（只补空的那几项，不覆盖数据源已经给过的值）。
+   *
+   * 正文例外：详情那边一般更全（私信载荷里的 caption 常常被截过），所以**谁长用谁**。
+   */
+  private static applyDetail(reel: Reel, detail: MediaDetail): void {
+    /*
+     * 真 pk 优先：从私信卡片进来的那条 `mediaId` 一开始只是短码，而点赞/收藏/评论这几条
+     * 移动端接口都只认数字 pk（见 core/mobileapi/MobileEngage.mediaPkFor）。详情里给了
+     * 就从现在起换成它 —— 后面每个动作都少绕一次 oembed。
+     */
+    if (detail.mediaId.length > 0 && !ProfileReelsViewModel.isNumeric(reel.mediaId)) {
+      reel.mediaId = detail.mediaId;
+    }
+    if (reel.videoUrl.length === 0 && detail.hasVideo()) {
+      reel.videoUrl = detail.display;
+      reel.originalVideoUrl = detail.original;
+    }
+    if (detail.caption.length > reel.caption.length) {
+      reel.caption = detail.caption;
+    }
+    if (reel.author.length === 0 && detail.username.length > 0) {
+      reel.author = detail.username;
+    }
+    if (reel.avatarUrl.length === 0 && detail.avatarUrl.length > 0) {
+      reel.avatarUrl = detail.avatarUrl;
+    }
+    if (reel.likeCount <= 0 && detail.likeCount > 0) {
+      reel.likeCount = detail.likeCount;
+    }
+    if (reel.commentCount <= 0 && detail.commentCount > 0) {
+      reel.commentCount = detail.commentCount;
+    }
+    if (detail.likedKnown) {
+      reel.liked = detail.liked;
+      // 台账也记一笔：这一页的"红心"要靠它，否则下次进来又回灰（见 core/EngageState）。
+      EngageState.rememberLiked(reel.mediaId.length > 0 ? reel.mediaId : reel.shortcode,
+        detail.liked);
+    }
+  }
+
+  /** 这串是不是纯数字（媒体 pk 的判据；短码里有字母，一眼就能分开）。 */
+  private static isNumeric(text: string): boolean {
+    if (text.length === 0) {
+      return false;
+    }
+    for (let index: number = 0; index < text.length; index++) {
+      const ch: string = text.charAt(index);
+      if (ch < '0' || ch > '9') {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**

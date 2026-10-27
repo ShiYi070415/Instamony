@@ -971,15 +971,16 @@ export struct DirectThreadPage {
       // 悬浮在封面左上角的用户资讯栏（带沉浸光感底；宽度跟着文本自适应，见 shareUserRow）。
       if (message.shareUser.length > 0 || message.shareAvatar.length > 0) {
         Toggle({ type: ToggleType.Button, isOn: false }) {
-          this.shareUserRow(message, 10, 16, this.shareCardWidth(message) - 26)
+          // 需求："视频卡片的用户资讯栏内容大小增加" —— 头像 20、名字 12，胶囊随之放大。
+          this.shareUserRow(message, 12, 20, this.shareCardWidth(message) - 30)
         }
-        .padding({ left: 5, right: 8, top: 3, bottom: 3 })
-        .borderRadius(11)
+        .padding({ left: 6, right: 9, top: 4, bottom: 4 })
+        .borderRadius(13)
         // 底色交给材质（同帖子卡片那条说明）。
         .backgroundColor(Color.Transparent)
         .selectedColor(Color.Transparent)
         .attributeModifier(new SurfaceModifier(this.cardThickness, true))
-        .position({ x: 7, y: 7 })
+        .position({ x: 8, y: 8 })
         .hitTestBehavior(HitTestMode.None)
       }
       // 垂直横向置中：播放三角（系统符号；纯图标、无按钮、不吃触摸）。

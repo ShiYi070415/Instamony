@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Reels 视频流的数据模型。
  *
  * 数据来自页面侧的小脚本抽取（见 bridge/WebScripts 的 reelsScript）：
@@ -85,7 +85,8 @@ export class Reel {
   readonly coverUrl: string;
   readonly width: number;
   readonly height: number;
-  readonly author: string;
+  /** 作者名（**可变**：从私信卡片点开的那条是先有封面、进页后再按短码补数据的，见 ProfileReelsViewModel.ensureDetail）。 */
+  author: string;
   /**
    * 作者的**数字 id**（`pk`）。空 = 这一条没给。
    *
@@ -93,7 +94,8 @@ export class Reel {
    * （见 pages/Index.followReelAuthor）。拿不到就不画那颗按钮。
    */
   readonly authorId: string;
-  readonly avatarUrl: string;
+  /** 作者头像（同 author，进页后可能被补上）。 */
+  avatarUrl: string;
   readonly isVerified: boolean;
   readonly music: string;
   /**
@@ -102,12 +104,13 @@ export class Reel {
    * 和 `music` 分开：以前个人主页那条路把配文塞进 `music`（那一栏本来是给"音乐名"的），
    * 现在正文有自己的位置，音乐名照旧单独一行。
    */
-  readonly caption: string;
+  caption: string;
   /**
    * 点赞数（**可变**：Reels 页点一下就地 ±1，见 ReelsPage.tapLike）。
    */
   likeCount: number;
-  readonly commentCount: number;
+  /** 评论数（同 caption：进页后按短码补数据时会就地改）。 */
+  commentCount: number;
   /**
    * **转发数**（可变：点一下就地 ±1，见 ReelsPage.tapRepost）。
    *
@@ -140,7 +143,8 @@ export class Reel {
    * 那条查询只给封面、不给视频地址（真机实测，见 core/NativeMediaInfo 的文件头），
    * 得拿 id 去 `/api/v1/media/{id}/info/` 补一次。空串 = 不知道。
    */
-  readonly mediaId: string;
+  /** 同 author：从私信卡片点开的那条一开始只有短码，进页补到详情后换成真 pk（见 ProfileReelsViewModel.applyDetail）。 */
+  mediaId: string;
   /**
    * 本机**点赞了没有**（可变：Reels 页右侧那颗心按它画，点一下乐观翻转）。
    *

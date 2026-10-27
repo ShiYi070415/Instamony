@@ -1,4 +1,4 @@
-/*
+﻿/*
  * 一条媒体的**视频地址**：按需去 IG 的 REST 取一次。
  *
  * ## 为什么需要它
@@ -112,11 +112,27 @@ export class MediaDetail {
   readonly imageAspectMin: number;
   /** 转发数（`media_repost_count`；0 = 没给）。 */
   readonly repostCount: number;
+  /**
+   * 这几项是给**"从私信卡片点开的那条帖子"**用的（需求："进入 reels 类页面后通过对应
+   * 帖子/视频链接获取数据，实现动作区功能和显示正文内容"）：`media/{pk}/info/` 这一发响应里
+   * 本来就有正文、作者名和三个计数，不取白不取 —— 私信那条载荷往往只有封面和一小截 caption。
+   */
+  readonly caption: string;
+  readonly username: string;
+  readonly likeCount: number;
+  readonly commentCount: number;
+  /** 本机点赞过没有（载荷里有 `has_liked` 时才有意义，见 `likedKnown`）。 */
+  readonly liked: boolean;
+  readonly likedKnown: boolean;
+  /** 这条媒体的**数字 pk**（从 `id` 的 `<媒体pk>_<作者pk>` 里拆出来；空 = 响应没给）。 */
+  readonly mediaId: string;
 
   constructor(display: string, original: string, width: number, height: number, avatarUrl: string,
               images: Array<string>, originalImages: Array<string>, takenAtMs: number,
               saved: boolean = false, savedKnown: boolean = false, imageAspectMin: number = 0,
-              repostCount: number = 0) {
+              repostCount: number = 0, caption: string = '', username: string = '',
+              likeCount: number = 0, commentCount: number = 0, liked: boolean = false,
+              likedKnown: boolean = false, mediaId: string = '') {
     this.display = display;
     this.original = original.length > 0 ? original : display;
     this.width = width;
@@ -129,6 +145,13 @@ export class MediaDetail {
     this.savedKnown = savedKnown;
     this.imageAspectMin = imageAspectMin;
     this.repostCount = repostCount;
+    this.caption = caption;
+    this.username = username;
+    this.likeCount = likeCount;
+    this.commentCount = commentCount;
+    this.liked = liked;
+    this.likedKnown = likedKnown;
+    this.mediaId = mediaId;
   }
 
   /** 有没有视频地址。 */
@@ -144,7 +167,9 @@ export class MediaDetail {
   /** 这一发到底有没有捞到东西（全是空的就该当失败，别去替换列表）。 */
   useful(): boolean {
     return this.display.length > 0 || this.images.length > 0
-      || this.avatarUrl.length > 0 || this.takenAtMs > 0;
+      || this.avatarUrl.length > 0 || this.takenAtMs > 0
+      || this.caption.length > 0 || this.likeCount > 0 || this.commentCount > 0
+      || this.username.length > 0;
   }
 }
 
@@ -162,6 +187,15 @@ interface ImageVersionsDto {
 
 interface MediaItemDto {
   video_versions?: Array<VideoVersionDto>;
+  /** 正文（`caption.text`；有的版本直接给 `caption_text`）。 */
+  caption?: CaptionDto;
+  caption_text?: string;
+  /** 三个计数：动作区下面的数字（拿不到就是 undefined）。 */
+  like_count?: number;
+  comment_count?: number;
+  /** 单条媒体的精确 id（`<媒体pk>_<作者pk>` 那种形状）。 */
+  id?: string;
+  code?: string;
   /** 图片候选：多图帖里**每个子媒体**各有一份（见 carousel_media）。 */
   image_versions2?: ImageVersionsDto;
   /**
@@ -190,9 +224,16 @@ interface MediaItemDto {
 }
 
 interface MediaUserDto {
+  username?: string;
+  full_name?: string;
   profile_pic_url?: string;
   profile_pic_url_hd?: string;
   hd_profile_pic_url_info?: VideoVersionDto;
+}
+
+/** 正文对象（`caption.text`）。 */
+interface CaptionDto {
+  text?: string;
 }
 
 interface MediaInfoDto {
@@ -388,9 +429,23 @@ export class NativeMediaInfo {
       ? (item.media_repost_count ?? 0) : (item.repost_count ?? 0);
     const detail: MediaDetail = new MediaDetail(display, original, width, height,
       NativeMediaInfo.avatarOf(item.user), images, originalImages, takenAt,
-      item.has_saved === true, savedKnown, images.length > 1 ? minAspect : 0, reposts);
+      item.has_saved === true, savedKnown, images.length > 1 ? minAspect : 0, reposts,
+      NativeMediaInfo.captionOf(item), item.user?.username ?? '',
+      item.like_count ?? 0, item.comment_count ?? 0,
+      item.has_liked === true || item.viewer_has_liked === true,
+      item.has_liked !== undefined || item.viewer_has_liked !== undefined,
+      NativeMediaInfo.pkOf(item.id ?? ''));
     NativeMediaInfo.detail = detail.useful() ? '-' : 'empty';
     return detail.useful() ? detail : null;
+  }
+
+  /** 正文（两个字段名都试；都没有给空串）。 */
+  private static captionOf(item: MediaItemDto): string {
+    const direct: string = item.caption_text ?? '';
+    if (direct.length > 0) {
+      return direct;
+    }
+    return item.caption?.text ?? '';
   }
 
   /**
