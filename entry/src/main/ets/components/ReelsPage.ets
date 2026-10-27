@@ -267,6 +267,40 @@ const LONG_PRESS_SIDE_MS: number = 300;
 const SPEED_ZONE_RATIO: number = 0.3;
 
 /**
+ * 长按结束之后**这么短时间内的一下点击不算"双击的第一下"**
+ * （需求："长按不计入点赞手势的第一步"）。
+ *
+ * 为什么需要：长按松手时系统会补一次 Tap，TapGesture(count: 2) 会把它记成第一下 ——
+ * 于是"长按 2 倍速 → 再点一下"就成了双击点赞（用户报的就是这个）。
+ * 600ms：比双击窗口宽一点，又短到"松手马上真想双击"也不至于被误吞太多。
+ */
+const HOLD_TAP_GUARD_MS: number = 600;
+
+/**
+ * 长按结束时刻的**跨组件共享门闩**。
+ *
+ * 双击点赞挂在页面根节点（ReelsPage），而长按状态分散在页面级 pageSpeed/pageHold 与
+ * ReelSlide 的 speedBoost/holdPaused 两处。用一个小静态类传这一个时间戳，
+ * 比在组件之间加回调省事、也不会漏掉某一条路径。
+ */
+export class ReelHoldGate {
+  static lastEndMs: number = 0;
+
+  /** 记一次"长按刚结束"。 */
+  static markEnd(): void {
+    ReelHoldGate.lastEndMs = Date.now();
+  }
+
+  /** 最近 windowMs 内长按刚结束吗（双击点赞据此跳过）。 */
+  static recent(windowMs: number): boolean {
+    if (ReelHoldGate.lastEndMs <= 0) {
+      return false;
+    }
+    return Date.now() - ReelHoldGate.lastEndMs < windowMs;
+  }
+}
+
+/**
  * **信息层护栏**：手指落在这两条带子里时，我们不再处理"单击暂停/长按"。
  *
  * 为什么需要：信息层（作者行 / 正文 / 动作栏）是 `HitTestMode.Transparent` 盖在画面上的
@@ -673,6 +707,7 @@ struct ReelSlide {
    * 什么都不做（幂等，连点两次也不会把状态翻回去）。
    */
   private onHoldEnd(): void {
+    ReelHoldGate.markEnd();
     const mode: string = this.longPressMode;
     this.longPressMode = '';
     if (mode === 'speed') {
@@ -2990,6 +3025,15 @@ export struct ReelsPage {
           const fingers: Array<FingerInfo> = event.fingerList;
           const x: number = fingers.length > 0 ? fingers[0].localX : -1;
           const y: number = fingers.length > 0 ? fingers[0].localY : -1;
+          /*
+           * **长按之后这一下不算双击的第一下**（需求）：长按松手时系统补的那次 Tap
+           * 会被双击识别器记成第一下，再点一下就变成点赞。长按刚结束的
+           * HOLD_TAP_GUARD_MS 内直接跳过（时间戳见 ReelHoldGate）。
+           */
+          if (ReelHoldGate.recent(HOLD_TAP_GUARD_MS)) {
+            hilog.info(DOMAIN, TAG, 'double tap ignored right after hold');
+            return;
+          }
           playLikeBurst(this.burst, REELS_BURST_KEY, x, y);
           this.doubleTapLike();
         }),
@@ -3070,11 +3114,26 @@ export struct ReelsPage {
     }
     const gx: number = fingers[0].globalX;
     const gy: number = fingers[0].globalY;
-    const inActionColumn: boolean = this.screenWidthVp > 0
-      && gx > this.screenWidthVp - ACTION_COLUMN_ZONE_VP;
-    const inInfoArea: boolean = this.screenHeightVp > 0
-      && gy > this.screenHeightVp * INFO_AREA_BOTTOM_RATIO;
-    return inActionColumn || inInfoArea;
+    return this.xInActionColumn(gx) || this.yInInfoArea(gy);
+  }
+
+  /** 横坐标是否落在右侧动作栏那一条上。 */
+  private xInActionColumn(gx: number): boolean {
+    return this.screenWidthVp > 0 && gx > this.screenWidthVp - ACTION_COLUMN_ZONE_VP;
+  }
+
+  /** 纵坐标是否落在底部信息区（作者行 / 正文 / 底栏）里。 */
+  private yInInfoArea(gy: number): boolean {
+    return this.screenHeightVp > 0 && gy > this.screenHeightVp * INFO_AREA_BOTTOM_RATIO;
+  }
+
+  /** 只判底部信息区（倍速热区用：它不再受右侧动作栏那条影响）。 */
+  private inInfoAreaHit(event: GestureEvent): boolean {
+    const fingers: Array<FingerInfo> = event.fingerList;
+    if (fingers.length === 0) {
+      return false;
+    }
+    return this.yInInfoArea(fingers[0].globalY);
   }
 
   private pageHoldStart(event: GestureEvent): void {
@@ -3091,12 +3150,27 @@ export struct ReelsPage {
      *   · 屏幕底部一段（作者行 + 正文 + 底栏）→ 资讯区。
      * 两个阈值都取保守值，宁可少触发也不要误触发（画面主体仍在大片区域里）。
      */
-    if (this.holdZoneHit(event)) {
+    /*
+     * **倍速热区只看底部信息区，不挡右侧动作栏**
+     * （用户报："屏幕右侧 10% 热区长按没有反应"）。
+     *
+     * "两侧各 10%" 在手机上只有约 36vp，而动作栏那条守卫是 88vp —— 右侧 10% 整段
+     * 都落在它里面，于是右边怎么长按都没有 2 倍速、也走不到震动那句。动作栏那几颗
+     * 按钮自己挂了 swallowLongPress，长按落在按钮上由按钮吃掉；落在按钮左边的空白
+     * （正是用户要按的地方）现在能生效。
+     */
+    if (side) {
+      if (this.inInfoAreaHit(event)) {
+        return;
+      }
+    } else if (this.holdZoneHit(event)) {
       return;
     }
     this.holdFired = true;
     if (side) {
       this.pageSpeed = true;
+      // 触感反馈（需求："长按倍速新增手机震动"）：倍速真正生效这一刻震一下。
+      Haptics.speedHold();
       return;
     }
     this.pageHold = true;
@@ -3105,6 +3179,8 @@ export struct ReelsPage {
 
   /** 长按松手：只做恢复，不额外切播放（原来在播就继续播）。 */
   private pageHoldEnd(): void {
+    // 记下"长按刚结束"：之后 HOLD_TAP_GUARD_MS 内的那一击不算双击的第一下（见 ReelHoldGate）。
+    ReelHoldGate.markEnd();
     if (this.pageSpeed) {
       this.pageSpeed = false;
       return;

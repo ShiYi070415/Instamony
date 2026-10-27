@@ -32,6 +32,9 @@ const SPEED_HOLD_MS: number = 30;
 const FALLBACK_EFFECT_ID: string = 'haptic.clock.timer';
 
 export class Haptics {
+  /** 上一次真正震动的时刻：短时间去重（两条长按路径可能同时进来，不能震两下）。 */
+  private static lastFireMs: number = 0;
+
   /** 长按倍速生效：一下轻点（见文件头的两条策略）。 */
   static speedHold(): void {
     Haptics.fire(SPEED_HOLD_MS, 'speed-hold');
@@ -48,6 +51,12 @@ export class Haptics {
   }
 
   private static fire(durationMs: number, tag: string): void {
+    // 150ms 内只震一次（页面级 / slide 级两条长按都可能调进来）。
+    const now: number = Date.now();
+    if (now - Haptics.lastFireMs < 150) {
+      return;
+    }
+    Haptics.lastFireMs = now;
     const duration: number = durationMs < 10 ? 10 : (durationMs > 60 ? 60 : durationMs);
     try {
       const effect: vibrator.VibrateTime = { type: 'time', duration: duration };
