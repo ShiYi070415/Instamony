@@ -1,1 +1,0 @@
-feat(relay): 中转脚本改成跨平台低功耗版（Windows / Linux / Android-Termux 同一份 relay.js）—— keepAlive 连接复用（省掉每轮 TLS 握手）、Accept-Encoding gzip（收件箱压到几 KB）、自适应间隔（活跃 90s、空闲退到 300s）、同轮多条新私信合并成一条汇总推送、quietHours 安静时段只记账不推、state 脏写才落盘（tmp+rename）、单实例 pid 锁、SIGINT/SIGTERM 收尾落盘；删掉 Python 版（本机没装 Python，Node 三平台通吃）；config.example.json 补 idleMaxSeconds 与 quietHours；README 增加三平台常开方式与一天耗量估算

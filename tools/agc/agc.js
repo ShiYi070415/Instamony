@@ -1,0 +1,234 @@
+#!/usr/bin/env node
+/*
+ * AGC（AppGallery Connect）自检小工具 —— 用来把"推送为什么不工作"从猜变成事实。
+ *
+ * 为什么需要它：真机上 `pushService.getToken()` 回的是 `1000900010 Illegal application
+ * identity`，上游 `VerifyCloudCapability result:1003400002` —— 这是**云端应用身份**没认上，
+ * 要么是 AGC 里这个应用的签名证书指纹与本地打包证书不一致，要么是 Push 权益没生效。
+ * 光看手机日志分不出来，得从 AGC 侧查。
+ *
+ * 用法（凭据放在同目录的 credentials.json，不进 git，见 .gitignore）：
+ *   node agc.js --token            # 验证 OAuth 凭据能不能换到 token（只打长度）
+ *   node agc.js --app             # 查这个应用在 AGC 里登记的信息（含证书指纹）
+ *   node agc.js --certs           # 查证书列表（看有哪些 SHA-256）
+ *   node agc.js --push "测试内容"  # 用 Push Kit 给手机发一条测试推送（需要 pushToken）
+ *
+ * credentials.json 长这样：
+ *   {
+ *     "appId": "AGC 里的 App ID（数字）",
+ *     "clientId": "OAuth Client ID",
+ *     "clientSecret": "OAuth Client Secret",
+ *     "pushToken": "手机里「复制中转材料」得到的 pushToken（只有 --push 需要）"
+ *   }
+ */
+
+'use strict';
+
+const fs = require('fs');
+const https = require('https');
+const path = require('path');
+const querystring = require('querystring');
+
+const CONNECT_TOKEN = 'https://connect-api.cloud.huawei.com/api/oauth2/v1/token';
+const CONNECT_APPINFO = 'https://connect-api.cloud.huawei.com/api/publish/v2/app-info';
+const CONNECT_CERTS = 'https://connect-api.cloud.huawei.com/api/publish/v2/certificates';
+const PUSH_TOKEN = 'https://oauth-login.cloud.huawei.com/oauth2/v3/token';
+const PUSH_SEND = 'https://push-api.cloud.huawei.com/v1/%s/messages:send';
+
+function request(url, options, body) {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const req = https.request({
+      hostname: target.hostname,
+      path: target.pathname + target.search,
+      method: (options && options.method) || 'GET',
+      headers: (options && options.headers) || {},
+      timeout: 30000
+    }, (res) => {
+      let raw = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => { raw += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode || 0, body: raw }));
+    });
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+function loadCredentials() {
+  const file = path.join(__dirname, 'credentials.json');
+  if (!fs.existsSync(file)) {
+    console.error('缺少 ' + file + '（模板见本文件头部的注释）。');
+    process.exit(2);
+  }
+  const cred = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (!cred.clientId || !cred.clientSecret) {
+    console.error('credentials.json 里 clientId / clientSecret 没填。');
+    process.exit(2);
+  }
+  return cred;
+}
+
+/** Connect API 的项目级 token（查应用/证书用）。 */
+async function connectToken(cred) {
+  const body = JSON.stringify({
+    grant_type: 'client_credentials',
+    client_id: cred.clientId,
+    client_secret: cred.clientSecret
+  });
+  const res = await request(CONNECT_TOKEN, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Length': Buffer.byteLength(body)
+    }
+  }, body);
+  let data = {};
+  try {
+    data = JSON.parse(res.body);
+  } catch (error) {
+    data = {};
+  }
+  if (!data.access_token) {
+    throw new Error('换 token 失败（HTTP ' + res.status + '）：' + res.body.slice(0, 240));
+  }
+  return data.access_token;
+}
+
+/** Push Kit 的 token（发推送用，和 Connect API 是两个不同的地址）。 */
+async function pushToken(cred) {
+  const body = querystring.stringify({
+    grant_type: 'client_credentials',
+    client_id: cred.clientId,
+    client_secret: cred.clientSecret
+  });
+  const res = await request(PUSH_TOKEN, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Content-Length': Buffer.byteLength(body)
+    }
+  }, body);
+  let data = {};
+  try {
+    data = JSON.parse(res.body);
+  } catch (error) {
+    data = {};
+  }
+  if (!data.access_token) {
+    throw new Error('Push token 失败（HTTP ' + res.status + '）：' + res.body.slice(0, 240));
+  }
+  return data.access_token;
+}
+
+async function cmdToken(cred) {
+  const token = await connectToken(cred);
+  console.log('Connect API token OK，长度 ' + token.length + '（有效期约 1 小时）');
+  try {
+    const push = await pushToken(cred);
+    console.log('Push Kit token OK，长度 ' + push.length);
+  } catch (error) {
+    console.log('Push Kit token 失败：' + error.message);
+    console.log('→ 这说明「API 密钥/OAuth 客户端」没开通 Push 服务，或凭据不是这个项目的。');
+  }
+}
+
+async function cmdApp(cred) {
+  if (!cred.appId) {
+    console.error('credentials.json 里缺 appId。');
+    process.exit(2);
+  }
+  const token = await connectToken(cred);
+  const res = await request(CONNECT_APPINFO + '?appId=' + encodeURIComponent(cred.appId), {
+    headers: {
+      Authorization: 'Bearer ' + token,
+      client_id: cred.clientId
+    }
+  });
+  if (res.status !== 200) {
+    console.log('查应用信息失败（HTTP ' + res.status + '）：' + res.body.slice(0, 400));
+    return;
+  }
+  let data = {};
+  try {
+    data = JSON.parse(res.body);
+  } catch (error) {
+    console.log('回包不是 JSON：' + res.body.slice(0, 240));
+    return;
+  }
+  const info = data.appInfo || data;
+  // 只打和身份有关的字段（不打 secret 之类）。
+  const keys = ['appId', 'appName', 'packageName', 'bundleName', 'appType', 'platform',
+    'sha256', 'certFingerprint', 'fingerprints', 'releaseState', 'appStatus'];
+  for (const key of keys) {
+    if (info[key] !== undefined) {
+      console.log(key + ' = ' + JSON.stringify(info[key]));
+    }
+  }
+  console.log('--- 原始字段名（便于核对 API 版本差异）---');
+  console.log(Object.keys(info).join(', '));
+}
+
+async function cmdCerts(cred) {
+  const token = await connectToken(cred);
+  const res = await request(CONNECT_CERTS, {
+    headers: {
+      Authorization: 'Bearer ' + token,
+      client_id: cred.clientId
+    }
+  });
+  if (res.status !== 200) {
+    console.log('查证书失败（HTTP ' + res.status + '）：' + res.body.slice(0, 400));
+    return;
+  }
+  try {
+    const data = JSON.parse(res.body);
+    console.log(JSON.stringify(data, null, 2).slice(0, 4000));
+  } catch (error) {
+    console.log(res.body.slice(0, 400));
+  }
+}
+
+async function cmdPush(cred, text) {
+  if (!cred.appId || !cred.pushToken) {
+    console.error('发测试推送需要 credentials.json 里的 appId 与 pushToken。');
+    process.exit(2);
+  }
+  const token = await pushToken(cred);
+  const payload = JSON.stringify({
+    validate_only: false,
+    message: {
+      data: JSON.stringify({ kind: 'probe' }),
+      notification: { title: 'Instamony 自检', body: text || '这是一条测试推送' },
+      token: [cred.pushToken]
+    }
+  });
+  const res = await request(PUSH_SEND.replace('%s', cred.appId), {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + token,
+      'Content-Type': 'application/json; charset=UTF-8',
+      'Content-Length': Buffer.byteLength(payload)
+    }
+  }, payload);
+  console.log('HTTP ' + res.status);
+  console.log(res.body.slice(0, 600));
+}
+
+async function main() {
+  const argv = process.argv.slice(2);
+  const cred = loadCredentials();
+  if (argv.indexOf('--token') >= 0) return cmdToken(cred);
+  if (argv.indexOf('--app') >= 0) return cmdApp(cred);
+  if (argv.indexOf('--certs') >= 0) return cmdCerts(cred);
+  const at = argv.indexOf('--push');
+  if (at >= 0) return cmdPush(cred, argv[at + 1]);
+  console.log('用法：node agc.js --token | --app | --certs | --push "文本"');
+}
+
+main().catch((error) => {
+  console.error('失败：' + (error && error.message ? error.message : error));
+  process.exit(1);
+});
