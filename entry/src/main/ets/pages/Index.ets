@@ -9250,12 +9250,18 @@ struct Index {
     this.directThreadVm.open(thread.id, thread.title, thread.avatarUrl, thread.isGroup,
       thread.key.length > 0 ? thread.key : '', thread.username);
     /*
-     * **进会话即已读**：`DirectThreadViewModel` 在服务端标成功后回调这里，
-     * 把私信列表那一行的未读标记（粗体 + 右侧蓝点）立刻清掉 ——
-     * 不用等下一次整表刷新（见 core/mobileapi/MobileDirect.markSeen）。
+     * **点进去就清未读**（需求："私信列表点进去会话就清除未读标记，不用等已读状态回调"）。
+     *
+     * 以前只靠 `onSeen`（服务端 mark_seen 成功之后）才清：那一发要等会话首屏读完、
+     * 再等服务端回包，慢的时候用户都看完退出来了、列表还挂着粗体/蓝点（甚至被下一轮
+     * 轮询按服务端数据又画回未读）。现在**进页面这一帧就乐观清掉**：
+     *   · 同时记本地已读台账（`DirectViewModel.readUpTo` = 这一行最新消息的时间），
+     *     之后服务端那份就算还说"未读"也不会把它画回去；
+     *   · 真来了更晚的新消息仍然照常标未读、照常弹通知。
      */
+    this.directVm.markThreadRead(thread.id);
     this.directThreadVm.onSeen = (threadId: string, tsMs: number): void => {
-      // tsMs = 会话页读到的那条消息时间：列表用它记本地已读台账（见 DirectViewModel.readUpTo）。
+      // 服务端标成功后再补一次（幂等），并把"读到的确切时刻"写进台账。
       this.directVm.markThreadRead(threadId, tsMs);
     };
     this.navStack.pushPath({ name: DIRECT_THREAD_PAGE, param: thread.id });
