@@ -50,6 +50,13 @@ const CACHE_RESAVE_STEP: number = 6;
  * 3 页足够穿过 IG 常见的"游标回带"；再多就说明服务端确实在原地打转，收手更省流量。
  */
 const SKIP_DUP_PAGES: number = 3;
+/**
+ * 没有游标时"重取第一页"最多试几次（见 loadMore）。
+ *
+ * IG 探索流第一页有时根本不给 `max_id`；重取一次往往能捞出新的几条（排序会变）。
+ * 2 次都不出新内容就认为真的到底了 —— 再多就是白打请求。
+ */
+const RESTART_MAX: number = 2;
 
 export class SearchViewModel {
   private users: Array<SearchUser> = [];
@@ -257,7 +264,7 @@ export class SearchViewModel {
       // ---- 成功：整页覆盖（游标/预取队列/首屏预加载都换成新的这一份）----
       this.posts = page.posts;
       this.cursor = page.cursor;
-      this.hasMore = page.cursor.length > 0;
+      this.hasMore = page.posts.length > 0;
       this.prefetched = [];
       this.prefetchedFirst = null;
       this.recommendLoaded = true;
@@ -321,7 +328,7 @@ export class SearchViewModel {
      * 这里只按游标判断：有游标就允许继续翻（见 loadMore 的说明）。
      * 否则一进搜索页 footer 就写着「没有更多了」，而后面其实还有几十页。
      */
-    this.hasMore = cached.cursor.length > 0;
+    this.hasMore = cached.posts.length > 0;
     this.onPosts(this.posts);
     this.onMore(this.hasMore);
     this.onStatus('');
@@ -423,7 +430,7 @@ export class SearchViewModel {
     this.recommendLoaded = true;
     this.posts = page.posts;
     this.cursor = page.cursor;
-    this.hasMore = page.cursor.length > 0;
+    this.hasMore = page.posts.length > 0;
     this.onPosts(this.posts);
     this.onMore(this.hasMore);
     this.onStatus(page.posts.length === 0 ? '没有推荐内容' : '');
@@ -587,12 +594,13 @@ export class SearchViewModel {
       this.onStatus(`被 IG 限流，约 ${minutes} 分钟后自动恢复`);
       return;
     }
-    if (this.cursor.length === 0) {
-      hilog.info(DOMAIN, TAG, 'loadMore: no cursor, stop');
-      this.hasMore = false;
-      this.onMore(false);
-      return;
-    }
+    /*
+     * **没有游标不等于到底**（用户报："搜索探索流只加载一页就显示没有更多了"）。
+     *
+     * 探索流第一页有可能**根本不给 `max_id`**（只有真的往下翻才有），这时按游标判就是
+     * "一页到底"。所以这里不再直接收手：没有游标就走下面的"重取第一页 + 去重续命"，
+     * 一条新内容都拿不到时才置 hasMore=false。
+     */
     this.loadingMore = true;
     this.onLoadingMore(true);
     try {
@@ -602,28 +610,32 @@ export class SearchViewModel {
       let fresh: Array<SearchPost> = [];
       let cachedUsed: boolean = false;
       let attempts: number = 0;
+      let restarts: number = 0;
       /*
        * **整页都是重复时继续往下翻**（用户报："搜索页推荐流会出现没有更多了"）。
        *
        * IG 探索流的游标会回带：下一页常常整页都是已经显示过的那几条。原先的判据是
        * `fresh.length > 0`，于是只要撞上这种回带页，`hasMore` 立刻被拍成 false ——
        * 用户滑到底就永久停在"没有更多了"，哪怕后面还有几十页。而且我们给三条入口做了
-       * 跨入口去重（ExploreLanes），去重后也可能出现"这页剩下的都是别人拿走的"。
+       * 跨入口去重（ExploreLanes），去重后也可能出现"这页剩的都被别人拿走了"。
        *
-       * 现在改成**只看游标有没有前进**：游标变了就再要一页（最多连跳 SKIP_DUP_PAGES 页），
-       * 游标没变、或服务端明说没有了，才真的收手。
+       * 现在：拿到新条目就停；一页全重复时只要**游标前进了**就再要一页（最多连跳
+       * SKIP_DUP_PAGES 页）；**连游标都没有**时重取第一页再按 code 去重（IG 排序会变，
+       * 重取常能捞出新的几条），连续 RESTART_MAX 次都没新内容才真的收手。
        */
-      while (attempts <= SKIP_DUP_PAGES) {
+      while (attempts <= SKIP_DUP_PAGES + RESTART_MAX) {
         attempts++;
+        // 没有游标时只能重取第一页；有游标就顺着游标翻。
+        const target: string = cursor;
         // **有缓存页就直接用**（毫秒级）：没有再发请求（见 prefetchMore 的说明）。
         let cached: SearchPostPage | null = null;
-        if (this.prefetched.length > 0) {
+        if (this.prefetched.length > 0 && target.length > 0) {
           cached = this.prefetched[0];
           this.prefetched = this.prefetched.slice(1);
         }
         cachedUsed = cached !== null;
         const fetched: SearchPostPage | null = cached !== null
-          ? cached : await NativeSearch.recommendedPage(cursor, EXPLORE_LANE_SEARCH);
+          ? cached : await NativeSearch.recommendedPage(target, EXPLORE_LANE_SEARCH);
         if (fetched === null) {
           break;
         }
@@ -633,8 +645,19 @@ export class SearchViewModel {
         if (fetched.cursor.length > 0) {
           cursor = fetched.cursor;
         }
+        if (fresh.length > 0) {
+          break;
+        }
+        if (cursor.length === 0) {
+          restarts++;
+          if (restarts >= RESTART_MAX) {
+            break;
+          }
+          hilog.info(DOMAIN, TAG, 'loadMore cursorless restart %{public}d (no new items)', restarts);
+          continue;
+        }
         const moved: boolean = cursor !== startCursor;
-        if (fresh.length > 0 || !fetched.hasMore || !moved || fetched.cursor.length === 0) {
+        if (!moved) {
           break;
         }
         hilog.info(DOMAIN, TAG, 'loadMore all-duplicate page, skip (attempt %{public}d cursor=%{public}d)',
@@ -645,17 +668,19 @@ export class SearchViewModel {
         return;
       }
       this.cursor = cursor;
-      // **只在"游标没前进"或"服务端说没有更多"时收手** —— 整页重复不再等于到底。
-      // hasMore 只看游标（见下方说明）：游标前进了就还有下一页。
-      this.hasMore = cursor.length > 0 && cursor !== startCursor;
+      /*
+       * **收手条件**：这一轮一条新内容都没拿到、而且没有可继续的游标。
+       * 有游标就说明还能翻（交给下一次触底再试）；拿到新内容就当然还能继续。
+       */
+      this.hasMore = fresh.length > 0 || cursor.length > 0;
       this.onPosts(this.posts);
       this.onMore(this.hasMore);
       hilog.info(DOMAIN, TAG,
         'loadMore +%{public}d total=%{public}d hasMore=%{public}s reason=%{public}s'
-        + ' cursor=%{public}d cached=%{public}s tries=%{public}d',
+        + ' cursor=%{public}d restarts=%{public}d cached=%{public}s tries=%{public}d',
         fresh.length, this.posts.length, `${this.hasMore}`,
-        cursor.length === 0 ? 'cursor-empty' : (cursor === startCursor ? 'cursor-stuck' : 'ok'),
-        cursor.length, cachedUsed ? 'y' : 'n', attempts);
+        fresh.length > 0 ? 'got-new' : (cursor.length === 0 ? 'no-cursor-no-new' : 'dup-but-cursor'),
+        cursor.length, restarts, cachedUsed ? 'y' : 'n', attempts);
       // 网格明显长起来了就**再存一份更满的缓存**（见 savedCount）：下次冷启动/切页一进来
       // 就有十几格，而不是只有第一页那 4 格。
       if (this.posts.length - this.savedCount >= CACHE_RESAVE_STEP) {
