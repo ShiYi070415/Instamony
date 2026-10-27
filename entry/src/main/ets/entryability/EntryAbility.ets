@@ -108,8 +108,8 @@ export default class EntryAbility extends UIAbility {
      * 顺带把 `DeviceTruth` 的缓存预热掉（它内部只读一次设备信息）。
      */
     hilog.info(DOMAIN, TAG_MATERIAL, 'identity ua=%{public}s', AppConfig.webUserAgent());
-    // 应用级代理：冷启动恢复上一份配置（不重启即可生效，见 core/AppProxy）。
-    AppProxy.restoreAndApply();
+    // 应用级代理：冷启动从 preferences 读回上次的代理并立即生效（不重启即可生效，见 core/AppProxy）。
+    AppProxy.restoreAndApply(this.context);
     /*
      * 同一份身份**再落一次盘**：`files/Instamony_identity.txt`。
      *

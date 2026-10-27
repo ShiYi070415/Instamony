@@ -16,10 +16,14 @@
  */
 
 import { connection } from '@kit.NetworkKit';
+import { preferences } from '@kit.ArkData';
+import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'AppProxy';
+/** preferences 文件名（和 AppSettings 那个分开：代理里带密码，单独一个罐更好审计）。 */
+const STORE_NAME: string = 'instarmony_proxy';
 
 /** 旧（单份）配置的持久键。 */
 export const PROXY_HOST: string = 'proxy_host';
@@ -84,6 +88,8 @@ class ProxyRow {
 }
 
 export class AppProxy {
+  /** 持久化罐（冷启动时在 restoreAndApply 里打开）。 */
+  private static store: preferences.Preferences | null = null;
   /** 旧 UI 的内存镜像。 */
   private static singleConfig: AppProxyConfig = new AppProxyConfig();
   /** 新 UI：列表 / 选中下标 / 总开关。 */
@@ -91,8 +97,24 @@ export class AppProxy {
   private static activeIndexValue: number = -1;
   private static enabledFlag: boolean = false;
 
-  /** 冷启动：读回两种形状，并把"该生效的那份"落到系统接口。 */
-  static restoreAndApply(): void {
+  /**
+   * 冷启动：读回两种形状，并把"该生效的那份"落到系统接口。
+   *
+   * **为什么必须在这里读盘**：之前代理只写到 AppStorage，进程一结束就没了 ——
+   * 用户加过的代理重启后全消失（需求："把添加的代理永久保存到 app"）。
+   * preferences 用同步接口（getPreferencesSync / getSync / putSync / flushSync），
+   * 因为这里在 onCreate 里，必须同步完成：apply 要在第一个请求发出去之前生效。
+   */
+  static restoreAndApply(context: common.Context): void {
+    try {
+      if (AppProxy.store === null) {
+        AppProxy.store = preferences.getPreferencesSync(context, { name: STORE_NAME });
+      }
+    } catch (error) {
+      // 读不到罐不影响启动：只是"没记住上次的代理"。
+      hilog.warn(DOMAIN, TAG, 'open proxy store failed: %{public}s', (error as Error).message);
+      AppProxy.store = null;
+    }
     AppProxy.loadEntries();
     const config: AppProxyConfig = AppProxy.loadSingle();
     AppProxy.singleConfig = config;
@@ -122,7 +144,7 @@ export class AppProxy {
     AppProxy.singleConfig = empty;
     AppProxy.persistSingle(empty);
     AppProxy.enabledFlag = false;
-    AppStorage.setOrCreate(PROXY_ON, false);
+    AppProxy.persistState();
     return AppProxy.apply(empty);
   }
 
@@ -185,7 +207,8 @@ export class AppProxy {
       return false;
     }
     AppProxy.enabledFlag = value;
-    AppStorage.setOrCreate(PROXY_ON, value);
+    // 开关本身也要落盘：否则重启后代理列表还在、开关却是关的。
+    AppProxy.persistState();
     if (!value) {
       return AppProxy.apply(new AppProxyConfig());
     }
@@ -262,14 +285,24 @@ export class AppProxy {
       row.password = one.password;
       plain.push(row);
     }
+    // 内存镜像（UI 直接读它）+ 落盘（重启后还在）。
     AppStorage.setOrCreate(PROXY_LIST, JSON.stringify(plain));
+    AppProxy.write(PROXY_LIST, JSON.stringify(plain));
+    AppProxy.persistState();
+  }
+
+  /** 选中项与总开关：**列表变了、换了代理、开关拨了都要落盘**。 */
+  private static persistState(): void {
     AppStorage.setOrCreate(PROXY_ACTIVE, AppProxy.activeIndexValue);
+    AppStorage.setOrCreate(PROXY_ON, AppProxy.enabledFlag);
+    AppProxy.write(PROXY_ACTIVE, AppProxy.activeIndexValue);
+    AppProxy.write(PROXY_ON, AppProxy.enabledFlag);
   }
 
   private static loadEntries(): void {
     const out: Array<ProxyEntry> = [];
-    const raw: string | undefined = AppStorage.get<string>(PROXY_LIST);
-    if (raw !== undefined && raw.length > 0) {
+    const raw: string = AppProxy.readString(PROXY_LIST, '');
+    if (raw.length > 0) {
       try {
         const plain: Array<ProxyRow> = JSON.parse(raw) as Array<ProxyRow>;
         for (let i: number = 0; i < plain.length; i++) {
@@ -287,9 +320,78 @@ export class AppProxy {
       }
     }
     AppProxy.entries = out;
-    const active: number | undefined = AppStorage.get<number>(PROXY_ACTIVE);
-    AppProxy.activeIndexValue = active === undefined ? -1 : active;
-    const enabled: boolean | undefined = AppStorage.get<boolean>(PROXY_ON);
-    AppProxy.enabledFlag = enabled === undefined ? false : enabled;
+    AppProxy.activeIndexValue = AppProxy.readNumber(PROXY_ACTIVE, -1);
+    AppProxy.enabledFlag = AppProxy.readBool(PROXY_ON, false);
+    // 下标越界（列表被手工改坏、或者只剩空表）时回落到"没有选中"，免得 setEnabled 出错。
+    if (AppProxy.activeIndexValue >= out.length) {
+      AppProxy.activeIndexValue = -1;
+    }
+    if (out.length === 0) {
+      AppProxy.activeIndexValue = -1;
+    }
+    // AppStorage 镜像同步一份：UI 的 @State 靠它初始化。
+    AppStorage.setOrCreate(PROXY_ACTIVE, AppProxy.activeIndexValue);
+    AppStorage.setOrCreate(PROXY_ON, AppProxy.enabledFlag);
+  }
+
+  // ---------------- 持久化（preferences，同步接口） ----------------
+
+  /** 读字符串：罐没打开时退回 AppStorage（老版本只写内存的那批数据）。 */
+  private static readString(key: string, fallback: string): string {
+    const store: preferences.Preferences | null = AppProxy.store;
+    if (store !== null) {
+      try {
+        const value: preferences.ValueType = store.getSync(key, fallback);
+        if (typeof value === 'string') {
+          return value;
+        }
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'read %{public}s failed: %{public}s', key, (error as Error).message);
+      }
+    }
+    return AppStorage.get<string>(key) ?? fallback;
+  }
+
+  private static readNumber(key: string, fallback: number): number {
+    const store: preferences.Preferences | null = AppProxy.store;
+    if (store !== null) {
+      try {
+        const value: preferences.ValueType = store.getSync(key, fallback);
+        if (typeof value === 'number') {
+          return value;
+        }
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'read %{public}s failed: %{public}s', key, (error as Error).message);
+      }
+    }
+    return AppStorage.get<number>(key) ?? fallback;
+  }
+
+  private static readBool(key: string, fallback: boolean): boolean {
+    const store: preferences.Preferences | null = AppProxy.store;
+    if (store !== null) {
+      try {
+        const value: preferences.ValueType = store.getSync(key, fallback);
+        if (typeof value === 'boolean') {
+          return value;
+        }
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'read %{public}s failed: %{public}s', key, (error as Error).message);
+      }
+    }
+    return AppStorage.get<boolean>(key) ?? fallback;
+  }
+
+  private static write(key: string, value: preferences.ValueType): void {
+    const store: preferences.Preferences | null = AppProxy.store;
+    if (store === null) {
+      return;
+    }
+    try {
+      store.putSync(key, value);
+      store.flushSync();
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'save %{public}s failed: %{public}s', key, (error as Error).message);
+    }
   }
 }

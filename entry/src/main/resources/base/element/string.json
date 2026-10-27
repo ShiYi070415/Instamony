@@ -956,5 +956,9 @@
     {"name": "proxy_ph_host", "value": "例如：127.0.0.1"},
     {"name": "proxy_ph_port", "value": "例如：7890"},
     {"name": "proxy_ph_optional", "value": "可选"}
+,
+    {"name": "settings_proxy_pick_title", "value": "选择代理"},
+    {"name": "settings_proxy_confirm", "value": "确定"},
+    {"name": "settings_proxy_selected", "value": "已选中"}
 ]
 }

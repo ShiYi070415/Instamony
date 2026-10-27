@@ -700,5 +700,9 @@
     {"name": "proxy_ph_host", "value": "e.g. 127.0.0.1"},
     {"name": "proxy_ph_port", "value": "e.g. 7890"},
     {"name": "proxy_ph_optional", "value": "Optional"}
+,
+    {"name": "settings_proxy_pick_title", "value": "Choose proxy"},
+    {"name": "settings_proxy_confirm", "value": "Confirm"},
+    {"name": "settings_proxy_selected", "value": "Selected"}
 ]
 }

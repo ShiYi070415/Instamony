@@ -108,6 +108,24 @@ const PROXY_FIELD_HEIGHT: number = 42;
 const CARD_BORDER: number = 1;
 
 /**
+ * 「选择代理」半模态里的卡片尺寸（需求：圆角 + blur 模糊卡片，只显示代理名称）。
+ *
+ * 高度取 52：和设置页里其它可点行的观感接近，又是"卡片"而不是"按钮"那一档；
+ * 圆角沿用卡片档 CARD_RADIUS（16），全页圆角只有三档，这里不新造一档。
+ */
+const PROXY_PICK_CARD_HEIGHT: number = 52;
+const PROXY_PICK_CARD_RADIUS: number = CARD_RADIUS;
+/** 卡片之间的间距（vp）。 */
+const PROXY_PICK_CARD_GAP: number = 10;
+/**
+ * 列表区最大高度（vp）：超了就内部滚动。
+ *
+ * 半模态用的是 FIT_CONTENT（高度跟着内容走），代理一多会把按钮挤出屏幕 ——
+ * 所以列表本身设一个上限，卡片再多也只是它自己滚。
+ */
+const PROXY_PICK_LIST_MAX: number = 300;
+
+/**
  * 下拉里四档的**顺序**（也是下标 → 取值 的映射表）。
  *
  * 和 materialOptions() 里的资源一一对应：下拉回调只给下标，靠这张表换回设置值。
@@ -136,6 +154,22 @@ export struct SettingsPanel {
   @State private proxyNames: Array<string> = [];
   @State private proxyActive: number = -1;
   @State private proxySheet: boolean = false;
+  /**
+   * 「选择代理」半模态（点「已保存的代理」那一行打开）。
+   *
+   * 需求：原来那一行是 `Select` 下拉菜单，改成和「添加代理」同一套半模态面板 ——
+   * 列表是圆角 blur 卡片（只显示代理名称），最底部一颗「确定」。
+   */
+  @State private proxyPick: boolean = false;
+  /** 面板里**草稿**选中的下标：点卡片只改它，点「确定」才真正切过去。 */
+  @State private pickDraft: number = -1;
+  /**
+   * 列表里点了「添加代理」：等选择面板**关完**再开添加面板。
+   *
+   * 为什么不能当场开：同一个页面里两个半模态不能同时挂（后开的那个不显示或状态错乱），
+   * 所以这里只置标记，由选择面板的 onDisappear 接力打开添加面板。
+   */
+  private pickWantsAdd: boolean = false;
   @State private draftName: string = '';
   @State private draftHost: string = '';
   @State private draftPort: string = '';
@@ -235,33 +269,33 @@ export struct SettingsPanel {
       .width('100%')
 
       Column() {
-        Row({ space: 12 }) {
+        Row() {
           Text($r('app.string.settings_proxy_saved'))
             .fontSize(16)
             .fontColor($r('app.color.primary_text'))
           Blank()
-          Select(this.proxyOptions())
-            .selected(this.proxyActive)
-            .value(this.proxyActive >= 0 && this.proxyActive < this.proxyNames.length
-              ? this.proxyNames[this.proxyActive]
-              : $r('app.string.settings_proxy_none'))
-            .font({ size: 14 })
-            .onSelect((index: number, value: string): void => {
-              if (index === this.proxyNames.length) {
-                // 选单最后固定是「添加代理」。
-                this.openProxySheet();
-                return;
-              }
-              if (AppProxy.select(index)) {
-                this.proxyActive = index;
-              }
-            })
+          Text(this.currentProxyLabel())
+            .fontSize(14)
+            .fontColor($r('app.color.secondary_text'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .constraintSize({ maxWidth: 180 })
+          // 尾巴上的"下拉"箭头（需求：点下拉按钮打开面板）——整行都可点，箭头只是提示。
+          SymbolGlyph($r('sys.symbol.chevron_down'))
+            .fontSize(14)
+            .fontColor([$r('app.color.secondary_text')])
+            .margin({ left: 4 })
         }
         .width('100%')
         .height(SIGN_OUT_HEIGHT)
-        .padding({ left: CARD_ROW_PADDING, right: 8 })
+        .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING })
+        .onClick((): void => {
+          this.openProxyPick();
+        })
       }
       .width('100%')
+      // 选择面板挂在这一行上（添加面板挂在外层 Column 上），两个半模态各有各的状态。
+      .bindSheet($$this.proxyPick, this.proxyPickSheet(), this.proxyPickOptions())
 
       // **卡片结尾的描述**（与"诊断"分类同款）：讲清作用范围与生效方式。
       this.groupHint($r('app.string.settings_proxy_hint'))
@@ -284,16 +318,203 @@ export struct SettingsPanel {
     })
   }
 
-  /** 下拉选项：别名 + 末尾固定的「添加代理」。 */
-  private proxyOptions(): Array<SelectOption> {
-    const out: Array<SelectOption> = [];
-    for (let i: number = 0; i < this.proxyNames.length; i++) {
-      const one: SelectOption = { value: this.proxyNames[i] };
-      out.push(one);
+  /** 「已保存的代理」那一行右侧显示的名字（没选中 → 暂无代理）。 */
+  private currentProxyLabel(): ResourceStr {
+    const index: number = this.proxyActive;
+    if (index >= 0 && index < this.proxyNames.length) {
+      return this.proxyNames[index];
     }
-    const addOne: SelectOption = { value: $r('app.string.settings_proxy_add') };
-    out.push(addOne);
-    return out;
+    return $r('app.string.settings_proxy_none');
+  }
+
+  /**
+   * 打开「选择代理」面板。
+   *
+   * 一份代理都没有时直接去添加面板：用户点这一行就是要配代理，先给一个空列表让他
+   * 自己再点一次"添加"没有意义。
+   */
+  private openProxyPick(): void {
+    this.refreshProxyNames();
+    if (this.proxyNames.length === 0) {
+      this.openProxySheet();
+      return;
+    }
+    this.pickDraft = this.proxyActive;
+    this.proxyPick = true;
+  }
+
+  /**
+   * 面板最底部那颗「确定」：把草稿选中落实。
+   *
+   * 只有**真的换了一份**才走 AppProxy.select（它会落盘，开关开着时还会立刻换隧道）；
+   * 没选（pickDraft 仍是 -1）就只是关面板。
+   */
+  private confirmProxyPick(): void {
+    const index: number = this.pickDraft;
+    if (index >= 0 && index < this.proxyNames.length && index !== this.proxyActive) {
+      if (AppProxy.select(index)) {
+        this.proxyActive = index;
+      }
+    }
+    this.proxyPick = false;
+  }
+
+  /** 列表里点了「添加代理」：关掉选择面板，由它的 onDisappear 接力开添加面板。 */
+  private requestAddFromPick(): void {
+    this.pickWantsAdd = true;
+    this.proxyPick = false;
+  }
+
+  /** 选择面板的外观（和添加面板同一套：系统原生面板 + 沉浸光感材质，见 proxySheetOptions）。 */
+  private proxyPickOptions(): SheetOptions {
+    const options: SheetOptions = {
+      height: SheetSize.FIT_CONTENT,
+      dragBar: true,
+      showClose: true
+    };
+    options.title = { title: $r('app.string.settings_proxy_pick_title') };
+    options.onDisappear = (): void => {
+      if (this.pickWantsAdd) {
+        this.pickWantsAdd = false;
+        this.openProxySheet();
+      }
+    };
+    return this.applySheetLook(options);
+  }
+
+  /**
+   * 半模态的统一材质外观（两个面板共用一份，别各写一遍）。
+   *
+   * 见 proxySheetOptions 的说明：`systemMaterial` 才是沉浸光感，低版本退回厚模糊；
+   * 开了材质时背景必须透明（文档：不要和 backgroundColor/borderWidth/shadow 一起用）。
+   */
+  private applySheetLook(options: SheetOptions): SheetOptions {
+    if (PlatformCap.hasArkMaterial()) {
+      options.systemMaterial = new uiMaterial.ImmersiveMaterial({
+        style: uiMaterial.ImmersiveStyle.ULTRA_THIN
+      });
+      options.backgroundColor = Color.Transparent;
+    } else {
+      options.blurStyle = BlurStyle.COMPONENT_THICK;
+    }
+    return options;
+  }
+
+  /**
+   * 半模态：**选择已保存的代理**。
+   *
+   * 需求：卡片用圆角 + blur 模糊卡片、只显示代理名称；最底部一颗「确定」。
+   * 点卡片只改草稿（画个勾），点「确定」才真正切换 —— 和系统设置里"选完再确认"的
+   * 面板一致，也避免误触一下就换了隧道。
+   */
+  @Builder
+  proxyPickSheet() {
+    Column({ space: 12 }) {
+      // 列表本身设上限：FIT_CONTENT 会跟着内容长高，代理一多就把「确定」顶出屏幕。
+      Scroll() {
+        Column({ space: PROXY_PICK_CARD_GAP }) {
+          ForEach(this.proxyNames, (name: string, index: number) => {
+            this.proxyPickCard(name, index)
+          }, (name: string, index: number): string => `${index}-${name}`)
+          // 末尾固定一个「添加代理」（原来下拉菜单里它也是最后一项）。
+          this.proxyAddCard()
+        }
+        .width('100%')
+      }
+      .width('100%')
+      .constraintSize({ maxHeight: PROXY_PICK_LIST_MAX })
+      .scrollBar(BarState.Off)
+      .edgeEffect(EdgeEffect.None)
+
+      // 最底部：确定（同一颗沉浸光感文字按钮，和添加面板底部的「添加」同款）。
+      Toggle({ type: ToggleType.Button, isOn: false }) {
+        Text($r('app.string.settings_proxy_confirm'))
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.accent'))
+      }
+      .width('100%')
+      .height(SIGN_OUT_HEIGHT)
+      .padding(0)
+      .borderRadius(SIGN_OUT_RADIUS)
+      .margin({ top: 20 })
+      .attributeModifier(new SurfaceModifier(this.materialThickness, true))
+      .backgroundColor(Color.Transparent)
+      // 只挂 onClick：Toggle(Button) 的 onChange 在真机上不一定来（见 MaterialSurface 的说明）。
+      .onClick((): void => {
+        this.confirmProxyPick();
+      })
+    }
+    .width('100%')
+    .padding({ left: 16, right: 16, top: 16, bottom: 20 })
+  }
+
+  /**
+   * 一行代理卡片：**圆角 + blur 模糊卡片**，只显示名称。
+   *
+   * 材质只能由 Toggle 承载（官方生效范围，见 MaterialSurface 文件头），所以卡片本体是
+   * 一颗透明的 Toggle(Button)，圆角/模糊/材质都由它给；选中态靠右侧那颗勾，不改底色
+   * （材质是"透"的，再垫一层色会发灰）。
+   */
+  @Builder
+  proxyPickCard(name: string, index: number) {
+    Toggle({ type: ToggleType.Button, isOn: false }) {
+      Row({ space: 10 }) {
+        Text(name)
+          .fontSize(15)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .textAlign(TextAlign.Start)
+          .layoutWeight(1)
+          .fontColor($r('app.color.primary_text'))
+        if (index === this.pickDraft) {
+          SymbolGlyph($r('sys.symbol.checkmark'))
+            .fontSize(16)
+            .fontColor([$r('app.color.accent')])
+        }
+      }
+      .width('100%')
+      .height(PROXY_PICK_CARD_HEIGHT)
+      .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING })
+    }
+    .width('100%')
+    .height(PROXY_PICK_CARD_HEIGHT)
+    .padding(0)
+    .borderRadius(PROXY_PICK_CARD_RADIUS)
+    .backgroundColor(Color.Transparent)
+    .selectedColor(Color.Transparent)
+    .attributeModifier(new SurfaceModifier(this.materialThickness, true))
+    .onClick((): void => {
+      this.pickDraft = index;
+    })
+  }
+
+  /** 列表末尾的「添加代理」卡片（同款圆角模糊底，内容用强调色区分）。 */
+  @Builder
+  proxyAddCard() {
+    Toggle({ type: ToggleType.Button, isOn: false }) {
+      Row({ space: 8 }) {
+        SymbolGlyph($r('sys.symbol.plus'))
+          .fontSize(16)
+          .fontColor([$r('app.color.accent')])
+        Text($r('app.string.settings_proxy_add'))
+          .fontSize(15)
+          .fontColor($r('app.color.accent'))
+      }
+      .width('100%')
+      .height(PROXY_PICK_CARD_HEIGHT)
+      .justifyContent(FlexAlign.Center)
+    }
+    .width('100%')
+    .height(PROXY_PICK_CARD_HEIGHT)
+    .padding(0)
+    .borderRadius(PROXY_PICK_CARD_RADIUS)
+    .backgroundColor(Color.Transparent)
+    .selectedColor(Color.Transparent)
+    .attributeModifier(new SurfaceModifier(this.materialThickness, true))
+    .onClick((): void => {
+      this.requestAddFromPick();
+    })
   }
 
   private refreshProxyNames(): void {
@@ -346,15 +567,7 @@ export struct SettingsPanel {
     options.onDisappear = (): void => {
       this.proxyOn = AppProxy.enabled();
     };
-    if (PlatformCap.hasArkMaterial()) {
-      options.systemMaterial = new uiMaterial.ImmersiveMaterial({
-        style: uiMaterial.ImmersiveStyle.ULTRA_THIN
-      });
-      options.backgroundColor = Color.Transparent;
-    } else {
-      options.blurStyle = BlurStyle.COMPONENT_THICK;
-    }
-    return options;
+    return this.applySheetLook(options);
   }
 
   /** 半模态：添加代理（标题 + 右上角关闭 + 交叉排布的文本/输入 + 添加）。 */
