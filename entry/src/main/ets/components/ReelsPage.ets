@@ -1069,14 +1069,21 @@ struct ReelSlide {
        *   · `blur(48)`：够糊到看不出细节，又不至于变成一块纯色；
        *   · `opacity(0.55)`：压暗一档，保证前景文字（作者行/操作栏）的对比度不受影响。
        */
-      Image(this.reel.coverUrl.length > 0 ? this.reel.coverUrl : $r('app.media.startIcon'))
-        .draggable(false)
-        .width('100%')
-        .height('100%')
-        .objectFit(ImageFit.Fill)
-        .blur(48)
-        .scale({ x: 1.15, y: 1.15 })
-        .opacity(0.55)
+      /*
+       * 背景那层高模糊封面：**有封面才画**。没有封面（从私信卡片点进来、还在按 pk 取数）时
+       * 不画任何东西 —— 以前这里兜底 `startIcon`，满屏就是一张放大的应用图标（用户报的
+       * "进入 reels 页显示封面，而不是应用图标"）。
+       */
+      if (this.reel.coverUrl.length > 0) {
+        Image(this.reel.coverUrl)
+          .draggable(false)
+          .width('100%')
+          .height('100%')
+          .objectFit(ImageFit.Fill)
+          .blur(48)
+          .scale({ x: 1.15, y: 1.15 })
+          .opacity(0.55)
+      }
       /*
        * **画面盒子**：宽度永远铺满屏幕，高度按**视频自己的比例**（实测优先，见 aspect()）。
        *
@@ -1086,17 +1093,19 @@ struct ReelSlide {
        */
       Stack({ alignContent: Alignment.Center }) {
         // 封面先铺底：视频起播前不会黑屏，滑过去也立刻有画面。**和播放器同一个盒子**，
-        // 所以撤封面时不会有任何错位。
-        Image(this.reel.coverUrl.length > 0 ? this.reel.coverUrl : $r('app.media.startIcon'))
-          .draggable(false)
-          .width('100%')
-          .height('100%')
-          .objectFit(ImageFit.Contain)
+        // 所以撤封面时不会有任何错位。没有封面就留空（不要画 startIcon，见上一条说明）。
+        if (this.reel.coverUrl.length > 0) {
+          Image(this.reel.coverUrl)
+            .draggable(false)
+            .width('100%')
+            .height('100%')
+            .objectFit(ImageFit.Contain)
+        }
         /*
          * **"还没从 pk 取到数据"的加载态**（需求：视频/图片/用户信息都不从会话里取，按 pk 现取）。
          *
-         * 这一条刚进页时既没有封面也没有视频地址（都还在路上），画 `startIcon` 看着像一条坏数据；
-         * 给一颗转圈，数据回来就换掉 —— 用户至少知道"正在取"，而不是"打不开"。
+         * 这一条刚进页时既没有封面也没有视频地址（都还在路上）：给一颗转圈，数据回来就换掉 ——
+         * 用户至少知道"正在取"，而不是"打不开"。
          */
         if (this.reel.coverUrl.length === 0 && !this.reel.playable()) {
           LoadingProgress()
@@ -1164,8 +1173,10 @@ struct ReelSlide {
             .height('100%')
         }
         // 首帧还没上屏：再盖一层同样大小的封面（同一个盒子，不会错位），且**不吃手势**。
-        if (this.playing && this.reel.playable() && !this.ready) {
-          Image(this.reel.coverUrl.length > 0 ? this.reel.coverUrl : $r('app.media.startIcon'))
+        // 没有封面就不盖（画面交给播放器；这里的 startIcon 兜底会把应用图标糊在全屏上）。
+        if (this.playing && this.reel.playable() && !this.ready
+          && this.reel.coverUrl.length > 0) {
+          Image(this.reel.coverUrl)
             .draggable(false)
             .width('100%')
             .height('100%')
@@ -2774,18 +2785,20 @@ export struct ReelsPage {
        * 之前这一层"看不见"，根因不是位置、不是比例，而是**信息层 `ReelOverlay` 有一块不透明的黑底**
        * （已在本轮改透明），所以现在能看到它了。
        */
-      Image(reel.coverUrl.length > 0 ? reel.coverUrl : $r('app.media.startIcon'))
-        .draggable(false)
-        .width('100%')
-        .height('100%')
-        .objectFit(ImageFit.Fill)
-        /*
-         * 用户反馈："亮度很高" → 去掉之前的 `brightness(1.35)`（那是为了让暗场景不像黑边，
-         * 代价就是亮场景发白）；"模糊程度调最高" → blur 拉到 120，再压一档透明度让它沉下去。
-         */
-        .blur(120)
-        .opacity(0.75)
-        .hitTestBehavior(HitTestMode.None)
+      if (reel.coverUrl.length > 0) {
+        Image(reel.coverUrl)
+          .draggable(false)
+          .width('100%')
+          .height('100%')
+          .objectFit(ImageFit.Fill)
+          /*
+           * 用户反馈："亮度很高" → 去掉之前的 `brightness(1.35)`（那是为了让暗场景不像黑边，
+           * 代价就是亮场景发白）；"模糊程度调最高" → blur 拉到 120，再压一档透明度让它沉下去。
+           */
+          .blur(120)
+          .opacity(0.75)
+          .hitTestBehavior(HitTestMode.None)
+      }
       /*
        * **"画面之外"那一层：单击 = 隐藏 / 恢复全局控件**（需求第 4 条）。
        *

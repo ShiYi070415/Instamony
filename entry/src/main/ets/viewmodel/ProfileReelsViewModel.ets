@@ -230,6 +230,19 @@ export class ProfileReelsViewModel implements ReelStreamVm {
     if (detail.mediaId.length > 0 && !ProfileReelsViewModel.isNumeric(reel.mediaId)) {
       reel.mediaId = detail.mediaId;
     }
+    /*
+     * **封面**（用户报："进入 reels 页显示封面，而不是应用图标"）：
+     * 从私信卡片进来的那条进页时 `coverUrl` 是空的（按需求不从会话里取数），所以这里必须把
+     * 详情里的那张图贴上去 —— 否则那一页永远只有 `startIcon` 兜底。
+     * 视频帖的详情里也带 `image_versions2`（首帧封面），一样用它。
+     */
+    if (reel.coverUrl.length === 0 && detail.images.length > 0) {
+      reel.coverUrl = detail.images[0];
+    }
+    if (reel.width <= 0 && detail.width > 0) {
+      reel.width = detail.width;
+      reel.height = detail.height;
+    }
     if (reel.videoUrl.length === 0 && detail.hasVideo()) {
       reel.videoUrl = detail.display;
       reel.originalVideoUrl = detail.original;

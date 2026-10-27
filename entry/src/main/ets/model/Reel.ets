@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Reels 视频流的数据模型。
  *
  * 数据来自页面侧的小脚本抽取（见 bridge/WebScripts 的 reelsScript）：
@@ -82,9 +82,15 @@ export class Reel {
    * 可播放的视频地址（**可变**，见类头的说明）；空 = 还没取到（那时只画封面）。
    */
   videoUrl: string;
-  readonly coverUrl: string;
-  readonly width: number;
-  readonly height: number;
+  /**
+   * 封面（**可变**：从私信卡片点开的那条进页时什么画面都没有，封面要等 `media/{pk}/info/`
+   * 那一发回来才贴上去 —— 见 ProfileReelsViewModel.applyDetail）。
+   */
+  coverUrl: string;
+  /** 媒体原始宽高（**可变**：同上，按 pk 取回详情后才填，画面盒子才按真实比例）。
+   *  0 = 不知道（那时按屏幕比例画）。 */
+  width: number;
+  height: number;
   /** 作者名（**可变**：从私信卡片点开的那条是先有封面、进页后再按短码补数据的，见 ProfileReelsViewModel.ensureDetail）。 */
   author: string;
   /**
