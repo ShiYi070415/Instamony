@@ -1,4 +1,4 @@
-/*
+﻿/*
  * 一条私信会话（会话详情）的视图模型。
  *
  * ## 和 DirectViewModel 的分工
@@ -28,6 +28,8 @@ import { AppLifecycle } from '../core/AppLifecycle';
 import { ReelsCrashLog } from '../core/ReelsCrashLog';
 // 分享卡片一出现就预取它的帖子详情（见 prefetchShareCards）。
 import { NativeMediaInfo } from '../core/NativeMediaInfo';
+// 同一进程内再进这条会话时先铺上次那一屏（见 open 的说明）。
+import { ThreadSnapshot } from '../core/ThreadSnapshot';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'DirectThreadViewModel';
@@ -257,7 +259,16 @@ export class DirectThreadViewModel {
     this.fallbackGroup = isGroup;
     this.fallbackUserId = userId;
     this.fallbackUsername = username;
-    this.view = null;
+    /*
+     * **同一进程内再进这条会话：先把上一次那一屏直接铺上**（用户报："初次加载会话会有点慢"）。
+     *
+     * 快照只放内存（见 core/ThreadSnapshot，不落地 —— 用户要求过不要文本快照缓存），
+     * 所以这是"退出再进来"和"来回切换会话"这两条最常见的路径：
+     *   · 有快照 → 0 毫秒出画面，网络那一发回来整份替换（load 里照旧）；
+     *   · 没有快照 → 和以前一样，空着等网络（标题/头像已经由 fallback 那几栏先画出来）。
+     */
+    const snapshot: DirectThreadView | null = ThreadSnapshot.load(threadId);
+    this.view = snapshot;
     this.onView(this.view);
     this.diag = '-';
     this.pending = kept;
@@ -300,6 +311,7 @@ export class DirectThreadViewModel {
     messages.sort((a: DirectMessage, b: DirectMessage): number => a.tsMs - b.tsMs);
     this.view = new DirectThreadView(view.id, view.title, view.withUsername, view.withAvatar,
       view.withId, messages, view.hasOlder, view.oldestCursor, view.isGroup, view.withFullName);
+    ThreadSnapshot.save(this.threadId, this.view);
     // 刚有推送到达：别让轮询紧接着再发一发同样的请求（见 pollOnce 的 8 秒闸）。
     this.lastLoadAtMs = Date.now();
     this.onView(this.view);
@@ -439,7 +451,8 @@ export class DirectThreadViewModel {
         return;
       }
       this.view = view;
-      // 分享卡片的现场（诊断用）：卡片没画出来时，这一行能区分"解析没认出作者/正文"还是"界面没画"。
+      // 存一份内存快照：再进这条会话时先铺它（见 open 里那段说明）。
+      ThreadSnapshot.save(wantThread, view);
       this.noteShareCards(view);
       // 卡片在屏上了就顺手把帖子详情预取起来（需求："卡片出现在会话时预加载"）。
       this.prefetchShareCards(view);
@@ -847,6 +860,7 @@ export class DirectThreadViewModel {
     merged.sort((a: DirectMessage, b: DirectMessage): number => a.tsMs - b.tsMs);
     this.view = new DirectThreadView(view.id, view.title, view.withUsername, view.withAvatar,
       view.withId, merged, view.hasOlder, view.oldestCursor, view.isGroup, view.withFullName);
+    ThreadSnapshot.save(this.threadId, this.view);
     this.onView(this.view);
     // 服务端副本进来 → 本地那条乐观气泡在同一个 tick 里撤掉（见 applyIncoming 的说明）。
     this.dropConfirmedPending();

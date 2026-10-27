@@ -9330,6 +9330,17 @@ struct Index {
       // 服务端标成功后再补一次（幂等），并把"读到的确切时刻"写进台账。
       this.directVm.markThreadRead(threadId, tsMs);
     };
+    /*
+     * **首屏请求提前到压页面之前**（用户报："初次加载会话会有点慢"）。
+     *
+     * 页面滑上来的动画约 300ms，这段时间以前完全空等：现在在 pushPath 之前就把这一发打出去，
+     * 页面同步上来（aboutToAppear → syncFromVm）时数据通常已经在路上甚至到了。
+     * 页面自己那次 `load()` 会被 busyFor 闸门挡掉（同一会话正在读），不会重复请求。
+     */
+    this.directThreadVm.load().then((): void => {
+    }).catch((error: Error): void => {
+      hilog.warn(DOMAIN, TAG, 'thread preload failed: %{public}s', error.message);
+    });
     this.navStack.pushPath({ name: DIRECT_THREAD_PAGE, param: thread.id });
   }
 
