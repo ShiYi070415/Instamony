@@ -1,4 +1,4 @@
-﻿/*
+/*
 /**
  * Instamony native shell.
  *
@@ -15,7 +15,7 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { SymbolGlyphModifier } from '@kit.ArkUI';
-import { common } from '@kit.AbilityKit';
+import { common, Want } from '@kit.AbilityKit';
 import { pasteboard, BusinessError } from '@kit.BasicServicesKit';
 // curves：下沉收缩的补间用系统那套弹簧（springMotion，带过冲，比 EaseOut 更"弹"）。
 // uiMaterial：只用来读应用级沉浸光感开关的状态（见 aboutToAppear 的日志）。
@@ -205,6 +205,8 @@ import { NativeUserInfo } from '../core/NativeUserInfo';
 import { ApiThrottle } from '../core/ApiThrottle';
 // 退到后台后仍能再跑几分钟：短时任务 + 后台收件箱检查（见 core/BackgroundKeep）。
 import { BackgroundInbox, BackgroundKeep } from '../core/BackgroundKeep';
+// 站外地址一律交给系统浏览器（见 core/WebPolicy 与 openWeb）。
+import { WebPolicy } from '../core/WebPolicy';
 // 降噪度量（临时 toast 用，见 aboutToAppear 末尾那段）。
 import { MobileRequest } from '../core/mobileapi/MobileRequest';
 // 首页时间线"能不能走移动端"的一次性实验（见 core/mobileapi/MobileFeedProbe）。
@@ -4460,11 +4462,54 @@ struct Index {
    *   · **已经挂着**：直接让现有控制器导航。
    */
   private openWeb(url: string): void {
+    /*
+     * **站外地址不进内置网页**（安全 + 上架审核口径）。
+     *
+     * 内置网页握着用户的 Instagram 会话 Cookie：让它加载任意地址，等于把"带登录态的浏览器"
+     * 交给任何一条外链。所以先过一遍白名单（见 core/WebPolicy）：站外的用**系统浏览器**打开，
+     * 站内的才交给内嵌网页。
+     */
+    if (!WebPolicy.isAllowed(url)) {
+      hilog.info(DOMAIN, TAG, 'openWeb to external browser (%{public}d chars)', url.length);
+      this.openExternal(url);
+      return;
+    }
     this.noteStartUrl(url);
     this.mountWebHost();
     this.webVisible = true;
     this.statusShown = false;
     this.bridge.loadUrl(url);
+  }
+
+  /**
+   * 用**系统浏览器**打开一条站外地址（viewData 意图，交给系统里注册的浏览器）。
+   *
+   * 为什么不用内嵌网页：见 openWeb 的说明 —— 那个内嵌网页带着用户的登录态，
+   * 站外页面不该跑在它里面。打开失败就退回内嵌网页（至少别让用户点了没反应）。
+   */
+  private openExternal(url: string): void {
+    try {
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      if (context === undefined || context === null) {
+        return;
+      }
+      const want: Want = {
+        action: 'ohos.want.action.viewData',
+        entities: ['entity.system.browsable'],
+        uri: url
+      };
+      context.startAbility(want).catch((error: BusinessError): void => {
+        hilog.warn(DOMAIN, TAG, 'external open failed (%{public}d): %{public}s',
+          error.code, error.message ?? '-');
+        this.noteStartUrl(url);
+        this.mountWebHost();
+        this.webVisible = true;
+        this.statusShown = false;
+        this.bridge.loadUrl(url);
+      });
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'external open threw: %{public}s', (error as Error).message);
+    }
   }
 
   /**
@@ -12144,6 +12189,10 @@ struct Index {
           signedIn: this.signedIn,
           // 这一次挂载该从哪条地址起步（见 webStartUrl / noteStartUrl）。
           startUrl: this.webStartUrl,
+          onBlockedUrl: (url: string): void => {
+            // 内置网页里点到的站外地址：交给系统浏览器（见 core/WebPolicy）。
+            this.openExternal(url);
+          },
           onPageReady: (): void => {
             this.handlePageReady();
           },

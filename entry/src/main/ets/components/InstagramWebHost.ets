@@ -15,6 +15,8 @@ import { InstagramPageBridge, InstagramBridgeProxy } from '../bridge/PageBridge'
 import { SESSION_WATCHER } from '../bridge/WebScripts';
 import { AppLifecycle } from '../core/AppLifecycle';
 import { InstagramCookieJar, InstagramCookieSnapshot } from '../core/InstagramCookieJar';
+// 内置网页只允许去这几个域（见 core/WebPolicy 的文件头）。
+import { WebPolicy } from '../core/WebPolicy';
 
 const TAG: string = 'InstagramWebHost';
 const DOMAIN: number = 0xFF00;
