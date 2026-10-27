@@ -108,9 +108,20 @@ export class DirectMessage {
   readonly mediaUrl: string;
   /** 这条媒体是不是视频（缩略图上要盖一颗播放标记）。 */
   readonly isVideo: boolean;
+  /**
+   * 分享卡片指向的**帖子短码**（`media_share.code` / `clip.clip.code` / `reel_share.media.code`，
+   * 或者从 XMA 的 `target_url` 里拆出来的 `/p/<code>/`、`/reel/<code>/`）。
+   * 空串 = 这条消息没有可打开的帖子（纯文本 / 贴纸 / 语音…）。
+   */
+  readonly shareCode: string;
+  /** 分享卡片的外部链接（链接卡片 `link_context.link_url`、XMA 的 `target_url`）。空串 = 没有。 */
+  readonly shareUrl: string;
+  /** 分享的是不是 Reel（决定用 /reel/ 还是 /p/ 打开）。 */
+  readonly shareIsVideo: boolean;
 
   constructor(id: string, userId: string, mine: boolean, tsMs: number, kind: string,
-              text: string, mediaUrl: string = '', isVideo: boolean = false) {
+              text: string, mediaUrl: string = '', isVideo: boolean = false,
+              shareCode: string = '', shareUrl: string = '', shareIsVideo: boolean = false) {
     this.id = id;
     this.userId = userId;
     this.mine = mine;
@@ -119,6 +130,9 @@ export class DirectMessage {
     this.text = text;
     this.mediaUrl = mediaUrl;
     this.isVideo = isVideo;
+    this.shareCode = shareCode;
+    this.shareUrl = shareUrl;
+    this.shareIsVideo = shareIsVideo;
   }
 }
 
@@ -964,9 +978,12 @@ export class DirectMapper {
     }
     const userId: string = JsonRead.strOf(item, 'user_id');
     const micros: number = JsonRead.numOf(item, 'timestamp');
+    const shareCode: string = DirectMapper.shareCodeOf(item);
+    const shareUrl: string = DirectMapper.shareUrlOf(item);
+    const shareVideo: boolean = DirectMapper.shareIsVideoOf(item);
     return new DirectMessage(id, userId, ownId.length > 0 && userId === ownId,
       micros > 0 ? Math.round(micros / 1000) : Date.now(), kind, text, mediaUrl,
-      DirectMapper.hasVideoMedia(item));
+      DirectMapper.hasVideoMedia(item), shareCode, shareUrl, shareVideo);
   }
 
   /**
@@ -1164,6 +1181,128 @@ export class DirectMapper {
   }
 
   /** 这条消息的媒体里有没有视频（缩略图上盖一颗播放标记用）。 */
+  /**
+   * 分享卡片的**帖子短码**（拿不到给空串）。
+   *
+   * 覆盖的形状（真机响应里都见过）：
+   *   · `media_share.code`      —— 转发一条帖子；
+   *   · `clip.clip.code`        —— 分享一条 Reel（外面还套一层 `clip`）；
+   *   · `reel_share.media.code` —— 分享一条动态里的媒体；
+   *   · XMA（`xma_clip` / `xma_media_share` / `generic_xma`）：没有 code 字段，
+   *     但有 `target_url`（形如 `https://www.instagram.com/reel/DAbc123/`）—— 从 URL 里拆。
+   */
+  private static shareCodeOf(item: Record<string, Object>): string {
+    const share: Record<string, Object> | null = JsonRead.recordOf(item, 'media_share');
+    if (share !== null) {
+      const code: string = JsonRead.strOf(share, 'code');
+      if (code.length > 0) {
+        return code;
+      }
+    }
+    const clip: Record<string, Object> | null = JsonRead.recordOf(item, 'clip');
+    if (clip !== null) {
+      const inner: Record<string, Object> | null = JsonRead.recordOf(clip, 'clip');
+      if (inner !== null) {
+        const code: string = JsonRead.strOf(inner, 'code');
+        if (code.length > 0) {
+          return code;
+        }
+      }
+    }
+    const reel: Record<string, Object> | null = JsonRead.recordOf(item, 'reel_share');
+    if (reel !== null) {
+      const media: Record<string, Object> | null = JsonRead.recordOf(reel, 'media');
+      if (media !== null) {
+        const code: string = JsonRead.strOf(media, 'code');
+        if (code.length > 0) {
+          return code;
+        }
+      }
+    }
+    // XMA：从目标链接里拆 /p/<code>/ 或 /reel/<code>/（也认 /reels/<code>/）。
+    return DirectMapper.codeFromUrl(DirectMapper.shareUrlOf(item));
+  }
+
+  /** 从 Instagram 帖子链接里拆短码（不是帖子链接就给空串）。 */
+  private static codeFromUrl(url: string): string {
+    if (url.length === 0) {
+      return '';
+    }
+    const markers: Array<string> = ['/reel/', '/reels/', '/p/', '/tv/'];
+    for (let index: number = 0; index < markers.length; index++) {
+      const at: number = url.indexOf(markers[index]);
+      if (at < 0) {
+        continue;
+      }
+      const rest: string = url.substring(at + markers[index].length);
+      const slash: number = rest.search(/[/?#]/);
+      const code: string = slash < 0 ? rest : rest.substring(0, slash);
+      if (code.length > 0) {
+        return code;
+      }
+    }
+    return '';
+  }
+
+  /**
+   * 分享卡片的**可打开链接**（优先帖子链接，其次外部链接）。
+   *
+   * 顺序：`link.link_context.link_url`（外链卡片）→ XMA 的 `target_url`。
+   * 内部的帖子/Reel 也在这里出现（XMA 的 target_url 就是帖子地址）。
+   */
+  private static shareUrlOf(item: Record<string, Object>): string {
+    const link: Record<string, Object> | null = JsonRead.recordOf(item, 'link');
+    if (link !== null) {
+      const context: Record<string, Object> | null = JsonRead.recordOf(link, 'link_context');
+      if (context !== null) {
+        const url: string = JsonRead.strOf(context, 'link_url');
+        if (url.length > 0) {
+          return url;
+        }
+      }
+    }
+    // XMA：按 item_type 取数组，再退回几个已知键名（和 xmaImageUrl 同一套遍历）。
+    const type: string = JsonRead.strOf(item, 'item_type');
+    const holders: Array<string> = [];
+    if (type.length > 0) {
+      holders.push(type);
+    }
+    const known: Array<string> = ['xma_clip', 'xma_media_share', 'generic_xma', 'xma_share'];
+    for (let index: number = 0; index < known.length; index++) {
+      if (holders.indexOf(known[index]) < 0) {
+        holders.push(known[index]);
+      }
+    }
+    for (let index: number = 0; index < holders.length; index++) {
+      const attachments: Array<Object> = JsonRead.arrayOf(item, holders[index]);
+      for (let at: number = 0; at < attachments.length && at < 2; at++) {
+        const one: Record<string, Object> | null = JsonRead.asRecord(attachments[at]);
+        if (one === null) {
+          continue;
+        }
+        const url: string = JsonRead.strOf(one, 'target_url');
+        if (url.length > 0) {
+          return url;
+        }
+      }
+    }
+    return '';
+  }
+
+  /** 分享的是不是 Reel（决定打开 /reel/ 还是 /p/）。 */
+  private static shareIsVideoOf(item: Record<string, Object>): boolean {
+    const share: Record<string, Object> | null = JsonRead.recordOf(item, 'media_share');
+    if (share !== null && JsonRead.numOf(share, 'media_type') === 2) {
+      return true;
+    }
+    const type: string = JsonRead.strOf(item, 'item_type');
+    if (type.indexOf('clip') >= 0) {
+      return true;
+    }
+    const url: string = DirectMapper.shareUrlOf(item);
+    return url.indexOf('/reel/') >= 0 || url.indexOf('/reels/') >= 0;
+  }
+
   private static hasVideoMedia(item: Record<string, Object>): boolean {
     const holders: Array<string> = ['media', 'media_share'];
     for (let index: number = 0; index < holders.length; index++) {

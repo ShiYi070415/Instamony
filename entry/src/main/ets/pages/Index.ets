@@ -146,7 +146,7 @@ import { Reel } from '../model/Reel';
 import { ReelSeenTime } from '../core/ReelSeenTime';
 import { CommentInputBar } from '../components/CommentInputBar';
 import { ProfileHeader, ProfileHighlight, ProfilePost, ProfileStreamPage } from '../model/Profile';
-import { DirectThread } from '../model/Direct';
+import { DirectThread, DirectMessage } from '../model/Direct';
 import { SearchUser, SearchPost } from '../model/Search';
 import { EMPTY_REEL, StoryHeroRect, StoryItem, StoryReel, StoryTray, StoryTrayItem } from '../model/Story';
 import { NativeStories } from '../core/NativeStories';
@@ -9233,6 +9233,31 @@ struct Index {
    * 网页版界面（还有地址栏那条外壳）。现在整条会话走**原生 HTTP**（读消息 + 发消息，见
    * core/NativeDirect），所以进的是自己的原生页（DirectThreadPage）。
    */
+  /**
+   * 打开私信里"转发的帖子 / Reel / 链接卡片"。
+   *
+   * 目标从 `DirectMessage` 的三个分享字段来（见 model/Direct 的 DirectMapper.shareCodeOf）：
+   *   · 有**帖子短码** → 拼规范的 Instagram 地址（Reel 用 /reel/，其余 /p/）；
+   *   · 只有**外部链接** → 直接用那个链接（链接卡片 / XMA 的 target_url）。
+   * 打开方式与信息流里点帖子一致（`openWeb`）：那条路已经有完整的网页外壳与返回键，
+   * 不需要再为"私信里的一条分享"新造一个原生页。
+   */
+  private openDirectShare(message: DirectMessage): void {
+    let url: string = '';
+    if (message.shareCode.length > 0) {
+      const kind: string = message.shareIsVideo ? 'reel' : 'p';
+      url = `https://www.instagram.com/${kind}/${message.shareCode}/`;
+    } else if (message.shareUrl.length > 0) {
+      url = message.shareUrl;
+    }
+    if (url.length === 0) {
+      return;
+    }
+    hilog.info(DOMAIN, TAG, 'direct share open code=%{public}d url=%{public}s',
+      message.shareCode.length, url.substring(0, 80));
+    this.openWeb(url);
+  }
+
   private openDirectThread(thread: DirectThread): void {
     /*
      * **直接进原生会话页**（不再先探一次、失败就弹网页）。
@@ -10734,6 +10759,10 @@ struct Index {
           },
           onFeedScroll: (deltaY: number, offsetY: number, scrollState: ScrollState): void => {
             this.onFeedScroll(deltaY, offsetY, scrollState);
+          },
+          /** 点开会话里"转发的帖子 / Reel / 链接卡片"（需求：现在只能看封面、点不进去）。 */
+          onOpenShare: (message: DirectMessage): void => {
+            this.openDirectShare(message);
           },
           onOpenUser: (username: string, userId: string): void => {
             this.openUserProfile(username, userId);

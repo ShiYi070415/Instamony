@@ -147,6 +147,9 @@ export struct DirectThreadPage {
    */
   onOpenWeb: () => void = (): void => {
   };
+  /** 点开"转发的帖子 / Reel / 链接卡片"（见 bubbleContent 的说明）。 */
+  onOpenShare: (message: DirectMessage) => void = (message: DirectMessage): void => {
+  };
   onOpenUser: (username: string, userId: string) => void =
     (username: string, userId: string): void => {
     };
@@ -760,6 +763,11 @@ export struct DirectThreadPage {
     })
   }
 
+  /** 这条消息有没有"可打开的分享目标"（帖子短码或外部链接）。 */
+  private static hasShareTarget(message: DirectMessage): boolean {
+    return message.shareCode.length > 0 || message.shareUrl.length > 0;
+  }
+
   /** 气泡内容：有图先画图，文字跟在图下面。 */
   @Builder
   bubbleContent(message: DirectMessage) {
@@ -784,7 +792,16 @@ export struct DirectThreadPage {
                 this.scrollToNewest(false);
               }
             })
-          if (message.isVideo) {
+          /*
+           * **分享卡片可点**（需求："会话里的转发帖子/Reels 现在只能看封面，点不进去"）：
+           * 有帖子短码或外部链接时，整块封面就是入口（气泡里的文字仍然可复制，不受影响）。
+           */
+          .onClick((): void => {
+            if (DirectThreadPage.hasShareTarget(message)) {
+              this.onOpenShare(message);
+            }
+          })
+          if (message.isVideo || message.shareIsVideo) {
             SymbolGlyph($r('sys.symbol.play_fill'))
               .fontSize(18)
               .fontColor([Color.White])
@@ -812,6 +829,12 @@ export struct DirectThreadPage {
             .fontSize(22)
             .fontColor([$r('app.color.secondary_text')])
         }
+          // 占位块也接同一个入口：分享的帖子这一版没给预览图时，用户仍然点得进去。
+          .onClick((): void => {
+            if (DirectThreadPage.hasShareTarget(message)) {
+              this.onOpenShare(message);
+            }
+          })
       }
       if (message.text.length > 0) {
         Text(message.text)
@@ -822,6 +845,7 @@ export struct DirectThreadPage {
           .borderRadius(18)
           .constraintSize({ maxWidth: this.bubbleMaxVp() })
       } else if (message.mediaUrl.length === 0 && !DirectThreadPage.isMediaKind(message.kind)) {
+        // 没有封面也没有 media 类型：有分享目标时这一块就是入口（点了能查看）。
         Text($r('app.string.direct_kind_other'))
           .fontSize(15)
           .fontColor(message.mine ? $r('app.color.on_accent') : $r('app.color.primary_text'))
