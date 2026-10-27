@@ -71,6 +71,8 @@ const NOTIFY_AGENT_WAIT_MS: number = 400;
 export class PushCenter {
   /** Push Kit 给的 token（空 = 没拿到 / 没配 AGC）。 */
   private static token: string = '';
+  /** 上一次取 token 失败的原因（1000900010 这类；空串 = 没失败过）。 */
+  private static tokenError: string = '';
   /** 已经初始化过（幂等）。 */
   private static started: boolean = false;
   /** 通知分类（slot）注册过没有（幂等）。 */
@@ -172,10 +174,12 @@ export class PushCenter {
       pushService.getToken()
         .then((token: string): void => {
           PushCenter.token = token;
+          PushCenter.tokenError = '';
           hilog.info(DOMAIN, TAG, 'push token len=%{public}d head=%{public}s',
             token.length, token.substring(0, 12));
         })
         .catch((error: BusinessError): void => {
+          PushCenter.tokenError = '${error.code}';
           hilog.info(DOMAIN, TAG, 'push token unavailable (%{public}d): %{public}s',
             error.code, error.message ?? '-');
         });
@@ -201,6 +205,11 @@ export class PushCenter {
   /** 推送 token 本身（空串 = 还没拿到；BYO 中转要把它抄走，见设置页的「复制中转材料」）。 */
   static tokenNow(): string {
     return PushCenter.token;
+  }
+
+  /** 上一次取 token 失败的错误码（诊断/中转材料里带上，见 registerPush）。 */
+  static errorNow(): string {
+    return PushCenter.tokenError;
   }
 
   /**

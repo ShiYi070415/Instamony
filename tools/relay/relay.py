@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Instamony **BYO 中转**：在自己家里那台机器上低频轮询 IG 收件箱，有新私信就推送。
@@ -73,6 +73,15 @@ def load_config(path):
     elif channel == "meow":
         if not ((notify.get("meow") or {}).get("nickname")):
             log("channel=meow 但没填昵称")
+            sys.exit(2)
+    elif channel == "telegram":
+        tg = notify.get("telegram") or {}
+        if not (tg.get("botToken") and tg.get("chatId")):
+            log("channel=telegram 但 botToken/chatId 没填")
+            sys.exit(2)
+    elif channel == "webhook":
+        if not ((notify.get("webhook") or {}).get("url")):
+            log("channel=webhook 但 url 没填")
             sys.exit(2)
     else:
         log("未知的 notify.channel: " + channel)
@@ -222,13 +231,52 @@ def push_meow(cfg, title, body, thread_id):
     log("MeoW 推送已发：%s" % raw[:160])
 
 
+def push_telegram(cfg, title, body, thread_id):
+    """Telegram 机器人：不受 MeoW 那种"共用 IP 判攻击"的影响，手机上有 Telegram 就有通知。"""
+    tg = cfg["notify"]["telegram"]
+    payload = urllib.parse.urlencode({
+        "chat_id": tg["chatId"],
+        "text": title + "\n" + body,
+        "disable_web_page_preview": "true",
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.telegram.org/bot%s/sendMessage" % tg["botToken"], data=payload)
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        raw = resp.read().decode("utf-8", "replace")
+    log("Telegram 推送已发：%s" % raw[:120])
+
+
+def push_webhook(cfg, title, body, thread_id):
+    """通用 webhook（企业微信 / 钉钉 / Bark / 自建服务都行）：POST 一个 JSON 过去。"""
+    hook = cfg["notify"]["webhook"]
+    payload = json.dumps({
+        "title": title,
+        "body": body,
+        "threadId": thread_id,
+        "url": cfg.get("openUrl") or "instamony://direct",
+    }).encode()
+    req = urllib.request.Request(hook["url"], data=payload)
+    req.add_header("Content-Type", "application/json; charset=UTF-8")
+    for key in (hook.get("headers") or {}):
+        req.add_header(key, hook["headers"][key])
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        raw = resp.read().decode("utf-8", "replace")
+    log("Webhook 推送已发：%s" % raw[:120])
+
+
 def notify(cfg, title, body, thread_id):
     channel = cfg["notify"]["channel"]
     try:
         if channel == "agc":
             push_agc(cfg, title, body, thread_id)
-        else:
+        elif channel == "meow":
             push_meow(cfg, title, body, thread_id)
+        elif channel == "telegram":
+            push_telegram(cfg, title, body, thread_id)
+        elif channel == "webhook":
+            push_webhook(cfg, title, body, thread_id)
+        else:
+            log("未知的 notify.channel: " + channel)
     except Exception as error:
         log("推送失败（这一轮不算丢，下一轮会重新判定）：%s" % error)
 

@@ -1215,6 +1215,7 @@ export struct SettingsPanel {
       const material: RelayMaterial = new RelayMaterial();
       material.cookie = snapshot.signedIn ? snapshot.cookie : '';
       material.pushToken = PushCenter.tokenNow();
+      material.pushError = PushCenter.errorNow();
       material.signedIn = snapshot.signedIn;
       const text: string = JSON.stringify(material, null, 2);
       hilog.info(DOMAIN, TAG, 'relay material copy signedIn=%{public}s cookie=%{public}d token=%{public}d',
@@ -2049,5 +2050,7 @@ class RelayMaterial {
   cookie: string = '';
   /** AGC Push Kit 的设备 token。空串 = 还没拿到（多半是 AGC 没配置，见 PushCenter.registerPush）。 */
   pushToken: string = '';
+  /** 取 token 失败时的错误码（例如 1000900010 Illegal application identity）。 */
+  pushError: string = '';
   signedIn: boolean = false;
 }
