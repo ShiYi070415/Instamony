@@ -633,13 +633,14 @@ export struct DirectThreadPage {
   @StorageProp(SETTING_MATERIAL_THICKNESS) cardThickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
 
   /**
-   * 卡片宽度（需求）：帖子卡片占屏幕 2/3，视频卡片占 1/3。
+   * 卡片宽度（需求）：帖子卡片占屏幕 2/3，**视频卡片是帖子卡片的三分之二**（= 屏幕 4/9）。
    *
    * 用屏幕宽度而不是气泡宽度：这两种卡片是"内容卡片"，和左右气泡的宽度口径不同。
    */
   private shareCardWidth(message: DirectMessage): number {
     const width: number = this.screenWidthVp > 0 ? this.screenWidthVp : FALLBACK_WIDTH_VP;
-    return message.shareKind === 'video' ? width / 3 : width * 2 / 3;
+    const postWidth: number = width * 2 / 3;
+    return message.shareKind === 'video' ? postWidth * 2 / 3 : postWidth;
   }
 
   /** 卡片封面高度：按"视频 16:9 竖屏 / 帖子方图略竖"给一个稳定比例（不做裁剪跳变）。 */
@@ -800,6 +801,14 @@ export struct DirectThreadPage {
    *
    * 头像**必须有**时才插 Image：ArkTS 里 `Image(undefined)` 画不出来（上一版就是这么"没绘制好"的）。
    */
+  /**
+   * 作者行（头像 + 名字）。
+   *
+   * 头像**必须有**时才插 Image：ArkTS 里 `Image(undefined)` 画不出来（上一版就是这么"没绘制好"的）。
+   *
+   * `maxWidth` 是**上限**而不是固定宽度（需求："用户资讯栏的容器宽度跟随文本宽度自适应"）——
+   * 所以这里用 `constraintSize`，外面的材质胶囊因此会自动收紧到"头像 + 名字"的宽度。
+   */
   @Builder
   shareUserRow(message: DirectMessage, fontSize: number, avatarSize: number, maxWidth: number) {
     Row({ space: 6 }) {
@@ -829,10 +838,35 @@ export struct DirectThreadPage {
         .fontColor($r('app.color.primary_text'))
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .layoutWeight(1)
+        .constraintSize({ maxWidth: Math.max(24, maxWidth - avatarSize - 6) })
     }
-    .width(maxWidth)
+    .constraintSize({ maxWidth: maxWidth })
     .alignItems(VerticalAlign.Center)
+  }
+
+  /**
+   * 帖子卡片的正文（需求："正文部分文本颜色改成白色，正文中用户名需要粗体"）。
+   *
+   * 用户名的处理：正文前面加一段**粗体**的作者名（IG 自己也是这么排的：`username 正文…`），
+   * 后面是正文本身。两段拼在同一个 Text 里，所以"两行 + 省略号"是对整段生效的。
+   */
+  @Builder
+  shareCaptionText(message: DirectMessage) {
+    Text() {
+      if (message.shareUser.length > 0) {
+        Span(message.shareUser + ' ')
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Color.White)
+      }
+      Span(message.shareCaption)
+        .fontColor(Color.White)
+    }
+    .fontSize(12)
+    .maxLines(2)
+    .textOverflow({ overflow: TextOverflow.Ellipsis })
+    .width('100%')
+    .textAlign(TextAlign.Start)
+    .padding({ left: 10, right: 10, top: 8, bottom: 10 })
   }
 
   /** 封面：有地址就画图，没有就画一块带图标的占位（尺寸永远固定，不会塌成 0）。 */
@@ -880,22 +914,16 @@ export struct DirectThreadPage {
         Column() {
           if (message.shareUser.length > 0 || message.shareAvatar.length > 0) {
             Column() {
-              this.shareUserRow(message, 13, 22, this.shareCardWidth(message) - 20)
+              // 需求："帖子卡片的用户资讯栏内容大小增加"（头像 26、名字 15）。
+              this.shareUserRow(message, 15, 26, this.shareCardWidth(message) - 20)
             }
             .width(this.shareCardWidth(message))
             .alignItems(HorizontalAlign.Start)
-            .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+            .padding({ left: 10, right: 10, top: 9, bottom: 9 })
           }
           this.shareCover(message, this.shareCardWidth(message), this.shareCardHeight(message))
           if (message.shareCaption.length > 0) {
-            Text(message.shareCaption)
-              .fontSize(12)
-              .fontColor($r('app.color.secondary_text'))
-              .maxLines(2)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .width('100%')
-              .textAlign(TextAlign.Start)
-              .padding({ left: 10, right: 10, top: 8, bottom: 10 })
+            this.shareCaptionText(message)
           }
         }
         .width(this.shareCardWidth(message))
@@ -940,10 +968,10 @@ export struct DirectThreadPage {
     Stack({ alignContent: Alignment.Center }) {
       // 底层封面：宽高都给死，铺满整张卡片。
       this.shareCover(message, this.shareCardWidth(message), this.shareCardHeight(message))
-      // 悬浮在封面左上角的用户资讯栏（带沉浸光感底）。
+      // 悬浮在封面左上角的用户资讯栏（带沉浸光感底；宽度跟着文本自适应，见 shareUserRow）。
       if (message.shareUser.length > 0 || message.shareAvatar.length > 0) {
         Toggle({ type: ToggleType.Button, isOn: false }) {
-          this.shareUserRow(message, 10, 16, this.shareCardWidth(message) - 36)
+          this.shareUserRow(message, 10, 16, this.shareCardWidth(message) - 26)
         }
         .padding({ left: 5, right: 8, top: 3, bottom: 3 })
         .borderRadius(11)
@@ -954,9 +982,9 @@ export struct DirectThreadPage {
         .position({ x: 7, y: 7 })
         .hitTestBehavior(HitTestMode.None)
       }
-      // 垂直横向置中：暂停图标（纯图标、无按钮、不吃触摸）。
-      SymbolGlyph($r('sys.symbol.pause_fill'))
-        .fontSize(24)
+      // 垂直横向置中：播放三角（系统符号；纯图标、无按钮、不吃触摸）。
+      SymbolGlyph($r('sys.symbol.play_fill'))
+        .fontSize(28)
         .fontColor([Color.White])
         .hitTestBehavior(HitTestMode.None)
     }
