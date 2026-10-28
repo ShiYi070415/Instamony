@@ -504,6 +504,23 @@ export class MobileSession {
    * 而 `persist()` 见身份为空直接返回 —— 于是盘上那份旧 claim / rur / authorization
    * 会被下一段会话继续带上（都是**会话级**材料，串会话用就是失败）。
    */
+  /**
+   * "下一次会话复位不要清掉 authorization" 的短时通行证（毫秒时间戳，0 = 没有）。
+   *
+   * 为什么需要：粘贴导入设备级会话后，界面会立刻经历一次「未登录 → 已登录」的登录态翻转，
+   * 而复位那条路会调 `clearSession()`。可设备级会话**唯一的凭据就是这份 authorization** ——
+   * 清掉之后 `ensure()` 既没有 sessionid 也没有 authorization，界面就"进去了但什么都没有"。
+   *
+   * 为什么安全：`ensure()` 本身要求 Cookie 罐里先有账号（ds_user_id / sessionid）才会用这份
+   * authorization；真退出登录会先清空 Cookie 罐，所以残留的 authorization 不会被当成登录态。
+   */
+  private static keepAuthorizationUntil: number = 0;
+
+  /** 导入设备级会话后调一次：让紧跟着的那次复位别把 authorization 抹掉。 */
+  static keepAuthorizationForNextReset(): void {
+    MobileSession.keepAuthorizationUntil = Date.now() + 60000;
+  }
+
   clearSession(keepAuthorizationFor: string = ''): void {
     const identity: MobileIdentity | null = this.identity;
     if (identity === null) {
@@ -523,18 +540,34 @@ export class MobileSession {
       && identity.sessionId.length === 0
       && identity.userId === keepAuthorizationFor
       && identity.authorizationOwner === keepAuthorizationFor;
-    if (sameAccount) {
+    /*
+     * 第二条"别清"的理由：**刚导入设备级会话**（见 keepAuthorizationForNextReset）。
+     * 登录态翻转时调用方未必能告诉我们目标账号（复位发生在 Cookie 罐刷新前后都有可能），
+     * 所以用一张 60 秒的通行证兜住这一次。
+     */
+    const justAdopted: boolean = MobileSession.keepAuthorizationUntil > Date.now()
+      && identity.sessionId.length === 0
+      && identity.authorization.length > 0;
+    const keep: boolean = sameAccount || justAdopted;
+    hilog.info(DOMAIN, TAG,
+      'clearSession keep=%{public}s (same=%{public}s, justAdopted=%{public}s, sid=%{public}d, auth=%{public}db)',
+      keep ? '1' : '0', sameAccount ? '1' : '0', justAdopted ? '1' : '0',
+      identity.sessionId.length, identity.authorization.length);
+    if (keep) {
       const keptAuth: string = identity.authorization;
+      const keptOwner: string = identity.authorizationOwner;
       identity.mid = '';
       identity.wwwClaim = '0';
       identity.igURur = '';
       identity.authorization = keptAuth;
+      identity.authorizationOwner = keptOwner;
       const kept: StoredIdentity = identity.toStored();
       MobileSession.seed = kept;
       MobileSession.writeSeed(kept);
+      MobileSession.keepAuthorizationUntil = 0;
       this.identity = null;
       hilog.info(DOMAIN, TAG, 'session reset kept device-level authorization (uid=%{public}s)',
-        keepAuthorizationFor);
+        identity.userId);
       return;
     }
     identity.mid = '';

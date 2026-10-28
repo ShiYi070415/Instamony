@@ -391,6 +391,9 @@ export class CaaSession {
     if (sessionId.length === 0) {
       hilog.info(DOMAIN, TAG, 'device-level session (no sessionid), adopting authorization');
       MobileSession.adoptAuthorization(authorization, cookieUserId);
+      // 紧接着界面会经历一次「未登录 → 已登录」的复位；给这一份 authorization 一张免清通行证，
+      // 否则它会被 `clearSession()` 抹掉 —— 设备级会话的唯一凭据就没了。
+      MobileSession.keepAuthorizationForNextReset();
     }
     // 整串都种：除了会话三件套，还带 mid / rur / ig_did 这类设备材料。
     let written: number = await InstagramCookieJar.adoptCookieText(cookieText);
