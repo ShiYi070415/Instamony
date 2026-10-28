@@ -193,7 +193,8 @@ const script = [
   toFunction('mergeParams'),
   toFunction('ensureNulls'),
   toFunction('loginResponseBool'),
-  toFunction('inferChallenge')
+  toFunction('inferChallenge'),
+  toFunction('extractAac')
 ].join('\n');
 vm.runInContext(script, sandbox);
 const Ark = sandbox.CaaLogin;
@@ -206,6 +207,13 @@ const Ark = sandbox.CaaLogin;
 sandbox.base64 = (bytes, urlSafe) => Buffer.from(bytes).toString(urlSafe ? 'base64url' : 'base64');
 sandbox.utf8 = (text) => Buffer.from(String(text), 'utf8');
 sandbox.CaaSession = {};
+sandbox.CaaLogin.parse = (text) => {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    return null;
+  }
+};
 source = fs.readFileSync(ETS_SESSION, 'utf8');
 const sessionScript = [
   toFunctionAs('CaaSession', 'textFieldOf'),
@@ -261,31 +269,44 @@ check('载荷：日志文本挡在前面时仍能解析', () => {
   assert(parsed.authorization === 'Bearer IGT:2:REAL', 'ArkTS 版 authorization 不对');
 });
 
+/** 从 dump 里解析出来的成功载荷（没有就是 null；后面"两个文件接力"那项要用）。 */
+let dumpPayload = null;
+
 if (fs.existsSync(dumpFile)) {
-  check('真实响应（' + path.basename(dumpFile) + '）：ArkTS 版能解析出会话', () => {
-    const dump = JSON.parse(fs.readFileSync(dumpFile, 'utf8'));
-    const raw = dump.raw !== undefined && dump.raw !== null ? dump.raw : dump;
-    // 与 JS 版同样遍历所有字符串
-    const strings = [];
-    (function collect(value) {
-      if (typeof value === 'string') strings.push(value);
-      else if (Array.isArray(value)) value.forEach(collect);
-      else if (value && typeof value === 'object') Object.values(value).forEach(collect);
-    })(raw);
-    let hit = null;
-    for (const text of strings) {
-      const parsed = Ark.loginPayloadFromText(text);
-      if (parsed !== null) {
-        hit = parsed;
-        break;
-      }
+  /*
+   * 注意：`caa-last-response.json` 是**易变的**（每次登录失败都会覆盖；我用假账号跑回归时
+   * 也会覆盖它）。所以这份响应里没有会话时**跳过**而不是判失败 —— 否则测试会因为
+   * "上一次跑的是假账号"而红。
+   */
+  const dump = JSON.parse(fs.readFileSync(dumpFile, 'utf8'));
+  const rawDump = dump.raw !== undefined && dump.raw !== null ? dump.raw : dump;
+  const dumpStrings = [];
+  (function collect(value) {
+    if (typeof value === 'string') dumpStrings.push(value);
+    else if (Array.isArray(value)) value.forEach(collect);
+    else if (value && typeof value === 'object') Object.values(value).forEach(collect);
+  })(rawDump);
+  let hitPayload = null;
+  for (const text of dumpStrings) {
+    const parsed = Ark.loginPayloadFromText(text);
+    if (parsed !== null) {
+      hitPayload = parsed;
+      break;
     }
-    assert(hit !== null, 'ArkTS 版在真实响应里没解析出会话');
-    assert(hit.cookie.indexOf('sessionid=') >= 0, 'ArkTS 版解析出的 cookie 里没有 sessionid');
-    assert(hit.authorization.indexOf('Bearer IGT:2:') === 0, 'ArkTS 版解析出的 authorization 不对');
-    console.log('      （cookie：' + hit.cookie.split(';').map((one) => one.split('=')[0].trim()).join(',')
-      + '；authorization ' + hit.authorization.length + ' 字符）');
-  });
+  }
+  dumpPayload = hitPayload;
+  if (dumpPayload === null) {
+    console.log('  · 跳过"真实响应"两项：' + path.basename(dumpFile)
+      + ' 里没有成功会话（可能上次跑的是假账号 / 失败响应）');
+  } else {
+    check('真实响应（' + path.basename(dumpFile) + '）：ArkTS 版能解析出会话', () => {
+      assert(dumpPayload.cookie.indexOf('sessionid=') >= 0, 'ArkTS 版解析出的 cookie 里没有 sessionid');
+      assert(dumpPayload.authorization.indexOf('Bearer IGT:2:') === 0, 'authorization 形状不对');
+      console.log('      （cookie：'
+        + dumpPayload.cookie.split(';').map((one) => one.split('=')[0].trim()).join(',')
+        + '；authorization ' + dumpPayload.authorization.length + ' 字符）');
+    });
+  }
 } else {
   console.log('  · 跳过"真实响应"一项：没有 ' + dumpFile);
 }
@@ -355,27 +376,26 @@ check('会话落地（CaaSession.ets）：cookieValue / cookieTextOf / authoriza
   assert(rebuilt === auth, 'authorization_data 拼回的串与原始不一致：' + rebuilt);
 });
 
+check('取 aac：initial 与 initial_lispy 两种形状都要能取（与 JS 版对齐）', () => {
+  const withInitial = JSON.stringify({ layout: { bloks_payload: { data: [
+    { data: { key: 'CAA_ACCOUNT_ACCESS_CONTEXT:aac', initial: 'AAC-INITIAL' } }
+  ] } } });
+  assert(Ark.extractAac(withInitial) === 'AAC-INITIAL', 'initial 形状没取到');
+  const withLispy = JSON.stringify({ layout: { bloks_payload: { data: [
+    { data: { key: 'CAA_ACCOUNT_ACCESS_CONTEXT:aac',
+      initial_lispy: '\t(e1z (ii9) "AAC-FROM-LISPY")' } }
+  ] } } });
+  assert(Ark.extractAac(withLispy) === 'AAC-FROM-LISPY',
+    'initial_lispy 形状没取到（这就是 App 报"没拿到 aac"的原因）：' + JSON.stringify(Ark.extractAac(withLispy)));
+  const none = JSON.stringify({ layout: { bloks_payload: { data: [] } } });
+  assert(Ark.extractAac(none) === '', '空布局不该给出 aac');
+});
+
 const sendDump = path.join(DIR, '.tmp', 'caa-send-response.json');
-if (fs.existsSync(dumpFile)) {
+if (dumpPayload !== null) {
   check('真实响应 → 会话字段（两个文件的源码接力）：sessionid / ds_user_id / authorization',
     () => {
-      const dump = JSON.parse(fs.readFileSync(dumpFile, 'utf8'));
-      const raw = dump.raw !== undefined && dump.raw !== null ? dump.raw : dump;
-      const strings = [];
-      (function collect(value) {
-        if (typeof value === 'string') strings.push(value);
-        else if (Array.isArray(value)) value.forEach(collect);
-        else if (value && typeof value === 'object') Object.values(value).forEach(collect);
-      })(raw);
-      let payload = null;
-      for (const text of strings) {
-        const hit = Ark.loginPayloadFromText(text);
-        if (hit !== null) {
-          payload = hit;
-          break;
-        }
-      }
-      assert(payload !== null, 'ArkTS 版没解析出载荷');
+      const payload = dumpPayload;
       const sessionid = Session.cookieValue(payload.cookie, 'sessionid');
       const userId = Session.cookieValue(payload.cookie, 'ds_user_id');
       assert(sessionid.length > 40, 'sessionid 太短：' + sessionid.length);

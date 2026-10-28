@@ -879,6 +879,18 @@ export class CaaLogin {
       const result: CaaResult = new CaaResult(false,
         error.length > 0 ? `登录失败：${error}` : '没拿到 aac（CAA 流程可能变了）');
       result.aac = '';
+      /*
+       * **把这一步的响应正文也带回去**（截断）。"没拿到 aac" 有两种可能：IG 回的布局确实
+       * 变了，或它回了错误（风控/地区/参数）。只给一句"没拿到 aac"没法判断，而真机上
+       * hilog 常常抓不到（本机实测被系统关掉了），所以原始正文就是唯一现场。
+       */
+      try {
+        result.raw = String(step3.body).substring(0, 100000);
+      } catch (rawError) {
+        result.raw = '';
+      }
+      hilog.info(DOMAIN, TAG, 'process_client_data no aac status=%{public}d bodyLen=%{public}d',
+        step3.status, String(step3.body).length);
       return result;
     }
 
@@ -1672,6 +1684,29 @@ export class CaaLogin {
             const initial: ESObject = entryRecord['initial'];
             if (typeof initial === 'string' && (initial as string).trim().length > 0) {
               return initial as string;
+            }
+            /*
+             * ② **有些版本只把 aac 放在 `initial_lispy` 的 lispy 表达式里**。
+             *
+             * 这一条是"App 报没拿到 aac、命令行却正常"的直接原因：JS 版（已验证能取到
+             * aac 303 字符）两种都试，ArkTS 版原来只看 `initial`。两边必须一致 ——
+             * 取法照 JS 的 extractAac：从第一个 `"` 起取一段 JSON 字符串再解。
+             */
+            const lispyRaw: ESObject = entryRecord['initial_lispy'];
+            const lispy: string = typeof lispyRaw === 'string' ? lispyRaw as string : '';
+            const quote: number = lispy.indexOf('"');
+            if (quote >= 0) {
+              const end: number = lispy.indexOf('"', quote + 1);
+              if (end > quote) {
+                try {
+                  const value: string = JSON.parse(lispy.substring(quote, end + 1)) as string;
+                  if (typeof value === 'string' && value.length > 0) {
+                    return value;
+                  }
+                } catch (error) {
+                  // 解不开就继续找下一个节点
+                }
+              }
             }
           }
         }
