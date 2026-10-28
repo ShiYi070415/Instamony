@@ -29,7 +29,8 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { curves, display } from '@kit.ArkUI';
 import { CommentInputBar } from './CommentInputBar';
 import { MaterialIconButton, MaterialLabelButton, SurfaceModifier } from './MaterialSurface';
-import { MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS } from '../core/AppSettings';
+import { AppSettings, MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS,
+  SETTING_VIDEO_MUTED } from '../core/AppSettings';
 import {
   EMPTY_REEL,
   STORY_CARD_ID,
@@ -88,6 +89,12 @@ const PROGRESS_SIDE_VP: number = 10;
 const INFO_GAP_VP: number = 8;
 /** 用户资讯栏离媒体区左右边（vp）。 */
 const INFO_SIDE_VP: number = 8;
+/**
+ * 卡片内部那颗静音键的内缩（vp）。
+ *
+ * 需求："静音按钮显示在卡片内部右下角"。12vp 与卡片圆角（18vp）视觉上刚好不贴边。
+ */
+const STORY_MUTE_INSET_VP: number = 12;
 /** 资讯栏里那颗头像的直径（vp）—— 和 feeds 资料行那颗一致。 */
 const INFO_AVATAR_VP: number = 34;
 /** 资讯栏胶囊的高度（vp，和 feeds 的材质容器 40 对齐）。 */
@@ -361,6 +368,14 @@ export struct StoryViewer {
   @State private scrimAlpha: number = 0;
   /** 用户资讯栏的材质厚度（跟设定页联动，和全 app 那些材质组件同一份全局设定）。 */
   @StorageProp(SETTING_MATERIAL_THICKNESS) thickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
+  /**
+   * 全局静音（`AppSettings.SETTING_VIDEO_MUTED`）。
+   *
+   * 需求："快拍和 highlight 卡片新增静音按钮，显示在卡片内部右下角，然后把全局静音状态绑定，
+   * 包括快拍/highlight/帖子/reels"。所以这里用 `@StorageLink` —— 跟信息流那颗喇叭键、
+   * reels 标题栏那颗是**同一个状态**，点哪一处都会同时改到其余所有地方（并且落盘）。
+   */
+  @StorageLink(SETTING_VIDEO_MUTED) muted: boolean = false;
   /** 屏幕尺寸（vp）：全屏矩形与进度条分段宽度都按它算。 */
   @State private screenW: number = 360;
   @State private screenH: number = 780;
@@ -1668,6 +1683,8 @@ export struct StoryViewer {
         .autoPlay(this.open && this.contentMounted)
         .controls(false)
         .loop(false)
+        // 全局静音（快拍 / highlight 与信息流、reels 共用同一个开关，见 SETTING_VIDEO_MUTED）
+        .muted(this.muted)
         .onFinish((): void => {
           // 播完 = 右半屏那一下，直接下一条（时钟那条兜底可能先到，next() 自己会判重）。
           this.next();
@@ -1753,6 +1770,33 @@ export struct StoryViewer {
             this.resumeFromLongPress();
           })
       )
+
+      /*
+       * **卡片内部右下角的静音键**（需求："快拍和 highlight 卡片新增静音按钮，显示在卡片内部右下角"）。
+       *
+       * 必须放在点击层**之后**（Stack 里后画的在上面），否则点它会先被"左/右半屏翻页"吃掉。
+       * 图标与信息流 / reels 那两颗一致：开=喇叭，关=喇叭加斜杠；状态走全局 key，点了落盘。
+       */
+      Row() {
+        MaterialIconButton({
+          symbol: this.muted ? $r('sys.symbol.speaker_slash') : $r('sys.symbol.speaker_wave_2'),
+          buttonSize: 36,
+          iconSize: 18,
+          tint: '#FFFFFF',
+          autoInvert: false,
+          onTap: (on: boolean): void => {
+            // 取反由全局状态决定（双击回调时不会来回翻，见 MaterialIconButton 的说明）
+            AppSettings.setVideoMuted(!this.muted);
+          }
+        })
+      }
+      .width('100%')
+      .height('100%')
+      .justifyContent(FlexAlign.End)
+      .alignItems(VerticalAlign.Bottom)
+      .padding({ right: STORY_MUTE_INSET_VP, bottom: STORY_MUTE_INSET_VP })
+      // 只吃自己那颗按钮的点击，其余空白让给下面的翻页层
+      .hitTestBehavior(HitTestMode.Transparent)
     }
     .width('100%')
     // 媒体区固定高度（圆角卡片的那块"底"），进度条 / 资讯栏都浮在它上面。

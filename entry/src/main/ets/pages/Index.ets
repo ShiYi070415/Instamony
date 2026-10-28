@@ -7715,8 +7715,7 @@ struct Index {
          * 贴到屏幕顶端的全屏布局 —— 横幅一半在状态栏后面、点不到（用户报的问题）。
          * 现在是**置中弹窗**（见 challengeDialog / components/ChallengeDialog），
          * 由 refreshChallengeState 触发；挑战不是"首页才有"，弹窗天然覆盖五个页签。
-         */
-        Column() {
+         */        Column() {
           if (this.selectedIndex === 0) {
             this.homeTab()
           } else if (this.currentTab() === AppTab.Profile) {
@@ -7738,6 +7737,14 @@ struct Index {
         // 内容层的稳定节点 id（见 SHELL_CONTENT_ID 的说明：原来给 BackdropTone 拍快照用，
         // 采样已停用，这里只留一个可按 id 取矩形的句柄）。
         .id(SHELL_CONTENT_ID)
+        /*
+         * **页面底色兜底**（用户报"搜索页顶部有黑块"）。
+         *
+         * 各页自己都会画 `page_background`，但只要有一处没铺到（顶部让位那块、或某页的根节点
+         * 没铺满），露出来的就是**窗口背景（黑色）**。在这一层补一次底色之后，任何缝隙看到的
+         * 都是页面底色，不再是黑块 —— 属于"怎么都不该更差"的兜底。
+         */
+        .backgroundColor($r('app.color.page_background'))
       }
       .width('100%')
       .height('100%')
