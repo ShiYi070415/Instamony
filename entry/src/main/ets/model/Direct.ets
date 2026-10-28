@@ -1106,6 +1106,11 @@ export class DirectMapper {
       // 这条消息是谁发的（群聊里每人不一样，见 DirectMessage.senderName）。
       const sender: DirectPerson | null = personOf(people, userId);
       const mediaSize: Array<number> = DirectMapper.mediaSizeOf(item);
+      if (mediaUrl.length > 0) {
+        // 媒体条目的形状现场（见 stickerBrief 的说明）。
+        hilog.info(DOMAIN, TAG, 'media item %{public}s',
+          DirectMapper.stickerBrief(item, DirectMapper.isSticker(item)));
+      }
       messages.push(new DirectMessage(JsonRead.strOf(item, 'item_id'), userId,
         me.length > 0 && userId === me, micros > 0 ? Math.round(micros / 1000) : 0,
         kind, text, mediaUrl, isVideo, DirectMapper.shareCodeOf(item),
@@ -1218,6 +1223,20 @@ export class DirectMapper {
   }
 
   /** 一条消息里那张图的原始宽高（依次试 media → animated_media；都没有 [0,0]）。 */
+  /**
+   * **贴图识别的现场**（诊断用，写进 hilog）。
+   *
+   * 为什么留这一行：贴纸在真机上有好几种形状（animated_media / 透明 PNG 的 media / 分享类），
+   * 肉眼判断不了是哪一种。下次还有贴纸被画成卡片时，看这行就知道该补哪条判据。
+   */
+  private static stickerBrief(item: Record<string, Object>, sticker: boolean): string {
+    const type: string = JsonRead.strOf(item, 'item_type');
+    const size: Array<number> = DirectMapper.mediaSizeOf(item);
+    const url: string = DirectMapper.mediaUrlOf(item).toLowerCase();
+    const tail: string = url.length > 0 ? url.substring(url.lastIndexOf('.')) : '-';
+    return `${type}|${size[0]}x${size[1]}|${tail}|sticker=${sticker}`;
+  }
+
   private static mediaSizeOf(item: Record<string, Object>): Array<number> {
     const direct: Array<number> = DirectMapper.imageSizeOf(JsonRead.recordOf(item, 'media'));
     if (direct[0] > 0 && direct[1] > 0) {
@@ -1250,15 +1269,49 @@ export class DirectMapper {
    * 判据：`item_type` 是 `animated_media`、载荷里有 `animated_media`、或者地址本身是 gif/webp。
    */
   private static isSticker(item: Record<string, Object>): boolean {
-    const kind: string = JsonRead.strOf(item, 'item_type');
-    if (kind === 'animated_media' || kind === 'sticker') {
+    const type: string = JsonRead.strOf(item, 'item_type').toLowerCase();
+    const kind: string = JsonRead.strOf(item, 'content_type').toLowerCase();
+    if (type.indexOf('sticker') >= 0 || type.indexOf('animated') >= 0
+      || kind.indexOf('sticker') >= 0) {
       return true;
     }
     if (JsonRead.recordOf(item, 'animated_media') !== null) {
       return true;
     }
+    /*
+     * **静态贴纸**（透明 PNG）没有 `animated_media`，以前完全认不出来，于是被当成普通图片
+     * 画成了"媒体卡片"（大尺寸 + 圆角 + 深色底）。两类线索补上：
+     *   · 载荷里有贴纸专属字段（`is_sticker` / `sticker_*` / `sticker_asset_url`）；
+     *   · 地址里带 sticker / gif / webp。
+     */
+    const media: Record<string, Object> | null = JsonRead.recordOf(item, 'media');
+    if (media !== null) {
+      if (JsonRead.boolOf(media, 'is_sticker') || JsonRead.boolOf(media, 'is_sticker_media')) {
+        return true;
+      }
+      if (JsonRead.strOf(media, 'sticker_asset_url').length > 0
+        || JsonRead.strOf(media, 'sticker_template').length > 0
+        || JsonRead.strOf(media, 'sticker_style').length > 0) {
+        return true;
+      }
+      /*
+       * 最后一道：**小尺寸素材**当成贴纸。
+       *
+       * 真机上贴纸的 `image_versions2` 往往只有一档、宽度很小（320~480），而用户从相册/相机发的
+       * 照片基本都 ≥720。这条兜底让"没有 animated_media 也没有 sticker 字段"的静态贴纸也能走
+       * 小尺寸+透明底那条分支。
+       */
+      const size: Array<number> = DirectMapper.imageSizeOf(media);
+      if (size[0] > 0 && size[0] <= 512) {
+        return true;
+      }
+    }
     const url: string = DirectMapper.mediaUrlOf(item).toLowerCase();
-    return url.indexOf('.gif') >= 0 || url.indexOf('.webp') >= 0;
+    if (url.indexOf('.gif') >= 0 || url.indexOf('.webp') >= 0
+      || url.indexOf('sticker') >= 0) {
+      return true;
+    }
+    return false;
   }
 
   private static imageUrlOf(host: Record<string, Object> | null): string {

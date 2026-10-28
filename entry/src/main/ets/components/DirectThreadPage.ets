@@ -732,7 +732,7 @@ export struct DirectThreadPage {
    *   · 贴图：1/3 屏；
    *   · 方形图（≈1:1）：4/7 屏；
    *   · 长图（竖图）：1/2 屏；
-   *   · 横图：4/6 屏。
+   *   · 横图：5/7 屏。
    *
    * 比例取自原图尺寸（见 mediaAspect），拿不到尺寸时按横图那一档算。
    */
@@ -762,8 +762,8 @@ export struct DirectThreadPage {
         // 长图（高 > 宽）：1/2
         wanted = screen / 2;
       } else {
-        // 横图（含未知尺寸）：4/6
-        wanted = screen * 4 / 6;
+        // 横图（含未知尺寸）：5/7
+        wanted = screen * 5 / 7;
       }
     }
     /*

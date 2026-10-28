@@ -1,0 +1,1 @@
+fix(direct): 横图宽度 4/6 → 5/7；贴图识别加强 —— 除了 animated_media 与 gif/webp，静态透明贴纸（没有 animated_media 的那类）现在也能认出来：按 item_type/content_type 含 sticker|animated、media 里的 is_sticker/sticker_asset_url/sticker_template、地址含 sticker、以及"素材宽度 ≤512 的小图"兜底；被识别后走小尺寸（屏幕 1/3）+ 透明底那条分支，不再画成媒体卡片；另加 hilog 面包屑 media item <type>|<wxh>|<ext>|sticker=? 便于下次定位贴纸形状

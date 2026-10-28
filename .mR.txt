@@ -1,1 +1,0 @@
-docs: 新增交付约定 docs/DELIVERY.md —— 以后一律给未压缩的 .app（GitHub 拒绝 .app 后缀时改用能收 .app 的图床，而不是压成 zip）、图床可用顺序（catbox 会间歇 500/502，tmpfiles 直链要 /dl/ 且一小时失效、GitHub Release 只收 zip）、随包附 MeoW 链接与改动说明、以及三条已知受限（MeoW 推送恒 429、真机时常断连、Push Kit 侧载不可用）与"版本号固定 1.4"的约定
