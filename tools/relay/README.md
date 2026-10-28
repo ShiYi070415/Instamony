@@ -30,6 +30,9 @@ IG ──FBNS 推送──▶ 本脚本 ──华为 Push Kit──▶ 手机通
 `settings.caa.json`，并当场用 `--import-session` 的解析器读回来比对 —— 两条路产出的
 会话是等价的，任选一条即可。
 
+设备档案（phoneId / uuid / androidId / mid / 版本号）会落到 `device-profile.json` 并在
+后续运行里复用：同一台机器始终是同一台"手机"（每次换新设备会被 IG 当陌生设备，更容易要验证码）。
+
 > 自测/自动化可以用环境变量免交互：`INSTAMONY_IG_USER` / `INSTAMONY_IG_PASS`
 > （密码不落盘、不打印；日常还是用交互输入）。
 
@@ -125,4 +128,5 @@ push token 注册成功 —— 之后新私信由 IG 主动推过来
 
 `session.json` / `settings.json` / `settings.caa.json` / `fbns-auth.json` / `mqtt-device.json`
 都是**等同密码**的东西，全部已在 `.gitignore` 里，别提交、别外传。
+`device-profile.json`（本机设备档案）也一并忽略：它不是会话，但换掉就等于换了一台设备。
 本脚本只做只读的收私信 + 发通知，不发消息、不点赞、不关注。

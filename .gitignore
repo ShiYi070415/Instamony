@@ -49,6 +49,8 @@ tools/relay/session.json
 tools/relay/settings.json
 # CAA 登录产出的 instagrapi 形状会话（--caa-login 产出，同样等同密码）
 tools/relay/settings.caa.json
+# 本机设备档案（--caa-login 生成/复用；等同"这是哪台设备"，别提交）
+tools/relay/device-profile.json
 # 网关配置（含分给用户的 key）与登记表
 tools/gateway/config.json
 tools/gateway/tokens.json

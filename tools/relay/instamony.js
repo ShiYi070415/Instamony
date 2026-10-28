@@ -931,12 +931,70 @@ function readLine(prompt, hidden) {
   });
 }
 
+/** 内置的设备/应用默认档（没有 settings.json、也还没落过 device-profile.json 时用）。 */
+const FALLBACK_PROFILE = {
+  appVersion: '449.0.0.52.84',
+  versionCode: '1079242191',
+  bloksVersionId: '799db3e387d7a21a19c72918b8698b6cd28a1516ade363792c100ed45a0f9f0b',
+  userAgent: MOBILE_UA
+};
+
+/**
+ * 本机设备档案（`--caa-login` 自己落的一份）。
+ *
+ * **为什么必须有**：以前没有 settings.json 时每次运行都随机生成一套设备身份 ——
+ * 在 IG 眼里就是"每次登录都换一台新手机"，风控更严（更容易要验证码/恢复确认）。
+ * 真机是常量，所以这里也落盘复用。存的东西不含会话材料（phoneId / uuid / androidId /
+ * mid / 版本号 / UA），删掉只会让下次被当成新设备。
+ */
+const DEVICE_PROFILE_FILE = path.join(DIR, 'device-profile.json');
+
+function saveDeviceProfile(profile) {
+  try {
+    fs.writeFileSync(DEVICE_PROFILE_FILE, JSON.stringify({
+      phoneId: profile.phoneId,
+      uuid: profile.uuid,
+      androidId: profile.androidId,
+      mid: profile.mid,
+      appVersion: profile.appVersion,
+      versionCode: profile.versionCode,
+      bloksVersionId: profile.bloksVersionId,
+      userAgent: profile.userAgent,
+      savedAt: Date.now()
+    }, null, 2), 'utf8');
+  } catch (error) {
+    warn('写 device-profile.json 失败：' + error.message);
+  }
+}
+
+function loadSavedProfile() {
+  const saved = readJson(DEVICE_PROFILE_FILE, null);
+  if (saved === null) {
+    return null;
+  }
+  const phoneId = String(saved.phoneId || '');
+  const uuid = String(saved.uuid || '');
+  const androidId = String(saved.androidId || '').replace(/^android-/, '');
+  if (phoneId.length === 0 || uuid.length === 0 || androidId.length === 0) {
+    return null;
+  }
+  return {
+    phoneId,
+    uuid,
+    androidId,
+    mid: String(saved.mid || ''),
+    appVersion: String(saved.appVersion || FALLBACK_PROFILE.appVersion),
+    versionCode: String(saved.versionCode || FALLBACK_PROFILE.versionCode),
+    bloksVersionId: String(saved.bloksVersionId || FALLBACK_PROFILE.bloksVersionId),
+    userAgent: String(saved.userAgent || FALLBACK_PROFILE.userAgent)
+  };
+}
+
 /**
  * `--caa-login`：用**账号密码**登录（CAA/Bloks 流程，Node 版，不需要 Python）。
  *
- * 设备档案（phone_id / uuid / app_version / bloks_versioning_id / mid）取自
- * `settings.json`；如果还没有那份文件，会先用一份内置的默认档案跑，
- * 成功率略低（IG 对"新设备"更谨慎）。
+ * 设备档案的取法（按优先级）：`settings.json`（`--settings` 可指定）→ `device-profile.json`
+ * （上一次登录用过的那一套）→ 新生成一套并落盘。**同一台机器始终是同一台"手机"**。
  */
 async function runCaaLogin(argv) {
   const { caaLogin, loadDeviceProfile } = require('./caa-login.js');
@@ -953,19 +1011,26 @@ async function runCaaLogin(argv) {
     }
   }
   if (profile === null) {
+    profile = loadSavedProfile();
+    if (profile !== null) {
+      log('设备档案取自 device-profile.json（沿用本机上次那一套）');
+    }
+  }
+  if (profile === null) {
     const cryptoMod = require('crypto');
     profile = {
       phoneId: 'android-' + cryptoMod.randomUUID(),
       uuid: cryptoMod.randomUUID(),
       androidId: cryptoMod.randomBytes(8).toString('hex'),
       mid: '',
-      appVersion: '449.0.0.52.84',
-      versionCode: '1079242191',
-      bloksVersionId: '799db3e387d7a21a19c72918b8698b6cd28a1516ade363792c100ed45a0f9f0b',
-      userAgent: MOBILE_UA
+      appVersion: FALLBACK_PROFILE.appVersion,
+      versionCode: FALLBACK_PROFILE.versionCode,
+      bloksVersionId: FALLBACK_PROFILE.bloksVersionId,
+      userAgent: FALLBACK_PROFILE.userAgent
     };
-    log('没有 settings.json，用内置默认设备档案（成功率略低）');
+    log('没有 settings.json / device-profile.json → 生成一套设备档案并记下（下次复用同一台设备）');
   }
+  saveDeviceProfile(profile);
 
   /*
    * 凭据来源：交互输入优先，其次环境变量（`INSTAMONY_IG_USER` / `INSTAMONY_IG_PASS`）。
