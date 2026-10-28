@@ -1059,8 +1059,14 @@ async function runCaaLogin(argv) {
   if (result.loggedIn !== true) {
     warn('登录未成功：' + (result.reason || '未知原因'));
     if (typeof result.twoStepContext === 'string' && result.twoStepContext.length > 0) {
-      log('两步验证票据（two_step_verification_context）长度 ' + result.twoStepContext.length
-        + ' —— 这次没输入验证码？重跑 --caa-login 会提示输入');
+      const ranTwoStep = Array.isArray(result.steps)
+        && result.steps.some((one) => String(one.step || '').indexOf('2sv_') === 0);
+      if (!ranTwoStep) {
+        log('两步验证票据（two_step_verification_context）长度 ' + result.twoStepContext.length
+          + ' —— 这次没走 2FA 链？重跑 --caa-login 会提示输入验证码');
+      } else {
+        log('两步验证票据长度 ' + result.twoStepContext.length + '，2FA 链已尝试（见上面 2sv_* 各步状态）');
+      }
     }
     /*
      * **把完整响应落盘**（本地文件，不提交）。
@@ -1083,6 +1089,15 @@ async function runCaaLogin(argv) {
           raw: result.raw
         }, null, 2), 'utf8');
         log('完整响应已保存：' + dumpFile + '（形状变了的话，把这个文件发我）');
+        if (result.sendRaw !== undefined && result.sendRaw !== null) {
+          const sendFile = path.join(dumpDir, 'caa-send-response.json');
+          fs.writeFileSync(sendFile, JSON.stringify({
+            at: new Date().toISOString(),
+            steps: result.steps,
+            raw: result.sendRaw
+          }, null, 2), 'utf8');
+          log('提交密码那一步的响应也已保存：' + sendFile + '（2FA 的 app id 就在里面）');
+        }
       } catch (error) {
         warn('保存完整响应失败：' + error.message);
       }

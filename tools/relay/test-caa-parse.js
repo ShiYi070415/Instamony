@@ -488,6 +488,33 @@ check('登录结果藏在字符串里（再嵌一层 JSON 文本）也要能找�
   assertEqual(deep.cookies.sessionid, '888%3Astr', 'sessionid 不对');
 });
 
+check('域名打错时 IG 的回包能识别（404 + "Payload returned is null"）', () => {
+  // 真实回包（R12 真机，2FA 打在 b.i.instagram.com 上时拿到的）
+  const dead = { status: 404, data: { message: 'Payload returned is null. A server error field_exception occured. Check server logs for details.', status: 'fail' } };
+  assert(caa.isNullPayloadReply(dead), '空载荷回包没被识别（会导致误报"形状变了"）');
+  const alive = { status: 200, data: { layout: { bloks_payload: { action: 'x' } } } };
+  assert(!caa.isNullPayloadReply(alive), '正常回包被误判成空载荷');
+  assert(!caa.isNullPayloadReply({ status: 200, data: {} }), '空对象不该判成空载荷');
+});
+
+check('候选 app id 能从响应里抓出来（不写死，随 IG 改版自动跟随）', () => {
+  const data = { layout: { bloks_payload: { ft: {
+    a: 'push com.bloks.www.two_step_verification.entrypoint_async and '
+      + 'com.bloks.www.two_step_verification.method_picker plus com.bloks.www.misc.other',
+    b: 'com.bloks.www.two_factor_login.enter_totp_code'
+  } } } };
+  const twoStep = caa.bloksCandidateApps(data, ['two_step', 'two_factor']);
+  assert(twoStep.indexOf('com.bloks.www.two_step_verification.entrypoint_async') >= 0,
+    'entrypoint 候选没抓到');
+  assert(twoStep.indexOf('com.bloks.www.two_factor_login.enter_totp_code') >= 0,
+    'two_factor 候选没抓到');
+  assert(twoStep.indexOf('com.bloks.www.misc.other') < 0, '不该带上无关 app');
+  const picker = caa.bloksCandidateApps(data, ['method_picker']);
+  assertEqual(picker.length, 1, 'method_picker 候选数不对');
+  assertEqual(new Set(caa.bloksCandidateApps(data, ['two_step'])).size, picker.length + 1,
+    '候选应该去重');
+});
+
 /* ------------------------------------------------ 汇总 */
 
 console.log('');

@@ -40,6 +40,13 @@ const IG_APP_ID = '567067343352427';
 const CAA_API_DOMAIN = 'b.i.instagram.com';
 /** IG 的 GraphQL 直连端点（Bloks / USDID 都走它）。 */
 const GRAPHQL_DOMAIN = 'i.instagram.com';
+/**
+ * 私有 API 的默认域名（instagrapi 的 `API_DOMAIN`）。
+ *
+ * **新版 2FA 的那几个 Bloks app 在这个域名上**，而 CAA 登录的 app 在 `b.i.instagram.com`
+ * —— 打错域名会回 404 + "Payload returned is null"（R12 真机实测）。
+ */
+const PRIVATE_API_DOMAIN = 'i.instagram.com';
 const USDID_REGISTRATION_CLIENT_DOC_ID = '124930351917786857261002920888';
 const MOBILE_UA =
   'Instagram 449.0.0.52.84 Android (34/14; 480dpi; 1344x2992; Google/google; ' +
@@ -301,11 +308,16 @@ function bloksPayload(profile, params) {
 }
 
 /**
- * `POST https://b.i.instagram.com/api/v1/bloks/async_action/{action}/`
+ * `POST https://{host}/api/v1/bloks/async_action/{action}/`
  *
- * 注意域名是 **b.i.instagram.com**（CAA 专用），不是 i.instagram.com。
+ * `host` 默认 **b.i.instagram.com**（CAA 专用）。但**新版 2FA** 那几个 app 必须走
+ * `i.instagram.com`（instagrapi 的 `bloks_two_step_verification_*` 不传 domain，
+ * 走的就是默认的私有 API 域名）—— 打错域名时 IG 回 404 +
+ * `{"message":"Payload returned is null...field_exception..."}`，看起来像"形状变了"，
+ * 实际上只是 app 不在那个域名上。
  */
-async function bloksAsyncAction(profile, action, params, extraHeaders) {
+async function bloksAsyncAction(profile, action, params, extraHeaders, host) {
+  const target = host || CAA_API_DOMAIN;
   const body = bloksPayload(profile, params);
   const headers = headersFor(profile, Object.assign({
     'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
@@ -313,7 +325,7 @@ async function bloksAsyncAction(profile, action, params, extraHeaders) {
     'X-FB-Friendly-Name': `IgApi: bloks/async_action/${action}/`
   }, extraHeaders || {}));
   const res = await request({
-    hostname: CAA_API_DOMAIN,
+    hostname: target,
     path: `/api/v1/bloks/async_action/${action}/`,
     method: 'POST',
     headers: headers,
@@ -325,18 +337,19 @@ async function bloksAsyncAction(profile, action, params, extraHeaders) {
   } catch (error) {
     data = { raw: res.body.slice(0, 600) };
   }
-  return { status: res.status, headers: res.headers, data };
+  return { status: res.status, headers: res.headers, data, host: target };
 }
 
-/** `POST https://b.i.instagram.com/api/v1/bloks/apps/{app}/`（两步验证用）。 */
-async function bloksApp(profile, app, params) {
+/** `POST https://{host}/api/v1/bloks/apps/{app}/`（两步验证用；host 语义同上）。 */
+async function bloksApp(profile, app, params, host) {
+  const target = host || CAA_API_DOMAIN;
   const body = bloksPayload(profile, params);
   const headers = headersFor(profile, {
     'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
     'Content-Length': Buffer.byteLength(body)
   });
   const res = await request({
-    hostname: CAA_API_DOMAIN,
+    hostname: target,
     path: `/api/v1/bloks/apps/${app}/`,
     method: 'POST',
     headers: headers,
@@ -348,7 +361,19 @@ async function bloksApp(profile, app, params) {
   } catch (error) {
     data = { raw: res.body.slice(0, 600) };
   }
-  return { status: res.status, headers: res.headers, data };
+  return { status: res.status, headers: res.headers, data, host: target };
+}
+
+/**
+ * 这个响应是不是"app 不在这个域名上"（Bloks VM 的空载荷失败）。
+ *
+ * 判据取自 IG 的真实响应：HTTP 404 且 body 里是
+ * `Payload returned is null. A server error field_exception occured.`（R12 真机实测）。
+ */
+function isNullPayloadReply(reply) {
+  const body = JSON.stringify((reply || {}).data || {});
+  return body.indexOf('Payload returned is null') >= 0
+    || (body.toLowerCase().indexOf('field_exception') >= 0 && body.indexOf('null') >= 0);
 }
 
 /* --------------------------------------------------------- 密码加密（混合） */
@@ -997,22 +1022,83 @@ function inferChallenge(data, code) {
 }
 
 /**
+ * **从响应里收集候选 Bloks app id**（按关键词过滤）。
+ *
+ * 为什么不写死：新版 2FA 的 app id 可能随 IG 客户端改版而变，而**响应本身**通常就带着
+ * 下一步该调哪个 app（布局里会出现 `com.bloks.www.two_step_verification.…` 这样的字符串）。
+ * 与其猜，不如把候选抓出来逐个试。
+ */
+function bloksCandidateApps(data, keywords) {
+  const text = bloksAllText(data);
+  const re = /com\.bloks\.[A-Za-z0-9_.]+/g;
+  const seen = new Set();
+  const out = [];
+  let match = re.exec(text);
+  while (match !== null) {
+    const id = match[0];
+    if (seen.has(id)) {
+      match = re.exec(text);
+      continue;
+    }
+    seen.add(id);
+    const lower = id.toLowerCase();
+    if (keywords.some((word) => lower.indexOf(word) >= 0)) {
+      out.push(id);
+    }
+    match = re.exec(text);
+  }
+  return out;
+}
+
+/** 在多个 app id / 多个域名里找一个"能回载荷"的组合。 */
+async function firstLiveAppCall(profile, appIds, params, log, label) {
+  const hosts = [PRIVATE_API_DOMAIN, CAA_API_DOMAIN];
+  for (const appId of appIds) {
+    for (const host of hosts) {
+      const reply = await bloksApp(profile, appId, params, host);
+      const dead = isNullPayloadReply(reply);
+      log('      ' + label + ' @' + host + ' ' + appId.split('.').slice(-1)[0]
+        + ' → HTTP ' + reply.status + (dead ? '（空载荷）' : '（有载荷）'));
+      if (!dead) {
+        return { appId, host, reply };
+      }
+    }
+  }
+  return null;
+}
+
+/** 同上，但打 `bloks/async_action/` 端点（选方法、提交验证码走它）。 */
+async function firstLiveAsyncAction(profile, actionIds, params, log, label) {
+  const hosts = [PRIVATE_API_DOMAIN, CAA_API_DOMAIN];
+  for (const actionId of actionIds) {
+    for (const host of hosts) {
+      const reply = await bloksAsyncAction(profile, actionId, params, null, host);
+      const dead = isNullPayloadReply(reply);
+      log('      ' + label + ' @' + host + ' ' + actionId.split('.').slice(-1)[0]
+        + ' → HTTP ' + reply.status + (dead ? '（空载荷）' : '（有载荷）'));
+      if (!dead) {
+        return { appId: actionId, host, reply };
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * **新版 2FA 链**（入口拿到 `two_step_verification_context` 时走它）：
  * entrypoint → method_picker → select_method →（备用码才走 enter_backup_code）→ verify_code。
  *
- * 这是 instagrapi `_login_with_bloks_two_factor` 的逐条搬运。和 `ap.*` 那条
- * "profile-code" 链是**两套**：那套用布局里的 `context_data` 串，这套用登录响应给的
- * `two_step_verification_context`。真机上 IG 会用哪套取决于账号，两套都得在。
+ * 每一跳的 app id **优先从上一跳的响应里抓**（`bloksCandidateApps`），抓不到才退回
+ * instagrapi 的常量；域名也每次在 `i.instagram.com` / `b.i.instagram.com` 之间试。
+ * 之所以这么"啰嗦"：R12 真机实测时四个写死的 app id 全回 404 空载荷 —— 说明写死的常量
+ * 对当前 IG 版本已经不对了，与其继续猜，不如让响应告诉我们。
  */
 async function resolveTwoStepByContext(profile, context, sendData, getCode, log, steps) {
-  const code = String(await getCode()).trim();
-  if (code.length === 0) {
-    return { loggedIn: false, reason: '两步验证：没有输入验证码', steps };
-  }
-  const challenge = inferChallenge(sendData, code);
-  const normalized = String(code).replace(/[\s-]+/g, '');
-  log('    两步验证（context 链，方式 ' + challenge + '）1/4：entrypoint');
-  const entry = await bloksApp(profile, TSV_ENTRYPOINT, {
+  // 1) entrypoint：先把响应里出现的 2FA 相关 app id 都当候选
+  const entryCandidates = bloksCandidateApps(sendData, ['two_step', 'two_factor', '2sv']);
+  const entryIds = entryCandidates.length > 0 ? entryCandidates : [TSV_ENTRYPOINT];
+  log('    两步验证 1/4：entrypoint（候选 ' + entryIds.length + ' 个）');
+  const entryParams = {
     client_input_params: {
       device_id: profile.androidId,
       is_whatsapp_installed: 0,
@@ -1025,10 +1111,21 @@ async function resolveTwoStepByContext(profile, context, sendData, getCode, log,
       two_step_verification_context: context,
       flow_source: TSV_FLOW_SOURCE
     }
-  });
-  steps.push({ step: '2sv_entrypoint', status: entry.status });
-  log('    两步验证 2/4：method_picker');
-  const picker = await bloksApp(profile, TSV_METHOD_PICKER, {
+  };
+  const entry = await firstLiveAppCall(profile, entryIds, entryParams, log, 'entrypoint');
+  steps.push({ step: '2sv_entrypoint', status: entry === null ? 404 : entry.reply.status });
+  if (entry === null) {
+    return {
+      loggedIn: false, steps,
+      reason: '两步验证：所有 entrypoint 候选都拿不到载荷（app id 或域名都不对）'
+    };
+  }
+
+  // 2) method_picker
+  const pickerCandidates = bloksCandidateApps(entry.reply.data, ['method_picker']);
+  const pickerIds = pickerCandidates.length > 0 ? pickerCandidates : [TSV_METHOD_PICKER];
+  log('    两步验证 2/4：method_picker（候选 ' + pickerIds.length + ' 个）');
+  const picker = await firstLiveAppCall(profile, pickerIds, {
     client_input_params: { is_whatsapp_installed: 0 },
     server_params: {
       should_fallback_to_sms: 0,
@@ -1036,10 +1133,29 @@ async function resolveTwoStepByContext(profile, context, sendData, getCode, log,
       two_step_verification_context: context,
       flow_source: TSV_FLOW_SOURCE
     }
-  });
-  steps.push({ step: '2sv_method_picker', status: picker.status });
-  log('    两步验证 3/4：select_method（' + challenge + '）');
-  const selected = await bloksAsyncAction(profile, TSV_SELECT_METHOD, {
+  }, log, 'method_picker');
+  steps.push({ step: '2sv_method_picker', status: picker === null ? 404 : picker.reply.status });
+
+  /*
+   * **到这里才问验证码**。
+   *
+   * 为什么不能更早问：TOTP 六位码的有效窗口通常只有 30 秒，而上面那两步是"探测"——
+   * 候选 app id × 两个域名，可能要打好几次请求。先探测、后要码，才不会让用户手忙脚乱地
+   * 输一个已经过期的码（R12 真机那次就是这个顺序，输完码才开始探测）。
+   */
+  const code = String(await getCode()).trim();
+  if (code.length === 0) {
+    return { loggedIn: false, reason: '两步验证：没有输入验证码', steps };
+  }
+  const challenge = inferChallenge(sendData, code);
+  const normalized = String(code).replace(/[\s-]+/g, '');
+
+  // 3) select_method（async action）
+  const selectCandidates = picker === null ? []
+    : bloksCandidateApps(picker.reply.data, ['navigation', 'select_method', 'method_picker']);
+  const selectIds = selectCandidates.length > 0 ? selectCandidates : [TSV_SELECT_METHOD];
+  log('    两步验证 3/4：select_method（' + challenge + '，候选 ' + selectIds.length + ' 个）');
+  const selectParams = {
     client_input_params: {
       selected_method: challenge,
       cloud_trust_token: null,
@@ -1052,21 +1168,32 @@ async function resolveTwoStepByContext(profile, context, sendData, getCode, log,
       two_step_verification_context: context,
       flow_source: TSV_FLOW_SOURCE
     }
-  });
-  steps.push({ step: '2sv_select_method', status: selected.status });
+  };
+  const selected = await firstLiveAsyncAction(profile, selectIds, selectParams, log, 'select_method');
+  steps.push({ step: '2sv_select_method', status: selected === null ? 404 : selected.reply.status });
+
+  // 3.5) 备用码：多打一次输入页
   if (challenge === 'backup_codes') {
-    log('    两步验证 3.5/4：打开备用码输入页');
-    const backup = await bloksApp(profile, TSV_ENTER_BACKUP, {
+    const backupCandidates = selected === null ? []
+      : bloksCandidateApps(selected.reply.data, ['backup']);
+    const backupIds = backupCandidates.length > 0 ? backupCandidates : [TSV_ENTER_BACKUP];
+    log('    两步验证 3.5/4：备用码输入页（候选 ' + backupIds.length + ' 个）');
+    const backup = await firstLiveAppCall(profile, backupIds, {
       server_params: {
         device_id: profile.androidId,
         two_step_verification_context: context,
         flow_source: TSV_FLOW_SOURCE
       }
-    });
-    steps.push({ step: '2sv_enter_backup_code', status: backup.status });
+    }, log, 'enter_backup_code');
+    steps.push({ step: '2sv_enter_backup_code', status: backup === null ? 404 : backup.reply.status });
   }
-  log('    两步验证 4/4：提交验证码');
-  const submit = await bloksAsyncAction(profile, TSV_VERIFY, {
+
+  // 4) 提交验证码（async action）
+  const verifyCandidates = selected === null ? []
+    : bloksCandidateApps(selected.reply.data, ['verify_code', 'verify']);
+  const verifyIds = verifyCandidates.length > 0 ? verifyCandidates : [TSV_VERIFY];
+  log('    两步验证 4/4：提交验证码（候选 ' + verifyIds.length + ' 个）');
+  const submitParams = {
     client_input_params: {
       auth_secure_device_id: '',
       block_store_machine_id: '',
@@ -1086,16 +1213,24 @@ async function resolveTwoStepByContext(profile, context, sendData, getCode, log,
       two_step_verification_context: context,
       flow_source: TSV_FLOW_SOURCE
     }
-  });
-  steps.push({ step: '2sv_verify_code', status: submit.status });
-  const parsed = extractLoginPayloadDeep(submit.data);
+  };
+  const submit = await firstLiveAsyncAction(profile, verifyIds, submitParams, log, 'verify_code');
+  steps.push({ step: '2sv_verify_code', status: submit === null ? 404 : submit.reply.status });
+  if (submit === null) {
+    return {
+      loggedIn: false, steps,
+      reason: '两步验证：所有 verify_code 候选都拿不到载荷（验证码没提交成功）'
+    };
+  }
+  const parsed = extractLoginPayloadDeep(submit.reply.data);
   if (parsed === null) {
-    const error = bloksErrorMessage(submit.data);
+    const error = bloksErrorMessage(submit.reply.data);
     return {
       loggedIn: false,
       steps,
-      raw: submit.data,
-      reason: '两步验证已提交，但响应里没找到登录结果：' + (error.length > 0 ? error : '形状可能变了')
+      raw: submit.reply.data,
+      reason: '两步验证已提交（' + submit.reply.status + '），但响应里没找到登录结果：'
+        + (error.length > 0 ? error : '形状可能变了')
     };
   }
   return { loggedIn: true, parsed, steps };
@@ -1485,12 +1620,15 @@ async function caaLogin(profile, username, password, log, options) {
       }
       return {
         loggedIn: false, aac, cookies: {}, authorization: '', twoStepContext,
-        steps, reason: resolved.reason, raw: resolved.raw
+        steps, reason: resolved.reason, raw: resolved.raw,
+        // 把**提交密码那一步**的原始响应也带回去：2FA 的 app id 存在里面，
+        // 失败时落盘就能离线分析，不必再让用户重跑一次登录。
+        sendRaw: send.data
       };
     }
     return {
       loggedIn: false, aac, cookies: {}, authorization: '', twoStepContext,
-      steps, raw: send.data,
+      steps, raw: send.data, sendRaw: send.data,
       reason: '需要两步验证（context 链）：重新运行并输入验证码'
     };
   }
@@ -1595,9 +1733,16 @@ module.exports = {
   inferChallenge,
   findValueDeep,
   bloksFallbackMarkers,
+  isNullPayloadReply,
+  bloksCandidateApps,
   parseCookieHeader,
   sessionHeadersOf,
   bloksExtractContextValue,
   bloksNeedsTwoStep,
-  bloksErrorMessage
+  bloksErrorMessage,
+  // 底层调用与域名常量（给诊断脚本用：比如"这个 2FA app 到底在哪个域名上"）
+  bloksApp,
+  bloksAsyncAction,
+  CAA_API_DOMAIN,
+  PRIVATE_API_DOMAIN
 };
