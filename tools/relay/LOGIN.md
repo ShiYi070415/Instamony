@@ -4,7 +4,7 @@
 
 | 方式 | 命令 | 依赖 |
 | --- | --- | --- |
-| **JS 版（正在完善）** | `node instamony.js --caa-login` | 只要 Node |
+| **JS 版（正在完善）** | `node instamony.js --caa-login` → `node instamony.js --verify-session` | 只要 Node |
 | Python 版（已验证可用） | `python login_ig.py` → `node instamony.js --import-session settings.json` | Python + instagrapi |
 
 JS 版移植自 instagrapi 的 CAA/Bloks 流程，实测已打通的部分：
@@ -17,6 +17,24 @@ JS 版移植自 instagrapi 的 CAA/Bloks 流程，实测已打通的部分：
 | oauth token 预取 | ✅ HTTP 200 |
 | **提交账号密码** | ✅ HTTP 200，IG 真实处理（假账号回 `login_failed` + "Can't find account"） |
 | 两步验证链（ap.2sv） | 已实现 entrypoint → code_entry → 提交验证码，**待真账号验证** |
+| 会话形状等价性 | ✅ `settings.caa.json` 经 `--import-session` 解析与 `session.json` 逐字段一致（实测） |
+| 设备信任闸门 | ✅ `--verify-session` 四步全绿：形状 / 探活 200 / 等价 / `push/register/` `{"status":"ok"}` |
+
+> `--verify-session` 是**判据**，不是装饰：`push/register/` 那一步对网页 Cookie 派生的会话回
+> 400（实测过），只有设备级会话回 `{"status":"ok"}`。登录"成功"但这一步不过 = 常驻收不到推送。
+
+### 与 instagrapi 3.2.2 对齐时踩到的两处（直接照抄源码结论，别再自己推）
+
+1. **2SV entrypoint 的 app id 带 `_async`**：`com.bloks.www.ap.two_step_verification.entrypoint_async`
+   （少写 `_async` 时"是否需要 2FA"的判断仍然成立 —— 因为前缀匹配得到 —— 但**真正去调**那个
+   app 会失败。这个坑很隐蔽：看起来只差一个后缀。）
+2. **`password_text_input_id` / `username_text_input_id` 的形状是 `<4 位十六进制>ig:81|82`**
+   （instagrapi 注释原文：纯十六进制/UUID 前缀能被 VM 接受，但可能回"空载荷 404"）。
+
+另注：instagrapi 里还有第二套 2FA（`two_step_verification.*` / `two_factor_login.*` 的
+TOTP/SMS 选法 + `verify_code.async`），**CAA 登录这条路不走它** —— 走的是上面那套
+`ap.two_step_verification` 的"profile-code"链（entrypoint → code_entry → code_entry_async），
+用布局里的 `context_data` 串起来。两条链别混。
 
 三个关键结论（避免以后重复踩）：
 

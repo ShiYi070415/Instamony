@@ -47,6 +47,8 @@ tools/relay/usdid.json
 tools/relay/session.json
 # instagrapi 登录后的会话（login_ig.py 产出，等同密码）
 tools/relay/settings.json
+# CAA 登录产出的 instagrapi 形状会话（--caa-login 产出，同样等同密码）
+tools/relay/settings.caa.json
 # 网关配置（含分给用户的 key）与登记表
 tools/gateway/config.json
 tools/gateway/tokens.json

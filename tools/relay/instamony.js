@@ -26,6 +26,8 @@
  * ## 用法
  *   node instamony.js                  # 常驻
  *   node instamony.js --check          # 打印当前会话/设备/配置状态
+ *   node instamony.js --caa-login      # 用账号密码登录（Node 版 CAA，不需要 Python）
+ *   node instamony.js --verify-session # 会话自证：形状 + 探活 + 设备信任闸门（push 注册）
  *   node instamony.js --import-session settings.json
  *   node instamony.js --test-push 文本
  *   node instamony.js --quiet          # 只打警告和错误
@@ -195,7 +197,9 @@ function httpRequest(url, options, body) {
  * 为什么需要"导入"这一步：IG 已停用旧的密码登录接口（回 needs_upgrade），
  * 现在能登录的是 Bloks CAA 流程，由 instagrapi 维护着（见 LOGIN.md）。
  */
-function importSession(settingsPath) {
+function importSession(settingsPath, options) {
+  const opts = options || {};
+  const dryRun = opts.dryRun === true;
   const settings = readJson(path.resolve(settingsPath), null);
   if (settings === null) {
     die('读不到 ' + settingsPath);
@@ -210,6 +214,9 @@ function importSession(settingsPath) {
   }
   const cookie = parts.join('; ');
   if (cookieValueOf(cookie, 'sessionid').length === 0) {
+    if (dryRun) {
+      throw new Error('settings 里没有 sessionid —— 这份会话不算登录成功');
+    }
     die('settings.json 里没有 sessionid —— 这份会话不算登录成功');
   }
   const uuids = settings.uuids || {};
@@ -218,6 +225,9 @@ function importSession(settingsPath) {
   let androidId = String(uuids.android_device_id || '');
   if (androidId.startsWith('android-')) androidId = androidId.slice('android-'.length);
   if (phoneId.length === 0 || uuid.length === 0 || androidId.length === 0) {
+    if (dryRun) {
+      throw new Error('settings 的 uuids 不全（需要 phone_id / uuid / android_device_id）');
+    }
     die('settings.json 的 uuids 不全（需要 phone_id / uuid / android_device_id）');
   }
   const authData = settings.authorization_data || {};
@@ -236,6 +246,9 @@ function importSession(settingsPath) {
     mid: String(settings.mid || ''),
     savedAt: Date.now()
   };
+  if (dryRun) {
+    return session;
+  }
   fs.writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2), 'utf8');
   fs.writeFileSync(DEVICE_FILE,
     JSON.stringify({ phoneId, uuid, androidId, createdAt: Date.now() }, null, 2), 'utf8');
@@ -603,14 +616,285 @@ async function runDaemon(cfg) {
   log('就绪：手机被杀了也能收到新私信通知（Ctrl+C 停）');
 }
 
+/**
+ * 把 CAA 登录结果整理成 **instagrapi settings.json 的形状**（`--import-session` 认这份）。
+ *
+ * 关键的一处转换：CAA 给的是 `Bearer IGT:2:<base64(JSON)>` 这一整串，而 settings.json 存的是
+ * 解开的 `authorization_data` 对象。这里把它 base64 解回来 —— 这样两条登录路（Python 的
+ * instagrapi / 这里的 Node 版）产出的文件才**逐字段等价**，而不只是"看起来能跑"。
+ */
+function settingsShapeOf(result, profile) {
+  const authorization = String(result.authorization || '');
+  const marker = 'Bearer IGT:2:';
+  let authorizationData = {};
+  if (authorization.startsWith(marker)) {
+    try {
+      authorizationData = JSON.parse(
+        Buffer.from(authorization.slice(marker.length), 'base64').toString('utf8'));
+    } catch (error) {
+      warn('authorization 解不开（authorization_data 先留空）：' + error.message);
+    }
+  }
+  return {
+    cookies: result.cookies || {},
+    uuids: {
+      phone_id: profile.phoneId,
+      uuid: profile.uuid,
+      android_device_id: 'android-' + profile.androidId,
+      client_session_id: profile.uuid
+    },
+    authorization_data: authorizationData,
+    device_settings: {
+      app_version: profile.appVersion,
+      version_code: profile.versionCode
+    },
+    user_agent: profile.userAgent,
+    mid: profile.mid,
+    last_login: new Date().toISOString()
+  };
+}
+
+/**
+ * `--verify-session`：**会话自证**（一条命令把"能不能真的收推送"验掉）。
+ *
+ * 为什么要单独一条：**登录成功 ≠ 通道能用**。实测过太多次"登录成功、脚本全绿、手机不响"，
+ * 判据只有三样，一个都不能省：
+ *   1. **形状**：`sessionid` / `ds_user_id` / `authorization` 齐不齐
+ *      （authorization 是 `Bearer IGT:2:…`，设备信任看它）；
+ *   2. **还活着**：`accounts/current_user/` 回 200；
+ *   3. **设备信任闸门**：FBNS 申请 push token → 交给 IG（`push/register/`）。
+ *      网页 Cookie 派生的会话在这一步回 400（实测），真机登录的会话回 `{"status":"ok"}` ——
+ *      这一条过了，常驻进程才有可能真的收到推送。
+ */
+async function runVerifySession() {
+  const session = loadSession();
+  const device = loadDevice();
+  const sid = cookieValueOf(session.cookie, 'sessionid');
+  const uid = session.userId || cookieValueOf(session.cookie, 'ds_user_id');
+  const auth = igAuthorization(session);
+
+  log('① 会话形状');
+  log('   sessionid     ' + (sid.length > 0 ? '有（' + sid.length + ' 字符）' : '缺'));
+  log('   ds_user_id    ' + (uid.length > 0 ? uid : '缺'));
+  log('   authorization ' + (auth.length > 0 ? '有（' + auth.length + ' 字符）'
+    : '缺（会退回用 cookie 里的 sessionid 拼）'));
+  if (sid.length === 0 || uid.length === 0) {
+    warn('会话不完整：先跑 node instamony.js --caa-login');
+    process.exitCode = 1;
+    return;
+  }
+
+  log('② 会话探活（accounts/current_user/）');
+  try {
+    const res = await httpRequest(
+      'https://i.instagram.com/api/v1/accounts/current_user/?edit=true',
+      { method: 'GET', headers: igHeaders(session, device) });
+    let username = '';
+    try {
+      username = String((JSON.parse(res.body).user || {}).username || '');
+    } catch (error) {
+      // 非 JSON（多半是未登录的 HTML）：下面按状态码处理
+    }
+    if (res.status === 200) {
+      log('   HTTP 200 —— 会话有效' + (username.length > 0 ? '（@' + username + '）' : ''));
+    } else {
+      warn('   HTTP ' + res.status + ' —— 会话可能已失效：' + res.body.slice(0, 160));
+      process.exitCode = 1;
+      return;
+    }
+  } catch (error) {
+    warn('   探活失败：' + error.message);
+    process.exitCode = 1;
+    return;
+  }
+
+  /*
+   * ③ 等价性：`settings.caa.json`（CAA 登录产出的 instagrapi 形状文件）经同一条导入路径解析，
+   * 解出来的会话必须和现在这份一模一样。**这一点比形状检查更能说明"等价"**：不是字段长得像，
+   * 而是真的能被 Python 那条路的格式吃下去、还原成同一份会话。
+   */
+  const caaFile = path.join(DIR, 'settings.caa.json');
+  if (fs.existsSync(caaFile)) {
+    log('③ 与 instagrapi settings 的等价性（settings.caa.json）');
+    try {
+      const reread = importSession(caaFile, { dryRun: true });
+      const sameSid = reread.sessionid === sid;
+      const sameAuth = reread.authorization === auth;
+      const sameUser = String(reread.userId) === String(uid);
+      log('   sessionid ' + (sameSid ? '一致' : '**不一致**')
+        + '，authorization ' + (sameAuth ? '一致' : '**不一致**')
+        + '，账号 ' + (sameUser ? '一致' : '**不一致**'));
+      if (!sameSid || !sameAuth || !sameUser) {
+        warn('   等价性没过：settings.caa.json 与 session.json 不是同一份会话');
+      }
+    } catch (error) {
+      warn('   解析 settings.caa.json 失败：' + error.message);
+    }
+  } else {
+    log('③ 等价性：没有 settings.caa.json（只有 --caa-login 会产出，跳过）');
+  }
+
+  log('④ 设备信任闸门（FBNS 申请 token → push/register/）');
+  const ok = await pushRegisterGate(session, device);
+  if (ok) {
+    log('结论：会话是**设备级**的 —— 常驻进程可以收到 IG 主动推送');
+    process.exitCode = 0;
+  } else {
+    warn('结论：闸门没过 —— 常驻进程收不到推送（会话来源多半是网页 Cookie）');
+    process.exitCode = 2;
+  }
+}
+
+/** 闸门本体：连 FBNS 拿 push token，再交给 IG 注册。返回是否通过。 */
+function pushRegisterGate(session, device) {
+  return new Promise((resolve) => {
+    const client = new FbnsClient({
+      stateDir: DIR,
+      clientId: session.userId,
+      userId: Number(session.userId) || 0,
+      log: (text) => log('   ' + text)
+    });
+    let finished = false;
+    const finish = (value) => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      clearTimeout(timer);
+      try {
+        client.close();
+      } catch (error) {
+        // 关连接失败不影响结论
+      }
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      warn('   超时：60 秒内 FBNS 没给出 push token');
+      finish(false);
+    }, 60000);
+
+    client.on('up', () => client.requestPushToken());
+    client.on('down', (reason) => log('   FBNS 断开：' + reason));
+    client.on('registered', async (payload) => {
+      const token = payload && payload.token ? String(payload.token) : '';
+      if (token.length === 0) {
+        warn('   没拿到 push token：' + JSON.stringify(payload).slice(0, 160));
+        finish(false);
+        return;
+      }
+      log('   拿到 push token（' + token.length + ' 字符），交给 IG 注册');
+      const form = querystring.stringify({
+        device_type: 'android_mqtt',
+        is_main_push_channel: 'true',
+        device_sub_type: '2',
+        device_token: token,
+        _csrftoken: cookieValueOf(session.cookie, 'csrftoken'),
+        guid: cookieValueOf(session.cookie, 'ig_did') || device.uuid,
+        uuid: cookieValueOf(session.cookie, 'ig_did') || device.uuid,
+        users: session.userId,
+        family_device_id: device.uuid
+      });
+      try {
+        const res = await httpRequest('https://i.instagram.com/api/v1/push/register/', {
+          method: 'POST',
+          headers: Object.assign(igHeaders(session, device), {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Content-Length': Buffer.byteLength(form)
+          })
+        }, form);
+        const passed = res.status === 200 && res.body.indexOf('"ok"') >= 0;
+        if (passed) {
+          log('   push/register/ HTTP 200 {"status":"ok"} —— 设备信任**通过**');
+        } else {
+          warn('   push/register/ HTTP ' + res.status + '：' + res.body.slice(0, 200));
+        }
+        finish(passed);
+      } catch (error) {
+        warn('   push/register/ 异常：' + error.message);
+        finish(false);
+      }
+    });
+    client.connect().catch((error) => {
+      warn('   FBNS 连接失败：' + error.message);
+      finish(false);
+    });
+  });
+}
+
 /* ------------------------------------------------- 交互输入（CAA 登录用） */
+
+/*
+ * **非 TTY（管道 / 重定向）下的按行读取**。
+ *
+ * 早先每个问题都挂一次 `stdin.once('data')`，而管道会把**多行一起**送过来：
+ * 用户名那一问把密码那一行也吃掉了，第二问永远等不到 data —— 进程在事件循环空掉时
+ * **静默退出（exit 0）**。自测时就是这样：只看到两个提示符，什么结论都没有。
+ * 现在改成"把 stdin 读完 → 按行切队列 → 谁来问就发一行"，EOF 时回空串（让调用方 die）。
+ */
+const PIPED_LINES = [];
+let pipedRemainder = '';
+let pipedDone = false;
+let pipedHooks = false;
+const lineWaiters = [];
+
+function flushPipedLines() {
+  while (lineWaiters.length > 0) {
+    if (PIPED_LINES.length > 0) {
+      lineWaiters.shift()(PIPED_LINES.shift());
+    } else if (pipedDone) {
+      lineWaiters.shift()('');
+    } else {
+      break;
+    }
+  }
+}
+
+function installPipedReader() {
+  if (pipedHooks) {
+    return;
+  }
+  pipedHooks = true;
+  const stdin = process.stdin;
+  stdin.setEncoding('utf8');
+  stdin.on('data', (chunk) => {
+    pipedRemainder += String(chunk);
+    let cut = pipedRemainder.indexOf('\n');
+    while (cut >= 0) {
+      PIPED_LINES.push(pipedRemainder.slice(0, cut).replace(/\r$/, ''));
+      pipedRemainder = pipedRemainder.slice(cut + 1);
+      cut = pipedRemainder.indexOf('\n');
+    }
+    flushPipedLines();
+  });
+  stdin.on('end', () => {
+    if (pipedRemainder.length > 0) {
+      PIPED_LINES.push(pipedRemainder.replace(/\r$/, ''));
+      pipedRemainder = '';
+    }
+    pipedDone = true;
+    flushPipedLines();
+  });
+  stdin.resume();
+}
+
+function readPipedLine() {
+  installPipedReader();
+  return new Promise((resolve) => {
+    lineWaiters.push(resolve);
+    flushPipedLines();
+  });
+}
 
 /** 读一行；`hidden` 时密码不回显（TTY）。 */
 function readLine(prompt, hidden) {
+  process.stdout.write(prompt);
+  const stdin = process.stdin;
+  if (!stdin.isTTY) {
+    // 管道/重定向：走上面的按行队列（回显本来就无所谓）。
+    return readPipedLine();
+  }
   return new Promise((resolve) => {
-    const stdin = process.stdin;
-    process.stdout.write(prompt);
-    if (hidden && stdin.isTTY) {
+    if (hidden) {
       stdin.setRawMode(true);
       let buffer = '';
       const onData = (chunk) => {
@@ -683,9 +967,16 @@ async function runCaaLogin(argv) {
     log('没有 settings.json，用内置默认设备档案（成功率略低）');
   }
 
-  const username = (await readLine('IG 用户名：')).trim();
+  /*
+   * 凭据来源：交互输入优先，其次环境变量（`INSTAMONY_IG_USER` / `INSTAMONY_IG_PASS`）。
+   *
+   * 环境变量只为**自动化/自测**（比如用假账号确认链路形状没变）；密码不会落盘、不会打印。
+   */
+  const envUser = String(process.env.INSTAMONY_IG_USER || '').trim();
+  const envPass = String(process.env.INSTAMONY_IG_PASS || '');
+  const username = envUser.length > 0 ? envUser : (await readLine('IG 用户名：')).trim();
   if (username.length === 0) die('没输入用户名');
-  const password = await readLine('IG 密码（不回显）：', true);
+  const password = envPass.length > 0 ? envPass : await readLine('IG 密码（不回显）：', true);
   if (password.length === 0) die('没输入密码');
 
   // 两步验证时按需提示输入验证码（2FA / 短信码）
@@ -743,7 +1034,31 @@ async function runCaaLogin(argv) {
   }
   log('登录成功：账号 ' + (session.userId || '?'));
   log('会话已写入 ' + SESSION_FILE + '，设备身份已写入 ' + DEVICE_FILE);
-  log('下一步：node instamony.js --check  然后 node instamony.js');
+
+  /*
+   * **再写一份 instagrapi 形状的会话**（`settings.caa.json`），并当场自检等价性。
+   *
+   * 目标里要的是"产出与 instagrapi settings.json 等价的会话"。只写我们自己的 session.json
+   * 只能证明"我们认得自己"；这份文件能直接喂给 `--import-session`（原先只有 Python 那条路
+   * 才产出的格式）——**同一条导入路径能吃下去、且解出来是同一份会话**，才算等价。
+   */
+  const settingsCaaFile = path.join(DIR, 'settings.caa.json');
+  try {
+    fs.writeFileSync(settingsCaaFile,
+      JSON.stringify(settingsShapeOf(result, profile), null, 2), 'utf8');
+    const reread = importSession(settingsCaaFile, { dryRun: true });
+    const sameSid = reread.sessionid === session.sessionid;
+    const sameAuth = reread.authorization === session.authorization;
+    log('等价性自检：settings.caa.json 经 --import-session 解析 → 账号 ' + (reread.userId || '?')
+      + '，sessionid ' + (sameSid ? '一致' : '**不一致**')
+      + '，authorization ' + (sameAuth ? '一致' : '**不一致**'));
+    if (!sameSid || !sameAuth) {
+      warn('等价性自检没过：两份会话不一致，别把 settings.caa.json 当等价物用');
+    }
+  } catch (error) {
+    warn('写 settings.caa.json 失败：' + error.message);
+  }
+  log('下一步：node instamony.js --verify-session   （自证能收推送）然后 node instamony.js');
 }
 
 /* ------------------------------------------------------------------ 入口 */
@@ -769,6 +1084,11 @@ async function main() {
 
   if (argv.indexOf('--check') >= 0) {
     await runCheck(cfg);
+    return;
+  }
+
+  if (argv.indexOf('--verify-session') >= 0) {
+    await runVerifySession();
     return;
   }
 

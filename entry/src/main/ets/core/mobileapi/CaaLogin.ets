@@ -46,7 +46,7 @@ const CAA_HOST: string = 'b.i.instagram.com';
 const IG_APP_ID: string = '567067343352427';
 
 /** 两步验证相关的三个 Bloks app。 */
-const AP_2SV_ENTRYPOINT: string = 'com.bloks.www.ap.two_step_verification.entrypoint';
+const AP_2SV_ENTRYPOINT: string = 'com.bloks.www.ap.two_step_verification.entrypoint_async';
 const AP_2SV_CODE_ENTRY: string = 'com.bloks.www.ap.two_step_verification.code_entry';
 const AP_2SV_CODE_ENTRY_ASYNC: string = 'com.bloks.www.ap.two_step_verification.code_entry_async';
 
@@ -734,7 +734,12 @@ export class CaaLogin {
       return new CaaResult(false, '拿不到密码加密公钥（qe/sync 没回头发公钥）');
     }
     const encrypted: string = await MobileCrypto.encryptPassword(password, keys);
-    const textInputId: string = `${CaaLogin.randomBytes(2).toString()}`;
+    /*
+     * 输入框 id 的形状必须和真机一致：**4 位十六进制 + `ig`**（instagrapi 3.2.2 的注释说得更狠：
+     * 纯十六进制/UUID 前缀虽然能被 VM 接受，但可能回"空载荷 + 404"）。所以别用随机字节
+     * 直接 toString（那会拼成 `12,34`）。
+     */
+    const textInputId: string = `${CaaLogin.hexOfBytes(CaaLogin.randomBytes(2))}ig`;
     const sendClient: Record<string, ESObject> =
       CaaLogin.sendClientParams(identity, username, encrypted, aac);
     const sendServer: Record<string, ESObject> =

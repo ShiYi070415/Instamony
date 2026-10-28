@@ -497,7 +497,7 @@ function extractLoginPayload(data) {
 
 /* ------------------------------------------------- 两步验证（ap.2sv 链） */
 
-const AP_2SV_ENTRYPOINT = 'com.bloks.www.ap.two_step_verification.entrypoint';
+const AP_2SV_ENTRYPOINT = 'com.bloks.www.ap.two_step_verification.entrypoint_async';
 const AP_2SV_CODE_ENTRY = 'com.bloks.www.ap.two_step_verification.code_entry';
 const AP_2SV_CODE_ENTRY_ASYNC = 'com.bloks.www.ap.two_step_verification.code_entry_async';
 

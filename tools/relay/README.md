@@ -19,12 +19,29 @@ IG ──FBNS 推送──▶ 本脚本 ──华为 Push Kit──▶ 手机通
 > 必须是真机登录产生的会话。IG 已停用旧的密码登录接口，现在能登录的是
 > Bloks CAA 流程 —— 由 instagrapi 维护，所以借它登录一次（细节见 [LOGIN.md](LOGIN.md)）。
 
+**两条路，选一条：**
+
+| 路 | 命令 | 依赖 |
+| --- | --- | --- |
+| **纯 Node（推荐）** | `node instamony.js --caa-login` | 只要 Node |
+| Python | `python login_ig.py` → `node instamony.js --import-session settings.json` | Python + instagrapi |
+
+`--caa-login` 成功后除了写 `session.json`，还会写一份**instagrapi 形状**的
+`settings.caa.json`，并当场用 `--import-session` 的解析器读回来比对 —— 两条路产出的
+会话是等价的，任选一条即可。
+
+> 自测/自动化可以用环境变量免交互：`INSTAMONY_IG_USER` / `INSTAMONY_IG_PASS`
+> （密码不落盘、不打印；日常还是用交互输入）。
+
+### 1.5 会话自证（建议每次登录后跑一次）
+
 ```powershell
-pip install instagrapi          # 只需一次
-python login_ig.py              # 输用户名 / 密码（不回显）/ 2FA 码
+node instamony.js --verify-session
 ```
 
-成功会打印 `OK <账号id>`，并生成 `settings.json`。
+四件事一次验完：会话形状 → `accounts/current_user/` 探活 → 与 instagrapi settings 的等价性 →
+**设备信任闸门**（FBNS 申请 token 后 `push/register/` 是否回 `{"status":"ok"}`）。
+闸门不过就说明会话来源不对（网页 Cookie），常驻进程收不到推送。
 
 ### 2. 导入会话 + 设备身份
 
@@ -81,7 +98,7 @@ push token 注册成功 —— 之后新私信由 IG 主动推过来
 
 | 环节 | 说明 |
 | --- | --- |
-| 登录 | 交给 instagrapi（Bloks CAA 流程，IG 会随时改，别自己重写） |
+| 登录 | `--caa-login` 是 Node 版 CAA/Bloks 实现（搬运自 instagrapi 3.2.2 的实际行为）；也可以继续用 `login_ig.py` |
 | 设备注册 | FBNS 两段式：空 userId 引导拿 `ck/cs/di/ds` → 用凭据重连 → 申请 push token → `push/register/` 注册给 IG |
 | 收 | topic 76 的 `fbpushnotif`：`m` 正文 / `t_id` 会话 / `s` 发信人 / `n` 消息 id |
 | 发 | 华为 Push Kit v3（服务账号 JWT），`category=IM`（锁屏+铃声+振动） |
@@ -95,7 +112,9 @@ push token 注册成功 —— 之后新私信由 IG 主动推过来
 
 | 现象 | 处理 |
 | --- | --- |
-| `缺少有效会话` | 先跑第 1、2 步（`python login_ig.py` → `--import-session`） |
+| `缺少有效会话` | 先跑第 1、2 步（`--caa-login`，或 `python login_ig.py` → `--import-session`） |
+| 登录"成功"但手机不响 | 跑 `--verify-session`：闸门不过 = 会话来源不对（网页 Cookie），换 `--caa-login` 重登 |
+| `--caa-login` 只看到提示符就退出 | 旧版的管道读取 bug（多行一起送来、第二行等不到），已修；若还复现，用 `INSTAMONY_IG_USER` / `INSTAMONY_IG_PASS` 跑 |
 | `没拿到 push token` | FBNS 引导失败；删掉 `fbns-auth.json` 再启动一次 |
 | `push token 注册失败` | 会话可能过期：重跑 `python login_ig.py` 并重新导入 |
 | 手机收不到 | `node instamony.js --test-push x` 若成功，说明是 IG 推送没到（检查会话）；若失败，看报错里的 HTTP/code |
@@ -104,6 +123,6 @@ push token 注册成功 —— 之后新私信由 IG 主动推过来
 
 ## 五、安全
 
-`session.json` / `settings.json` / `fbns-auth.json` / `mqtt-device.json` 都是
-**等同密码**的东西，全部已在 `.gitignore` 里，别提交、别外传。
+`session.json` / `settings.json` / `settings.caa.json` / `fbns-auth.json` / `mqtt-device.json`
+都是**等同密码**的东西，全部已在 `.gitignore` 里，别提交、别外传。
 本脚本只做只读的收私信 + 发通知，不发消息、不点赞、不关注。
