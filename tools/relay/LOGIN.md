@@ -56,6 +56,22 @@ TOTP/SMS 选法 + `verify_code.async`），**CAA 登录这条路不走它** —�
 `CaaLogin.selfTest()` 里放了同样四项断言，界面上的「先跑解析自检（不联网）」就是它 ——
 真机上先跑一次，就能把"解析器坏了"和"IG 拒绝了"分开。
 
+### App 那份移植和 JS 是否一致：`audit-arkts-parity.js`
+
+App 里的 `CaaLogin.ets` 是真机才跑得到的移植，字段少一个/拼错一个，IG 就换判据
+（典型症状：同样的密码，脚本能登、App 里登不上）。审计脚本按锚点把两边每个请求体的
+**键集合**抠出来比：`node tools/relay/audit-arkts-parity.js`。
+
+当前结论（R6）：五个请求体（networkInfo / 取 aac / oauth / send_login_request / 2SV）
+**字段齐全**；请求头只差 `Connection`（ArkTS 有意不发，理由见 `MobileRequest.baseHeaders`）。
+另外核过三处"只有真机才暴露"的等价性：
+
+- **密码加密字节布局**：`0x01 | keyId | iv(12) | u16LE(rsa) | rsa | tag(16) | cipher`，
+  AES-256-GCM 的 AAD = 时间戳字符串 —— 与 JS（离线可逆测试过的那份）逐字节一致；
+- **bloks 版本号**：ArkTS 从 `MobileConfig.APP_SETTINGS` 的默认档取
+  `799db3e3…`，与 JS `FALLBACK_PROFILE.bloksVersionId` 同一个常量；
+- **文本输入框 id**：`<4 位十六进制>ig`（`:81` 用户名 / `:82` 密码）。
+
 三个关键结论（避免以后重复踩）：
 
 1. **`graphql_www` 的路径是 `https://i.instagram.com/graphql_www`，没有 `/api` 前缀**；

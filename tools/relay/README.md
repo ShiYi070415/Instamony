@@ -49,13 +49,18 @@ node instamony.js --verify-session
 ### 1.6 离线自检（不需要账号、不需要网络）
 
 ```powershell
-node test-caa-parse.js
+node test-caa-parse.js          # 16 项：加密可逆 / 布局解析 / Cookie / 会话等价 / USDID
+node audit-arkts-parity.js      # ArkTS 移植与 JS 的字段、请求头差异（改一边后跑它）
 ```
 
-16 项断言，覆盖：密码加密能被 IG 的格式解开（RSA + AES-GCM 可逆）、Bloks 布局解析
+`test-caa-parse.js` 覆盖：密码加密能被 IG 的格式解开（RSA + AES-GCM 可逆）、Bloks 布局解析
 （aac / 错误文案 / `login_response` → cookie + authorization / 两步验证上下文）、
 Cookie 串解析（对齐 Python `SimpleCookie`）、CAA 结果 ⇄ settings.json 的**逐字段等价**、
 USDID 令牌形状。改解析器前后都该跑一次 —— 它已经抓出过两个真 bug（见 LOGIN.md）。
+
+`audit-arkts-parity.js` 比的是 App 里那份 ArkTS 实现（`CaaLogin.ets`）：**「只在 JS 里有」
+就是 ArkTS 少发了字段**（IG 会因此换判据），请求头一组只作提示（ArkTS 有意不发
+`Accept-Encoding` / `Host` / `Connection`）。当前结论：五个请求体字段齐全。
 
 ### 2. 导入会话 + 设备身份
 
