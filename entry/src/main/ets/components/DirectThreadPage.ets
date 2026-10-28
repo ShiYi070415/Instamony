@@ -34,6 +34,16 @@ const TAG: string = 'DirectThreadPage';
  * 见 pages/Index 里 bottomBuilder 那段注释），留 56vp 时最上面一条消息会被蒙版压住。
  */
 const PAGE_TOP_OFFSET: number = 96;
+/**
+ * 会话页**自绘标题**（头像 + 名字 + 用户名）的高度与顶部留白。
+ *
+ * 为什么不用 HDS 标题栏：它的 `title` 只接受 `mainTitle / subTitle` 两行文字，
+ * 放不进头像（见 pages/Index 里那段说明）。需求要的是"头像在名字与用户名左边"，
+ * 所以把标题栏隐藏，改成页面内这一层；高度与 PAGE_TOP_OFFSET 对齐，列表的滚动留白不用改。
+ */
+const HEADER_HEIGHT_VP: number = 96;
+const HEADER_TOP_PAD_VP: number = 40;
+const HEADER_AVATAR_VP: number = 36;
 const BOTTOM_OFFSET: number = 92;
 const FALLBACK_WIDTH_VP: number = 411;
 /** 分享卡片的圆角（帖子卡片与视频卡片共用一套，别各写一个数）。 */
@@ -171,6 +181,9 @@ export struct DirectThreadPage {
    * 三条原生的路都断了（REST 被 IG 挡、没有会话模板、网页抓模板也抓不到）时，页面上给一颗
    * 按钮，把用户送回网页版会话 —— 总比让他盯着一片空白强（这就是接入原生之前的老行为）。
    */
+  /** 自绘标题上的返回键（HDS 标题栏隐藏后由页面自己提供）。 */
+  onBack: () => void = (): void => {
+  };
   onOpenWeb: () => void = (): void => {
   };
   /** 点开"转发的帖子 / Reel / 链接卡片"（见 bubbleContent 的说明）。 */
@@ -1420,6 +1433,69 @@ export struct DirectThreadPage {
       || lower.indexOf('photo') >= 0 || lower.indexOf('video') >= 0;
   }
 
+  /**
+   * **自绘会话标题**：返回键 + 头像 + 名字 / 用户名（群聊则是群头像 + 群名）。
+   *
+   * 头像位置按需求在"名字与用户名左边"；群聊用 `vm.avatarNow()`（那是会话头像吗，
+   * 群聊时服务端给的就是群头像）。
+   */
+  @Builder
+  pageHeader() {
+    Row({ space: 10 }) {
+      // 返回
+      Row() {
+        SymbolGlyph($r('sys.symbol.chevron_left'))
+          .fontSize(22)
+          .fontColor([$r('app.color.primary_text')])
+      }
+      .width(36)
+      .height(36)
+      .justifyContent(FlexAlign.Center)
+      .onClick((): void => {
+        this.onBack();
+      })
+      // 头像（会话 / 群组头像）
+      if (this.vm.avatarNow().length > 0) {
+        Image(this.vm.avatarNow())
+          .draggable(false)
+          .width(HEADER_AVATAR_VP)
+          .height(HEADER_AVATAR_VP)
+          .borderRadius(HEADER_AVATAR_VP / 2)
+          .objectFit(ImageFit.Cover)
+          .backgroundColor($r('app.color.field_background'))
+      } else {
+        Column()
+          .width(HEADER_AVATAR_VP)
+          .height(HEADER_AVATAR_VP)
+          .borderRadius(HEADER_AVATAR_VP / 2)
+          .backgroundColor($r('app.color.field_background'))
+      }
+      // 名字 + 用户名
+      Column({ space: 2 }) {
+        Text(this.vm.titleNow().length > 0 ? this.vm.titleNow() : $r('app.string.direct_empty'))
+          .fontSize(17)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.primary_text'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        if (this.vm.subtitleNow().length > 0) {
+          Text(this.vm.subtitleNow())
+            .fontSize(12)
+            .fontColor($r('app.color.secondary_text'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+    }
+    .width('100%')
+    .height(HEADER_HEIGHT_VP)
+    .padding({ left: SIDE_PADDING, right: SIDE_PADDING, top: HEADER_TOP_PAD_VP })
+    .alignItems(VerticalAlign.Center)
+    .backgroundColor(Color.Transparent)
+  }
+
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
       Column() {
@@ -1611,6 +1687,22 @@ export struct DirectThreadPage {
 
       // 悬浮输入条（在 Stack 的 Bottom 对齐层里，自己再抬一次输入法高度）。
       this.inputOverlay()
+
+      /*
+       * **会话标题层**（自绘：头像 + 名字 + 用户名）。HDS 标题栏已隐藏，见 HEADER_HEIGHT_VP 的说明。
+       *
+       * 外面必须再包一层"满高 + 顶部对齐"的容器：这个 Stack 的 alignContent 是 Bottom
+       * （输入条要贴底），直接把 Row 放进去它会跑到屏幕底部盖住输入框。
+       * `HitTestMode.Transparent`：不阻塞列表的滚动与点击，返回键自己仍然收得到点击。
+       */
+      Column() {
+        this.pageHeader()
+      }
+      .width('100%')
+      .height('100%')
+      .justifyContent(FlexAlign.Start)
+      .alignItems(HorizontalAlign.Start)
+      .hitTestBehavior(HitTestMode.Transparent)
     }
     .width('100%')
     .height('100%')

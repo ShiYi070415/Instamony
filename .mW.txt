@@ -1,0 +1,1 @@
+feat(direct): 会话标题加头像 —— HDS 标题栏只接受两行文字（mainTitle/subTitle），放不进头像，所以这个 NavDestination 隐藏标题栏，改由 DirectThreadPage.pageHeader 自绘：返回键 + 会话/群组头像（vm.avatarNow()，群聊即群头像）+ 名字/用户名两行；用满高+顶部对齐的 Container 叠在列表上层（根 Stack 是 Bottom 对齐，直接放会跑到屏幕底部），HitTestMode.Transparent 不阻塞列表滚动；高度 96 与 contentStartOffset 对齐，滚动留白不用改

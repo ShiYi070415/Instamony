@@ -10520,7 +10520,7 @@ struct Index {
         avoidLayoutSafeArea: false,
         enableComponentSafeArea: false
       })
-      // 有上一级（首页），所以显示返回键；点击由 NavDestination 自己 pop 路由栈。
+      // 需求：标题里要放用户/群组头像 —— HDS 标题只支持两行文字，所以整条标题栏换成页面自绘。
       .hideBackButton(false)
       .titleMode(HdsNavDestinationTitleMode.MINI)
       // 标题栏铺到系统栏下方，沉浸光感才有连续的底。
@@ -10882,6 +10882,12 @@ struct Index {
           },
           onOpenUser: (username: string, userId: string): void => {
             this.openUserProfile(username, userId);
+          },
+          // 自绘标题（头像 + 名字 + 用户名）替代 HDS 标题栏，返回键由页面自己画。
+          onBack: (): void => {
+            if (this.navStack.size() > 0) {
+              this.navStack.pop();
+            }
           }
         })
       }
@@ -10906,6 +10912,8 @@ struct Index {
         avoidLayoutSafeArea: false,
         enableComponentSafeArea: false
       })
+      // 需求：标题里要有用户/群组头像 —— HDS 标题只支持两行文字，所以换成页面自绘（见 DirectThreadPage.pageHeader）。
+      .hideTitleBar(true)
       .hideBackButton(false)
       .titleMode(HdsNavDestinationTitleMode.MINI)
       .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
