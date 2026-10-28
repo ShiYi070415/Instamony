@@ -245,9 +245,10 @@ function deviceIdentity() {
  * `direct_subscribe` 就是从收件箱响应顶层读这两个值），所以顺手带出来，
  * 免得为了拿它们再打一次请求。
  */
-async function fetchInboxRaw(cfg) {
+async function fetchInboxRaw(cfg, options) {
   const cookie = cfg.ig.cookie;
   const ig = cfg.ig || {};
+  const opts = options || {};
   const query = querystring.stringify({
     /*
      * **窗口大小决定会不会"吞消息"**。
@@ -257,8 +258,8 @@ async function fetchInboxRaw(cfg) {
      * 现在默认 30 个会话 / 每个会话 20 条；另外把"窗口里最旧一条比上次记录还新"
      * 当作**可能有空洞**，去该会话详情页回填（见 backfillThread / neededBackfill）。
      */
-    limit: String(Number(ig.inboxLimit || 30)),
-    thread_message_limit: String(Number(ig.threadMessageLimit || 20)),
+    limit: String(Number(opts.limit || ig.inboxLimit || 30)),
+    thread_message_limit: String(Number(opts.messageLimit || ig.threadMessageLimit || 20)),
     visual_message_return_type: 'unseen',
     persistentBadging: 'true'
   });
@@ -343,6 +344,35 @@ async function fetchInboxRaw(cfg) {
     seqId: Number(data.seq_id || 0),
     snapshotAtMs: Number(data.snapshot_at_ms || 0)
   };
+}
+
+/**
+ * **轻量探测**：只取最近 5 个会话、每会话 5 条。
+ *
+ * 为什么这样也能发现新消息：IG 的收件箱是**按最后活跃时间排序**的，
+ * 任何会话来了新消息都会顶到最前面 —— 所以只看前几个就能判断"有没有动静"，
+ * 不用每次拉 30×20 的大响应。体积大约是完整请求的 1/10。
+ */
+async function probeInbox(cfg) {
+  const raw = await fetchInboxRaw(cfg, { limit: 5, messageLimit: 5 });
+  return raw.threads;
+}
+
+/** 探测结果里有没有"比记录更新的东西"（含从没见过的会话）。 */
+function probeChanged(threads, state) {
+  for (const thread of threads) {
+    const threadId = String(thread.thread_id || thread.thread_v2_id || '');
+    if (threadId.length === 0) continue;
+    const items = thread.items || [];
+    if (items.length === 0) continue;
+    const last = state[threadId];
+    if (last === undefined) return true;        // 新会话
+    const lastTs = Number(last.ts || 0);
+    for (const item of items) {
+      if (Number(item.timestamp || 0) > lastTs) return true;
+    }
+  }
+  return false;
 }
 
 /** 只要会话列表（老的调用方式）。 */
@@ -940,25 +970,65 @@ function lockFile() {
   return path.join(__dirname, '.relay.lock');
 }
 
-function acquireLock() {
+/**
+ * 单实例互斥 —— **用本地端口占位，不再只靠 pid 文件**。
+ *
+ * 为什么要换：pid 文件挡不住"锁文件被删掉之后再起一个"——我实测同时跑起过**三个**
+ * relay（各推一遍，于是"同一条消息多发"）。端口占位是内核级的：第二个进程 bind 同一个
+ * 端口必然失败，谁清了文件都没用。
+ */
+let mutexServer = null;
+
+function acquireLock(cfg) {
   const file = lockFile();
+  const port = Number((cfg && cfg.lockPort) || 47999);
   try {
     const old = Number(fs.readFileSync(file, 'utf8').trim());
-    if (old > 0) {
+    if (old > 0 && old !== process.pid) {
       try {
         process.kill(old, 0);
-        die('已经有一个中转在跑（pid ' + old + '），先停掉它。');
+        warn('锁文件里写着 pid ' + old + '，它还在（下面再用端口判一次）。');
       } catch (error) {
         // 进程不在了：把旧锁当垃圾清掉
+        try {
+          fs.unlinkSync(file);
+        } catch (ignored) {
+        }
       }
     }
   } catch (error) {
     // 没有锁文件：正常
   }
-  fs.writeFileSync(file, String(process.pid), 'utf8');
+  return new Promise((resolve) => {
+    const net = require('net');
+    const server = net.createServer();
+    server.once('error', (error) => {
+      if (error.code === 'EADDRINUSE') {
+        die('已经有一个中转在跑（本地端口 ' + port + ' 被占用）。'
+          + '\n先停掉它（Windows: 任务管理器里结束那个 node，或 `Get-Process node` 找 relay.js），再启动。'
+          + '\n这条检查是为了防止两个实例同时推送，导致同一条消息收到两遍。');
+      } else {
+        warn('单实例端口检查异常（' + error.code + '）：' + error.message + '，继续启动。');
+        resolve(false);
+      }
+    });
+    server.listen(port, '127.0.0.1', () => {
+      mutexServer = server;
+      fs.writeFileSync(file, String(process.pid), 'utf8');
+      resolve(true);
+    });
+  });
 }
 
 function releaseLock() {
+  if (mutexServer !== null) {
+    try {
+      mutexServer.close();
+    } catch (error) {
+      // 忽略
+    }
+    mutexServer = null;
+  }
   try {
     fs.unlinkSync(lockFile());
   } catch (error) {
@@ -1078,8 +1148,12 @@ async function main() {
    */
   const hotSeconds = Math.max(10, Math.min(activeGap, Number(ig.hotSeconds || 15)));
   const hotWindowMs = Math.max(1, Number(ig.hotMinutes || 10)) * 60 * 1000;
+  const probeSeconds = Math.max(2, Number(ig.probeSeconds || 10));
+  const hotProbeSeconds = Math.max(1, Number(ig.hotProbeSeconds || 3));
+  /** 无条件拉全量的兜底间隔（秒）。 */
+  const fullEverySeconds = Math.max(30, Number(ig.fullEverySeconds || 300));
   const stateFile = path.resolve(__dirname, cfg.stateFile || 'state.json');
-  if (!once) acquireLock();
+  if (!once) await acquireLock(cfg);
 
   let state = loadState(stateFile);
   let dirty = false;
@@ -1089,6 +1163,10 @@ async function main() {
   let lastActivityAt = 0;
   /** 上一次打过的"下一轮间隔"（只在变化时打，避免刷屏）。 */
   let lastLoggedGap = -1;
+  /** 上一次拉全量的时间（毫秒）。 */
+  let lastFullAt = 0;
+  /** 探测到变化后暂存的那批会话（下一轮直接用，省一次往返）。 */
+  let probeResult = null;
   /** 实时通道客户端（null = 没连，靠轮询）。 */
   let realtime = null;
 
@@ -1152,16 +1230,73 @@ async function main() {
     return client;
   })();
 
+  /** 短睡（可被实时事件叫醒）。 */
+  const nap = (ms) => new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      wakeUp = null;
+      resolve();
+    }, Math.max(0, Math.round(ms)));
+    wakeUp = () => {
+      clearTimeout(timer);
+      wakeUp = null;
+      resolve();
+    };
+  });
+
   for (;;) {
     /*
-     * 一轮：先拉收件箱，再把**每个会话里所有没推过的条目**逐条推出去。
+     * **常态轻量探测**（需求："延迟还要更低"）。
+     *
+     * 结构改成"探测器 + 全量"两级：
+     *   · 每一轮先打一次**很小的请求**（前 5 个会话 × 5 条，约全量的 1/10）；
+     *   · 没变化 → 短睡再探（聊天中 `hotProbeSeconds` 默认 3 秒，平时 `probeSeconds` 默认 10 秒）；
+     *   · 有变化 → 才拉 30×20 的全量、逐条推。
+     *   · 另外每 `fullEverySeconds`（默认 300 秒）无条件拉一次全量兜底：
+     *     万一某条消息没把会话顶到最前（归档、置顶等边角情况），也能在 5 分钟内补上。
+     *
+     * 为什么敢这么勤：探测响应只有全量的十分之一左右（gzip 后几 KB），
+     * 3 秒一次也只相当于每 30 秒拉一次全量的带宽。
+     */
+    const hotNow = lastActivityAt > 0 && (Date.now() - lastActivityAt) < hotWindowMs;
+    const probeGap = hotNow ? hotProbeSeconds : probeSeconds;
+    if (!firstRound) {
+      const probed = await probeInbox(cfg);
+      const changed = probeChanged(probed, state);
+      const stale = (Date.now() - lastFullAt) > fullEverySeconds * 1000;
+      if (!changed && !stale) {
+        await nap(probeGap * 1000 * (0.8 + Math.random() * 0.4));
+        continue;
+      }
+      if (changed && !stale) {
+        /*
+         * **省一次往返**：探测结果里已经带着那个会话的最新 5 条，直接拿它去推，
+         * 不再回头拉 30×20 的全量。
+         *
+         * 为什么这一下很关键：实测 IG 收件箱接口**光服务端响应就要 1.5 秒**
+         * （探测 32KB/1.6s、全量 261KB/1.5s）。省掉一次全量 = 少等 1.5 秒，
+         * 相当于把整体延迟砍掉三分之一。
+         */
+        probeResult = probed;
+        log('探测到新动静 → 直接用探测结果推送（省一次往返）');
+      } else {
+        probeResult = null;
+        if (changed) log('有新动静且到全量兜底时间 → 拉全量');
+      }
+    }
+    /*
+     * 一轮：把拿到的那批会话里**所有没推过的条目**逐条推出去。
      *
      * 为什么不用 MQTToT 直接收消息：IG 不给我们推（iris 订阅被拒，
      * `Iris_IrisValidationException`，见 REALTIME.md），MQTT 只能当"有新动静"的触发器。
-     * 所以正确性完全取决于这里的比对逻辑 —— 这正是"吞消息 / 重复"要修的地方。
      */
-    const inbox = await fetchInboxRaw(cfg);
-    let threads = inbox.threads;
+    let threads;
+    if (probeResult !== null) {
+      threads = probeResult;
+      probeResult = null;
+    } else {
+      lastFullAt = Date.now();
+      threads = (await fetchInboxRaw(cfg)).threads;
+    }
     /*
      * **窗口空洞检测**：如果某个会话返回的最旧一条都比我们上次记录的新，
      * 说明两轮之间来的消息超过了窗口大小（已经丢了）。这时去该会话详情页回填。
