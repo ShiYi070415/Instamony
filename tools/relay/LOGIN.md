@@ -117,13 +117,50 @@ App 现在用 WebView 登录，拿到的就是"网页会话"——所以 **App �
    **代价最小、最稳**，缺点是用户得先跑一次 Python 脚本（可引导，或做成"在电脑上登一次"）。
 2. **App 内实现 CAA 登录**：把 instagrapi 的 Bloks CAA 流程移植到 ArkTS
    （`bloks_caa_login` + 两步验证 + challenge）。工作量大、且 IG 随时改（instagrapi
-   自己就在不停修），**不建议**作为第一选择。
+   自己就在不停修）—— **已完成移植并接进界面**，见下面「六·补」。
 3. **继续轮询**：App 侧已有（`BackgroundKeep` + 本地通知），延迟 45 秒级；
    配合 relay 的 FBNS 才能到秒级。
 
 > 若走方案 1，App 侧只需要：一个粘贴框 + 解析（`cookies`/`uuids`/`authorization_data`）+ 
 > 落盘 + 启动时把 `sessionid` 注入 Cookie 罐、把 oauth 注入 `MobileSession` 身份。
 > 现有 `core/mobileapi/MobileSession` 已经支持 `authorization` 字段，接起来不难。
+
+## 六·补、App 内密码登录：已接线（ArkTS 版 CAA）
+
+这一轮把 scheme 2 做完了，两条路（JS 脚本 / App 内）共用同一套协议知识：
+
+| 位置 | 作用 |
+| --- | --- |
+| `entry/src/main/ets/core/mobileapi/CaaLogin.ets` | 协议本体：USDID、attestation、aac、oauth、send_login_request、两步验证 |
+| `entry/src/main/ets/core/mobileapi/CaaSession.ets` | **落地面**：Cookie 种进罐 + `MobileSession` 重捡会话 + USDID 存 preferences |
+| `entry/src/main/ets/components/CaaLoginCard.ets` | 界面（输入框 / 验证码 / 逐步 HTTP 状态），登录页与设置页共用 |
+| `entry/src/main/ets/core/InstagramCookieJar.ets` | `adoptCookieText`：把服务端给的每一颗 Cookie 都种进罐 |
+
+界面入口有两个（同一个组件）：
+- **未登录的整页登录页** → 底部「App 协议登录（实验）」→ 半模态面板；
+- **设置页** → 「账号登录（实验）」那一组。
+
+刻意做成"登录成功后会话直接进 Cookie 罐"。整个 App 只认罐（网页兜底、`MobileSession.ensure`、
+退出登录清罐都是），所以成功之后壳会自己从登录页切到已登录（`refreshSessionFromJar → applySession`），
+**不需要**为这条路再写一套会话生效逻辑。
+
+几个实现要点（改代码前先看这几条）：
+
+1. **USDID 要落盘复用**。它是设备身份；每次登录换新密钥 = 在 IG 眼里是一台新设备，
+   风控更严。存 preferences（`instarmony_caa`：`usdid` / `usdid_kid` / `usdid_private` / `usdid_public`），
+   退出登录**不清**（和会话材料分开）。
+2. **两步验证的现场留在内存**（`CaaPending`）：第二段要复用第一段布局里的 `context_data`
+   和同一份请求头。所以 `login(..., null)` 探到要验证码就停住，UI 收码后调 `submitCode(code)`。
+3. **`authorization` 用服务端下发的那一份**（`Bearer IGT:2:…`），不要用本地按 userId/sessionid
+   算的 —— 设备信任看的是前者。
+4. ArkTS 严格模式的坑（都已踩过）：`cryptoFramework.Signer` 实际叫 **`Sign`**；`convertKey` 传
+   `null` 要显式声明成 `DataBlob | null`，否则重载解析落到只收 `DataBlob` 的那两个上；
+   嵌套对象字面量必须逐层声明类型。
+
+验证方法（真机）：登录页 →「App 协议登录（实验）」→ 填用户名密码 →
+状态行应当依次显示 `usdid 200 → attestation 200 → aac 200 → oauth_token_fetch 200 →
+send_login_request 200`，然后壳切进主界面。要验证码时面板会多出「验证码」一行。
+失败时状态行会给出 IG 的原话（例如 `Can't find account`），照它判断是账号问题还是形状变了。
 
 ## 七、账号侧的注意事项
 
