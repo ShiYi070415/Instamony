@@ -1,0 +1,11 @@
+{
+  "port": 8788,
+  "agc": {
+    "serviceAccountFile": "../agc/private.json",
+    "category": "IM",
+    "testMessage": false
+  },
+  "keys": [
+    { "key": "换成一串随机字符（至少 8 位）", "note": "给谁用写在这里" }
+  ]
+}

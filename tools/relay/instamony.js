@@ -152,11 +152,14 @@ function igHeaders(session, device) {
   return headers;
 }
 
+/** 通用 HTTP 请求：按 URL 协议自动选 http / https（网关常是 http，推送接口是 https）。 */
 function httpRequest(url, options, body) {
   return new Promise((resolve, reject) => {
     const target = new URL(url);
-    const req = https.request({
+    const client = target.protocol === 'http:' ? require('http') : https;
+    const req = client.request({
       hostname: target.hostname,
+      port: target.port || (target.protocol === 'http:' ? 80 : 443),
       path: target.pathname + target.search,
       method: (options && options.method) || 'GET',
       headers: (options && options.headers) || {},
@@ -282,27 +285,59 @@ function notifyIdOf(text) {
 }
 
 /**
- * 发一条通知（华为 Push Kit v3 + 服务账号 JWT）。
+ * 发一条通知。
  *
- * `appMessageId` 的字符集只有 `[A-Za-z0-9+/=_-]`（实测带冒号会被整条拒收，
- * 回 `80100003 invalid appMessageId`，表现为"完全收不到消息"）。
+ * 两种模式，按 config.json 自动选：
+ *   · **网关模式**（`notify.gateway = {url,key}`）：把内容 POST 到网关，由网关用服务账号私钥
+ *     发华为。适合分发给其他用户 —— 他们机器上不需要华为私钥。
+ *   · **本机模式**（配置了 `notify.agc`）：自己签 JWT 直接发华为。
+ *
+ * `appMessageId` 的字符集只有 `[A-Za-z0-9+/=_-]`（带冒号会被整条拒收，回 80100003
+ * 且表现为"完全收不到消息"），这里统一清洗。
  */
 async function pushToPhone(cfg, title, body, itemKey) {
-  const agc = cfg.notify.agc || {};
+  const notifyCfg = cfg.notify || {};
+  const rawId = String(itemKey || Date.now());
+  const messageId = /^[A-Za-z0-9+/=_\-\s]{1,64}$/.test(rawId) ? rawId : String(notifyIdOf(rawId));
+  const token = process.env.INSTAMONY_PUSH_TOKEN || notifyCfg.pushToken || '';
+
+  const gateway = notifyCfg.gateway || null;
+  if (gateway !== null && typeof gateway.url === 'string' && gateway.url.length > 0) {
+    if (token.length < 20) throw new Error('config.json 的 notify.pushToken 为空');
+    const payload = JSON.stringify({ token, title, body, itemKey: rawId, messageId });
+    const res = await httpRequest(gateway.url, {
+      method: 'POST',
+      headers: {
+        'X-Gateway-Key': String(gateway.key || ''),
+        'Content-Type': 'application/json; charset=UTF-8',
+        'Content-Length': Buffer.byteLength(payload)
+      }
+    }, payload);
+    let data = {};
+    try {
+      data = JSON.parse(res.body);
+    } catch (error) {
+      data = {};
+    }
+    if (data.ok === true) {
+      log('已通过网关推送到手机（' + (data.requestId || '') + '）');
+      return true;
+    }
+    throw new Error('网关返回失败（HTTP ' + res.status + '）：' + res.body.slice(0, 200));
+  }
+
+  const agc = notifyCfg.agc || {};
   const saFile = agc.serviceAccountFile
     ? path.resolve(DIR, agc.serviceAccountFile) : DEFAULT_SA_FILE;
   const sa = readJson(saFile, null);
   if (sa === null) {
     throw new Error('找不到服务账号密钥 ' + saFile
-      + '（AGC → API Console → 服务账号密钥 → 下载推送服务 API 的 json）');
+      + '（ACP → API Console → 服务账号密钥 → 下载推送服务 API 的 json）');
   }
   const projectId = sa.project_id;
   if (!projectId) throw new Error('密钥文件里没有 project_id');
-  const token = process.env.INSTAMONY_PUSH_TOKEN || cfg.notify.pushToken || '';
   if (token.length < 20) throw new Error('config.json 的 notify.pushToken 为空（App 里「复制中转材料」可拿到）');
 
-  const rawId = String(itemKey || Date.now());
-  const messageId = /^[A-Za-z0-9+/=_\-\s]{1,64}$/.test(rawId) ? rawId : String(notifyIdOf(rawId));
   const payload = JSON.stringify({
     payload: {
       notification: {
