@@ -33,6 +33,8 @@ import { VideoProbe } from '../core/VideoProbe';
 import { BusinessError } from '@kit.BasicServicesKit';
 // 前后台信号：切后台要把解码器还回去（见 appForeground 的说明）。
 import { AppLifecycle, VisibilityHandler } from '../core/AppLifecycle';
+// 播放器生命周期也进滚动日志：reels 闪退时那是唯一能带出来的现场（见 core/ReelsCrashLog）
+import { ReelsCrashLog } from '../core/ReelsCrashLog';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'VideoSurface';
@@ -176,6 +178,38 @@ export struct VideoSurface {
 
   private readonly xController: XComponentController = new XComponentController();
   private player: media.AVPlayer | null = null;
+  /**
+   * 进程内**当前活着的播放器数量**（诊断用）。
+   *
+   * 为什么要盯它：每个 AVPlayer 都占一个硬解码器 + 一块缓冲，reels 连刷时旧播放器释放、
+   * 新播放器创建是交错的；数量一旦堆到 4~5 个，低内存机型就容易被系统直接杀掉
+   * （表现就是"闪退"，且 JS 层没有任何异常可捕获）。这里把数量写进滚动日志，
+   * 用户下次导出诊断时能直接看出是不是这个原因。
+   */
+  private static alivePlayers: number = 0;
+
+  /** 建好一个播放器时的计数与打点。 */
+  private static notePlayerCreated(url: string): void {
+    VideoSurface.alivePlayers++;
+    const alive: number = VideoSurface.alivePlayers;
+    if (alive >= 3) {
+      hilog.warn(DOMAIN, TAG, 'players alive=%{public}d url=%{public}s', alive, url);
+      ReelsCrashLog.note(`players alive=${alive} (create)`);
+    }
+  }
+
+  /** 释放一个播放器时的计数与打点。 */
+  private static notePlayerReleased(url: string): void {
+    if (VideoSurface.alivePlayers > 0) {
+      VideoSurface.alivePlayers--;
+    }
+    const alive: number = VideoSurface.alivePlayers;
+    if (alive >= 3) {
+      hilog.warn(DOMAIN, TAG, 'players still alive=%{public}d after release url=%{public}s',
+        alive, url);
+      ReelsCrashLog.note(`players alive=${alive} (release)`);
+    }
+  }
   private surfaceId: string = '';
   /** 已经交给播放器的地址（见 onPropChanged 里那道判据）。 */
   private appliedUrl: string = '';
@@ -258,8 +292,7 @@ export struct VideoSurface {
   }
 
   /** 建播放器并挂状态机；策略在 setMediaSource 时就带上（那是最早能带的时机）。 */
-  private createPlayer(): void {
-    VideoProbe.log('createPlayer');
+  private createPlayer(): void {    VideoProbe.log('createPlayer');
     if (this.player !== null || this.creating || this.destroyed || !this.wanted()) {
       return;
     }
@@ -276,6 +309,7 @@ export struct VideoSurface {
         return;
       }
       this.player = player;
+      VideoSurface.notePlayerCreated(this.shortUrl());
       player.on('stateChange', (state: string): void => {
         this.onState(state);
       });
@@ -323,6 +357,8 @@ export struct VideoSurface {
   private reportError(detail: string): void {
     hilog.error(DOMAIN, TAG, '%{public}s url=%{public}s playing=%{public}s',
       detail, this.shortUrl(), this.playing ? 'y' : 'n');
+    // 进滚动日志：闪退若发生在"播放器报错之后不久"，这条就是前因（用户导出诊断能看到）
+    ReelsCrashLog.note(`player error ${detail.substring(0, 120)} playing=${this.playing ? 'y' : 'n'}`);
     if (this.wantsPlay()) {
       this.onError();
     }
@@ -349,12 +385,26 @@ export struct VideoSurface {
       return;
     }
     try {
+      /*
+       * **先摘表面、再释放**（顺序很重要）。
+       *
+       * 播放器还挂着一个即将销毁的表面时释放，原生层可能在回调里访问已失效的 surface，
+       * 表现就是"偶发闪退，且 JS 侧一点日志都没有"（用户反馈的那种）。
+       * 这是 HarmonyOS AVPlayer 的既有坑，别合并成一句话。
+       */
+      try {
+        player.surfaceId = '';
+      } catch (error) {
+        // 已经处于释放中/不支持清空：忽略，继续释放
+      }
       player.off('stateChange');
       player.off('error');
       player.off('timeUpdate');
+      player.off('videoSizeChange');
       player.release();
     } catch (error) {
     }
+    VideoSurface.notePlayerReleased(player === null ? '' : this.shortUrl());
   }
 
   /** 状态机：initialized 挂表面（没表面就把 prepare 挂起）；prepared 校正缩放/循环并按需起播。 */
@@ -913,7 +963,22 @@ export struct VideoSurface {
         this.onSurfaceReady();
       })
       .onDestroy((): void => {
-        // 表面被系统回收（比如整层被移出渲染树）：下次 onLoad 会给新 id。
+        /*
+         * 表面被系统回收（整层移出渲染树 / 滑出预加载窗口）。
+         *
+         * **必须先把表面从播放器上摘下来**：播放器还挂着一个已经销毁的表面时，
+         * 释放/下一帧渲染在原生层就可能是野指针 —— 这是"刷 reels 偶发闪退"里
+         * JS 层完全看不到的一类（`try/catch` 也拦不住 native crash）。
+         * 摘表面这一步在 `teardownPlayer` 里也做了一次（两条路径都要兜住）。
+         */
+        const player: media.AVPlayer | null = this.player;
+        if (player !== null) {
+          try {
+            player.surfaceId = '';
+          } catch (error) {
+            hilog.warn(DOMAIN, TAG, 'detach surface on destroy failed');
+          }
+        }
         this.surfaceId = '';
         this.surfaceReady = false;
       })

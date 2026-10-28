@@ -42,7 +42,34 @@ export class ReelsCrashLog {
     }
     ReelsCrashLog.dir = filesDir;
     ReelsCrashLog.ready = true;
+    /*
+     * **上一次是不是"没写完就没了"**（= 被系统杀掉 / 崩了）。
+     *
+     * 判据：上次会话以 `session end` 收尾才算正常退出；没有那一行就说明进程是被暴力终止的。
+     * 这一行会留在滚动日志里，用户下次进「设定 → 诊断 → 导出诊断」就能带出来 ——
+     * 没有它，线上只能说"崩了"，说不出"崩之前最后一步是什么"（用户报的 reels 闪退就卡在这）。
+     */
+    const previous: string = ReelsCrashLog.readRaw(`${ReelsCrashLog.dir}/${FILE_NAME}`);
+    const endedClean: boolean = previous.lastIndexOf('session end') > previous.lastIndexOf(
+      'session start');
+    if (previous.length > 0 && !endedClean) {
+      ReelsCrashLog.buffer.push('session ABORTED (previous run did not end cleanly)');
+    }
     ReelsCrashLog.note('session start');
+  }
+
+  /**
+   * 正常退出时调用一次（`EntryAbility.onBackground` / `onDestroy`）。
+   *
+   * 配合 `init` 里的判据：有这一行 = 正常；没有 = 那次是被杀掉/崩掉的。
+   * 写上之后会把缓冲刷盘（崩溃现场最后几行必须落地）。
+   */
+  static endSession(reason: string): void {
+    if (!ReelsCrashLog.ready) {
+      return;
+    }
+    ReelsCrashLog.note(`session end (${reason})`);
+    ReelsCrashLog.flush();
   }
 
   /** 记一行（自动带时间戳；写盘失败静默）。 */

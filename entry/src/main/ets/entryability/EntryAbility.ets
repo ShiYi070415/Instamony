@@ -427,6 +427,8 @@ export default class EntryAbility extends UIAbility {
 
   onDestroy(): void {
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onDestroy');
+    // 正常退出：给滚动的崩溃现场日志收尾（判据见 ReelsCrashLog.init）
+    ReelsCrashLog.endSession('destroy');
     // 退出应用：把预下载的媒体清掉（理由见 MediaPrefetch.clearCache）。
     MediaPrefetch.clearCache();
   }
@@ -532,6 +534,11 @@ export default class EntryAbility extends UIAbility {
      */
     BackgroundKeep.request('检查新私信');
     BackgroundInbox.start();
+    /*
+     * **给滚动日志收个尾**：`onBackground` 之后进程可能被系统直接回收（尤其开着 reels 播放器时）。
+     * 写了这一行，"下一次启动发现上次没写完"才等于"真崩了"，否则会误报（见 ReelsCrashLog.init）。
+     */
+    ReelsCrashLog.endSession('background');
     /*
      * **必须无条件通知**：以前这里挂着 `isRegistered()`，而那个标志只由 Web 宿主设置 ——
      * 结果"视频在后台继续解码"这条就漏掉了（真机实测：退到桌面后进程仍吃 69% CPU、
