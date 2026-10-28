@@ -115,7 +115,52 @@
 > 另一个真正"即时"的路径是**手机上 App 自己弹本地通知**（App 活着时零服务器往返，
 > 见 `PushCenter.notifyDirect`）。relay 的价值在于"App 被系统杀掉"那段。
 
-## 五、这些文件留着干什么
+## 六、FBNS：另一条真正"IG 主动推"的通道（已打通 3/4，卡在注册）
+
+iris 那条死了，但上网查到一个关键线索 —— instagrapi 官方文档写着：
+
+> FBNS push notifications use a separate `mqtt-mini.facebook.com` device-auth connection.
+> **Use FBNS when you need Instagram push payloads, for example Direct message notification callbacks.**
+
+也就是说 IG 另有一条**设备认证**的推送通道，与 iris 完全独立。照 instagrapi 的
+`realtime/fbns.py` 实现了 `fbns.js`，实测进展：
+
+| 步骤 | 状态 |
+| --- | --- |
+| 1. 连 `mqtt-mini.facebook.com:443`（`clientType=device_auth`） | ✅ |
+| 2. 引导：**空 userId** 首连 → `CONNACK rc=0` 并下发设备凭据 `{ck,cs,di,ds}` | ✅ |
+| 3. 用凭据重连 → `CONNACK rc=0` | ✅ |
+| 4. 订阅 topic 76 + 往 79 发注册请求 → topic 80 回 push token | ✅（token 长度 189） |
+| 5. **把 token 注册给 IG**（`POST /api/v1/push/register/`） | ❌ `400 Invalid request` |
+| 6. 之后 IG 就会往 topic 76 推 `fbpushnotif`（`collapse_key: direct_v2_message`） | 未验证 |
+
+### 两个反直觉的实测结论（别再走回去）
+
+1. **引导连接必须把 `userId` 留空**。填 `ds_user_id`、或把 `sessionid` 当密码，全都回
+   `CONNACK rc=4`（bad user name or password）；留空反而成功，并在回包里下发设备凭据。
+   这一条是试出来的（`fbns-probe.js` 的 A~E 变体）。
+2. 设备凭据里的 `ck` **不等于账号 id**（实测 `ck=1039423658233371`，而账号是
+   `46473815227`），`di`/`ds` 也是 broker 自己发的，与本地 `mqtt-device.json` 无关。
+
+### 卡点（下一步要解决的就是它）
+
+`push/register/` 对所有试过的形态都回 `400 {"message":"Invalid request","status":"fail"}`：
+
+| 变体 | 结果 |
+| --- | --- |
+| form / `signed_body=SIGNATURE.…` / JSON body | 400 |
+| `guid`+`uuid` 取 `ig_did` / 设备 uuid / `di` | 400 |
+| `family_device_id` 取新 uuid4 / `phoneId` / `di` | 400 |
+| `users` 取 `ds_user_id` / `ck` | 400 |
+| `device_token` 取整串 JSON / 内层 `k` | 400 |
+| `X-IG-App-ID` 取 567067343352427 / 567310203415052 | 400 |
+| `is_main_push_channel` 取 `true` / `True` / `true` | 400 |
+
+下一步最值得做的是**对照一个有实际运行的实现**（比如 `mautrix-instagram` 的 FBNS 注册），
+看它的请求头/字段与 instagrapi 有何差异 —— 差一步就成了，成了之后端到端延迟会从
+1~2 秒变成亚秒级。
+
+## 七、这些文件留着干什么
 
 | 文件 | 用途 |
 | --- | --- |
