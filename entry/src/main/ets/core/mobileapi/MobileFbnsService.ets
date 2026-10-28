@@ -134,10 +134,11 @@ export class MobileFbnsService {
   }
 
   /**
-   * 解析发信人的用户名（带缓存；查不到返回空串）。
+   * 解析发信人的**显示名**（带缓存；查不到返回空串）。
    *
-   * 为什么不在推送里等：`users/{id}/info/` 是一发网络请求，但通知晚几百毫秒完全可接受，
-   * 而标题显示数字会让人以为"这消息是假的"。查不到就交给 PushCenter 的兜底标题。
+   * 判据必须与界面一致：私信列表/标题栏显示的是 `full_name`（例如 `Jin`），**没有才退回
+   * username**（见 `model/Direct.ets` 里 `person.label` 的注释）。早先这里直接取 username，
+   * 通知标题就成了 `yijin.0415_` 而列表里是 `Jin` —— 同一个人两个名字，看着像"取数取错了"。
    */
   private static async nameOf(userId: string): Promise<string> {
     const id: string = userId.trim();
@@ -153,12 +154,20 @@ export class MobileFbnsService {
       if (body === null) {
         return '';
       }
-      const value: Object | undefined = body.user['username'];
-      const name: string = value === undefined || value === null ? '' : `${value}`;
-      if (name.length > 0) {
-        MobileFbnsService.senderNames.set(id, name);
+      const read = (name: string): string => {
+        const value: Object | undefined = body.user[name];
+        return value === undefined || value === null ? '' : `${value}`.trim();
+      };
+      const fullName: string = read('full_name');
+      const username: string = read('username');
+      // 与界面同一判据：full_name 优先，没有才用 username。
+      const label: string = fullName.length > 0 ? fullName : username;
+      if (label.length > 0) {
+        MobileFbnsService.senderNames.set(id, label);
+        hilog.info(DOMAIN, TAG, 'sender name resolved uid=%{public}s name=%{public}s',
+          id, label);
       }
-      return name;
+      return label;
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'name lookup failed for %{public}s: %{public}s',
         id, (error as Error).message);
