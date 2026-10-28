@@ -43,6 +43,22 @@ export struct CaaLoginCard {
   @State private pasteText: string = '';
 
   build() {
+    /*
+     * **整张卡片可滚动**：面板里除了输入框/按钮，还有自检、前检、诊断、粘贴导入等入口 ——
+     * 小屏或弹出键盘后内容会超出半模态面板，若不可滚动，最关键的「登录」按钮会被顶到屏幕外，
+     * 用户根本点不到。所以外面套一层 Scroll 并给个高度上限。
+     */
+    Scroll() {
+      this.cardContent()
+    }
+    .width('100%')
+    .constraintSize({ maxHeight: 560 })
+    .scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.Spring)
+  }
+
+  @Builder
+  cardContent() {
     Column({ space: 10 }) {
       Text('用账号密码直接登录（实验）')
         .fontSize(15)
