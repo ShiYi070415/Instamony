@@ -53,6 +53,13 @@ const TAG: string = 'MobileSession';
 /** 身份落盘的 preferences 文件名 / 键。 */
 const STORE_NAME: string = 'instarmony_mobile_session';
 const STORE_KEY: string = 'identity_v1';
+/**
+ * `mid`（machine id）的长度。
+ *
+ * 28 位字母数字：桌面 `settings.caa.json` 里那枚 `mid` 就是这个形状（IG 接受过），
+ * instagrapi 的 `generate_mid` 也是。**不能留空**（见 ensureMid 的说明）。
+ */
+const MID_LENGTH: number = 28;
 
 /** 落盘的身份（字段短名 = 直接进 preferences 的 JSON）。 */
 class StoredIdentity {
@@ -654,6 +661,18 @@ export class MobileSession {
         if (raw.length > 0) {
           const parsed: StoredIdentity = JSON.parse(raw) as StoredIdentity;
           if (MobileSession.isUsable(parsed)) {
+            /*
+             * **补 `mid`**（老版本的坑，见 `ensureMid`）。
+             *
+             * 早先 `mint()` 把 mid 留成空串，于是：
+             *   · 请求头里没有 `X-MID`；
+             *   · CAA 登录的 `client_input_params.machine_id` 也是空串。
+             * 对已登录的私有 API（靠 cookie/authorization 认身份）IG 不追究，但**登录**这一发
+             * 里 `machine_id` 是"这台机器"的主要标识 —— 空值在 IG 眼里就是"不是真客户端"，
+             * `send_login_request` 会回 **429 + 空 body**，看着像"被限流"，其实是请求不成形。
+             * 桌面那份 `--caa-login` 一直能登，正是因为它用的 settings.json 里 mid 是有值的。
+             */
+            MobileSession.ensureMid(parsed);
             MobileSession.seed = parsed;
             hilog.info(DOMAIN, TAG, 'identity restored (saved %{public}d ago)',
               parsed.savedAt > 0 ? Math.round((Date.now() - parsed.savedAt) / 1000) : -1);
@@ -697,13 +716,34 @@ export class MobileSession {
     out.androidDeviceId = androidDeviceId();
     out.requestId = uuid4();
     out.traySessionId = uuid4();
-    out.mid = '';
+    // **`mid` 必须一造出来就有值**（见 ensureMid）：留空会让 CAA 登录的 machine_id 为空。
+    out.mid = genToken(MID_LENGTH);
     out.wwwClaim = '0';
     out.igURur = '';
     out.authorization = '';
     out.appVersion = DEFAULT_APP_VERSION;
     out.savedAt = Date.now();
     return out;
+  }
+
+  /**
+   * 给一份身份补 `mid`（没有就造一个并落盘）。
+   *
+   * 为什么单独一个函数：老版本 `mint()` 里 `mid = ''`，**已经装在用户手机上的那份身份**里
+   * 也是空的 —— 光改 `mint()` 只对"全新安装"生效，现存的这份还得就地补上，
+   * 否则用户升级之后照样是"没有 machine_id 的客户端"。
+   *
+   * 长度取 28 位字母数字：和桌面 `settings.caa.json` 里那枚 `mid` 同一个形状
+   * （它是 IG 接受过的样本；instagrapi 的 `generate_mid` 也是这个形状）。
+   */
+  private static ensureMid(seed: StoredIdentity): void {
+    const current: string = `${seed.mid ?? ''}`;
+    if (current.length > 0) {
+      return;
+    }
+    seed.mid = genToken(MID_LENGTH);
+    MobileSession.writeSeed(seed);
+    hilog.info(DOMAIN, TAG, 'mid backfilled (%{public}d chars)', seed.mid.length);
   }
 
   /** 落盘那份还能不能用（缺关键字段就作废，走 mint）。 */

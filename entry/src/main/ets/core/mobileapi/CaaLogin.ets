@@ -485,6 +485,165 @@ export class CaaLogin {
   /** 等验证码时留住的现场（见 `CaaPending`）。 */
   private static pending: CaaPending | null = null;
 
+  /**
+   * **CAA 链路的 Cookie 罐**（进程内，一次登录的一串请求共用）。
+   *
+   * 这是定位到的**程序缺陷**（不是 IG 限流的原因，而是它一直是 429 的原因）：
+   * 鸿蒙 `http.createHttp()` **不替我们存 Cookie**（模块没有 Cookie 管理，得自己从
+   * `response.cookies` 收下来、再塞进下一个请求的头里）。而 instagrapi 用的是
+   * `requests.Session` —— 步骤 1~4 下发的 `csrftoken` / `mid` / `datr` 会被自动带到第 5 步，
+   * 所以它登得进去。
+   *
+   * 我们这边一路是"裸奔"：步骤 1~4 全是 200（它们都是 logged-out 端点，不看 Cookie），
+   * 到第 5 步 `send_login_request` 既没有 Cookie 也没有 `X-CSRFToken`，IG 就回 429
+   * （空 body，看起来像"被限流"，其实是"这发请求不像同一个客户端"）。
+   *
+   * 现在补齐这两样：**每个响应都把 Set-Cookie 收进罐子**（见 absorbResponseCookies），
+   * **每个请求都带上罐子和 `X-CSRFToken`**（见 headers）。
+   */
+  private static cookieJar: Map<string, string> = new Map<string, string>();
+
+  /** 清空 Cookie 罐（换设备身份 / 重新开始一条链时用）。 */
+  static resetCookies(): void {
+    CaaLogin.cookieJar.clear();
+  }
+
+  /** Cookie 罐里现在有哪些名字（诊断用：只有名字，没有值）。 */
+  static cookieNames(): string {
+    return Array.from(CaaLogin.cookieJar.keys()).join(',');
+  }
+
+  /** 现在该带的 `Cookie` 头（空串 = 罐子是空的，那就不带）。 */
+  private static cookieHeader(): string {
+    const parts: Array<string> = [];
+    for (const name of Array.from(CaaLogin.cookieJar.keys())) {
+      const value: string = CaaLogin.cookieJar.get(name) ?? '';
+      if (name.length > 0 && value.length > 0) {
+        parts.push(`${name}=${value}`);
+      }
+    }
+    return parts.join('; ');
+  }
+
+  /** 罐子里的 `csrftoken`（要同时作为 `X-CSRFToken` 头发出去，instagrapi 就是这么做）。 */
+  private static csrfToken(): string {
+    return CaaLogin.cookieJar.get('csrftoken') ?? '';
+  }
+
+  /**
+   * `Set-Cookie` 里那些**是属性、不是 Cookie** 的名字（照 Python `SimpleCookie` 的语义）。
+   *
+   * 不排除它们的话，`Path=/` / `Secure` / `Expires=…` 会被当成三颗名叫 Path / Secure 的
+   * Cookie 记进罐子 —— 那既污染请求头，也会让真正的 `sessionid` 被顶掉。
+   */
+  private static readonly COOKIE_ATTRS: Array<string> = ['expires', 'max-age', 'path', 'domain',
+    'secure', 'httponly', 'samesite', 'priority', 'partitioned', 'version', 'comment'];
+
+  /**
+   * 把一段 `Set-Cookie` 原文吸收进罐子。
+   *
+   * 三种形状都要认（IG 三条都下发过）：
+   *   · 一条 `name=value; Path=/; ...`；
+   *   · 多条被换行拼在一起（还可能带 `Set-Cookie: ` 前缀）；
+   *   · 多条被 `, ` 拼在一起（**不能盲切逗号**：`expires=02-Dec-2027 13:57:44 GMT` 里就有逗号，
+   *     所以要按"逗号后面跟着 `名字=`、且这个逗号不在 expires 的日期里"来切）。
+   */
+  private static absorbCookieText(text: string): void {
+    const raw: string = text.trim();
+    if (raw.length === 0) {
+      return;
+    }
+    const lines: Array<string> = raw.replace(/Set-Cookie:\s*/gi, '').split(/\r?\n/);
+    for (let index: number = 0; index < lines.length; index++) {
+      const pairs: Array<string> = CaaLogin.splitCookiePairs(lines[index]);
+      for (let pair: number = 0; pair < pairs.length; pair++) {
+        const item: string = pairs[pair].trim();
+        const eq: number = item.indexOf('=');
+        if (eq <= 0) {
+          continue;
+        }
+        const name: string = item.substring(0, eq).trim();
+        const value: string = item.substring(eq + 1).trim();
+        if (name.length === 0 || value.length === 0) {
+          continue;
+        }
+        if (CaaLogin.COOKIE_ATTRS.indexOf(name.toLowerCase()) >= 0) {
+          continue;
+        }
+        if (value.replace(/^"(.*)"$/, '$1').length === 0) {
+          continue;
+        }
+        CaaLogin.cookieJar.set(name, value.replace(/^"(.*)"$/, '$1'));
+      }
+    }
+  }
+
+  /**
+   * 把一条 `Set-Cookie` 行拆成若干 `name=value` 段。
+   *
+   * 为什么不直接 `split(';')`：一条 Cookie 的属性也在里面，但 `split(';')` 之后**属性名**
+   * 会被 COOKIE_ATTRS 过滤掉，所以那样切是安全的 —— 真正麻烦的是", "拼接的多条 Cookie，
+   * 那里必须避开 `expires=Wed, 21 Oct 2026 …` 的逗号。
+   */
+  private static splitCookiePairs(line: string): Array<string> {
+    const out: Array<string> = [];
+    let start: number = 0;
+    for (let index: number = 0; index < line.length; index++) {
+      const ch: string = line.charAt(index);
+      if (ch !== ';' && ch !== ',') {
+        continue;
+      }
+      if (ch === ',') {
+        // 逗号后面必须紧跟 `名字=`（跳掉空格），否则当成日期里的逗号，不切。
+        let probe: number = index + 1;
+        while (probe < line.length && line.charAt(probe) === ' ') {
+          probe++;
+        }
+        const head: string = line.substring(probe, probe + 32);
+        if (!/^[A-Za-z0-9_\-]+\s*=/.test(head)) {
+          continue;
+        }
+      }
+      out.push(line.substring(start, index));
+      start = index + 1;
+    }
+    out.push(line.substring(start));
+    return out;
+  }
+
+  /**
+   * 从一个响应里把 Cookie 收进罐子。
+   *
+   * 两个来源都要看：`response.cookies`（鸿蒙 http 模块把 Set-Cookie 归到这里）
+   * 与 `response.header` 里名字含 `set-cookie` 的那几条（个别实现只放在头里）。
+   */
+  private static absorbResponseCookies(response: http.HttpResponse): void {
+    try {
+      const fromField: ESObject = response.cookies as ESObject;
+      if (typeof fromField === 'string') {
+        CaaLogin.absorbCookieText(fromField as string);
+      }
+    } catch (error) {
+    }
+    try {
+      const rawHeaders: ESObject = response.header as ESObject;
+      if (rawHeaders === null || rawHeaders === undefined) {
+        return;
+      }
+      const record: Record<string, ESObject> = rawHeaders as Record<string, ESObject>;
+      for (const key of Object.keys(record)) {
+        if (key.toLowerCase().indexOf('set-cookie') < 0) {
+          continue;
+        }
+        const value: ESObject = record[key];
+        if (typeof value === 'string') {
+          CaaLogin.absorbCookieText(value as string);
+        }
+      }
+    } catch (error) {
+    }
+  }
+
   static lastSteps(): Array<CaaStep> {
     return CaaLogin.steps;
   }
@@ -769,8 +928,34 @@ export class CaaLogin {
         expectDataType: http.HttpDataType.STRING
       });
       const text: string = typeof response.result === 'string'
-        ? response.result as string : JSON.stringify(response.result);
+        ? response.result as string
+        : (response.result === null || response.result === undefined ? '' : JSON.stringify(response.result));
+      // **每个响应都把 Cookie 收进罐子**（见 cookieJar）：1~4 步下发的 csrftoken/mid/datr
+      // 必须带到第 5 步，否则 IG 认不出"同一串会话"，直接回 429。
+      CaaLogin.absorbResponseCookies(response);
       const reply: CaaHttpReply = new CaaHttpReply(response.responseCode, text, host);
+      /*
+       * **响应头留一份（脱敏）**。
+       *
+       * 429 的 body 常常是空的，此时"为什么被拒"只能从响应头里找（IG 的 edge 会带
+       * `x-ig-*` / `retry-*` 之类的线索）。名字里带 cookie / authorization / token 的
+       * 一律打码 —— 这份内容是给用户复制出来的，不能夹带会话材料。
+       */
+      try {
+        const headerRecord: Record<string, ESObject> = response.header as Record<string, ESObject>;
+        const safe: Record<string, string> = {};
+        if (headerRecord !== null && headerRecord !== undefined) {
+          for (const key of Object.keys(headerRecord)) {
+            const lower: string = key.toLowerCase();
+            const secret: boolean = lower.indexOf('cookie') >= 0 || lower.indexOf('authorization') >= 0
+              || lower.indexOf('token') >= 0 || lower.indexOf('secret') >= 0;
+            safe[key] = secret ? '<redacted>' : `${headerRecord[key]}`;
+          }
+        }
+        reply.headersText = JSON.stringify(safe);
+      } catch (headerError) {
+        reply.headersText = '';
+      }
       // 会话 cookie 有时只出现在响应头里（IG-Set-Authorization 同理），这里留一份
       reply.headerOf = (name: string): string => {
         const raw: ESObject = response.header as ESObject;
@@ -799,6 +984,21 @@ export class CaaLogin {
     const base: Record<string, string> = MobileRequest.baseHeaders(identity);
     base['Content-Type'] = 'application/x-www-form-urlencoded; charset=UTF-8';
     base['Accept'] = '*/*';
+    /*
+     * **Cookie 与 `X-CSRFToken`**（见 cookieJar 的说明）。
+     *
+     * instagrapi 的 `_send_private_request` 每发一发都带
+     * `cookies=self.cookies.get_dict()` 和 `headers["X-CSRFToken"] = self.token`；
+     * 少这两样的第 5 步会被 IG 当成"不是同一个客户端"，回 429（空 body）。
+     */
+    const jar: string = CaaLogin.cookieHeader();
+    if (jar.length > 0) {
+      base['Cookie'] = jar;
+    }
+    const csrf: string = CaaLogin.csrfToken();
+    if (csrf.length > 0) {
+      base['X-CSRFToken'] = csrf;
+    }
     for (const key of Object.keys(extra)) {
       base[key] = extra[key];
     }
@@ -930,12 +1130,12 @@ export class CaaLogin {
        * hilog 常常抓不到（本机实测被系统关掉了），所以原始正文就是唯一现场。
        */
       try {
-        result.raw = String(step3.body).substring(0, 100000);
+        result.raw = CaaLogin.snippet(step3.body, 100000);
       } catch (rawError) {
         result.raw = '';
       }
       hilog.info(DOMAIN, TAG, 'process_client_data no aac status=%{public}d bodyLen=%{public}d',
-        step3.status, String(step3.body).length);
+        step3.status, step3.body.length);
       return result;
     }
 
@@ -1014,22 +1214,40 @@ export class CaaLogin {
     }
     const step5: CaaHttpReply = await CaaLogin.bloks(identity, sendExtra,
       'com.bloks.www.bloks.caa.login.async.send_login_request', send);
-    CaaLogin.steps.push(new CaaStep('send_login_request', step5.status, ''));
+    // 这一发带了哪些 Cookie 是排障关键（429 的成因曾被这里误导过，见 cookieJar 的说明）。
+    CaaLogin.steps.push(new CaaStep('send_login_request', step5.status,
+      `cookie=${CaaLogin.cookieNames()}; csrf=${CaaLogin.csrfToken().length > 0 ? 'yes' : 'no'}`));
     /*
      * **429 = IG 限流**（今天登录尝试太多）。必须单独认出来：否则会被当成"布局变了"，
      * 用户反复点只会让限流时间更长。给一句能照做的提示，并把现场留下。
+     *
+     * 注意：`send_login_request` 的 429 **body 常常是空的**（edge 层直接挡），所以判断依据只有
+     * 状态码；真实文案（如果有）会被 raw 带回来，界面上那行"429 原因"能看出是哪种。
      */
     if (step5.status === 429) {
       const limited: CaaResult = new CaaResult(false,
         'IG 限流（429）：登录尝试太多了，等 10~30 分钟再试（期间别再点）');
       limited.aac = aac;
       limited.rateLimited = true;
-      try {
-        limited.raw = String(step5.body).substring(0, 100000);
-      } catch (rawError) {
-        limited.raw = '';
-      }
-      hilog.info(DOMAIN, TAG, 'send_login_request 429 (rate limited)');
+      /*
+       * **把"这一发长什么样"和"服务端回了什么头"一起落盘**。
+       *
+       * 以前这里只存 body，而 429 的 body 是空的 → 用户复制出来是一行 `null`，什么也判断不了。
+       * 现在存：这一发的关键参数（机器 id / aac / 请求体长度）+ 脱敏响应头 + body 片段。
+       * 「machine_id=空」这一种成因（见 MobileSession.ensureMid）就是靠这一行一眼看出来的。
+       */
+      const machineId: string = identity.mid.length > 0 ? `${identity.mid.length}位` : '空（可疑：登录会被判成非真机）';
+      const bodyLength: number = CaaLogin.bloksBody(identity, send).length;
+      const head: string = `send_login_request 429\n`
+        + `machine_id=${machineId}\n`
+        + `aac=${aac.length}字符 attest=${attestParams.length}字符 body=${bodyLength}字符\n`
+        + `ua=${identity.userAgent()}\n`
+        + `cookie=${CaaLogin.cookieNames() || '(空)'}\n`
+        + `headers=${CaaLogin.snippet(step5.headersText, 4000)}\n`
+        + `body=${CaaLogin.snippet(step5.body, 2000)}`;
+      limited.raw = head;
+      hilog.info(DOMAIN, TAG, 'send_login_request 429 body=%{public}d chars cookies=%{public}s',
+        step5.body.length, CaaLogin.cookieNames());
       return limited;
     }
 
@@ -1707,6 +1925,21 @@ export class CaaLogin {
     return typeof value === 'string' ? value as string : '';
   }
 
+  /**
+   * 截一段响应文本（诊断用）。
+   *
+   * 单独一个函数是为了**在 `body` 是空串/`null` 时给出可读结果**：以前这里写的是
+   * `String(body).substring(...)`，body 为 null 时得到的是四个字符 `null`，
+   * 落盘的「原始响应」就成了没有信息量的 `null`（真机诊断时被它误导过）。
+   */
+  static snippet(text: string, limit: number): string {
+    if (text === null || text === undefined) {
+      return '';
+    }
+    const value: string = `${text}`;
+    return value.length > limit ? value.substring(0, limit) : value;
+  }
+
   /** JSON.parse 的安全版（失败返回 null）。 */
   private static parse(text: string): ESObject {
     try {
@@ -2121,14 +2354,28 @@ export class CaaLogin {
   private static async passwordKeys(identity: MobileIdentity): Promise<PasswordKeys | null> {
     const request: http.HttpRequest = http.createHttp();
     try {
+      /*
+       * 这一发也要走**同一套 Cookie 罐**：`qe/sync` 是最常见的 `csrftoken` / `mid` 发放点，
+       * 而第 5 步提交密码必须带着它们（见 cookieJar 的说明）。
+       */
+      const headers: Record<string, string> = MobileRequest.baseHeaders(identity);
+      const jar: string = CaaLogin.cookieHeader();
+      if (jar.length > 0) {
+        headers['Cookie'] = jar;
+      }
+      const csrf: string = CaaLogin.csrfToken();
+      if (csrf.length > 0) {
+        headers['X-CSRFToken'] = csrf;
+      }
       const response: http.HttpResponse = await request.request(
         'https://i.instagram.com/api/v1/qe/sync/', {
           method: http.RequestMethod.GET,
-          header: MobileRequest.baseHeaders(identity),
+          header: headers,
           connectTimeout: 15000,
           readTimeout: 15000,
           expectDataType: http.HttpDataType.STRING
         });
+      CaaLogin.absorbResponseCookies(response);
       const raw: ESObject = response.header as ESObject;
       if (raw === null || raw === undefined) {
         return null;
@@ -2300,6 +2547,8 @@ class CaaHttpReply {
    * "哪一步打到了哪个域名"就是判断依据 —— 诊断里带上它，比只有状态码有用得多。
    */
   host: string = '';
+  /** 响应头（脱敏后的 JSON 文本；429 时"为什么被拒"只能从这里看）。 */
+  headersText: string = '';
 
   constructor(status: number, body: string, host: string = '') {
     this.status = status;

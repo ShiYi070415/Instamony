@@ -211,7 +211,9 @@ export class CaaSession {
   /**
    * 限流冷却还剩几分钟（0 = 可以试了）。
    *
-   * 读 preferences 里的 `last_429_at`：10 分钟内直接拒绝发请求，只提示还要等多久。
+   * 读 preferences 里的 `last_429_at`：冷却期内直接拒绝发请求，只提示还要等多久。
+   * 冷却期一到就把**两份记录一起清掉**（时间和次数）—— 只清时间的话，次数会一直累加，
+   * 下一次偶发 429 又会直接跳到 60 分钟档，用户会觉得"这 App 越用越登不上"。
    */
   static rateLimitWaitMinutes(): number {
     const text: string = CaaSession.readText(KEY_LAST_429_AT);
@@ -225,10 +227,23 @@ export class CaaSession {
     const remain: number = at + cooldownMsOf(CaaSession.rateLimitCount()) - Date.now();
     if (remain <= 0) {
       // 冷却期过了就清掉，别让它一直挡着
-      CaaSession.writeText(KEY_LAST_429_AT, '');
+      CaaSession.clearRateLimit();
       return 0;
     }
     return Math.max(1, Math.ceil(remain / 60000));
+  }
+
+  /**
+   * **清掉限流冷却记录**（设置页/登录面板给一颗按钮）。
+   *
+   * 为什么需要它：这份记录是"本机自己记的"，判断依据只有一次 HTTP 429。
+   * 一旦那次 429 其实另有原因（这一轮就查到过：Cookie / `X-CSRFToken` 没带全，
+   * IG 同样回 429），这条记录会**白白把用户挡在 10~60 分钟**之外，
+   * 让他以为"程序坏了"。修好请求之后要能立刻重试，所以得有个显式的清入口。
+   */
+  static clearRateLimit(): void {
+    CaaSession.writeText(KEY_LAST_429_AT, '');
+    CaaSession.writeText(KEY_429_COUNT, '');
   }
 
   /** 连续 429 次数（读不到 / 脏数据当 0）。 */
@@ -553,7 +568,10 @@ export class CaaSession {
     const parts: Array<string> = [];
     for (let index: number = 0; index < steps.length; index++) {
       const one: CaaStep = steps[index];
-      parts.push(one.status > 0 ? `${one.name} ${one.status}` : one.name);
+      // **note 也要带上**：`aac 303` / `cookie=…` / `csrf=yes` 这些是排障的分辨点，
+      // 只报状态码的话，两种完全不同的原因在界面上一模一样。
+      const note: string = one.note.length > 0 ? ` (${one.note})` : '';
+      parts.push(one.status > 0 ? `${one.name} ${one.status}${note}` : `${one.name}${note}`);
     }
     return parts.join(' → ');
   }
@@ -603,6 +621,20 @@ export class CaaSession {
       lines.push(extra);
     }
     lines.push(`设备身份：${CaaSession.hasDevice() ? '有' : '无'}`);
+    /*
+     * **机器 id / UA 落到诊断里**。
+     *
+     * 这一轮查到：`send_login_request` 的 429（空 body）有一个成因是 `machine_id` 为空
+     * （app 老版本 `mint()` 里 `mid = ''`，见 MobileSession.ensureMid）。光看状态码分不出
+     * "被限流"和"请求不成形"，所以把这两项写进诊断，一眼就能看出来。
+     */
+    try {
+      const identity: MobileIdentity = MobileSession.seedIdentity();
+      lines.push(`机器 id：${identity.mid.length > 0 ? `${identity.mid.length} 位` : '空（登录会被判成非真机）'}`);
+      lines.push(`UA：${identity.userAgent()}`);
+    } catch (error) {
+      lines.push('机器 id：读取失败');
+    }
     lines.push(`等待验证码：${CaaSession.waitingCode() ? '是' : '否'}`);
     const text: string = lines.join('\n');
     CaaSession.lastDiag = text;

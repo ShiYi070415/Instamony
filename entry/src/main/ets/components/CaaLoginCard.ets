@@ -193,6 +193,22 @@ export struct CaaLoginCard {
           }
           this.putClipboard(raw, '响应已复制（' + raw.length + ' 字符，失败响应里没有可用会话）');
         })
+      /*
+       * **清除限流冷却**（本机自己记的那个 10~60 分钟闸门）。
+       *
+       * 它只是一次 429 的记账，判断依据并不牢靠：这一轮就查到"提交密码那一发没带 Cookie /
+       * `X-CSRFToken`"也会让 IG 回 429 —— 那种情况下这条记录会把用户白白挡在冷却里。
+       * 所以给一个显式入口：修好请求之后立刻就能重试。
+       */
+      Text(this.cooldownHint())
+        .fontSize(12)
+        .fontColor($r('app.color.secondary_text'))
+        .width('100%')
+        .onClick((): void => {
+          CaaSession.clearRateLimit();
+          this.status = '已清除限流冷却，可以直接再点一次登录';
+          this.steps = '';
+        })
       Text(this.pasteOpen ? '收起「粘贴会话导入」' : '用已有会话导入（备用，粘贴 settings.caa.json）')
         .fontSize(12)
         .fontColor($r('app.color.secondary_text'))
@@ -399,6 +415,18 @@ export struct CaaLoginCard {
   /** 复制登录诊断（只含结论 / 步骤 / 名字，不含 cookie 与 authorization）。 */
   private copyDiag(): void {
     this.putClipboard(CaaSession.diagText(), '诊断已复制，粘给我就行（里面没有密码/会话值）');
+  }
+
+  /**
+   * "清除限流冷却"那一行的文案：带上当前还剩几分钟。
+   *
+   * 建卡片时读一次就够（这一行只在点开面板时有人看，冷却时间不会在面板停留期间跳变到影响判断）。
+   */
+  private cooldownHint(): string {
+    const minutes: number = CaaSession.rateLimitWaitMinutes();
+    return minutes > 0
+      ? `清除限流冷却（现在还剩约 ${minutes} 分钟，点了就能马上重试）`
+      : '清除限流冷却（当前没有冷却）';
   }
 
   /** 写剪贴板 + 给一句提示（状态行）。 */

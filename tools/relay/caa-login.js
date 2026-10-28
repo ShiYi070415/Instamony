@@ -59,12 +59,47 @@ const b64u = (buffer) => Buffer.from(buffer).toString('base64url');
 
 /* ------------------------------------------------------------------ HTTP */
 
+/**
+ * **CAA 链路的 Cookie 罐**（进程内，一串请求共用）。
+ *
+ * 这是"提交密码必回 429"的**真正原因**：`https.request` 不像 instagrapi 的
+ * `requests.Session` 那样自动存 Cookie —— 步骤 1~4 下发的 `csrftoken` / `mid` / `datr`
+ * 我们从来没收过，第 5 步 `send_login_request` 就是"没有 Cookie、没有 X-CSRFToken 的
+ * 匿名 POST"，IG 对这种情况回**429 + 空 body**（看起来像限流，其实是客户端不成对）。
+ *
+ * 现在：每个响应的 `set-cookie` 都收进罐子（见 request），每个请求都带上罐子与
+ * `X-CSRFToken`（见 headersFor）。ArkTS 那份（core/mobileapi/CaaLogin.ets）同步改了。
+ */
+const cookieJar = Object.create(null);
+
+/** 把响应头里的 set-cookie 收进罐子（值原样存，名字做合法性过滤在 parseCookieHeader 里）。 */
+function absorbCookies(headers) {
+  const raw = headers && headers['set-cookie'];
+  if (!raw) {
+    return;
+  }
+  const list = Array.isArray(raw) ? raw : [raw];
+  for (const one of list) {
+    const parsed = parseCookieHeader(one);
+    for (const name of Object.keys(parsed)) {
+      cookieJar[name] = parsed[name];
+    }
+  }
+}
+
+/** 现在该带的 Cookie 头（空串 = 罐子空）。 */
+function cookieHeaderOfJar() {
+  return Object.keys(cookieJar).map((name) => `${name}=${cookieJar[name]}`).join('; ');
+}
+
 function request(options, body) {
   return new Promise((resolve, reject) => {
     const req = https.request(options, (res) => {
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
       res.on('end', () => {
+        // **每个响应都收 Cookie**（见 cookieJar 的说明）
+        absorbCookies(res.headers);
         resolve({
           status: res.statusCode || 0,
           headers: res.headers,
@@ -144,6 +179,16 @@ function headersFor(profile, extra) {
     Connection: 'keep-alive'
   };
   if (profile.mid.length > 0) headers['X-MID'] = profile.mid;
+  /*
+   * **Cookie + `X-CSRFToken`**（见 cookieJar 的说明）。
+   *
+   * instagrapi 的 `_send_private_request` 每发一发都带
+   * `cookies=self.cookies.get_dict()` 与 `headers["X-CSRFToken"] = self.token`；
+   * 少了它们，第 5 步（提交密码）会被 IG 当成匿名请求，直接回 429。
+   */
+  const jar = cookieHeaderOfJar();
+  if (jar.length > 0) headers.Cookie = jar;
+  if (cookieJar.csrftoken) headers['X-CSRFToken'] = cookieJar.csrftoken;
   /*
    * `X-Meta-Usdid`：设备签名头。instagrapi 的 base_headers 在"有 usdid 私钥"时
    * 一定会带上它；CAA 登录期间缺这个头容易被判成非本机设备。
@@ -2119,5 +2164,8 @@ module.exports = {
   bloksApp,
   bloksAsyncAction,
   CAA_API_DOMAIN,
-  PRIVATE_API_DOMAIN
+  PRIVATE_API_DOMAIN,
+  // Cookie 罐（给诊断脚本看"1~4 步到底收没收到 csrftoken/mid"，见 cookieJar 的说明）
+  caaCookieNames: () => Object.keys(cookieJar),
+  caaCookieHeader: () => cookieHeaderOfJar()
 };
