@@ -156,9 +156,18 @@ function pushRemaining(out, length) {
  *   · `endpointCapabilities = 128`、`noAutomaticForeground = true`、`isInitiallyForeground = false`；
  *   · 带 `deviceSecret` / `fbnsConnectionSecret` / `fbnsDeviceId` / `fbnsDeviceSecret`、`anotherUnknown = -1`。
  */
-function buildConnect(auth, keepAliveSeconds) {
+/**
+ * CONNECT 的 **Thrift 载荷**（压缩之前的那一段）。
+ *
+ * 单独抽出来是为了能被离线对拍：ArkTS 侧用 `zlibStored`（stored 块）替代 Node 的
+ * `deflateSync`，两者压缩结果必然不同 —— 但**解压之后必须逐字节一致**，所以真正要比的是
+ * 这一段的字节，而不是最终报文。
+ *
+ * @param nowMs 时间戳（注入是为了让对比可复现）
+ */
+function buildConnectThrift(auth, nowMs) {
   const writer = new ThriftWriter();
-  const clientId = auth.clientId;
+  const clientId = auth.clientId || '';
   writer.writeString(1, clientId.slice(0, 20));
   writer.pushStruct(4);
   writer.writeInt(1, Number(auth.userId || 0), 64);
@@ -172,7 +181,7 @@ function buildConnect(auth, keepAliveSeconds) {
   writer.writeBool(9, false);           // isInitiallyForeground
   writer.writeInt(10, 1, 32);
   writer.writeInt(11, 0, 32);
-  writer.writeInt(12, Date.now() % 4294967296, 64);
+  writer.writeInt(12, (nowMs === undefined ? Date.now() : nowMs) % 4294967296, 64);
   writer.writeIntList(14, FBNS_SUBSCRIBE_TOPICS);
   writer.writeString(15, 'device_auth');
   writer.writeInt(16, IG_FBNS_APP_ID, 64);
@@ -185,8 +194,11 @@ function buildConnect(auth, keepAliveSeconds) {
   writer.writeStop();
   writer.writeString(5, auth.password || '');
   writer.writeStop();
+  return Buffer.from(writer.bytes);
+}
 
-  const payload = zlib.deflateSync(Buffer.from(writer.bytes));
+function buildConnect(auth, keepAliveSeconds) {
+  const payload = zlib.deflateSync(buildConnectThrift(auth));
   const body = [];
   body.push(0x00, 0x06, 0x4D, 0x51, 0x54, 0x54, 0x6F, 0x54);
   body.push(0x03);
@@ -622,5 +634,11 @@ module.exports = {
   IG_FBNS_APP_ID,
   FBNS_HOST,
   FBNS_PORT,
-  MOBILE_UA
+  MOBILE_UA,
+  // 报文组装（离线对拍用：见 test-fbns-arkts.js）
+  buildConnectThrift,
+  buildPublish,
+  buildSubscribe,
+  buildPuback,
+  buildPingreq
 };
