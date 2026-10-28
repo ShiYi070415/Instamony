@@ -288,4 +288,30 @@ Body: alice_zhang sent you a photo.
 | 259 | 内容或 url 违规被拒 |
 | 31 | clickAction 指向的页面不存在（skills 标签对不上） |
 
+## 八、验证记录
+
+**2026-10-28：服务端推送全链路首次跑通。**
+
+| 项 | 值 |
+| --- | --- |
+| 接口 | `POST https://push-api.cloud.huawei.com/v3/101653523865415533/messages:send` |
+| 鉴权 | 服务账号 JWT（PS256，长度 928），`kid` 来自 `private.json` |
+| 请求头 | `Authorization: Bearer` + `push-type: 0` |
+| category | `IM`（自分类权益已通过并激活） |
+| 响应 | `HTTP 200` / `{"code":"80000000","msg":"Success","requestId":"179318208022778787000206"}` |
+| 端侧表现 | 锁屏 + 横幅 + 铃声 + 振动全部正常 → 确认归入「服务与通讯类」 |
+| 手机环境 | HarmonyOS NEXT，`appDistributionType: app_gallery`、`debug: false` |
+
+这一条同时证明了四件事，以后再出问题先对照这里：
+
+1. `project_id` 取自密钥文件是对的（不是 App ID、不是 OAuth Client ID）；
+2. PS256 的填充与盐长写法被服务端接受；
+3. 自分类权益已「激活」，`category: "IM"` 没被降级成资讯营销类
+   （降级的特征是只有静默通知、无铃声无亮屏）；
+4. AppGallery 分发的正式签名包拿到的 pushToken 有效。
+
+**还没验证的**：多个线程连续推送时的频控表现、token 轮换后的失效处理、
+以及 relay 侧的合规过滤（见下条待办）。
+
+
 
