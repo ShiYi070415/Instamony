@@ -959,8 +959,141 @@ function findValueDeep(value, key, depth = 0) {
   return undefined;
 }
 
-/** `two_step_verification_context`（新版 2FA 的握手票据）。 */
+/** 把 `(f4i (dkc "k1" "k2" …) (dkc "v1" "v2" …))` 解成 `{k1: v1, k2: v2}`（值必须是字面量）。 */
+function lispyPairMap(expr) {
+  const out = {};
+  for (const entry of lispyMapEntries(expr)) {
+    if (entry.value.startsWith('"')) {
+      try {
+        out[entry.key] = JSON.parse(entry.value);
+      } catch (error) {
+        out[entry.key] = '';
+      }
+    } else {
+      out[entry.key] = entry.value;
+    }
+  }
+  return out;
+}
+
+/**
+ * 解 `(f4i (dkc "k1" "k2" …) (dkc v1 v2 …))` → `[{key, value}]`。
+ *
+ * `value` 可能是**字面量**（以 `"` 开头）也可能是**嵌套表达式**（以 `(` 开头）——
+ * 2FA 的调用规范里就是这样：`server_params` 的值本身又是一个 `(f4i (dkc …) (dkc …))`。
+ */
+function lispyMapEntries(expr) {
+  const items = bloksExpressionItems(expr);
+  if (items.length !== 3 || items[0] !== 'f4i') return [];
+  const keys = bloksExpressionItems(items[1]);
+  const values = bloksExpressionItems(items[2]);
+  if (keys[0] !== 'dkc' || values[0] !== 'dkc' || keys.length !== values.length) return [];
+  const out = [];
+  for (let index = 1; index < keys.length; index++) {
+    const key = keys[index];
+    if (!key.startsWith('"')) continue;
+    let name = '';
+    try {
+      name = JSON.parse(key);
+    } catch (error) {
+      continue;
+    }
+    out.push({ key: name, value: values[index] });
+  }
+  return out;
+}
+
+/**
+ * 从一个 `(fma …)` 表达式里取出 `{ serverParams, clientParams }`。
+ *
+ * 真实形状（R12 真机）：`(fma (f4i (dkc "server_params" "client_input_params")
+ *                                  (dkc <serverExpr> <clientExpr>)))`
+ * 也兼容 `(fma <serverExpr> <clientExpr>)` 这种两参数变体。
+ */
+function paramsFromFma(fmaExpr) {
+  const items = bloksExpressionItems(fmaExpr);
+  if (items.length < 2 || items[0] !== 'fma') {
+    return { serverParams: {}, clientParams: {} };
+  }
+  if (items.length >= 3) {
+    return { serverParams: lispyPairMap(items[1]), clientParams: lispyPairMap(items[2]) };
+  }
+  const entries = lispyMapEntries(items[1]);
+  let serverParams = {};
+  let clientParams = {};
+  for (const entry of entries) {
+    if (entry.key === 'server_params') {
+      serverParams = lispyPairMap(entry.value);
+    } else if (entry.key === 'client_input_params') {
+      clientParams = lispyPairMap(entry.value);
+    }
+  }
+  return { serverParams, clientParams };
+}
+
+/**
+ * **从响应里读出"下一步该调哪个 app、带什么参数"**（Bloks 布局里的调用规范）。
+ *
+ * 真机实测（R12 第三次）：响应的 lispy 里明写着
+ *   `35 "com.bloks.www.two_step_verification.entrypoint" … (f6m 6 "params" (fma
+ *     (f4i (dkc "server_params" "client_input_params")
+ *          (dkc (f4i (dkc "two_step_verification_context" "flow_source" …)
+ *                    (dkc "AWR7ihSM…（700+ 字符）" …)) …)))`
+ * 也就是说：**IG 直接把该调什么、该带什么值告诉客户端了**。我们之前从别处硬抓一个
+ * 13 字符的"票据"去调，IG 当然回空载荷 —— 这是本次失败的真正原因。
+ *
+ * @returns `Array<{ appId, serverParams, clientParams }>`
+ */
+function nextCallSpecs(data) {
+  const strings = [];
+  collectStrings(data, strings);
+  const out = [];
+  for (const text of strings) {
+    let from = 0;
+    for (;;) {
+      const paramsAt = text.indexOf('"params"', from);
+      if (paramsAt < 0) break;
+      const fmaAt = text.indexOf('(fma', paramsAt);
+      if (fmaAt < 0) break;
+      const expr = bloksParenthesized(text, fmaAt);
+      if (expr.length === 0) break;
+      // app id：在 params 之前找最近的一个 `35 "com.bloks.…"`
+      const head = text.slice(0, paramsAt);
+      const re = /35\s+"(com\.bloks\.[A-Za-z0-9_.]+)"/g;
+      let appId = '';
+      let match = re.exec(head);
+      while (match !== null) {
+        appId = match[1];
+        match = re.exec(head);
+      }
+      const parsed = paramsFromFma(expr);
+      out.push({ appId, serverParams: parsed.serverParams, clientParams: parsed.clientParams });
+      from = fmaAt + expr.length;
+    }
+  }
+  return out;
+}
+
+/** 从规范列表里挑出 app id 命中关键词的第一个。 */
+function pickCallSpec(specs, keywords) {
+  for (const spec of specs) {
+    const lower = String(spec.appId || '').toLowerCase();
+    if (keywords.some((word) => lower.indexOf(word) >= 0)) {
+      return spec;
+    }
+  }
+  return null;
+}
+
+/** 规范里的票据（真实值有几百字符；取不到才回退旧逻辑）。 */
 function twoStepContextOf(data) {
+  const specs = nextCallSpecs(data);
+  for (const spec of specs) {
+    const value = spec.serverParams['two_step_verification_context'];
+    if (typeof value === 'string' && value.length > 0) {
+      return value;
+    }
+  }
   const deep = findValueDeep(data, 'two_step_verification_context');
   if (typeof deep === 'string' && deep.trim().length > 0) {
     return deep.trim();
@@ -1050,6 +1183,24 @@ function bloksCandidateApps(data, keywords) {
   return out;
 }
 
+/** 把规范里以字符串给出的布尔/数字字段还原成合适类型（`"false"` → `false`）。 */
+function normalizeFlags(params) {
+  const out = Object.assign({}, params);
+  for (const key of Object.keys(out)) {
+    const value = out[key];
+    if (typeof value !== 'string') continue;
+    const lower = value.trim().toLowerCase();
+    if (lower === 'true') {
+      out[key] = true;
+    } else if (lower === 'false') {
+      out[key] = false;
+    } else if (/^-?\d+$/.test(lower)) {
+      out[key] = Number(lower);
+    }
+  }
+  return out;
+}
+
 /** 在多个 app id / 多个域名里找一个"能回载荷"的组合。 */
 async function firstLiveAppCall(profile, appIds, params, log, label) {
   const hosts = [PRIVATE_API_DOMAIN, CAA_API_DOMAIN];
@@ -1094,52 +1245,66 @@ async function firstLiveAsyncAction(profile, actionIds, params, log, label) {
  * 对当前 IG 版本已经不对了，与其继续猜，不如让响应告诉我们。
  */
 async function resolveTwoStepByContext(profile, context, sendData, getCode, log, steps) {
-  // 1) entrypoint：先把响应里出现的 2FA 相关 app id 都当候选（关键词放宽，宁多勿漏）
-  const entryCandidates = bloksCandidateApps(sendData,
-    ['two_step', 'two_factor', '2sv', '2fa', 'verif', 'challenge']);
-  const entryIds = entryCandidates.length > 0
-    ? entryCandidates.slice(0, 8) : [TSV_ENTRYPOINT, AP_2SV_ENTRYPOINT];
-  log('    两步验证 1/4：entrypoint（响应里找到 ' + entryCandidates.length
-    + ' 个 2FA 相关 app id，将试 ' + entryIds.length + ' 个）');
-  // 把候选**全名**打出来：app id 是 IG 随时会改的东西，日志里有全名才能事后对齐。
+  /*
+   * **按 IG 给的规范调用**（这是本轮的关键修正）。
+   *
+   * 登录响应的 lispy 里带着下一步的调用规范：app id + server_params/client_input_params
+   * 的**键与值**（含 700+ 字符的真实 two_step_verification_context）。以前我们从别处硬抓
+   * 一个 13 字符的值去调，IG 回 "Payload returned is null" —— 那不是"app id 不对"，
+   * 是**票据抓错了**（真票据 2234 字符）。
+   */
+  const sendSpecs = nextCallSpecs(sendData);
+  const entrySpec = pickCallSpec(sendSpecs, ['two_step', 'two_factor']);
+  const entryIds = entrySpec !== null && entrySpec.appId.length > 0 ? [entrySpec.appId]
+    : [TSV_ENTRYPOINT];
+  log('    两步验证 1/4：entrypoint（规范里读到 ' + sendSpecs.length + ' 条，将试 '
+    + entryIds.length + ' 个 app）');
   for (const id of entryIds) {
     log('      候选：' + id);
   }
   const entryParams = {
-    client_input_params: {
+    client_input_params: Object.assign({
       device_id: profile.androidId,
       is_whatsapp_installed: 0,
       machine_id: profile.mid
-    },
-    server_params: {
+    }, entrySpec === null ? {} : entrySpec.clientParams),
+    server_params: Object.assign({
       should_fallback_to_sms: 0,
       family_device_id: profile.phoneId,
       device_id: profile.androidId,
       two_step_verification_context: context,
       flow_source: TSV_FLOW_SOURCE
-    }
+    }, entrySpec === null ? {} : entrySpec.serverParams)
   };
+  // 规范里的值是**字符串字面量**（"false"），但字段本身是布尔/数字 —— 还原成合适类型
+  entryParams.server_params = normalizeFlags(entryParams.server_params);
+  log('      票据长度 ' + String(entryParams.server_params['two_step_verification_context']).length
+    + '，server_params 键：' + Object.keys(entryParams.server_params).join(','));
   const entry = await firstLiveAppCall(profile, entryIds, entryParams, log, 'entrypoint');
   steps.push({ step: '2sv_entrypoint', status: entry === null ? 404 : entry.reply.status });
   if (entry === null) {
     return {
       loggedIn: false, steps,
-      reason: '两步验证：所有 entrypoint 候选都拿不到载荷（app id 或域名都不对）'
+      reason: '两步验证：entrypoint 拿不到载荷（票据或 app id 不对）'
     };
   }
 
-  // 2) method_picker
-  const pickerCandidates = bloksCandidateApps(entry.reply.data, ['method_picker']);
-  const pickerIds = pickerCandidates.length > 0 ? pickerCandidates : [TSV_METHOD_PICKER];
-  log('    两步验证 2/4：method_picker（候选 ' + pickerIds.length + ' 个）');
+  // 2) method_picker：优先用 entrypoint 响应里的规范
+  const entrySpecs = nextCallSpecs(entry.reply.data);
+  const pickerSpec = pickCallSpec(entrySpecs, ['method_picker']);
+  const pickerIds = pickerSpec !== null && pickerSpec.appId.length > 0
+    ? [pickerSpec.appId] : [TSV_METHOD_PICKER];
+  log('    两步验证 2/4：method_picker（规范里读到 ' + entrySpecs.length + ' 条，将试 '
+    + pickerIds.length + ' 个 app）');
   const picker = await firstLiveAppCall(profile, pickerIds, {
-    client_input_params: { is_whatsapp_installed: 0 },
-    server_params: {
+    client_input_params: Object.assign({ is_whatsapp_installed: 0 },
+      pickerSpec === null ? {} : pickerSpec.clientParams),
+    server_params: normalizeFlags(Object.assign({
       should_fallback_to_sms: 0,
       device_id: profile.androidId,
       two_step_verification_context: context,
       flow_source: TSV_FLOW_SOURCE
-    }
+    }, pickerSpec === null ? {} : pickerSpec.serverParams))
   }, log, 'method_picker');
   steps.push({ step: '2sv_method_picker', status: picker === null ? 404 : picker.reply.status });
 
@@ -1737,6 +1902,11 @@ module.exports = {
   extractLoginPayload,
   extractLoginPayloadDeep,
   twoStepContextOf,
+  nextCallSpecs,
+  pickCallSpec,
+  lispyPairMap,
+  bloksParenthesized,
+  bloksExpressionItems,
   inferChallenge,
   findValueDeep,
   bloksFallbackMarkers,

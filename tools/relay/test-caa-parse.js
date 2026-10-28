@@ -515,6 +515,26 @@ check('候选 app id 能从响应里抓出来（不写死，随 IG 改版自动�
     '候选应该去重');
 });
 
+check('调用规范：从布局里读出 app id + server/client 参数（含长票据）', () => {
+  // 形状照真机响应（R12）：`35 "app" … "params" (fma (f4i (dkc "server_params" "client_input_params")
+  //   (dkc <server f4i> <client f4i>)))`，server 的 two_step_verification_context 是长票据。
+  const longToken = 'A'.repeat(300);
+  const server = `(f4i (dkc "two_step_verification_context" "flow_source" "should_fallback_to_sms") `
+    + `(dkc "${longToken}" "two_factor_login" "false"))`;
+  const client = `(f4i (dkc "machine_id" "device_id") (dkc "MID-1" "ANDROID-1"))`;
+  const lispy = `(dzw (fom 1 2) 35 "com.bloks.www.two_step_verification.entrypoint" 49 7 `
+    + `(f6m 6 "params" (fma (f4i (dkc "server_params" "client_input_params") (dkc ${server} ${client})))))`;
+  const specs = caa.nextCallSpecs({ layout: { bloks_payload: { ft: { a: lispy } } } });
+  assertEqual(specs.length, 1, '规范条数不对');
+  assertEqual(specs[0].appId, 'com.bloks.www.two_step_verification.entrypoint', 'app id 不对');
+  assertEqual(specs[0].serverParams.two_step_verification_context, longToken, '长票据没解出来');
+  assertEqual(specs[0].serverParams.flow_source, 'two_factor_login', 'flow_source 不对');
+  assertEqual(specs[0].clientParams.machine_id, 'MID-1', 'client 参数没解出来');
+  // 票据长度必须远大于"抓错地方"的那种短值
+  assert(specs[0].serverParams.two_step_verification_context.length > 100,
+    '票据太短，说明又抓到别处去了');
+});
+
 /* ------------------------------------------------ 汇总 */
 
 console.log('');
