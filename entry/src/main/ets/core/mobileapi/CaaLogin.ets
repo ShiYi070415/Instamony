@@ -55,6 +55,7 @@ const TSV_METHOD_PICKER: string = 'com.bloks.www.two_step_verification.method_pi
 const TSV_SELECT_METHOD: string =
   'com.bloks.www.two_step_verification.method_picker.navigation.async';
 const TSV_VERIFY: string = 'com.bloks.www.two_step_verification.verify_code.async';
+const TSV_ENTER_BACKUP: string = 'com.bloks.www.two_factor_login.enter_backup_code';
 const TSV_FLOW_SOURCE: string = 'two_factor_login';
 const IG_APP_ID: string = '567067343352427';
 
@@ -91,6 +92,13 @@ const LISPY_MAP_HEAD: string = '(f4i';
   claim: string = '';
   /** 这是**前检**的结果（只跑到 aac 就停，没有提交密码）——UI 据此不当成"已登录"。 */
   preflight: boolean = false;
+  /**
+   * 失败时的**原始响应**（截断到 100KB，只有失败才填）。
+   *
+   * 真机上没有 hdc，解析类 bug 只能靠这份原始数据定位（桌面版就是这么做出来的）。
+   * 失败响应里不含可用会话材料，由用户主动「复制最近响应」发出来。
+   */
+  raw: string = '';
 
   constructor(ok: boolean, reason: string) {
     this.ok = ok;
@@ -999,8 +1007,21 @@ export class CaaLogin {
     }
 
     const error: string = bloksErrorText(payload);
-    return new CaaResult(false,
+    const failed: CaaResult = new CaaResult(false,
       error.length > 0 ? `登录失败：${error}` : '响应里没找到登录结果（布局形状可能变了）');
+    /*
+     * 失败时把**原始响应**带回去（截断到 100KB）。
+     *
+     * 桌面版就是靠保存响应才定位到"载荷被日志文本挡住""Cookie 按 \r\n 分行"这两个 bug 的。
+     * 真机上没有 hdc、hilog 会被冲掉，所以这条通道要留着 —— 失败响应里没有可用会话材料，
+     * 由用户主动复制发出来。
+     */
+    try {
+      failed.raw = JSON.stringify(payload).substring(0, 100000);
+    } catch (rawError) {
+      failed.raw = '';
+    }
+    return failed;
   }
 
   /* ------------------------------------------- 新版 2FA（context 链） */
@@ -1149,8 +1170,38 @@ export class CaaLogin {
     return '';
   }
 
-  /** 默认值 + 规范值 → 合并后的参数（并把 "false"/"0" 还原类型）。 */
-  private static mergeParams(defaults: Record<string, string>,
+  /**
+   * 把某些字段补成 **JSON null**（IG 期望这几个是 null，不是空串也不是省略）。
+   *
+   * @param params    形如 `{client_input_params: …, server_params: …}`
+   * @param inClient  要补进 client_input_params 的键
+   * @param inServer  要补进 server_params 的键
+   */
+  private static ensureNulls(params: Record<string, ESObject>, inClient: Array<string>,
+                             inServer: Array<string>): void {
+    const client: ESObject = params['client_input_params'];
+    if (client !== null && client !== undefined) {
+      const record: Record<string, ESObject> = client as Record<string, ESObject>;
+      for (let index: number = 0; index < inClient.length; index++) {
+        const key: string = inClient[index];
+        if (record[key] === undefined) {
+          record[key] = null;
+        }
+      }
+    }
+    const server: ESObject = params['server_params'];
+    if (server !== null && server !== undefined) {
+      const record: Record<string, ESObject> = server as Record<string, ESObject>;
+      for (let index: number = 0; index < inServer.length; index++) {
+        const key: string = inServer[index];
+        if (record[key] === undefined) {
+          record[key] = null;
+        }
+      }
+    }
+  }
+
+  /** 默认值 + 规范值 → 合并后的参数（并把 "false"/"0" 还原类型）。 */  private static mergeParams(defaults: Record<string, string>,
                              fromSpec: Record<string, string>): Record<string, ESObject> {
     const merged: Record<string, string> = {};
     for (const key of Object.keys(defaults)) {
@@ -1254,9 +1305,32 @@ export class CaaLogin {
       selectSpec === null ? {} : selectSpec.clientParams);
     selectParams['server_params'] = CaaLogin.mergeParams(selectServerDefaults,
       selectSpec === null ? {} : selectSpec.serverParams);
+    // 这三个字段 IG 期望是 JSON null（JS 那份就是这么发的），别漏。
+    CaaLogin.ensureNulls(selectParams, ['cloud_trust_token', 'network_bssid'],
+      ['spectra_reg_login_data']);
     const selected: CaaHttpReply = await CaaLogin.bloks(identity, extra, selectApp, selectParams,
       null, PRIVATE_HOST);
     CaaLogin.steps.push(new CaaStep('2sv_select_method', selected.status, challenge));
+
+    /*
+     * **备用码支路**：8 位备用码要先打开输入页（对齐 JS 那份，也对齐 instagrapi
+     * `bloks_two_step_verification_enter_backup_code`）。用验证器/短信的用户不会走到这。
+     */
+    if (challenge === 'backup_codes') {
+      const selectPayloadForBackup: ESObject = CaaLogin.parse(selected.body);
+      const backupSpecs: Array<CaaCallSpec> = CaaLogin.nextCallSpecs(selectPayloadForBackup);
+      const backupSpec: CaaCallSpec | null = CaaLogin.pickCallSpec(backupSpecs, ['backup']);
+      const backupApp: string = backupSpec === null ? TSV_ENTER_BACKUP : backupSpec.appId;
+      const backupParams: Record<string, ESObject> = {};
+      backupParams['server_params'] = CaaLogin.mergeParams({
+        'device_id': identity.androidDeviceId,
+        'two_step_verification_context': context,
+        'flow_source': TSV_FLOW_SOURCE
+      }, backupSpec === null ? {} : backupSpec.serverParams);
+      const backup: CaaHttpReply = await CaaLogin.bloksApp(identity, extra, backupApp, backupParams,
+        PRIVATE_HOST);
+      CaaLogin.steps.push(new CaaStep('2sv_enter_backup_code', backup.status, ''));
+    }
 
     const selectPayload: ESObject = CaaLogin.parse(selected.body);
     const selectSpecs: Array<CaaCallSpec> = CaaLogin.nextCallSpecs(selectPayload);
@@ -1283,6 +1357,8 @@ export class CaaLogin {
       verifySpec === null ? {} : verifySpec.clientParams);
     verifyParams['server_params'] = CaaLogin.mergeParams(verifyServerDefaults,
       verifySpec === null ? {} : verifySpec.serverParams);
+    CaaLogin.ensureNulls(verifyParams, ['cloud_trust_token', 'network_bssid'],
+      ['spectra_reg_login_data']);
     const submit: CaaHttpReply = await CaaLogin.bloks(identity, extra, verifyApp, verifyParams,
       null, PRIVATE_HOST);
     CaaLogin.steps.push(new CaaStep('2sv_verify_code', submit.status, ''));

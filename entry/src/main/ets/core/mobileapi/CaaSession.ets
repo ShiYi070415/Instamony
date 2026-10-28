@@ -34,6 +34,8 @@ const KEY_PRIVATE: string = 'usdid_private';
 const KEY_PUBLIC: string = 'usdid_public';
 /** 最近一次登录/前检/导入的诊断（只有结论与名字，没有密钥；重启还能复制）。 */
 const KEY_LAST_DIAG: string = 'last_diag';
+/** 最近一次失败时的原始响应（截断 100KB；同样只在本机，重启还能复制）。 */
+const KEY_LAST_RAW: string = 'last_raw';
 
 /** 登录结果（给 UI：不抛异常，全部放在字段里）。 */
 export class CaaOutcome {
@@ -66,6 +68,7 @@ export class CaaSession {
       CaaSession.store = preferences.getPreferencesSync(context, { name: STORE_NAME });
       // 上次的诊断读回来：重启之后仍然能"复制诊断"（不然失败一次就得再复现一次）。
       CaaSession.lastDiag = CaaSession.readText(KEY_LAST_DIAG);
+      CaaSession.lastRaw = CaaSession.readText(KEY_LAST_RAW);
       hilog.info(DOMAIN, TAG, 'usdid store opened');
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'open usdid store failed: %{public}s', (error as Error).message);
@@ -190,6 +193,8 @@ export class CaaSession {
       }
       const failed: CaaOutcome = CaaSession.outcome(false, result.reason, CaaSession.stepsText());
       CaaSession.rememberDiag('登录', failed.reason, failed.steps);
+      // 失败时把原始响应留下（真机上唯一的现场；成功时不存，避免会话材料被随手复制）。
+      CaaSession.rememberRaw(result.raw);
       return failed;
     }
     const outcome: CaaOutcome = await CaaSession.applySession(result.cookie, result.authorization,
@@ -472,6 +477,8 @@ export class CaaSession {
    * 就能判断是"布局形状变了"还是"账号侧的问题"。
    */
   private static lastDiag: string = '';
+  /** 最近一次失败时的原始响应（截断；有就存 preferences，重启后仍可复制）。 */
+  private static lastRaw: string = '';
 
   /** 最近一次登录/前检/导入的诊断文本（给"复制诊断"用）。 */
   static diagText(): string {
@@ -479,6 +486,19 @@ export class CaaSession {
       return '还没有跑过登录 / 前检 / 导入（先点一次「设备/网络前检」）';
     }
     return CaaSession.lastDiag;
+  }
+
+  /** 最近一次失败时的**原始响应**（没有就返回空串）。 */
+  static lastResponseText(): string {
+    return CaaSession.lastRaw;
+  }
+
+  /** 记下失败时的原始响应（截断，见 CaaResult.raw 的说明）。 */
+  private static rememberRaw(raw: string): void {
+    CaaSession.lastRaw = raw.length > 100000 ? raw.substring(0, 100000) : raw;
+    if (CaaSession.lastRaw.length > 0) {
+      CaaSession.writeText(KEY_LAST_RAW, CaaSession.lastRaw);
+    }
   }
 
   /** 把一次结论记成诊断文本（只存给人看的字段，不含 cookie / authorization）。 */

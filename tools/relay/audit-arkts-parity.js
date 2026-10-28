@@ -65,6 +65,18 @@ function keysOf(chunk) {
     out.add(match[1]);
     match = bare.exec(stripped);
   }
+  // `ensureNulls(params, ['a','b'], ['c'])`：这些键是**按名字补 null**，也要算进键集合。
+  const ensure = /ensureNulls\(([\s\S]*?)\);/g;
+  let call = ensure.exec(chunk);
+  while (call !== null) {
+    const inner = /['"]([A-Za-z0-9_]+)['"]/g;
+    let hit = inner.exec(call[1]);
+    while (hit !== null) {
+      out.add(hit[1]);
+      hit = inner.exec(call[1]);
+    }
+    call = ensure.exec(chunk);
+  }
   ['Record', 'Array', 'function', 'const', 'let', 'new', 'return', 'Object'].forEach((word) => {
     out.delete(word);
   });
@@ -79,7 +91,10 @@ const NOT_PAYLOAD = new Set([
   'loggedIn', 'reason', 'raw', 'parsed', 'aac', 'cookies', 'authorization', 'twoStepContext',
   'steps', 'status', 'step', 'ok', 'needsCode', 'cookie', 'body', 'headerOf', 'text', 'value',
   'name', 'username', 'identity', 'extra', 'password', 'encryptedPassword', 'waterfallId',
-  'textInputId'
+  'textInputId',
+  // 局部变量 / 候选列表（不是 payload 字段）
+  'backupCandidates', 'selectCandidates', 'verifyCandidates', 'entryCandidates', 'pickerCandidates',
+  'normalized', 'challenge', 'context', 'spec', 'specs', 'logger'
 ]);
 
 const SECTIONS = [
@@ -111,6 +126,15 @@ const SECTIONS = [
     name: '2SV（entrypoint / code_entry / submit_code）',
     js: [['async function resolveTwoStep(', '/* ---------------------------------------------------------------- 主流程 */']],
     arkts: [['private static async resolveTwoStep(', 'private static async bloks(']]
+  },
+  {
+    /*
+     * **新版 2FA（context 链）**：真机只在 ArkTS 上跑得到，而 JS 那份已经用真实账号验过。
+     * 这一段比的是"每一跳的 client/server 参数键"，缺一个 IG 就可能换判据。
+     */
+    name: '新版 2FA（context 链，逐跳参数）',
+    js: [['async function resolveTwoStepByContext(', 'async function resolveTwoStep(']],
+    arkts: [['private static async resolveTwoStepContext(', 'private static async resolveTwoStep(']]
   },
   {
     /*

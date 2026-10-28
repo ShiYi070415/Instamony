@@ -160,6 +160,23 @@ export struct CaaLoginCard {
         .onClick((): void => {
           this.copyDiag();
         })
+      /*
+       * **复制最近响应**（只有失败时才有内容）。
+       *
+       * 真机上没有 hdc，解析类 bug 只能靠原始响应定位 —— 桌面版两个 bug 就是这么找到的。
+       */
+      Text('复制最近一次响应（失败时才有）')
+        .fontSize(12)
+        .fontColor($r('app.color.secondary_text'))
+        .width('100%')
+        .onClick((): void => {
+          const raw: string = CaaSession.lastResponseText();
+          if (raw.length === 0) {
+            this.status = '还没有失败过的响应可复制';
+            return;
+          }
+          this.putClipboard(raw, '响应已复制（' + raw.length + ' 字符，失败响应里没有可用会话）');
+        })
       Text(this.pasteOpen ? '收起「粘贴会话导入」' : '用已有会话导入（备用，粘贴 settings.caa.json）')
         .fontSize(12)
         .fontColor($r('app.color.secondary_text'))
