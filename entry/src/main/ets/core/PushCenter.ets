@@ -82,6 +82,14 @@ export class PushCenter {
   private static started: boolean = false;
   /** 通知分类（slot）注册过没有（幂等）。 */
   private static slotsReady: boolean = false;
+  /**
+   * 会话 id → WantAgent 的缓存。
+   *
+   * 为什么要缓存：WantAgent 是**原生对象**，taskpool 的 `@Concurrent` 带不过去，
+   * 所以"点了跳会话"的通知只能在主线程发。缓存住之后同一条会话只构造一次，
+   * 后续通知都是"带 agent 立刻发"，既有 uri 又没有额外等待。
+   */
+  private static agents: Map<string, WantAgent> = new Map<string, WantAgent>();
   /** "通知开关"那行日志打过了没有（见 logEnabledOnce）。 */
   private static enabledLogged: boolean = false;
   /** 上一条未读数：kind → total。 */
@@ -372,27 +380,40 @@ export class PushCenter {
       PushCenter.ensureSlots();
       PushCenter.logEnabledOnce();
       /*
-       * **先发出去、再补 wantAgent**（顺序很重要）。
+       * **带 wantAgent 的通知只能在主线程发**（Agent 是原生对象，`@Concurrent` 带不过去）。
        *
-       * 以前是"先等 agent（最多 400ms）再发"—— 那 400ms 直接加到通知延迟上。
-       * 现在：① 立刻在 taskpool 发一条（不带 agent，点开只回首页）；
-       *       ② 之后取到 agent 再按**同一个 id** 补发一次（覆盖，不重复提醒），点开就能直达会话。
-       * 通知的"出现时间"和"点开能跳到哪"本来就是两件事，不该互相等。
+       * 但"点击跳会话"必须成立（用户要求），所以这里的顺序是：
+       *   ① 这个会话的 agent 已经缓存过 → 直接带 agent 发（本地 IPC，毫秒级）；
+       *   ② 没缓存 → 先取一次 agent（上限 400ms，本地不联网），拿到就带 agent 发；
+       *   ③ 取不到才退回 taskpool 发一条**不带 agent** 的（先保证通知出现，这一条点开只回首页）。
+       *
+       * 之前是"先发不带 agent 的一条、之后再补带 agent 的一条"—— 真机上两次发布撞在一起，
+       * 用户看到的往往还是没 agent 的那条，于是"点了没反应"。
        */
-      PushCenter.send(request, id);
-      if (threadId.length === 0) {
+      const cachedAgent: WantAgent | undefined = threadId.length > 0
+        ? PushCenter.agents.get(threadId) : undefined;
+      if (cachedAgent !== undefined) {
+        request.wantAgent = cachedAgent;
+        PushCenter.sendOnMainThread(request, id);
         return;
       }
       PushCenter.agentWithin(threadId, NOTIFY_AGENT_WAIT_MS)
         .then((agent: WantAgent | undefined): void => {
-          if (agent === undefined) {
+          if (agent !== undefined) {
+            request.wantAgent = agent;
+            if (threadId.length > 0) {
+              PushCenter.agents.set(threadId, agent);
+            }
+            PushCenter.sendOnMainThread(request, id);
             return;
           }
-          request.wantAgent = agent;
-          PushCenter.sendOnMainThread(request, id);
-          hilog.info(DOMAIN, TAG, 'notification deep link attached id=%{public}d', id);
+          // 拿不到 agent：先把通知发出去（taskpool，主线程再忙也不拖），代价是这条点开只回首页
+          hilog.warn(DOMAIN, TAG, 'notification without wantAgent (deep link missing) id=%{public}d',
+            id);
+          PushCenter.send(request, id);
         })
         .catch((): void => {
+          PushCenter.send(request, id);
         });
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'notification publish threw: %{public}s',
