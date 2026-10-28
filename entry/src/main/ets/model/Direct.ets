@@ -46,10 +46,19 @@ export class DirectThread {
   readonly text: string;
   /** 最近一条消息的类型（text / media / voice_media ...），文字为空时用它给个中文占位。 */
   readonly kind: string;
+  /**
+   * **群聊里"第一个有头像的成员"的头像**（1:1 会话恒为空）。
+   *
+   * 用途只有一个：进会话页时**首帧**还没把这条会话读回来（`view === null`），标题栏先用它，
+   * 免得群聊一进去先闪一下中性群图标（用户反馈："进会话第一时间显示中性群图标，没有显示头像"）。
+   * 列表那一行不画它（列表按"没有群图就画群图标"的规则，见 DirectPage.threadRow）。
+   */
+  readonly memberAvatar: string;
 
   constructor(id: string, key: string, title: string, avatarUrl: string, isGroup: boolean,
               unread: boolean, muted: boolean, pinned: boolean, tsMs: number,
-              text: string, kind: string, username: string = '', unreadCount: number = 0) {
+              text: string, kind: string, username: string = '', unreadCount: number = 0,
+              memberAvatar: string = '') {
     this.id = id;
     this.key = key;
     this.title = title;
@@ -63,6 +72,7 @@ export class DirectThread {
     this.text = text;
     this.kind = kind;
     this.username = username;
+    this.memberAvatar = memberAvatar;
   }
 
   /** 打开这条会话的网页地址。 */
@@ -859,7 +869,7 @@ export class DirectMapper {
       }
       threads.push(new DirectThread(row.id, row.key, row.title, row.avatar, row.isGroup,
         row.unread, row.muted, row.pinned, row.tsMs, row.text, row.kind, row.username,
-        row.unreadCount));
+        row.unreadCount, row.memberAvatar));
     }
     return new DirectInboxPage(threads, parsed.cursor, parsed.hasOlder);
   }
@@ -957,7 +967,9 @@ export class DirectMapper {
         isGroup ? DirectMapper.groupImageOf(th) : avatar, isGroup,
         unread, JsonRead.boolOf(th, 'muted'),
         JsonRead.boolOf(th, 'is_pin'), ts, text, kind, username,
-        count > 0 ? count : 0));
+        count > 0 ? count : 0,
+        // 群聊：第一个成员的头像单独带走，进会话页首帧用（见 DirectThread.memberAvatar）
+        isGroup ? avatar : ''));
     }
     const next: string = JsonRead.strOf(box, 'next_max_id');
     const older: boolean = JsonRead.boolOf(box, 'has_older') || next.length > 0;

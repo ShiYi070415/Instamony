@@ -20,6 +20,13 @@ export class InboxRow {
   key: string = '';
   title: string = '';
   avatar: string = '';
+  /**
+   * 群聊里"第一个有头像的成员"的头像（1:1 恒为空）。
+   *
+   * 只给"进会话页的首帧"用：那时会话还没读回来，标题栏先拿它，免得群聊一进去先闪一下
+   * 中性群图标（用户反馈的就是这个）。列表那一行不画它。
+   */
+  memberAvatar: string = '';
   username: string = '';
   isGroup: boolean = false;
   unread: boolean = false;

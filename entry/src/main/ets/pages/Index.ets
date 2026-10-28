@@ -9473,7 +9473,15 @@ struct Index {
      * 所以这里只管进页面；万一三条都不成，页面上的「在网页中打开」按钮是出口
      * （见 DirectThreadPage.onOpenWeb）。
      */
-    this.directThreadVm.open(thread.id, thread.title, thread.avatarUrl, thread.isGroup,
+    /*
+     * 标题栏首帧的头像：**群聊**用"第一个成员的头像"（列表行带过来的），
+     * 免得读回会话之前先闪一下中性群图标（用户反馈的"进会话第一时间显示群图标"）。
+     * 群有群图时列表行那份 `avatarUrl` 非空，优先用它。
+     */
+    const threadAvatar: string = thread.isGroup
+      ? (thread.avatarUrl.length > 0 ? thread.avatarUrl : thread.memberAvatar)
+      : thread.avatarUrl;
+    this.directThreadVm.open(thread.id, thread.title, threadAvatar, thread.isGroup,
       thread.key.length > 0 ? thread.key : '', thread.username);
     /*
      * **点进去就清未读**（需求："私信列表点进去会话就清除未读标记，不用等已读状态回调"）。

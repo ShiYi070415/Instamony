@@ -110,6 +110,7 @@ export function parseInboxTask(raw: string): InboxParseResult {
     row.id = id;
     row.title = title;
     row.avatar = isGroup ? inboxGroupImageOf(th) : avatar;
+    row.memberAvatar = isGroup ? avatar : '';
     row.username = username;
     row.isGroup = isGroup;
     row.unreadCount = count > 0 ? count : 0;

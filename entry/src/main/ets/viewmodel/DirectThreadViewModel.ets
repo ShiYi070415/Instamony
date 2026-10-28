@@ -384,16 +384,14 @@ export class DirectThreadViewModel {
 
   /** 标题栏那颗头像（对方 / 群图；没读到就用收件箱那一行带过来的）。 */
   avatarNow(): string {
-    /*
-     * 群聊**不退回**收件箱那一行的头像：那一行现在是空串（群没有群图时不给成员头像，
-     * 见 model/Direct.ets 的列表解析），退回去也没意义；界面会画中性群图标。
-     */
     if (this.view !== null && this.view.withAvatar.length > 0) {
       return this.view.withAvatar;
     }
-    if (this.isGroupNow()) {
-      return '';
-    }
+    /*
+     * 还没读回会话（或读回来没头像）：用收件箱那一行带过来的。
+     * 群聊那份 fallback 已经是"群图 → 第一个成员头像"（见 pages/Index.openDirectThread）——
+     * 早先这里对群聊直接返回空串，于是首帧闪群图标，读回来才变头像（用户反馈的那个小 bug）。
+     */
     return this.fallbackAvatar;
   }
 
