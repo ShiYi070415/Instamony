@@ -1262,8 +1262,8 @@ export class CaaLogin {
     entryParams['server_params'] = CaaLogin.mergeParams(entryServerDefaults,
       entrySpec === null ? {} : entrySpec.serverParams);
     CaaLogin.steps.push(new CaaStep('2sv_context', context.length, 'entrypoint'));
-    const entry: CaaHttpReply = await CaaLogin.bloksApp(identity, extra, entryApp, entryParams,
-      PRIVATE_HOST);
+    const entry: CaaHttpReply = await CaaLogin.bloksAppBestHost(identity, extra, entryApp,
+      entryParams);
     CaaLogin.steps.push(new CaaStep('2sv_entrypoint', entry.status, ''));
 
     const entryPayload: ESObject = CaaLogin.parse(entry.body);
@@ -1282,8 +1282,8 @@ export class CaaLogin {
       pickerSpec === null ? {} : pickerSpec.clientParams);
     pickerParams['server_params'] = CaaLogin.mergeParams(pickerServerDefaults,
       pickerSpec === null ? {} : pickerSpec.serverParams);
-    const picker: CaaHttpReply = await CaaLogin.bloksApp(identity, extra, pickerApp, pickerParams,
-      PRIVATE_HOST);
+    const picker: CaaHttpReply = await CaaLogin.bloksAppBestHost(identity, extra, pickerApp,
+      pickerParams);
     CaaLogin.steps.push(new CaaStep('2sv_method_picker', picker.status, ''));
 
     const challenge: string = CaaLogin.inferChallenge(sendPayload, code);
@@ -1308,8 +1308,8 @@ export class CaaLogin {
     // 这三个字段 IG 期望是 JSON null（JS 那份就是这么发的），别漏。
     CaaLogin.ensureNulls(selectParams, ['cloud_trust_token', 'network_bssid'],
       ['spectra_reg_login_data']);
-    const selected: CaaHttpReply = await CaaLogin.bloks(identity, extra, selectApp, selectParams,
-      null, PRIVATE_HOST);
+    const selected: CaaHttpReply = await CaaLogin.bloksBestHost(identity, extra, selectApp,
+      selectParams);
     CaaLogin.steps.push(new CaaStep('2sv_select_method', selected.status, challenge));
 
     /*
@@ -1327,8 +1327,8 @@ export class CaaLogin {
         'two_step_verification_context': context,
         'flow_source': TSV_FLOW_SOURCE
       }, backupSpec === null ? {} : backupSpec.serverParams);
-      const backup: CaaHttpReply = await CaaLogin.bloksApp(identity, extra, backupApp, backupParams,
-        PRIVATE_HOST);
+      const backup: CaaHttpReply = await CaaLogin.bloksAppBestHost(identity, extra, backupApp,
+        backupParams);
       CaaLogin.steps.push(new CaaStep('2sv_enter_backup_code', backup.status, ''));
     }
 
@@ -1359,8 +1359,8 @@ export class CaaLogin {
       verifySpec === null ? {} : verifySpec.serverParams);
     CaaLogin.ensureNulls(verifyParams, ['cloud_trust_token', 'network_bssid'],
       ['spectra_reg_login_data']);
-    const submit: CaaHttpReply = await CaaLogin.bloks(identity, extra, verifyApp, verifyParams,
-      null, PRIVATE_HOST);
+    const submit: CaaHttpReply = await CaaLogin.bloksBestHost(identity, extra, verifyApp,
+      verifyParams);
     CaaLogin.steps.push(new CaaStep('2sv_verify_code', submit.status, ''));
     const login: CaaLoginPayload | null = CaaLogin.extractLoginPayload(CaaLogin.parse(submit.body));
     if (login === null) {
@@ -1462,6 +1462,49 @@ export class CaaLogin {
   }
 
   /* ---------------------------------------------------------------- 细节 */
+
+  /**
+   * 这个回包是不是"app 不在这个域名上"（Bloks VM 的空载荷失败）。
+   *
+   * 判据取自 IG 真实响应（R12）：404 + `Payload returned is null. A server error
+   * field_exception occured.`。看起来像"形状变了"，其实只是域名不对。
+   */
+  private static isNullPayload(reply: CaaHttpReply): boolean {
+    const body: string = reply.body === null || reply.body === undefined ? '' : reply.body;
+    return body.indexOf('Payload returned is null') >= 0
+      || (body.toLowerCase().indexOf('field_exception') >= 0 && body.indexOf('null') >= 0);
+  }
+
+  /**
+   * 打 `bloks/apps/`，**两个域名自动回退**（先 `i.instagram.com`，空载荷再试 `b.i.instagram.com`）。
+   *
+   * 为什么：真机实测新版 2FA 的 app 在 `i.instagram.com`，而 CAA 登录的 app 在
+   * `b.i.instagram.com`；IG 改版时也可能反过来。多打一次请求的成本远小于"手机上登录失败"。
+   */
+  private static async bloksAppBestHost(identity: MobileIdentity, extra: Record<string, string>,
+                                        app: string, params: Record<string, ESObject>):
+    Promise<CaaHttpReply> {
+    const first: CaaHttpReply = await CaaLogin.bloksApp(identity, extra, app, params, PRIVATE_HOST);
+    if (!CaaLogin.isNullPayload(first)) {
+      return first;
+    }
+    const second: CaaHttpReply = await CaaLogin.bloksApp(identity, extra, app, params, CAA_HOST);
+    return CaaLogin.isNullPayload(second) ? first : second;
+  }
+
+  /** 同上，打 `bloks/async_action/`。 */
+  private static async bloksBestHost(identity: MobileIdentity, extra: Record<string, string>,
+                                     action: string, params: Record<string, ESObject>):
+    Promise<CaaHttpReply> {
+    const first: CaaHttpReply = await CaaLogin.bloks(identity, extra, action, params, null,
+      PRIVATE_HOST);
+    if (!CaaLogin.isNullPayload(first)) {
+      return first;
+    }
+    const second: CaaHttpReply = await CaaLogin.bloks(identity, extra, action, params, null,
+      CAA_HOST);
+    return CaaLogin.isNullPayload(second) ? first : second;
+  }
 
   /** 打 `bloks/async_action/`（`host` 默认 CAA 域名；**新版 2FA 要用私有域名**）。 */
   private static async bloks(identity: MobileIdentity, extra: Record<string, string>,

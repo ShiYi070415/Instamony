@@ -566,6 +566,54 @@ check('登录结果的第一个 "login_response" 可能是日志文本 —— �
   assertEqual(deep.headers['IG-Set-Authorization'], 'Bearer IGT:2:REAL', 'authorization 不对');
 });
 
+/* ------------------------------------- ⑦ App 自检 6 项镜像（逐字对齐 CaaLogin.selfTest） */
+
+/*
+ * 手机上第一步会点「解析自检」。若它误报失败，真机测试就被带偏了 —— 所以这里用**完全相同的
+ * fixture** 再跑一遍（改 selfTest 的 fixture 时两处要一起改）。
+ */
+console.log('⑦ App 自检 6 项镜像');
+
+check('自检⑤-a：真机 Cookie 格式（\\r\\n + 属性）只取会话三件套', () => {
+  const realCookie = 'Set-Cookie: csrftoken=CSRF; Domain=.instagram.com; '
+    + 'expires=02-Dec-2027 13:57:44 GMT; Max-Age=31536000; Path=/; Secure\r\n'
+    + 'Set-Cookie: ds_user_id=777; Domain=.instagram.com; Path=/; Secure\r\n'
+    + 'Set-Cookie: sessionid=777%3Areal; Domain=.instagram.com; HttpOnly; Path=/; Secure';
+  const parsed = caa.parseCookieHeader(realCookie);
+  assert(parsed.sessionid === '777%3Areal', 'sessionid 丢失');
+  assert(parsed.ds_user_id === '777', 'ds_user_id 丢失');
+  assert(JSON.stringify(parsed).indexOf('Secure') < 0, '属性混进了 Cookie');
+  assert(JSON.stringify(parsed).indexOf('Domain') < 0, 'Domain 混进了 Cookie');
+});
+
+check('自检⑤-b：日志文本挡在前面时仍能解析出载荷', () => {
+  const innerFields = {
+    login_response: JSON.stringify({ logged_in_user: { pk: 777 } }),
+    headers: JSON.stringify({ 'IG-Set-Authorization': 'Bearer IGT:2:REAL' }),
+    cookies: 'Set-Cookie: sessionid=777%3Areal; Path=/; Secure'
+  };
+  const trapText = '(dey "MAA_LOGIN_FLOW" '
+    + '"[trait:called_handle_login_response] Calling HandleLoginResponse") '
+    + '(dsg (fom 15942 35 ' + JSON.stringify(JSON.stringify(innerFields)) + '))';
+  const payload = { layout: { bloks_payload: { ft: { a: trapText } } } };
+  assert(caa.extractLoginPayloadDeep(payload) !== null, '被日志文本挡住');
+});
+
+check('自检⑥：从布局读出 2FA 规范（长票据 + client 参数）', () => {
+  const longToken = 'A'.repeat(300);
+  const serverExpr = '(f4i (dkc "two_step_verification_context" "flow_source") '
+    + `(dkc "${longToken}" "two_factor_login"))`;
+  const clientExpr = '(f4i (dkc "machine_id") (dkc "MID-1"))';
+  const specText = '(dzw (fom 1 2) 35 "com.bloks.www.two_step_verification.entrypoint" '
+    + `49 7 (f6m 6 "params" (fma (f4i (dkc "server_params" "client_input_params") `
+    + `(dkc ${serverExpr} ${clientExpr})))))`;
+  const payload = { layout: { bloks_payload: { ft: { a: specText } } } };
+  assert(caa.twoStepContextOf(payload).length >= 100, '票据太短（又抓到别处去了）');
+  const spec = caa.pickCallSpec(caa.nextCallSpecs(payload), ['two_step']);
+  assert(spec !== null, '没读到规范');
+  assertEqual(spec.clientParams.machine_id, 'MID-1', 'client 参数没解出来');
+});
+
 /* ------------------------------------------------ 汇总 */
 
 console.log('');
