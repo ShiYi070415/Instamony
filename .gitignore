@@ -43,6 +43,8 @@ tools/relay/mqtt-device.json
 tools/relay/fbns-auth.json
 # 密码登录后的会话（含 authorization，等同密码）
 tools/relay/session.json
+# instagrapi 登录后的会话（login_ig.py 产出，等同密码）
+tools/relay/settings.json
 # 登录用的专属浏览器 profile（里面有 IG 会话，等同密码）
 tools/relay/.login-profile/
 tools/relay/.relay.lock

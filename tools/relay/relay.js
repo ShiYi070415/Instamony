@@ -568,7 +568,201 @@ function inQuietHours(cfg) {
   return from < to ? (hour >= from && hour < to) : (hour >= from || hour < to);
 }
 
-/* ------------------------------------------------------------------ 推送 */
+/* -------------------------------------- FBNS 实时推送（IG 主动推，主路径） */
+
+/**
+ * **为什么这是主路径**：FBNS 推送的载荷里**直接带消息正文**，不用再拉收件箱 ——
+ * 收到就推，延迟等于 IG 推送到我们这里的时间（实测亚秒级）：
+ *
+ *   {"m":"消息正文","t_id":"会话 id","s":"发信人 id","a":"头像 URL",
+ *    "n":"消息 id","mid":"…","c":"direct_v2_text","ig":"direct_v2?id=…"}
+ *
+ * 而轮询那条路即使是 1 秒探测，也要"探测→响应→推送"三段。所以：
+ *   · FBNS 连上并注册成功 → 走它（秒推）；
+ *   · FBNS 断了 / 没注册上 → 自动退回轮询（探测档），行为与以前一致。
+ */
+
+/** FBNS 已经推过的消息 id（防止它和轮询各推一次）。 */
+const fbnsPushedIds = new Set();
+
+function rememberFbnsPush(id) {
+  if (!id) return;
+  fbnsPushedIds.add(String(id));
+  if (fbnsPushedIds.size > 600) {
+    const oldest = fbnsPushedIds.values().next().value;
+    fbnsPushedIds.delete(oldest);
+  }
+}
+
+/** 把 FBNS 的 push token 注册给 IG（不注册的话 broker 不会推东西过来）。 */
+function registerFbnsPushToken(cfg, token) {
+  const cookie = (cfg.ig && cfg.ig.cookie) || '';
+  const authorization = mobileAuthorization(cookie);
+  const device = deviceIdentity();
+  const form = JSON.stringify({
+    device_type: 'android_mqtt',
+    is_main_push_channel: true,
+    device_sub_type: 2,
+    device_token: token,
+    _csrftoken: cookieValueOf(cookie, 'csrftoken'),
+    guid: cookieValueOf(cookie, 'ig_did') || device.uuid,
+    uuid: cookieValueOf(cookie, 'ig_did') || device.uuid,
+    users: cookieValueOf(cookie, 'ds_user_id'),
+    family_device_id: device.uuid
+  });
+  /*
+   * 表单编码（`device_type=android_mqtt&…`）：布尔值在 x-www-form-urlencoded 里
+   * 只能写成 true/false —— 实测 `is_main_push_channel=true` 能被接受。
+   */
+  const body = JSON.parse(form);
+  const params = [];
+  for (const key of Object.keys(body)) {
+    params.push(encodeURIComponent(key) + '=' + encodeURIComponent(String(body[key])));
+  }
+  const payload = params.join('&');
+  return request('https://i.instagram.com/api/v1/push/register/', {
+    method: 'POST',
+    headers: {
+      Cookie: cookie,
+      Authorization: authorization,
+      'User-Agent': MOBILE_UA,
+      'X-IG-App-ID': MOBILE_APP_ID,
+      'X-IG-Capabilities': '3brTv10=',
+      'X-IG-Connection-Type': 'WIFI',
+      'X-IG-WWW-Claim': '0',
+      'X-IG-Device-ID': device.uuid,
+      'X-IG-Android-ID': device.androidId,
+      'X-IG-Family-Device-ID': device.phoneId,
+      'X-CSRFToken': cookieValueOf(cookie, 'csrftoken'),
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Content-Length': Buffer.byteLength(payload),
+      Accept: '*/*'
+    }
+  }, payload);
+}
+
+/**
+ * 起 FBNS 连接（两段式握手 + 取 token + 注册 + 收推送 + 断线重连）。
+ *
+ * @param onPush 收到一条推送时的回调（已经在 push 里带好正文/会话/发信人）
+ */
+function startFbns(cfg, onPush) {
+  if (cfg.fbns && cfg.fbns.enabled === false) {
+    log('FBNS 已按配置关闭，只走轮询');
+    return null;
+  }
+  const cookie = (cfg.ig && cfg.ig.cookie) || '';
+  const userId = cookieValueOf(cookie, 'ds_user_id');
+  if (userId.length === 0) {
+    log('没有 ds_user_id，FBNS 不启动');
+    return null;
+  }
+  const { FbnsClient } = require('./fbns.js');
+  const client = new FbnsClient({
+    stateDir: __dirname,
+    clientId: userId,
+    userId: Number(userId) || 0,
+    log: (text) => log(text)
+  });
+  client.on('up', () => {
+    log('FBNS 已连上，申请 push token');
+    client.requestPushToken();
+  });
+  client.on('registered', (payload) => {
+    const token = payload && payload.token ? String(payload.token) : '';
+    if (token.length === 0) {
+      warn('FBNS 没拿到 push token：' + JSON.stringify(payload).slice(0, 160));
+      return;
+    }
+    registerFbnsPushToken(cfg, token).then((res) => {
+      let data = {};
+      try {
+        data = JSON.parse(res.body);
+      } catch (error) {
+        data = {};
+      }
+      if (data.status === 'ok') {
+        log('FBNS push token 注册成功 —— 之后新私信由 IG 主动推过来');
+      } else {
+        warn('FBNS push token 注册失败（' + res.status + '）：' + res.body.slice(0, 160)
+          + '，仍可依赖轮询');
+      }
+    }).catch((error) => {
+      warn('FBNS push token 注册异常：' + error.message + '，仍可依赖轮询');
+    });
+  });
+  client.on('push', (push) => {
+    onPush(push);
+  });
+  client.on('down', (reason) => {
+    log('FBNS 断开：' + reason + '（30 秒后重连，期间靠轮询）');
+  });
+
+  const connect = () => {
+    client.connect().catch((error) => {
+      log('FBNS 连接失败：' + error.message);
+    });
+  };
+  connect();
+  const reconnect = setInterval(() => {
+    if (!client.up) connect();
+  }, 30000);
+  if (typeof reconnect.unref === 'function') reconnect.unref();
+  return client;
+}
+
+/**
+ * 处理一条 FBNS 推送 —— **收到就推，不拉收件箱**。
+ *
+ * 载荷实测样例（`fbns-test.js` 抓到的）：
+ *   {"m":"n h","t_id":"3402823668…","s":"46889056076","a":"https://…头像…",
+ *    "n":"33078498195258828955651929190432768","c":"direct_v2_text",
+ *    "mid":"mid.$…","u":"46473815227","ig":"direct_v2?id=…"}
+ *
+ * 字段含义：`m` 正文、`t_id` 会话、`s` 发信人、`n` 消息 id、`c` 类型、`a` 头像。
+ */
+async function handleFbnsPush(cfg, state, stateFile, push) {
+  if (push === null || typeof push !== 'object') return;
+  const threadId = String(push.t_id || '');
+  const itemId = String(push.n || push.mid || '');
+  if (threadId.length === 0) return;
+  const text = String(push.m || '').slice(0, 120).trim();
+  const kind = String(push.c || '');
+  // 自己的消息（理论上 IG 不会推给自己，防一手）
+  const selfId = cookieValueOf((cfg.ig && cfg.ig.cookie) || '', 'ds_user_id');
+  if (String(push.s || '') === selfId) return;
+  // 只处理私信类推送；其它（点赞、关注、评论…）不进通知
+  if (kind.length > 0 && kind.indexOf('direct') < 0 && kind.indexOf('text') < 0) return;
+  if (itemId.length > 0) {
+    if (fbnsPushedIds.has(itemId)) return;
+    rememberFbnsPush(itemId);
+  }
+  if (inQuietHours(cfg)) {
+    log('安静时段：FBNS 推送只记账不弹（' + threadId + '）');
+    return;
+  }
+  const entry = state[threadId];
+  const title = (entry && entry.title) || '私信';
+  if (entry !== undefined && itemId.length > 0) {
+    // 记进已推名单：轮询那一轮看到同一条就不会再推一次
+    const pushed = Array.isArray(entry.pushed) ? entry.pushed.slice() : [];
+    pushed.push(itemId);
+    entry.pushed = pushed.slice(-40);
+    try {
+      saveState(stateFile, state);
+    } catch (error) {
+      warn('FBNS 推送后落盘失败：' + error.message);
+    }
+  }
+  try {
+    await send(cfg, title, text.length > 0 ? text : '你有一条新私信', threadId, itemId || threadId);
+    log('FBNS 即时推送：' + title + ' —— ' + (text || '[非文本]'));
+  } catch (error) {
+    warn('FBNS 推送失败：' + error.message);
+  }
+}
+
+/* ------------------------------------------------- ------------- 推送通道 */
 
 /** 服务账号密钥文件路径：配置优先，否则用 tools/agc/private.json。 */
 function resolveServiceAccountFile(agc) {
@@ -1239,11 +1433,14 @@ async function main() {
   let probeResult = null;
   /** 实时通道客户端（null = 没连，靠轮询）。 */
   let realtime = null;
+  /** FBNS 客户端（null = 没启用/没启动）。 */
+  let fbns = null;
 
   const finish = () => {
     if (dirty) saveState(stateFile, state);
     if (reportServer !== null) reportServer.close();
     if (realtime !== null) realtime.close();
+    if (fbns !== null) fbns.close();
     if (!once) releaseLock();
     process.exit(0);
   };
@@ -1312,6 +1509,19 @@ async function main() {
       resolve();
     };
   });
+
+  /*
+   * **FBNS = 主推送路径**：IG 主动把新私信推过来，载荷里就带正文，
+   * 收到即推（实测亚秒级）。轮询保留为兜底（FBNS 断开时无缝接管）。
+   */
+  fbns = startFbns(cfg, (push) => {
+    handleFbnsPush(cfg, state, stateFile, push).catch((error) => {
+      warn('FBNS 推送处理异常：' + error.message);
+    });
+  });
+  if (fbns !== null) {
+    log('FBNS 已启动（收到私信即推，不再依赖轮询间隔）');
+  }
 
   for (;;) {
     /*
@@ -1462,6 +1672,11 @@ async function main() {
         recent.push({ key: key, ts: stamp, text: text });
         const mine = !!(viewerId && item.user_id && String(item.user_id) === viewerId);
         if (mine || firstRound || stamp <= lastTs) continue;
+        // FBNS 已经即时推过这一条了（它的消息 id 与 item_id 同源），别再推
+        if (fbnsPushedIds.has(itemId) || fbnsPushedIds.has(key)) {
+          log('FBNS 已推过 ' + itemId.slice(-8) + '，轮询跳过');
+          continue;
+        }
         // IM 分类的合规红线：消息请求 / 没有历史往来的一律不推。
         const verdict = complianceVerdict(thread);
         if (verdict) {
@@ -1487,6 +1702,8 @@ async function main() {
           key: newest.key,
           id: newest.id,
           ts: newest.ts,
+          // 会话标题：FBNS 推送只带 t_id，不带名字，靠这里缓存
+          title: thread.thread_title || '',
           recent: recent.slice(-8),
           // 已推 id 名单（最近 40 条），落盘后重启也不会重推老消息
           pushed: pushedIds.slice(-40)
@@ -1572,6 +1789,7 @@ async function main() {
       // --once 也连了实时通道（为了让这一轮和常驻行为一致），这里必须关掉，
       // 否则 socket 和定时器会把进程吊住（实测：--once 跑完不退出，卡到超时）。
       if (realtime !== null) realtime.close();
+      if (fbns !== null) fbns.close();
       releaseLock();
       return;
     }
