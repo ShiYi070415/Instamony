@@ -947,9 +947,14 @@ export class DirectMapper {
         ? count > 0
         : (readState === '1' || readState === 'true' || readState === 'unread');
       threads.push(new DirectThread(id, '', title,
-        // 群聊以前这里是空串（于是列表里群组没有头像）。现在：群自定义头像 → 第一个成员头像 → 空
-        isGroup ? (DirectMapper.groupImageOf(th).length > 0
-          ? DirectMapper.groupImageOf(th) : avatar) : avatar, isGroup,
+        /*
+         * 群聊头像：**只用真正的群头像**，拿不到就给空串。
+         *
+         * 不能退回"第一个成员的头像"（上一版这么干过）：列表里于是出现两行一模一样的人
+         * ——群那一行看着就是那个成员（用户反馈"群组头像被占了"）。空串时列表画中性群图标
+         * （见 DirectPage.threadRow）。
+         */
+        isGroup ? DirectMapper.groupImageOf(th) : avatar, isGroup,
         unread, JsonRead.boolOf(th, 'muted'),
         JsonRead.boolOf(th, 'is_pin'), ts, text, kind, username,
         count > 0 ? count : 0));
@@ -1140,10 +1145,8 @@ export class DirectMapper {
      */
     const isGroupThread: boolean = JsonRead.boolOf(thread, 'is_group');
     if (isGroupThread) {
-      const groupPic: string = DirectMapper.groupImageOf(thread);
-      if (groupPic.length > 0) {
-        withAvatar = groupPic;
-      }
+      // 群聊：有群头像就用群头像，没有就**留空**（由界面画中性群图标，别拿成员头像顶替）
+      withAvatar = DirectMapper.groupImageOf(thread);
     }
     return new DirectThreadView(id, title, withUsername, withAvatar, withId, messages,
       JsonRead.boolOf(thread, 'has_older'), JsonRead.strOf(thread, 'oldest_cursor'),

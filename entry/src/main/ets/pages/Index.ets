@@ -11028,7 +11028,11 @@ struct Index {
           subIcon: {
             content: {
               label: 'avatar',
-              icon: this.directThreadVm.avatarNow(),
+              // 群聊没有群图时给中性群图标（别拿某个成员的头像顶替 —— 列表那行踩过这个坑）
+              icon: this.directThreadVm.avatarNow().length > 0
+                ? this.directThreadVm.avatarNow()
+                : (this.directThreadVm.isGroupNow() ? $r('sys.symbol.person_2_fill')
+                  : $r('app.media.startIcon')),
               isEnabled: true,
               type: IconStyleMode.LARGE
             }
