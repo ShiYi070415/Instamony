@@ -509,11 +509,79 @@ async function runCheck(cfg) {
 
 /* ------------------------------------------------------------------ 主流程 */
 
-async function runDaemon(cfg) {
-  const session = loadSession();
+/**
+ * 会话还能不能用：打一发 `accounts/current_user/`。
+ *
+ * 为什么守护进程要问这个：会话文件在手 ≠ 会话还活着（密码改了、别处登出、被风控踢掉都会失效）。
+ * 失效时直接连 FBNS 会一路 400，日志看起来像"推送坏了"，实际只是该重新登录。
+ */
+async function sessionAlive(session, device) {
+  if (session === null || typeof session.cookie !== 'string' || session.cookie.length === 0) {
+    return false;
+  }
+  try {
+    const res = await httpRequest(
+      'https://i.instagram.com/api/v1/accounts/current_user/?edit=true',
+      { method: 'GET', headers: igHeaders(session, device) });
+    return res.status === 200;
+  } catch (error) {
+    warn('会话探活失败（网络？）：' + error.message);
+    return false;
+  }
+}
+
+/** 环境变量里有没有账号密码（有就能在后台自动重登，不用人守）。 */
+function hasEnvCredentials() {
+  return String(process.env.INSTAMONY_IG_USER || '').trim().length > 0
+    && String(process.env.INSTAMONY_IG_PASS || '').length > 0;
+}
+
+/**
+ * **把登录接进 relay 的启动流程**：没有会话、或会话已失效时，就地登录一次。
+ *
+ * 为什么放在这里面：以前要先用 `--caa-login` 登录、再启动守护进程，两条命令；
+ * 用户忘了先登录，守护进程只会报"缺少有效会话"就退出。现在启动时自己判断：
+ *   · 有会话且活着 → 直接开跑（不打扰）；
+ *   · 没有 / 已失效 → 交互登录（或读 `INSTAMONY_IG_USER` / `INSTAMONY_IG_PASS`）；
+ *   · 后台（非 TTY）又没有环境变量 → 给一句明确的命令提示后退出，不卡在无人应答的输入上。
+ */
+async function ensureDaemonSession(argv) {
+  const existing = readJson(SESSION_FILE, null);
   const device = loadDevice();
+  if (existing !== null && typeof existing.cookie === 'string' && existing.cookie.length > 0) {
+    if (await sessionAlive(existing, device)) {
+      log('会话可用（账号 ' + (existing.userId || '?') + '），直接启动');
+      return;
+    }
+    warn('现有会话已失效（accounts/current_user 非 200）→ 需要重新登录');
+  } else {
+    log('还没有会话 → 先登录一次（之后常驻会自动复用）');
+  }
+  if (!hasEnvCredentials() && !process.stdin.isTTY) {
+    die('没有可用会话，且当前不是交互终端，无法提示输入账号密码。\n'
+      + '先跑一次：node instamony.js --caa-login\n'
+      + '或用环境变量（仅自动化场景）：INSTAMONY_IG_USER / INSTAMONY_IG_PASS');
+  }
+  await runCaaLogin(argv);
+  // runCaaLogin 成功时已经把 session.json / settings.caa.json 写好；失败会自己 exit。
+  const refreshed = readJson(SESSION_FILE, null);
+  if (refreshed === null) {
+    die('登录流程结束了但没有会话文件，无法启动');
+  }
+  log('登录完成（账号 ' + (refreshed.userId || '?') + '），继续启动');
+}
+
+async function runDaemon(cfg, argv) {
+  await ensureDaemonSession(argv);
+  let session = loadSession();
+  let device = loadDevice();
   await acquireLock();
   log('启动 FBNS 实时通道（只走推送，不轮询）');
+
+  const reloadSession = () => {
+    session = loadSession();
+    device = loadDevice();
+  };
 
   const client = new FbnsClient({
     stateDir: DIR,
@@ -557,6 +625,31 @@ async function runDaemon(cfg) {
         log('push token 注册成功 —— 之后新私信由 IG 主动推过来');
       } else {
         warn('push token 注册失败（' + res.status + '）：' + res.body.slice(0, 160));
+        /*
+         * **运行中会话失效的自愈**：注册被判失败时先探一次 `current_user`，
+         * 真失效了且环境变量里有账号密码 → 自动重登一次并重连（换会话后 FBNS 凭据也要换，
+         * runCaaLogin 会删掉 fbns-auth.json，所以重连就是重新引导）。
+         * 没有环境变量时只提示，不擅自弹交互输入（后台守护进程里没人应答）。
+         */
+        const alive = await sessionAlive(session, device);
+        if (!alive) {
+          warn('会话已失效（current_user 非 200）');
+          if (hasEnvCredentials()) {
+            log('环境变量里有账号密码 → 自动重新登录');
+            try {
+              await runCaaLogin([]);
+              reloadSession();
+              log('重登完成，重连 FBNS');
+              client.close();
+              connect();
+            } catch (loginError) {
+              warn('自动重登失败：' + loginError.message);
+            }
+          } else {
+            log('提示：设 INSTAMONY_IG_USER / INSTAMONY_IG_PASS 可自动重登；'
+              + '或停掉本进程后重跑（启动时会引导登录）');
+          }
+        }
       }
     } catch (error) {
       warn('push token 注册异常：' + error.message);
@@ -1352,7 +1445,7 @@ async function main() {
     return;
   }
 
-  await runDaemon(cfg);
+  await runDaemon(cfg, argv);
 }
 
 main().catch((error) => {
