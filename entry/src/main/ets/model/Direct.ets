@@ -1145,8 +1145,16 @@ export class DirectMapper {
      */
     const isGroupThread: boolean = JsonRead.boolOf(thread, 'is_group');
     if (isGroupThread) {
-      // 群聊：有群头像就用群头像，没有就**留空**（由界面画中性群图标，别拿成员头像顶替）
-      withAvatar = DirectMapper.groupImageOf(thread);
+      /*
+       * 群聊：**线程自带群头像就用它**，没有则保留"第一个有头像的成员"。
+       *
+       * 会话页这个头像在真机上是**正确**的（用户确认），所以别动这条规则；
+       * 私信列表那边另有取舍（没有群图时画中性群图标，见 workers/InboxParseTask）。
+       */
+      const groupPic: string = DirectMapper.groupImageOf(thread);
+      if (groupPic.length > 0) {
+        withAvatar = groupPic;
+      }
     }
     return new DirectThreadView(id, title, withUsername, withAvatar, withId, messages,
       JsonRead.boolOf(thread, 'has_older'), JsonRead.strOf(thread, 'oldest_cursor'),

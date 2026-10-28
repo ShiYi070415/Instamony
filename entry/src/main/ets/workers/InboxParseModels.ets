@@ -62,6 +62,55 @@ export function inboxPictureOf(user: Record<string, Object>): string {
 }
 
 /**
+ * **群组头像**（`thread_image*`；拿不到给空串）。
+ *
+ * 为什么放在这个文件：收件箱解析跑在 TaskPool 里，`@Concurrent` 只能引用**导入的符号**，
+ * 所以这段必须是可导入的纯函数（主线程那份 `DirectMapper.groupImageOf` 是同一个规则，
+ * 两边各一份 —— 改一处记得改另一处，`test-arkts-parsers` 不覆盖这条）。
+ *
+ * 字段名轮流出现，还可能是字符串或 `{image_versions2:{candidates:[{url}]}}`。
+ */
+export function inboxGroupImageOf(thread: Record<string, Object>): string {
+  const names: Array<string> = ['thread_image_info', 'thread_image', 'group_image',
+    'thread_image_url', 'image_versions2'];
+  for (let index: number = 0; index < names.length; index++) {
+    const value: Object | undefined = thread[names[index]];
+    if (value === undefined || value === null) {
+      continue;
+    }
+    if (typeof value === 'string') {
+      const text: string = `${value}`;
+      if (text.indexOf('http') === 0) {
+        return text;
+      }
+      continue;
+    }
+    const holder: Record<string, Object> | null = JsonRead.asRecord(value);
+    if (holder === null) {
+      continue;
+    }
+    const versions: Record<string, Object> | null = JsonRead.recordOf(holder, 'image_versions2');
+    const source: Record<string, Object> = versions !== null ? versions : holder;
+    const candidates: Array<Object> = JsonRead.arrayOf(source, 'candidates');
+    for (let at: number = 0; at < candidates.length; at++) {
+      const one: Record<string, Object> | null = JsonRead.asRecord(candidates[at]);
+      if (one === null) {
+        continue;
+      }
+      const url: string = JsonRead.strOf(one, 'url');
+      if (url.length > 0) {
+        return url;
+      }
+    }
+    const direct: string = JsonRead.strOf(source, 'url');
+    if (direct.length > 0) {
+      return direct;
+    }
+  }
+  return '';
+}
+
+/**
  * 我还没看的消息有几条（**封顶 4**）。这是**唯一实现**：主线程回退路径
  * (`DirectMapper.unreadCountOf`) 直接调它，保证"走线程池"和"退回主线程"算出同一个数。
  *

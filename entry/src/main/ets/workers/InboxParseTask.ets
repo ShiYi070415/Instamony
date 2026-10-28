@@ -25,6 +25,7 @@ import {
   InboxParseResult,
   InboxRow,
   inboxPictureOf,
+  inboxGroupImageOf,
   inboxUnreadCountOf
 } from './InboxParseModels';
 
@@ -108,7 +109,7 @@ export function parseInboxTask(raw: string): InboxParseResult {
     const row: InboxRow = new InboxRow();
     row.id = id;
     row.title = title;
-    row.avatar = isGroup ? '' : avatar;
+    row.avatar = isGroup ? inboxGroupImageOf(th) : avatar;
     row.username = username;
     row.isGroup = isGroup;
     row.unreadCount = count > 0 ? count : 0;
