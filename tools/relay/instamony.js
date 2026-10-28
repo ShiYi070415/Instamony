@@ -1029,6 +1029,95 @@ async function runCaaPreflight(argv) {
 }
 
 /**
+ * `--caa-replay <file>`：**从一份已保存的响应里重建会话**（不需要再登录一次）。
+ *
+ * 用途：登录过程中解析出错时，响应已经落盘（`.tmp/caa-last-response.json`），修好解析器后
+ * 用这条命令重放即可拿到会话 —— R12 真机就是这么救回来的（2FA 那条链其实已经成功，
+ * 只是解析没命中）。也方便排查"某次响应该产出什么会话"。
+ *
+ * 接受两种输入：
+ *   · relay 落盘的 dump（带 `raw` 字段）；
+ *   · 直接是那一坨响应 JSON。
+ */
+async function runCaaReplay(argv) {
+  const at = argv.indexOf('--caa-replay');
+  const file = at >= 0 ? argv[at + 1] : '';
+  if (!file) {
+    die('用法：node instamony.js --caa-replay <.tmp/caa-last-response.json>');
+  }
+  const dump = readJson(path.resolve(DIR, file), null);
+  if (dump === null) {
+    die('读不到 ' + file);
+  }
+  const raw = dump.raw !== undefined && dump.raw !== null ? dump.raw : dump;
+  const { extractLoginPayloadDeep } = require('./caa-login.js');
+  const parsed = extractLoginPayloadDeep(raw);
+  if (parsed === null) {
+    warn('这份响应里没有登录结果（可能不是成功响应，或解析又漏了）');
+    process.exitCode = 2;
+    return;
+  }
+  const headers = parsed.headers || {};
+  const authorization = String(headers['IG-Set-Authorization']
+    || headers['ig-set-authorization'] || '').replace(/^IG-Set-Authorization:\s*/i, '');
+  const { sessionHeadersOf } = require('./caa-login.js');
+  const sessionHeaders = sessionHeadersOf(headers);
+  const profile = resolveDeviceProfile(argv);
+  const cookie = Object.keys(parsed.cookies || {})
+    .map((name) => `${name}=${parsed.cookies[name]}`).join('; ');
+  const session = {
+    source: 'caa-replay',
+    userId: cookieValueOf(cookie, 'ds_user_id'),
+    cookie,
+    sessionid: cookieValueOf(cookie, 'sessionid'),
+    csrf: cookieValueOf(cookie, 'csrftoken'),
+    authorization,
+    appVersion: profile.appVersion,
+    userAgent: profile.userAgent,
+    mid: sessionHeaders.mid || profile.mid,
+    rur: sessionHeaders.rur || '',
+    claim: sessionHeaders.claim || '',
+    savedAt: Date.now()
+  };
+  const problem = sessionProblemOf(session);
+  if (problem.length > 0) {
+    warn('响应里的会话不完整（' + problem + '）—— **不覆盖现有会话**');
+    process.exitCode = 3;
+    return;
+  }
+  fs.writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2), 'utf8');
+  // settingsShapeOf 要的是 `{cookies, authorization, mid}` 这种"登录结果"形状（不是原始响应），
+  // 传错会让 settings.caa.json 里的 authorization_data 变成空对象（等价性自检才发现）。
+  const shape = settingsShapeOf({
+    cookies: parsed.cookies || {},
+    authorization,
+    mid: session.mid
+  }, {
+    phoneId: profile.phoneId,
+    uuid: profile.uuid,
+    androidId: profile.androidId,
+    mid: session.mid,
+    appVersion: profile.appVersion,
+    versionCode: profile.versionCode,
+    userAgent: profile.userAgent
+  });
+  const settingsFile = path.join(DIR, 'settings.caa.json');
+  fs.writeFileSync(settingsFile, JSON.stringify(shape, null, 2), 'utf8');
+  try {
+    fs.unlinkSync(path.join(DIR, 'fbns-auth.json'));
+  } catch (error) {
+    // 没有就算了
+  }
+  log('已从响应重建会话：账号 ' + session.userId + '，sessionid '
+    + session.sessionid.length + ' 字符，authorization ' + session.authorization.length + ' 字符');
+  log('会话写入 ' + SESSION_FILE + '，instagrapi 形状写入 ' + settingsFile);
+  const reread = importSession(settingsFile, { dryRun: true });
+  log('等价性自检：sessionid ' + (reread.sessionid === session.sessionid ? '一致' : '**不一致**')
+    + '，authorization ' + (reread.authorization === session.authorization ? '一致' : '**不一致**'));
+  log('下一步：node instamony.js --verify-session');
+}
+
+/**
  * `--caa-login`：用**账号密码**登录（CAA/Bloks 流程，Node 版，不需要 Python）。
  */
 async function runCaaLogin(argv) {
@@ -1206,6 +1295,11 @@ async function main() {
 
   if (argv.indexOf('--caa-preflight') >= 0) {
     await runCaaPreflight(argv);
+    return;
+  }
+
+  if (argv.indexOf('--caa-replay') >= 0) {
+    await runCaaReplay(argv);
     return;
   }
 

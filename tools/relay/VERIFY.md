@@ -1,11 +1,36 @@
-# CAA 登录移植：验收清单（截至 R12）
+# CAA 登录移植：验收清单（更新于 R12 真机验证后）
 
 目标：把 IG 的 CAA（Bloks）密码登录移植成 JS（替代 `login_ig.py` 的 Python 依赖），
 产出与 instagrapi `settings.json` 等价的会话；再移植进 App，使 App 内可直接密码登录（含 2FA）
 拿到设备级会话，从而启用实时私信与本地通知。
 
-**当前状态：代码全部就绪并逐项验过；缺最后一步——用真实账号跑一次登录（密码只在用户手上，
-且失败登录本身是风控信号，不能让 AI 代试）。**
+**状态：JS 侧已在真实账号上跑通（含 TOTP 两步验证），拿到设备级会话；
+App 侧同一套逻辑已移植并编译通过，待真机确认。**
+
+---
+
+## 〇、真实账号验证结果（R12，决定性证据）
+
+真机第四次运行（账号 `_yijin.__`，TOTP）：
+`attestation/aac/oauth/send_login_request` 全 200 →
+`2sv_entrypoint / 2sv_method_picker / 2sv_select_method / 2sv_verify_code` **全 200 且有载荷**，
+验证码被接受。随后用那份响应 `--caa-replay` 重建会话并 `--verify-session`：
+
+```
+② HTTP 200 —— 会话有效（@_yijin.__）
+③ sessionid 一致，authorization 一致，账号 一致
+④ push/register/ HTTP 200 {"status":"ok"} —— 设备信任通过
+结论：会话是设备级的
+```
+
+即：**CAA 密码登录 + TOTP 2FA → 设备级会话**这条链路已被真实账号验证。
+
+途中修掉的四个真 bug（都由真机数据发现，均已加回归测试）：
+1. 2FA entrypoint 的 app id 少 `_async`；
+2. 2FA 票据抓错（13 字符 vs 真实 2234 字符）——改为**照布局里给的调用规范**；
+3. Cookie 串按 `\r\n` 分行（旧实现把 `Secure\r\nSet-Cookie: ds_user_id` 当 Cookie 名）；
+4. 载荷被日志文本 `[trait:called_handle_login_response]` 挡住（旧实现从第一个
+   `login_response` 往回扫，永远扫不到后面的真载荷）。
 
 ---
 
@@ -27,14 +52,14 @@
 
 | 项目 | 怎么做 | 预期 |
 | --- | --- | --- |
-| **真实账号登录（JS）** | `node instamony.js --caa-login`（2FA 会当场提示） → `node instamony.js --verify-session` | 输出 `usdid/attestation/aac/oauth/send_login_request` 均 200，且 `--verify-session` 四步全绿 |
-| **真机登录（App）** | 登录页 →「App 协议登录（实验）」→ 先「解析自检」(`4/4`) → 再「设备/网络前检」 → 填账号密码 | 状态行走到 `send_login_request 200`，壳切进主界面 |
-| **真机实时** | 「用已有会话导入」粘 `settings.caa.json`（或先完成上一步） | 私信页实时刷新；来消息弹出本地通知（标题=用户名、正文=内容） |
+| **真机登录（App）** | 登录页 →「App 协议登录（实验）」→ 先「解析自检」(应 `6/6`) → 再「设备/网络前检」 → 填账号密码 → 输验证码 | 状态行走到 `2sv_verify_code 200`，壳切进主界面 |
+| **真机实时** | 面板「用已有会话导入」粘 `settings.caa.json`（或先完成上一步） | 私信页实时刷新；来消息弹出本地通知（标题=用户名、正文=内容） |
 
-失败时请点 App 里的「**复制登录诊断**」——里面只有结论、步骤和各字段的**名字**，不含任何会话值。
+> 命令行那份已经验证过了；App 侧是**同一套逻辑的移植**（含 2FA 两条链、spec 解析、
+> Cookie 与载荷解析修复），但只有真机才能确认 ArkUI/网络栈层面没问题。
 
-`LOGIN.md` 有「状态行 → 含义 → 下一步」自诊表；错误文案是 IG 原话（例如 `Can't find account`、
-`The password you entered isn't correct`、`Please wait a few minutes`）。
+失败时请点 App 里的「**复制登录诊断**」——里面只有结论、步骤和字段的**名字**，不含会话值。
+`LOGIN.md` 有「状态行 → 含义 → 下一步」自诊表。
 
 ## 三、设计上刻意做的几个决定（避免以后重复踩）
 

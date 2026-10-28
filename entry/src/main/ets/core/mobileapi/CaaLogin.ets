@@ -123,12 +123,20 @@ class CaaPending {
   readonly extra: Record<string, string>;
   readonly payload: ESObject;
   readonly aac: string;
+  /**
+   * 新版 2FA 的票据（`two_step_verification_context`）；非空表示等验证码后要走
+   * **context 链**，空则走老的 `ap.*` 链。**必须存**：不存的话 UI 交码时无从判断该走哪条
+   * （真机实测：存在这里之前，手机上输完码会报"没有待提交的验证码"）。
+   */
+  readonly context: string;
 
-  constructor(identity: MobileIdentity, extra: Record<string, string>, payload: ESObject, aac: string) {
+  constructor(identity: MobileIdentity, extra: Record<string, string>, payload: ESObject,
+              aac: string, context: string = '') {
     this.identity = identity;
     this.extra = extra;
     this.payload = payload;
     this.aac = aac;
+    this.context = context;
   }
 }
 
@@ -549,7 +557,71 @@ export class CaaLogin {
       'com.bloks.www.ap.two_step_verification.entrypoint_async', 'context_data') !== 'CTX-TEST') {
       failures.push('two-step-context');
     }
-    return failures.length === 0 ? '解析自检 4/4 通过'
+
+    /*
+     * ⑤ **真机格式的两条**（R12 实测踩过的坑，必须能自检）：
+     *   · Cookie 串是按 `\r\n` 分行、每颗后面跟属性的；
+     *   · 载荷前面可能有一句日志文本（`called_handle_login_response`），
+     *     旧实现"从第一个 login_response 往回扫"会永远扫不到真正的载荷。
+     */
+    const realCookie: string = 'Set-Cookie: csrftoken=CSRF; Domain=.instagram.com; '
+      + 'expires=02-Dec-2027 13:57:44 GMT; Max-Age=31536000; Path=/; Secure\r\n'
+      + 'Set-Cookie: ds_user_id=777; Domain=.instagram.com; Path=/; Secure\r\n'
+      + 'Set-Cookie: sessionid=777%3Areal; Domain=.instagram.com; HttpOnly; Path=/; Secure';
+    const parsedCookie: string = CaaLogin.parseCookieHeader(realCookie);
+    if (parsedCookie.indexOf('sessionid=777%3Areal') < 0
+      || parsedCookie.indexOf('ds_user_id=777') < 0) {
+      failures.push('cookie-crlf');
+    }
+    if (parsedCookie.indexOf('Secure') >= 0 || parsedCookie.indexOf('Domain') >= 0) {
+      failures.push('cookie-attributes');
+    }
+    const innerFields2: Record<string, string> = {};
+    innerFields2['login_response'] = JSON.stringify({ 'logged_in_user': { 'pk': 777 } } as Record<string, ESObject>);
+    const innerHeaders2: Record<string, string> = { 'IG-Set-Authorization': 'Bearer IGT:2:REAL' };
+    innerFields2['headers'] = JSON.stringify(innerHeaders2);
+    innerFields2['cookies'] = 'Set-Cookie: sessionid=777%3Areal; Path=/; Secure';
+    const trapText: string = '(dey "MAA_LOGIN_FLOW" '
+      + '"[trait:called_handle_login_response] Calling HandleLoginResponse") '
+      + '(dsg (fom 15942 35 ' + JSON.stringify(JSON.stringify(innerFields2)) + '))';
+    const trapInner: Record<string, ESObject> = {};
+    trapInner['a'] = trapText;
+    const trapPayload0: Record<string, ESObject> = {};
+    trapPayload0['ft'] = trapInner;
+    const trapBloks: Record<string, ESObject> = {};
+    trapBloks['bloks_payload'] = trapPayload0;
+    const trapLayout: Record<string, ESObject> = {};
+    trapLayout['layout'] = trapBloks;
+    const trapPayload: ESObject = CaaLogin.parse(JSON.stringify(trapLayout));
+    if (CaaLogin.extractLoginPayload(trapPayload) === null) {
+      failures.push('login-response-trap');
+    }
+    // ⑥ 新版 2FA：从布局里读出"调哪个 app、带什么参数"（含长票据）
+    const longToken: string = 'A'.repeat(300);
+    const serverExpr: string = '(f4i (dkc "two_step_verification_context" "flow_source") '
+      + `(dkc "${longToken}" "two_factor_login"))`;
+    const clientExpr: string = '(f4i (dkc "machine_id") (dkc "MID-1"))';
+    const specText: string = '(dzw (fom 1 2) 35 "com.bloks.www.two_step_verification.entrypoint" '
+      + `49 7 (f6m 6 "params" (fma (f4i (dkc "server_params" "client_input_params") `
+      + `(dkc ${serverExpr} ${clientExpr})))))`;
+    const specInner: Record<string, ESObject> = {};
+    specInner['a'] = specText;
+    const specPayload0: Record<string, ESObject> = {};
+    specPayload0['ft'] = specInner;
+    const specBloks: Record<string, ESObject> = {};
+    specBloks['bloks_payload'] = specPayload0;
+    const specLayout: Record<string, ESObject> = {};
+    specLayout['layout'] = specBloks;
+    const specPayload: ESObject = CaaLogin.parse(JSON.stringify(specLayout));
+    if (CaaLogin.twoStepContextOf(specPayload).length < 100) {
+      failures.push('2sv-spec-context');
+    }
+    const spec: CaaCallSpec | null = CaaLogin.pickCallSpec(
+      CaaLogin.nextCallSpecs(specPayload), ['two_step']);
+    if (spec === null || spec.clientParams['machine_id'] !== 'MID-1') {
+      failures.push('2sv-spec-params');
+    }
+    return failures.length === 0 ? '解析自检 6/6 通过'
       : `解析自检未通过：${failures.join('、')}`;
   }
 
@@ -567,6 +639,11 @@ export class CaaLogin {
     const trimmed: string = code.trim();
     if (trimmed.length === 0) {
       return new CaaResult(false, '验证码是空的');
+    }
+    // 票据非空 ⇒ 走新版 context 链；否则走老的 ap.* 链。
+    if (pending.context.length > 0) {
+      return await CaaLogin.resolveTwoStepContext(pending.identity, pending.extra,
+        pending.payload, pending.context, trimmed);
     }
     return await CaaLogin.resolveTwoStep(pending.identity, pending.extra, pending.payload,
       pending.aac, trimmed);
@@ -900,6 +977,8 @@ export class CaaLogin {
         const pending: CaaResult = new CaaResult(false, '需要两步验证（验证器/短信）');
         pending.aac = aac;
         pending.needsCode = true;
+        // 必须留住现场（含票据）：UI 交码时据此走 context 链。
+        CaaLogin.pending = new CaaPending(identity, extra, payload, aac, context);
         return pending;
       }
       const code: string = await codeProvider();
