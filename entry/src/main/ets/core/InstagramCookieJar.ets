@@ -289,6 +289,50 @@ export class InstagramCookieJar {
     return true;
   }
 
+  /**
+   * **把一整串 Cookie 原样种进罐**（见 core/mobileapi/CaaSession）。
+   *
+   * 和 `adoptSession` 的分工：那个只种三颗会话 Cookie（网页登录 / 切换账号够用）；
+   * CAA 登录的响应里还带 `mid` / `rur` / `ig_did` / `datr` 这类**设备与会话材料**，
+   * 移动 API 与推送达标都要看它们，所以这里把服务端给的每一颗都种进去。
+   *
+   * @param cookieText `name=value; name=value`（不含 `Set-Cookie:` 前缀与属性段）
+   * @returns 成功写进去的颗数（0 = 没写成，调用方别当成功）
+   */
+  static async adoptCookieText(cookieText: string): Promise<number> {
+    const attrs: string = 'Path=/; Domain=.instagram.com; Secure';
+    // 这几颗在真实浏览器里是 HttpOnly：种进罐时也标上，免得网页脚本把它们读走。
+    const HTTP_ONLY: Array<string> = ['sessionid', 'rur', 'mid', 'shbid', 'shbts'];
+    let written: number = 0;
+    const parts: Array<string> = cookieText.split(';');
+    for (let index: number = 0; index < parts.length; index++) {
+      const one: string = parts[index].trim();
+      const cut: number = one.indexOf('=');
+      if (cut <= 0) {
+        continue;
+      }
+      const name: string = one.substring(0, cut).trim();
+      const value: string = one.substring(cut + 1).trim();
+      if (name.length === 0 || value.length === 0) {
+        continue;
+      }
+      try {
+        webview.WebCookieManager.configCookieSync(INSTAGRAM_URL,
+          `${name}=${value}; ${attrs}${HTTP_ONLY.indexOf(name) >= 0 ? '; HttpOnly' : ''}`);
+        written++;
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'adopt cookie %{public}s failed: %{public}s',
+          name, (error as Error).message);
+      }
+    }
+    if (written > 0) {
+      await InstagramCookieJar.save();
+      InstagramCookieJar.invalidate();
+      hilog.info(DOMAIN, TAG, 'adopted %{public}d cookie(s) from a native login', written);
+    }
+    return written;
+  }
+
   private static async read(): Promise<Array<CookieEntry>> {
     // **API < 23 没有 `fetchAllCookies` / `WebHttpCookie`**（它们和 name/value/isHttpOnly
     // 都是 6.1.0(23) 起）：低版本设备上退回老接口 `fetchCookie(url)` —— 它返回的是

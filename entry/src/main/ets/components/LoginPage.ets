@@ -24,6 +24,7 @@
  */
 
 import { FALLBACK_BLUR, FALLBACK_SURFACE, MaterialLabelButton, SurfaceModifier } from './MaterialSurface';
+import { CaaLoginCard } from './CaaLoginCard';
 import {
   MATERIAL_THICKNESS_ULTRA_THIN,
   SETTING_MATERIAL_THICKNESS
@@ -104,6 +105,14 @@ export struct LoginPage {
   @State private verifyBusy: boolean = false;
   /** 面板处于"只能去网页验"那一档（见 onWebVerify / WEB_LOGIN_NEEDS_WEB）。 */
   @State private verifyWeb: boolean = false;
+  /**
+   * **App 协议登录（CAA）面板**开没开（内容见 components/CaaLoginCard）。
+   *
+   * 为什么是一个面板而不是又一套输入框：这页的表单是"交给隐藏网页去登录"那条路，
+   * 实验的 CAA 路要自己维护状态（含两步验证码），塞进同一页会互相打架。
+   * 面板里的组件和设置页用的是**同一个** CaaLoginCard，流程只此一份。
+   */
+  @State private caaOpen: boolean = false;
 
   /*
    * 诊断（临时）：登录页这一整个 struct 会不会被销毁重建。
@@ -304,6 +313,37 @@ export struct LoginPage {
         onTap: (): void => {
           this.verifyOpen = false;
           this.verifyError = '';
+        }
+      })
+    }
+    .width('100%')
+    .padding({ left: SIDE_VP, right: SIDE_VP, top: 10, bottom: 24 })
+    .backgroundColor(FALLBACK_SURFACE)
+    .backgroundBlurStyle(FALLBACK_BLUR)
+  }
+
+  /**
+   * **App 协议登录（CAA）面板**：内容就是把 components/CaaLoginCard 放进玻璃底里。
+   *
+   * 为什么不在这页再写一套输入框：CAA 路要自己维护"密码 → 验证码"两段状态，
+   * 和这页表单（交给隐藏网页登录）混在一起会互相清空。组件复用保证设置页与登录页
+   * 走的是同一条流程、同一份错误文案。
+   */
+  @Builder
+  caaSheet() {
+    Column({ space: 10 }) {
+      CaaLoginCard({
+        onSignedIn: (): void => {
+          this.caaOpen = false;
+          this.onSignedIn();
+        }
+      })
+      MaterialLabelButton({
+        labelText: '取消',
+        fullWidth: true,
+        fontSize: 15,
+        onTap: (): void => {
+          this.caaOpen = false;
         }
       })
     }
@@ -514,6 +554,21 @@ export struct LoginPage {
               this.onWebVerify();
             }
           })
+          /*
+           * **App 协议登录（实验）**：走 IG 自己的登录协议（CAA），拿到的是**设备级会话**
+           * （见 core/mobileapi/CaaSession）。和上面那颗「网页登录」互补：
+           *   · 网页登录：会话来自浏览器 Cookie，IG 视作网页客户端；
+           *   · 这里：USDID 设备签名 + attestation，和真机 App 同一条路。
+           * 放在半模态面板里，成不成都不影响这页原有的登录表单。
+           */
+          MaterialLabelButton({
+            labelText: 'App 协议登录（实验）',
+            fullWidth: true,
+            fontSize: 15,
+            onTap: (): void => {
+              this.caaOpen = true;
+            }
+          })
         }
         .width('100%')
         .margin({ top: 22 })
@@ -541,6 +596,14 @@ export struct LoginPage {
       onDisappear: (): void => {
         this.verifyError = '';
       }
+    })
+    // CAA 面板（实验路，同上那套半模态外观）。
+    .bindSheet(this.caaOpen, this.caaSheet(), {
+      height: SheetSize.FIT_CONTENT,
+      dragBar: false,
+      showClose: false,
+      preferType: SheetType.BOTTOM,
+      backgroundColor: Color.Transparent
     })
   }
 

@@ -10545,6 +10545,16 @@ struct Index {
             this.signOut();
           },
           /*
+           * **App 内密码登录成功**（设置页的实验入口，见 core/mobileapi/CaaSession）：
+           * 会话已经被种进 Cookie 罐，这里重读一次罐让壳从登录页切成已登录。
+           * 收尾走的就是网页登录成功那条路（`refreshSessionFromJar → applySession`），
+           * 不另开一套"会话生效"逻辑。
+           */
+          onSignedIn: (): void => {
+            this.refreshSessionFromJar().catch((): void => {
+            });
+          },
+          /*
            * 清晰度改完：**顺手把首屏那几段重新取一遍**（展示档的地址是解析那一刻定死的，
            * 见 core/MediaQuality）。这里只刷首屏与探索流，不动其它页签的缓存。
            */

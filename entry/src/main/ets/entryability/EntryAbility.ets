@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright (c) 2026 Huawei Device Co., Ltd.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,6 +39,7 @@ import { RepostState } from '../core/RepostState';
 import { NetworkState } from '../core/NetworkState';
 import { PlatformCap } from '../core/PlatformCap';
 import { MobileSession } from '../core/mobileapi/MobileSession';
+import { CaaSession } from '../core/mobileapi/CaaSession';
 import { MobileProbe } from '../core/mobileapi/MobileProbe';
 import { AccountScope } from '../core/AccountScope';
 import { AccountBook } from '../core/AccountBook';
@@ -198,6 +199,11 @@ export default class EntryAbility extends UIAbility {
       // 移动 API 的设备身份（见 core/mobileapi/MobileSession）：**只开落盘文件**，
       // 不读 Cookie 罐、不发请求。身份必须跨重启稳定，所以这里同步把上次那份读回内存。
       MobileSession.init(this.context);
+      /*
+       * **App 内密码登录的设备身份**（见 core/mobileapi/CaaSession）：只开落盘文件，
+       * 不生成密钥也不发请求 —— 第一次真正登录时才造 USDID（生成密钥要动 crypto，别拖慢冷启动）。
+       */
+      CaaSession.init(this.context);
       /*
        * **首屏是探索流时，启动不要先用"关注流预热"占住节流闸**。
        *

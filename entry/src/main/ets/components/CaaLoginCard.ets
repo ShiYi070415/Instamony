@@ -1,0 +1,225 @@
+/*
+ * **App 内密码登录卡片**（CAA 路，见 core/mobileapi/CaaSession）。
+ *
+ * 为什么单独一个组件：它要出现在**两处** —— 未登录时的整页登录页（LoginPage 的底栏入口，
+ * 走半模态面板）和已登录后的设置页。两处共用同一份输入框、同一条流程、同一串步骤显示，
+ * 否则"实验登录在登录页能用、在设置页又坏了"这种不一致几乎必然发生。
+ *
+ * 交互要点：
+ *   · 服务端要求两步验证时，**同一个组件里**多出「验证码」一行（`needsCode`），
+ *     不需要跳到别的地方 —— 现场（context_data）由 `CaaLogin` 留在内存里；
+ *   · 每一步的 HTTP 状态都显示出来（`usdid 200 → attestation 200 → …`）：
+ *     真机上 hilog 常被冲掉、测试者也没有 hdc，界面是唯一的诊断通道；
+ *   · 成功后**清空密码与验证码**，只通过 `onSignedIn` 通知宿主。
+ */
+
+import { CaaOutcome, CaaSession } from '../core/mobileapi/CaaSession';
+
+/** 输入框高度（跟着登录页的 42 走，两处观感一致）。 */
+const FIELD_HEIGHT: number = 42;
+const FIELD_RADIUS: number = 14;
+
+@Component
+export struct CaaLoginCard {
+  /** 登录成功（会话已经在 Cookie 罐里）。宿主用它重读登录态 / 关掉面板。 */
+  onSignedIn: () => void = (): void => {
+  };
+
+  @State private user: string = '';
+  @State private pass: string = '';
+  @State private code: string = '';
+  @State private busy: boolean = false;
+  @State private status: string = '';
+  @State private steps: string = '';
+  /** 服务端要求两步验证：验证码输入框与按钮文案随之变化。 */
+  @State private needsCode: boolean = false;
+
+  build() {
+    Column({ space: 10 }) {
+      Text('用账号密码直接登录（实验）')
+        .fontSize(15)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.primary_text'))
+        .width('100%')
+      Text('走 IG 自己的 App 登录协议，成功后直接进已登录状态。密码只在本机内存里加密后才出网，'
+        + '不会被保存。要验证码时会多出「验证码」一行。')
+        .fontSize(11)
+        .lineHeight(16)
+        .fontColor($r('app.color.secondary_text'))
+        .width('100%')
+
+      this.userField()
+      this.passField()
+      if (this.needsCode) {
+        this.codeField()
+      }
+
+      Button(this.needsCode ? '提交验证码' : '登录')
+        .width('100%')
+        .height(FIELD_HEIGHT)
+        .fontSize(15)
+        .enabled(!this.busy)
+        .backgroundColor($r('app.color.accent'))
+        .fontColor(Color.White)
+        .borderRadius(FIELD_HEIGHT / 2)
+        .onClick((): void => {
+          if (this.needsCode) {
+            this.verify();
+          } else {
+            this.submit();
+          }
+        })
+
+      if (this.status.length > 0) {
+        Text(this.status)
+          .fontSize(12)
+          .fontColor(this.needsCode ? $r('app.color.accent') : $r('app.color.secondary_text'))
+          .width('100%')
+      }
+      if (this.steps.length > 0) {
+        Text(this.steps)
+          .fontSize(11)
+          .fontColor($r('app.color.secondary_text'))
+          .width('100%')
+      }
+    }
+    .width('100%')
+    .padding(16)
+    .alignItems(HorizontalAlign.Start)
+    .borderRadius(18)
+    .backgroundColor($r('app.color.page_background'))
+  }
+
+  @Builder
+  userField() {
+    Column({ space: 4 }) {
+      Text('Instagram 用户名')
+        .fontSize(11)
+        .fontColor($r('app.color.secondary_text'))
+      TextInput({ text: this.user, placeholder: '用户名（不带 @）' })
+        .type(InputType.Normal)
+        .height(FIELD_HEIGHT)
+        .width('100%')
+        .fontSize(15)
+        .padding({ left: 14, right: 14 })
+        .borderRadius(FIELD_RADIUS)
+        .backgroundColor($r('sys.color.comp_background_secondary'))
+        .fontColor($r('app.color.primary_text'))
+        .placeholderColor($r('app.color.secondary_text'))
+        .caretColor($r('app.color.accent'))
+        .enabled(!this.busy)
+        .onChange((text: string): void => {
+          this.user = text;
+        })
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  passField() {
+    Column({ space: 4 }) {
+      Text('密码')
+        .fontSize(11)
+        .fontColor($r('app.color.secondary_text'))
+      TextInput({ text: this.pass, placeholder: '账号密码' })
+        .type(InputType.Password)
+        .height(FIELD_HEIGHT)
+        .width('100%')
+        .fontSize(15)
+        .padding({ left: 14, right: 14 })
+        .borderRadius(FIELD_RADIUS)
+        .backgroundColor($r('sys.color.comp_background_secondary'))
+        .fontColor($r('app.color.primary_text'))
+        .placeholderColor($r('app.color.secondary_text'))
+        .caretColor($r('app.color.accent'))
+        .enabled(!this.busy)
+        .onChange((text: string): void => {
+          this.pass = text;
+        })
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  codeField() {
+    Column({ space: 4 }) {
+      Text('两步验证码')
+        .fontSize(11)
+        .fontColor($r('app.color.secondary_text'))
+      TextInput({ text: this.code, placeholder: '短信 / 验证器 App 里的验证码' })
+        .type(InputType.Number)
+        .height(FIELD_HEIGHT)
+        .width('100%')
+        .fontSize(15)
+        .padding({ left: 14, right: 14 })
+        .borderRadius(FIELD_RADIUS)
+        .backgroundColor($r('sys.color.comp_background_secondary'))
+        .fontColor($r('app.color.primary_text'))
+        .placeholderColor($r('app.color.secondary_text'))
+        .caretColor($r('app.color.accent'))
+        .enabled(!this.busy)
+        .onChange((text: string): void => {
+          this.code = text;
+        })
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  /** 点「登录」：用户名密码 → CAA 登录（成功即把会话种进 Cookie 罐）。 */
+  private submit(): void {
+    if (this.busy) {
+      return;
+    }
+    const user: string = this.user.trim();
+    if (user.length === 0 || this.pass.length === 0) {
+      this.status = '用户名和密码都要填';
+      return;
+    }
+    this.busy = true;
+    this.status = '正在登录…（一般 5~15 秒）';
+    this.steps = '';
+    CaaSession.login(user, this.pass).then((outcome: CaaOutcome): void => {
+      this.busy = false;
+      this.applyOutcome(outcome);
+    }).catch((error: Error): void => {
+      this.busy = false;
+      this.status = `登录失败：${error.message}`;
+    });
+  }
+
+  /** 点「提交验证码」：把两步验证那条链走完。 */
+  private verify(): void {
+    if (this.busy) {
+      return;
+    }
+    const code: string = this.code.trim();
+    if (code.length === 0) {
+      this.status = '先填验证码';
+      return;
+    }
+    this.busy = true;
+    this.status = '正在提交验证码…';
+    CaaSession.submitCode(code).then((outcome: CaaOutcome): void => {
+      this.busy = false;
+      this.applyOutcome(outcome);
+    }).catch((error: Error): void => {
+      this.busy = false;
+      this.status = `提交验证码失败：${error.message}`;
+    });
+  }
+
+  private applyOutcome(outcome: CaaOutcome): void {
+    this.status = outcome.reason;
+    this.steps = outcome.steps;
+    this.needsCode = outcome.needsCode;
+    if (outcome.ok) {
+      // 成功后不再留密码/验证码（内存里也不留）。
+      this.pass = '';
+      this.code = '';
+      this.onSignedIn();
+    }
+  }
+}

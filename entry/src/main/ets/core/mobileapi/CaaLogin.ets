@@ -31,7 +31,9 @@ import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { util } from '@kit.ArkTS';
 import { http } from '@kit.NetworkKit';
 import { MobileCrypto, PasswordKeys } from './MobileCrypto';
-import { MobileIdentity, MobileRequest } from './MobileRequest';
+// `MobileIdentity` 定义在 MobileSession（MobileRequest 只是转 import，并不导出）。
+import { MobileIdentity } from './MobileSession';
+import { MobileRequest } from './MobileRequest';
 import { base64, base64UrlNoPad, textOf, utf8 } from './MobileSign';
 
 const DOMAIN: number = 0xFF00;
@@ -82,6 +84,27 @@ export class CaaStep {
     this.name = name;
     this.status = status;
     this.note = note;
+  }
+}
+
+/**
+ * 等用户输验证码时**留住的现场**（见 `CaaLogin.login` 与 `submitCode`）。
+ *
+ * 为什么非要留住：两步验证是"提交密码 → 服务端要求验证码 → 再提交验证码"的**两段**对话，
+ * 第二段要复用第一段拿到的 `context_data`（藏在 send_login_request 的布局里）与同一份请求头。
+ * 不留现场就得把账号密码从 UI 再传回来、把整条链重跑一遍 —— 又慢，又等于多登一次。
+ */
+class CaaPending {
+  readonly identity: MobileIdentity;
+  readonly extra: Record<string, string>;
+  readonly payload: ESObject;
+  readonly aac: string;
+
+  constructor(identity: MobileIdentity, extra: Record<string, string>, payload: ESObject, aac: string) {
+    this.identity = identity;
+    this.extra = extra;
+    this.payload = payload;
+    this.aac = aac;
   }
 }
 
@@ -187,8 +210,10 @@ export function collectStrings(value: ESObject, output: Array<string>): void {
     return;
   }
   if (Array.isArray(value)) {
-    for (const item of value as Array<ESObject>) {
-      collectStrings(item, output);
+    // 显式标注：`Array.isArray` 之后 ArkTS 把 value 当 any[]，`for…of` 的元素就会退化成 any。
+    const items: Array<ESObject> = value as Array<ESObject>;
+    for (let index: number = 0; index < items.length; index++) {
+      collectStrings(items[index], output);
     }
     return;
   }
@@ -333,8 +358,10 @@ export class CaaUsdid {
     try {
       const generator: cryptoFramework.AsyKeyGenerator =
         cryptoFramework.createAsyKeyGenerator('ECC256');
-      const pair: cryptoFramework.KeyPair = await generator.convertKey(null,
-        CaaLogin.pemToDer(privateKeyText));
+      // 显式给 null 一个可空类型：直接写字面量 `null` 时重载解析会落到只收 `DataBlob` 的那两个上。
+      const noPublicKey: cryptoFramework.DataBlob | null = null;
+      const pair: cryptoFramework.KeyPair = await generator.convertKey(noPublicKey,
+        { data: CaaLogin.pemToDer(privateKeyText) } as cryptoFramework.DataBlob);
       return new CaaUsdid(usdid, kid, pair.priKey, publicKeyDerBase64);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'usdid restore failed: %{public}s', (error as Error).message);
@@ -342,12 +369,32 @@ export class CaaUsdid {
     }
   }
 
+  /**
+   * 公开密钥（DER 的 base64）。JWT 的 `pub` 字段就放它，落盘时也一起存 ——
+   * `restore` 不重新算公钥，所以存一份最省事。
+   */
+  publicKeyBase64(): string {
+    return this.publicKeyDerBase64;
+  }
+
+  /**
+   * 导出私钥（PKCS#8 DER 的 base64），供落盘后 `restore` 复原。
+   *
+   * 为什么要落盘：USDID 是**设备侧身份**。每次登录都换一对新密钥，在 IG 眼里就是
+   * "一台从没见过的设备"，风控更严（可能多要一次验证码/恢复确认）。存下来之后
+   * 同一台设备反复登录用的是同一个 usdid，和真实 App 一致。
+   */
+  exportPrivateKey(): string {
+    return base64(this.privateKey.getEncoded().data, false);
+  }
+
   /** DER 形式的 ECDSA 签名。 */
   async sign(message: string): Promise<Uint8Array> {
-    const signer: cryptoFramework.Signer = cryptoFramework.createSign('ECC256|SHA256');
+    // 类型名是 `cryptoFramework.Sign`（SDK 里没有 `Signer` 这个名字）。
+    const signer: cryptoFramework.Sign = cryptoFramework.createSign('ECC256|SHA256');
     await signer.init(this.privateKey);
-    const blob: cryptoFramework.DataBlob = await signer.sign(
-      { data: utf8(message) });
+    const input: cryptoFramework.DataBlob = { data: utf8(message) };
+    const blob: cryptoFramework.DataBlob = await signer.sign(input);
     return blob.data;
   }
 
@@ -393,8 +440,35 @@ export class CaaLogin {
   /** 诊断用：每一步的现场（设置页可以把它显示出来）。 */
   private static steps: Array<CaaStep> = [];
 
+  /** 等验证码时留住的现场（见 `CaaPending`）。 */
+  private static pending: CaaPending | null = null;
+
   static lastSteps(): Array<CaaStep> {
     return CaaLogin.steps;
+  }
+
+  /** 现在是不是"等着用户交验证码"（UI 据此决定要不要显示输入框）。 */
+  static waitingCode(): boolean {
+    return CaaLogin.pending !== null;
+  }
+
+  /**
+   * 交验证码，把两步验证这条链走完。
+   *
+   * 必须在 `login(..., null)` 返回 `needsCode` 之后调（现场在那一刻存下）。
+   */
+  static async submitCode(code: string): Promise<CaaResult> {
+    const pending: CaaPending | null = CaaLogin.pending;
+    if (pending === null) {
+      return new CaaResult(false, '没有待提交的验证码：请重新点一次登录');
+    }
+    CaaLogin.pending = null;
+    const trimmed: string = code.trim();
+    if (trimmed.length === 0) {
+      return new CaaResult(false, '验证码是空的');
+    }
+    return await CaaLogin.resolveTwoStep(pending.identity, pending.extra, pending.payload,
+      pending.aac, trimmed);
   }
 
   /* -------------------------------------------------- 小工具（随机 / 编码） */
@@ -512,6 +586,8 @@ export class CaaLogin {
                      usdid: CaaUsdid,
                      codeProvider: (() => Promise<string>) | null): Promise<CaaResult> {
     CaaLogin.steps = [];
+    // 新的一次登录：上一次没交的验证码现场作废（免得数字串到别的账号上）。
+    CaaLogin.pending = null;
     const usdidHeader: string = await usdid.header();
     const extra: Record<string, string> = {};
     extra['X-Meta-Usdid'] = usdidHeader;
@@ -522,13 +598,15 @@ export class CaaLogin {
     extra['X-Bloks-Version-Id'] = identity.app.bloksVersioningId;
 
     // 1. USDID 注册（失败不致命，多数情况 IG 侧已登记）
+    // 注意：**嵌套的对象字面量必须一行一行搭**（ArkTS 不允许"没有声明类型的裸字面量"）。
     const token: string = await usdid.registrationToken();
-    const regVariables: Record<string, ESObject> = {
-      'input': {
-        'usdid_token': { 'sensitive_string_value': token },
-        'fdid': { 'sensitive_string_value': identity.phoneId }
-      }
-    };
+    const sensitiveToken: Record<string, string> = { 'sensitive_string_value': token };
+    const sensitiveFdid: Record<string, string> = { 'sensitive_string_value': identity.phoneId };
+    const regInput: Record<string, ESObject> = {};
+    regInput['usdid_token'] = sensitiveToken;
+    regInput['fdid'] = sensitiveFdid;
+    const regVariables: Record<string, ESObject> = {};
+    regVariables['input'] = regInput;
     const regBody: string = CaaLogin.formEncode([
       new CaaField('client_doc_id', USDID_CLIENT_DOC_ID),
       new CaaField('variables', JSON.stringify(regVariables)),
@@ -557,12 +635,22 @@ export class CaaLogin {
     const challengeNonce: string = CaaLogin.stringField(att.body, 'challenge_nonce');
     CaaLogin.steps.push(new CaaStep('attestation', att.status,
       challengeNonce.length > 0 ? 'nonce ok' : 'no nonce'));
-    const attestParams: string = challengeNonce.length === 0 ? '' : JSON.stringify({
-      'attestation': [{
-        'version': 2, 'type': 'keystore', 'errors': [-1013],
-        'challenge_nonce': challengeNonce, 'signed_nonce': '', 'key_hash': ''
-      }]
-    });
+    let attestParams: string = '';
+    if (challengeNonce.length > 0) {
+      const errors: Array<number> = [-1013];
+      const attItem: Record<string, ESObject> = {
+        'version': 2,
+        'type': 'keystore',
+        'errors': errors,
+        'challenge_nonce': challengeNonce,
+        'signed_nonce': '',
+        'key_hash': ''
+      };
+      const attList: Array<Record<string, ESObject>> = [attItem];
+      const attRoot: Record<string, ESObject> = {};
+      attRoot['attestation'] = attList;
+      attestParams = JSON.stringify(attRoot);
+    }
 
     // 3. 取 aac（CAA 账号访问上下文）
     const waterfallId: string = CaaLogin.randomUuid();
@@ -606,33 +694,36 @@ export class CaaLogin {
     }
 
     // 4. oauth token 预取
-    const oauth: Record<string, ESObject> = {
-      'client_input_params': {
-        'username_input': username,
-        'si_device_param_network_info': CaaLogin.networkInfo(),
-        'aac': aac,
-        'lois_settings': { 'lois_token': '' },
-        'cloud_trust_token': null,
-        'zero_balance_state': '',
-        'network_bssid': null
-      },
-      'server_params': {
-        'is_from_logged_out': 0,
-        'layered_homepage_experiment_group': 'Deploy: Not in Experiment',
-        'device_id': identity.androidDeviceId,
-        'login_surface': 'login_home',
-        'waterfall_id': waterfallId,
-        'INTERNAL__latency_qpl_instance_id': Date.now(),
-        'is_platform_login': 0,
-        'login_entry_point': 'logged_out',
-        'INTERNAL__latency_qpl_marker_id': 36707139,
-        'family_device_id': identity.phoneId,
-        'offline_experiment_group': 'caa_iteration_v3_perf_ig_4',
-        'access_flow_version': 'pre_mt_behavior',
-        'is_from_logged_in_switcher': 0,
-        'qe_device_id': identity.uuid
-      }
+    // 同样：嵌套的对象字面量逐层搭出来（ArkTS 不允许无声明类型的裸字面量）。
+    const loisSettings: Record<string, string> = { 'lois_token': '' };
+    const oauthClient: Record<string, ESObject> = {
+      'username_input': username,
+      'si_device_param_network_info': CaaLogin.networkInfo(),
+      'aac': aac,
+      'lois_settings': loisSettings,
+      'cloud_trust_token': null,
+      'zero_balance_state': '',
+      'network_bssid': null
     };
+    const oauthServer: Record<string, ESObject> = {
+      'is_from_logged_out': 0,
+      'layered_homepage_experiment_group': 'Deploy: Not in Experiment',
+      'device_id': identity.androidDeviceId,
+      'login_surface': 'login_home',
+      'waterfall_id': waterfallId,
+      'INTERNAL__latency_qpl_instance_id': Date.now(),
+      'is_platform_login': 0,
+      'login_entry_point': 'logged_out',
+      'INTERNAL__latency_qpl_marker_id': 36707139,
+      'family_device_id': identity.phoneId,
+      'offline_experiment_group': 'caa_iteration_v3_perf_ig_4',
+      'access_flow_version': 'pre_mt_behavior',
+      'is_from_logged_in_switcher': 0,
+      'qe_device_id': identity.uuid
+    };
+    const oauth: Record<string, ESObject> = {};
+    oauth['client_input_params'] = oauthClient;
+    oauth['server_params'] = oauthServer;
     const step4: CaaHttpReply = await CaaLogin.bloks(identity, extra,
       'com.bloks.www.caa.login.oauth.token.fetch.async', oauth);
     CaaLogin.steps.push(new CaaStep('oauth_token_fetch', step4.status, ''));
@@ -644,10 +735,13 @@ export class CaaLogin {
     }
     const encrypted: string = await MobileCrypto.encryptPassword(password, keys);
     const textInputId: string = `${CaaLogin.randomBytes(2).toString()}`;
-    const send: Record<string, ESObject> = {
-      'client_input_params': CaaLogin.sendClientParams(identity, username, encrypted, aac),
-      'server_params': CaaLogin.sendServerParams(identity, waterfallId, textInputId)
-    };
+    const sendClient: Record<string, ESObject> =
+      CaaLogin.sendClientParams(identity, username, encrypted, aac);
+    const sendServer: Record<string, ESObject> =
+      CaaLogin.sendServerParams(identity, waterfallId, textInputId);
+    const send: Record<string, ESObject> = {};
+    send['client_input_params'] = sendClient;
+    send['server_params'] = sendServer;
     const sendExtra: Record<string, string> = {};
     for (const key of Object.keys(extra)) {
       sendExtra[key] = extra[key];
@@ -675,6 +769,8 @@ export class CaaLogin {
       pending.aac = aac;
       pending.needsCode = true;
       if (codeProvider === null) {
+        // 留住现场：UI 拿到验证码后调 `submitCode` 接着走（见 CaaPending）。
+        CaaLogin.pending = new CaaPending(identity, extra, payload, aac);
         return pending;
       }
       const code: string = await codeProvider();
@@ -840,7 +936,9 @@ export class CaaLogin {
       if (bloks !== null && bloks !== undefined) {
         const data: ESObject = (bloks as Record<string, ESObject>)['data'];
         if (Array.isArray(data)) {
-          for (const node of data as Array<ESObject>) {
+          const nodes: Array<ESObject> = data as Array<ESObject>;
+          for (let nodeIndex: number = 0; nodeIndex < nodes.length; nodeIndex++) {
+            const node: ESObject = nodes[nodeIndex];
             if (node === null || node === undefined) {
               continue;
             }
