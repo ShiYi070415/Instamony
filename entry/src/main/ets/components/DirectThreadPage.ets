@@ -40,6 +40,13 @@ const FALLBACK_WIDTH_VP: number = 411;
 const CARD_RADIUS: number = 16;
 const SIDE_PADDING: number = 16;
 /**
+ * **输入框那一侧的内缩**（= CommentInputBar 的 sideInset，见 build 里那一处）。
+ *
+ * 需求："自己发的图片媒体右侧对齐输入框" —— 所以自己那一侧的行留白用这个值，
+ * 图片右边缘才和输入框右边缘在同一条竖线上（原来是 SIDE_PADDING=16，差 4）。
+ */
+const INPUT_SIDE_INSET: number = 12;
+/**
  * 发送成功后"再贴一次底"的延迟（毫秒）。
  *
  * 键盘收起 + 输入条下移是个动画，列表可视高度在这期间一直在变；只在动画开始时贴底会落到
@@ -738,10 +745,11 @@ export struct DirectThreadPage {
      * 图片就会顶到屏幕边缘（右侧消息尤其明显）。这里按"档位宽度 − SIDE_PADDING"给，
      * 再和"这一行真正能用的宽度"取小值兜底（左侧消息还要让出头像的位置）。
      */
-    const inset: number = SIDE_PADDING * 2;
+    // 边缘距离：自己那一侧与输入框对齐（INPUT_SIDE_INSET），对方那一侧是 SIDE_PADDING。
+    const edge: number = message.mine ? INPUT_SIDE_INSET : SIDE_PADDING;
     const usable: number = message.mine
-      ? screen - inset
-      : screen - inset - AVATAR_SIZE - 8;
+      ? screen - SIDE_PADDING - edge
+      : screen - SIDE_PADDING * 2 - AVATAR_SIZE - 8;
     let wanted: number = 0;
     if (message.mediaSticker) {
       wanted = screen / 3;
@@ -758,8 +766,11 @@ export struct DirectThreadPage {
         wanted = screen * 4 / 6;
       }
     }
-    // 需求：只减**一侧**（不用 ×2）。
-    const target: number = wanted - SIDE_PADDING;
+    /*
+     * 需求："图片宽度减去边缘距离，不是增加边缘距离" —— 所以是
+     * `档位宽度 − 边缘距离`（边缘距离取这一侧的留白），而不是在已经缩过的宽度上再加留白。
+     */
+    const target: number = wanted - edge;
     return Math.round(target > 0 ? Math.min(usable, target) : wanted);
   }
 
@@ -1027,7 +1038,8 @@ export struct DirectThreadPage {
     .alignItems(VerticalAlign.Bottom)
     .padding({
       left: SIDE_PADDING,
-      right: SIDE_PADDING,
+      // 自己发的那一侧和输入框对齐（见 INPUT_SIDE_INSET）。
+      right: message.mine ? INPUT_SIDE_INSET : SIDE_PADDING,
       // 需求：带发送人名字的那一组，和上一段之间留出更明显的距离（见 topGapOf）。
       top: this.topGapOf(index, message),
       bottom: 0

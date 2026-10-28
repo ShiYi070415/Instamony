@@ -1,0 +1,1 @@
+fix(direct): 自己发的图片右侧对齐输入框（那一侧行留白改用 INPUT_SIDE_INSET=12，与 CommentInputBar 的 sideInset 一致）；图片宽度改成「档位宽度 − 边缘距离」，不再在已缩过的宽度上再叠一层留白；对方那一侧仍按 SIDE_PADDING 与头像让位兜底；版本保持 1.4（versionCode 1003011 不变）
