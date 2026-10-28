@@ -62,7 +62,7 @@ App 侧同一套逻辑已移植并编译通过，待真机确认。**
 
 | 项 | 作用 |
 | --- | --- |
-| `test-arkts-parsers.js` | **把 App 的 ArkTS 解析源码直接摘出来在 Node 里跑**（真数据）：Cookie 三件套、载荷解析、2FA 规范（2234 字符票据 + app id）与 JS 版**完全一致** |
+| `test-arkts-parsers.js` | **把 App 的 ArkTS 源码直接摘出来在 Node 里跑**（真数据，10 项）：解析、2FA 参数拼装，以及 `CaaLogin.ets → CaaSession.ets` 接力（response → sessionid/ds_user_id/authorization），与 JS 版**完全一致** |
 | `--caa-replay <dump>` | 从落盘响应重建会话，不必为解析 bug 再登录一次（桌面已用它救回过一次成功登录） |
 | 交验证码走对链（`CaaPending.context`） | 修掉"手机上输完码报没有待提交验证码" |
 | 解析自检 6 项（含 Cookie `\r\n`、日志文本挡路、2FA 规范） | 手机上点一下就能判定解析器好坏，自检 fixture 与 JS 测试逐字镜像 |

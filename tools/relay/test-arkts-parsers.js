@@ -19,10 +19,12 @@ const vm = require('vm');
 const DIR = __dirname;
 const ETS = path.join(DIR, '..', '..', 'entry', 'src', 'main', 'ets', 'core', 'mobileapi',
   'CaaLogin.ets');
+const ETS_SESSION = path.join(DIR, '..', '..', 'entry', 'src', 'main', 'ets', 'core', 'mobileapi',
+  'CaaSession.ets');
 const dumpFile = process.argv[2] ? path.resolve(process.argv[2])
   : path.join(DIR, '.tmp', 'caa-last-response.json');
 
-const source = fs.readFileSync(ETS, 'utf8');
+let source = fs.readFileSync(ETS, 'utf8');
 
 /** 从 .ets 里摘出一个方法/函数体（括号平衡）。`private static` 与模块级 `function` 都支持。 */
 function extractMethod(name) {
@@ -121,11 +123,16 @@ function stripTypes(text) {
 
 /** 把方法拼成 `CaaLogin.name = function(params) {…}`。 */
 function toFunction(name) {
+  return toFunctionAs('CaaLogin', name);
+}
+
+/** 同上，但挂到指定对象上（CaaSession.ets 里的函数用）。 */
+function toFunctionAs(target, name) {
   const method = extractMethod(name);
   const head = stripTypes(method.head).trim();
   // head 形如 `name(text, start)`：从 name 之后取到最后一个 `)`，**含左括号**
   const params = head.substring(name.length, head.lastIndexOf(')') + 1);
-  return `CaaLogin.${name} = function${params} ${stripTypes(method.body)};`;
+  return `${target}.${name} = function${params} ${stripTypes(method.body)};`;
 }
 
 /** 模块级函数（`bloksParenthesized` / `collectStrings` 这类）挂到沙盒全局上。 */
@@ -190,6 +197,24 @@ const script = [
 ].join('\n');
 vm.runInContext(script, sandbox);
 const Ark = sandbox.CaaLogin;
+
+/*
+ * **第二个文件：CaaSession.ets** —— 负责"把响应变成会话"的那几个纯函数
+ * （`cookieValue` / `cookieTextOf` / `authorizationOf` / `textFieldOf`）。
+ * 它们依赖 MobileSign 的 `base64` / `utf8`，这里按同样语义补两个桩函数。
+ */
+sandbox.base64 = (bytes, urlSafe) => Buffer.from(bytes).toString(urlSafe ? 'base64url' : 'base64');
+sandbox.utf8 = (text) => Buffer.from(String(text), 'utf8');
+sandbox.CaaSession = {};
+source = fs.readFileSync(ETS_SESSION, 'utf8');
+const sessionScript = [
+  toFunctionAs('CaaSession', 'textFieldOf'),
+  toFunctionAs('CaaSession', 'cookieTextOf'),
+  toFunctionAs('CaaSession', 'authorizationOf'),
+  toFunctionAs('CaaSession', 'cookieValue')
+].join('\n');
+vm.runInContext(sessionScript, sandbox);
+const Session = sandbox.CaaSession;
 
 let passed = 0;
 let failed = 0;
@@ -314,7 +339,54 @@ check('2FA 方式推断：8 位→备用码；只开短信→sms；其余→totp
   assert(Ark.inferChallenge({}, '123456') === 'totp', '默认应为 totp');
 });
 
+check('会话落地（CaaSession.ets）：cookieValue / cookieTextOf / authorizationOf', () => {
+  // cookieValue：从 `name=value; …` 里取一颗
+  const cookie = 'csrftoken=CSRF; ds_user_id=46473815227; sessionid=46473815227%3Aabc';
+  assert(Session.cookieValue(cookie, 'sessionid') === '46473815227%3Aabc', 'sessionid 取值不对');
+  assert(Session.cookieValue(cookie, 'ds_user_id') === '46473815227', 'ds_user_id 取值不对');
+  assert(Session.cookieValue(cookie, 'nope') === '', '取不到的键应回空串');
+  // cookieTextOf：两种输入形状
+  assert(Session.cookieTextOf({ cookie }) === cookie, 'cookie 串形状没原样返回');
+  assert(Session.cookieTextOf({ cookies: { a: '1', b: '2' } }) === 'a=1; b=2', 'cookies 映射没拼成串');
+  // authorizationOf：直接给串 vs 给 authorization_data
+  const auth = 'Bearer IGT:2:' + Buffer.from(JSON.stringify({ ds_user_id: '1' })).toString('base64');
+  assert(Session.authorizationOf({ authorization: auth }) === auth, 'authorization 串没原样返回');
+  const rebuilt = Session.authorizationOf({ authorization_data: { ds_user_id: '1' } });
+  assert(rebuilt === auth, 'authorization_data 拼回的串与原始不一致：' + rebuilt);
+});
+
 const sendDump = path.join(DIR, '.tmp', 'caa-send-response.json');
+if (fs.existsSync(dumpFile)) {
+  check('真实响应 → 会话字段（两个文件的源码接力）：sessionid / ds_user_id / authorization',
+    () => {
+      const dump = JSON.parse(fs.readFileSync(dumpFile, 'utf8'));
+      const raw = dump.raw !== undefined && dump.raw !== null ? dump.raw : dump;
+      const strings = [];
+      (function collect(value) {
+        if (typeof value === 'string') strings.push(value);
+        else if (Array.isArray(value)) value.forEach(collect);
+        else if (value && typeof value === 'object') Object.values(value).forEach(collect);
+      })(raw);
+      let payload = null;
+      for (const text of strings) {
+        const hit = Ark.loginPayloadFromText(text);
+        if (hit !== null) {
+          payload = hit;
+          break;
+        }
+      }
+      assert(payload !== null, 'ArkTS 版没解析出载荷');
+      const sessionid = Session.cookieValue(payload.cookie, 'sessionid');
+      const userId = Session.cookieValue(payload.cookie, 'ds_user_id');
+      assert(sessionid.length > 40, 'sessionid 太短：' + sessionid.length);
+      assert(userId.length > 0, 'ds_user_id 空');
+      assert(Session.cookieTextOf({ cookie: payload.cookie }) === payload.cookie,
+        'cookieTextOf 没原样返回载荷里的 cookie');
+      assert(payload.authorization.indexOf('Bearer IGT:2:') === 0, 'authorization 形状不对');
+      console.log('      （sessionid ' + sessionid.length + ' 字符，uid ' + userId
+        + '，authorization ' + payload.authorization.length + ' 字符）');
+    });
+}
 if (fs.existsSync(sendDump)) {
   check('真实 send 响应：ArkTS 版读出的 2FA 规范与 JS 版一致（长票据 + app id）', () => {
     const dump = JSON.parse(fs.readFileSync(sendDump, 'utf8'));
