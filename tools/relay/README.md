@@ -150,6 +150,16 @@ copy config.example.json config.json
 - `notify.agc.serviceAccountFile`：华为服务账号密钥（AGC → API Console →
   服务账号密钥 → 下载「推送服务 API」的 json，默认放在 `tools/agc/private.json`）。
 
+> **默认全天都推**。想夜里静音再自己加一个键（可选，不写就是不静音）：
+>
+> ```json
+> "quietHours": [23, 7]
+> ```
+>
+> 含义：本地时间 23:00–07:00 之间**不发**推送 —— 这条私信只记一行日志
+> （`安静时段：只记账不弹`），**不排队、不补发**，7 点之后也不会补。改成 `[2, 7]`
+> 就是只静音凌晨。要临时关掉：把这个键删了、重启中转。
+
 ---
 
 ## 二、跑起来

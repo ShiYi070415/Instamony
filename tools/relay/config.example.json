@@ -5,7 +5,6 @@
       "serviceAccountFile": "../agc/private.json",
       "category": "IM",
       "testMessage": true
-    },
-    "quietHours": [23, 7]
+    }
   }
 }
