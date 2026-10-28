@@ -347,14 +347,14 @@ async function fetchInboxRaw(cfg, options) {
 }
 
 /**
- * **轻量探测**：只取最近 5 个会话、每会话 5 条。
+ * **轻量探测**：只取最近 3 个会话、每会话 3 条（实测 13KB / 316ms）。
  *
  * 为什么这样也能发现新消息：IG 的收件箱是**按最后活跃时间排序**的，
  * 任何会话来了新消息都会顶到最前面 —— 所以只看前几个就能判断"有没有动静"，
- * 不用每次拉 30×20 的大响应。体积大约是完整请求的 1/10。
+ * 不用每次拉 30×20 的大响应（261KB）。体积约是它的 1/20。
  */
 async function probeInbox(cfg) {
-  const raw = await fetchInboxRaw(cfg, { limit: 5, messageLimit: 5 });
+  const raw = await fetchInboxRaw(cfg, { limit: 3, messageLimit: 3 });
   return raw.threads;
 }
 
@@ -1148,8 +1148,8 @@ async function main() {
    */
   const hotSeconds = Math.max(10, Math.min(activeGap, Number(ig.hotSeconds || 15)));
   const hotWindowMs = Math.max(1, Number(ig.hotMinutes || 10)) * 60 * 1000;
-  const probeSeconds = Math.max(2, Number(ig.probeSeconds || 10));
-  const hotProbeSeconds = Math.max(1, Number(ig.hotProbeSeconds || 3));
+  const probeSeconds = Math.max(1, Number(ig.probeSeconds || 2));
+  const hotProbeSeconds = Math.max(1, Number(ig.hotProbeSeconds || 1));
   /** 无条件拉全量的兜底间隔（秒）。 */
   const fullEverySeconds = Math.max(30, Number(ig.fullEverySeconds || 300));
   const stateFile = path.resolve(__dirname, cfg.stateFile || 'state.json');
@@ -1440,8 +1440,18 @@ async function main() {
          * 不会被后一条覆盖；服务端再用 `appMessageId` 兜住重复投递。
          */
         for (const item of fresh) {
+          const pushStart = Date.now();
+          /*
+           * **延迟拆解**（回答"能不能做到收到消息就收到通知"这个问题的唯一办法是量出来）：
+           *   · `IG 记录 → 我们察觉`：item.timestamp 是**服务端**时间（微秒），
+           *     差值是"消息进了 IG 之后，我们多久才看见" —— 这段等于探测间隔 + 响应时间；
+           *   · `察觉 → 推送成功`：从发出 HTTP 到华为回 requestId 的时间（下发本身在之后）。
+           */
+          const igStampMs = Math.round(Number(item.timestamp || 0) / 1000);
+          const detectMs = igStampMs > 0 ? pushStart - igStampMs : -1;
           try {
             await send(cfg, item.title, item.text || '你有一条新私信', item.id, item.key);
+            log(`时延拆解：IG记录→察觉 ${detectMs}ms，察觉→华为受理 ${Date.now() - pushStart}ms`);
           } catch (error) {
             /*
              * **失败必须回滚**：上面进循环前已经把 state 更新成"这条看过了"，
@@ -1463,17 +1473,13 @@ async function main() {
     firstRound = false;
 
     /*
-     * **三档间隔**（有动静就快，安静就退，聊天中走热档）：
+     * **下一轮等多短 = 下一次探测多短**（这里以前是"三档睡眠 15/60/240 秒"）。
      *
-     *   · 热档（`hotSeconds`，默认 15s）：刚才 `hotMinutes`（默认 10 分钟）内有新私信
-     *     —— 正在聊天，这段才是真正在意延迟的时候；
-     *   · 活跃档（`pollSeconds`，默认 60s）：热档窗口过了但还没完全安静；
-     *   · 安静档（`quietJumpSeconds`，默认 240s）：连续安静几轮之后。
+     * 那正是延迟 15 秒的真凶：探测分支里已经省掉了一次往返，但推完一轮又睡了 15 秒
+     * 才去探测，于是"探测间隔 3 秒"完全被这层睡眠盖掉（实测推送间隔 17~31 秒）。
      *
-     * 为什么不一直用 15 秒：收件箱响应解开后 300KB+，一直这么快既费电又容易被风控。
-     * 但要诚实说明：**真正的实时（来一条推一条）走不通** —— IG 的 iris 订阅拒绝
-     * 网页派生的会话（`Iris_IrisValidationException`，见 REALTIME.md），
-     * 所以热档的 15 秒就是能做到的最快响应。
+     * 现在：刚有新消息时用 `hotProbeSeconds`（默认 3 秒）；空闲时用 `probeSeconds`
+     * （默认 10 秒）；两者都是**轻量探测**（32KB），不是全量（261KB）。
      */
     if (fresh.length > 0) {
       quietRounds = 0;
@@ -1482,18 +1488,10 @@ async function main() {
       quietRounds++;
     }
     const hot = lastActivityAt > 0 && (Date.now() - lastActivityAt) < hotWindowMs;
-    if (hot) {
-      gap = hotSeconds;
-    } else if (fresh.length > 0) {
-      gap = activeGap;
-    } else {
-      gap = quietRounds >= quietAfterRounds
-        ? quietJump
-        : Math.min(quietJump, Math.round(gap * 1.25));
-    }
+    gap = hot ? hotProbeSeconds : probeSeconds;
     if (gap !== lastLoggedGap) {
       lastLoggedGap = gap;
-      log(`下一轮间隔 ${gap}s` + (hot ? '（热档：刚有新消息）' : ''));
+      log(`下一轮探测间隔 ${gap}s` + (hot ? '（热档：刚有新消息）' : ''));
     }
     if (once) {
       if (!quiet) {
