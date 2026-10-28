@@ -281,6 +281,43 @@ export class PushCenter {
       notificationManager.SlotType.SOCIAL_COMMUNICATION, threadId);
   }
 
+  /**
+   * **每条推送弹一条通知**（与中转 `instamony.js` 的行为一致）。
+   *
+   * 与 `notifyDirect` 的区别只有通知 id：
+   *   · `notifyDirect` 用固定 id（后来的覆盖前一条，适合"未读数变多"那种汇总场景）；
+   *   · 这里按**消息 id** 算一个稳定 id，所以连发 6 条就是 6 条通知、6 次提醒
+   *     —— 用户明确要求"每条推送都应该弹一次"，对齐中转那条路（它是一推一通知）。
+   *
+   * @param messageId 消息 id（`fbpushnotif.n`）；空串时退回固定 id（不会丢通知）
+   */
+  static notifyDirectEach(username: string, preview: string, threadId: string,
+                          messageId: string): void {
+    const title: string = username.trim().length > 0 ? username.trim() : '私信';
+    const body: string = preview.trim().length > 0 ? preview.trim() : '你有一条新私信';
+    const id: number = messageId.length > 0
+      ? PushCenter.idOfMessage(messageId) : NOTIFY_ID_DIRECT;
+    hilog.info(DOMAIN, TAG, 'direct notify(each) from=%{public}s id=%{public}d',
+      title, id);
+    PushCenter.publish(id, title, body,
+      notificationManager.SlotType.SOCIAL_COMMUNICATION, threadId);
+  }
+
+  /**
+   * 消息 id → 通知 id（FNV-1a 落进 20000~59999，避开上面两个固定 id）。
+   *
+   * 为什么不直接用消息 id 的数字：IG 的 item id 是**大整数**（19~20 位），
+   * 通知 id 是 32 位有符号；而且同一条消息重投时要落到同一个通知上（覆盖而不是重复）。
+   */
+  private static idOfMessage(messageId: string): number {
+    let hash: number = 2166136261;
+    for (let index: number = 0; index < messageId.length; index++) {
+      hash = hash ^ messageId.charCodeAt(index);
+      hash = Math.imul(hash, 16777619) >>> 0;
+    }
+    return 20000 + (hash % 40000);
+  }
+
   /** **动态通知**：只有条数（通知页里那些点赞/评论没有"一条正文"的概念）。 */
   static notifyFeed(added: number): void {
     if (added <= 0) {

@@ -62,6 +62,15 @@ export class MobileFbnsService {
   /** 正在合并的通知（会话 id → 待发）。 */
   private static pendingNotifies: Map<string, FbnsPendingNotify> =
     new Map<string, FbnsPendingNotify>();
+  /**
+   * 已提醒过的消息 id（**去重**，与中转 `instamony.js` 的 `seenItems` 同一目的）。
+   *
+   * 为什么要有：FBNS 在网络抖动/重连时会**重投**同一条推送。没有去重就会对同一条消息
+   * 反复弹通知（比"漏弹"更让人烦）。
+   */
+  private static seenItems: Set<string> = new Set<string>();
+  /** 自己的账号 id（用来跳过自己发的消息，与中转那条 `s === session.userId` 一致）。 */
+  private static ownUserId: string = '';
 
   /** 当前是不是设备级会话（没有 sessionid）。 */
   static isDeviceLevel(identity: MobileIdentity): boolean {
@@ -273,27 +282,39 @@ export class MobileFbnsService {
       DirectRealtime.handle(event);
     }
     /*
-     * **同一会话的连发合并成一条通知**（700ms 窗口）。
+     * **一条推送一条通知**（与中转 `instamony.js` 同一套判断，别再合并了）。
      *
-     * 为什么：一条消息连发时推送是"一条一条来"的，每条都弹一次就是连响 6 下、正文还停在
-     * 中间某条。合并之后只弹一次、正文取最后一条 —— 与 IG 自己的通知行为一致。
+     * 中转那边的顺序（`handlePush`）就是标准答案，这里逐条照搬：
+     *   1. 自己发的消息跳过（`s === 自己的 userId`）；
+     *   2. 同一条消息只提醒一次（`seenItems`，防 FBNS 重投）；
+     *   3. 正文截到 120 字符，空正文用兜底文案；
+     *   4. 标题用发信人显示名（`full_name` 优先，见 `nameOf`）；
+     *   5. **每条都发一条通知**（通知 id 按消息 id 算，所以连发 6 条 = 6 条通知）。
+     *
+     * 之前我按"同一会话 700ms 合并"处理，与中转行为不一致 —— 用户要的是"来一条弹一条"。
      */
+    if (MobileFbnsService.ownUserId.length === 0) {
+      const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
+      MobileFbnsService.ownUserId = identity === null ? '' : identity.userId;
+    }
+    if (MobileFbnsService.ownUserId.length > 0 && sender === MobileFbnsService.ownUserId) {
+      hilog.info(DOMAIN, TAG, 'skip own message thread=%{public}s', threadId);
+      return;
+    }
+    if (itemId.length > 0) {
+      if (MobileFbnsService.seenItems.has(itemId)) {
+        hilog.info(DOMAIN, TAG, 'skip duplicate item=%{public}s', itemId);
+        return;
+      }
+      MobileFbnsService.seenItems.add(itemId);
+      // 别让集合无限长（一次运行里几千条足够覆盖重投窗口）
+      if (MobileFbnsService.seenItems.size > 2000) {
+        MobileFbnsService.seenItems.clear();
+        MobileFbnsService.seenItems.add(itemId);
+      }
+    }
     const name: string = await MobileFbnsService.nameOf(sender);
-    let pending: FbnsPendingNotify | undefined = MobileFbnsService.pendingNotifies.get(threadId);
-    if (pending === undefined) {
-      pending = new FbnsPendingNotify();
-      MobileFbnsService.pendingNotifies.set(threadId, pending);
-    }
-    pending.name = name;
-    pending.text = text;
-    pending.added = pending.added + 1;
-    if (pending.timer >= 0) {
-      clearTimeout(pending.timer);
-    }
-    const merged: FbnsPendingNotify = pending;
-    merged.timer = setTimeout((): void => {
-      MobileFbnsService.pendingNotifies.delete(threadId);
-      PushCenter.notifyDirect(merged.name, merged.text, merged.added, threadId);
-    }, 700);
+    const preview: string = text.trim().slice(0, 120);
+    PushCenter.notifyDirectEach(name, preview, threadId, itemId);
   }
 }
