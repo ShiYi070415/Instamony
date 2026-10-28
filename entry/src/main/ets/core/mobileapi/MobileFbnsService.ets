@@ -21,6 +21,7 @@ import { PushCenter } from '../PushCenter';
 import { DirectRealtime } from '../DirectRealtime';
 import { MobileIdentity, MobileSession } from './MobileSession';
 import { MobileRequest, MobileResult } from './MobileRequest';
+import { MobileProfile, MobileUserBody } from './MobileProfile';
 import { FBNS_PACKAGE } from './MobileFbns';
 import { MobileFbnsClient } from './MobileFbnsClient';
 import { RealtimeEvent } from './MobileRealtime';
@@ -33,6 +34,14 @@ export class MobileFbnsService {
   private static started: boolean = false;
   /** 最近一次拿到的 push token（诊断用；值本身不记日志）。 */
   private static tokenLength: number = 0;
+  /**
+   * 发信人 id → 用户名 的缓存。
+   *
+   * 为什么必须有：FBNS 推送里只带发信人的**数字 id**（`s`），直接拿去当通知标题就是
+   * "用户名变成数字"。而用户名要么从已加载的会话里拿（推送这条路拿不到），要么现查
+   * `users/{id}/info/`（一发很小的请求）。缓存住之后同一个人只查一次。
+   */
+  private static senderNames: Map<string, string> = new Map<string, string>();
 
   /** 当前是不是设备级会话（没有 sessionid）。 */
   static isDeviceLevel(identity: MobileIdentity): boolean {
@@ -68,7 +77,8 @@ export class MobileFbnsService {
         });
       },
       (push: ESObject): void => {
-        MobileFbnsService.handlePush(push);
+        MobileFbnsService.handlePush(push).catch((): void => {
+        });
       });
     MobileFbnsService.started = ok;
     hilog.info(DOMAIN, TAG, 'fbns start result=%{public}s', ok ? 'up' : 'failed');
@@ -124,11 +134,44 @@ export class MobileFbnsService {
   }
 
   /**
+   * 解析发信人的用户名（带缓存；查不到返回空串）。
+   *
+   * 为什么不在推送里等：`users/{id}/info/` 是一发网络请求，但通知晚几百毫秒完全可接受，
+   * 而标题显示数字会让人以为"这消息是假的"。查不到就交给 PushCenter 的兜底标题。
+   */
+  private static async nameOf(userId: string): Promise<string> {
+    const id: string = userId.trim();
+    if (id.length === 0) {
+      return '';
+    }
+    const cached: string | undefined = MobileFbnsService.senderNames.get(id);
+    if (cached !== undefined) {
+      return cached;
+    }
+    try {
+      const body: MobileUserBody | null = await MobileProfile.info(id, '');
+      if (body === null) {
+        return '';
+      }
+      const value: Object | undefined = body.user['username'];
+      const name: string = value === undefined || value === null ? '' : `${value}`;
+      if (name.length > 0) {
+        MobileFbnsService.senderNames.set(id, name);
+      }
+      return name;
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'name lookup failed for %{public}s: %{public}s',
+        id, (error as Error).message);
+      return '';
+    }
+  }
+
+  /**
    * 处理一条 FBNS 推送（topic 76 的 `fbpushnotif`）。
    *
    * 字段见 relay 的注释：`m` 正文 / `t_id` 会话 / `s` 发信人 / `n` 消息 id / `c` 类型。
    */
-  private static handlePush(push: ESObject): void {
+  private static async handlePush(push: ESObject): Promise<void> {
     if (push === null || push === undefined || typeof push !== 'object') {
       return;
     }
@@ -171,7 +214,8 @@ export class MobileFbnsService {
       const event: RealtimeEvent = new RealtimeEvent('146', JSON.stringify([data]));
       DirectRealtime.handle(event);
     }
-    // 本地通知（不依赖界面是否开着）：标题先用发信人 id，正文是消息内容。
-    PushCenter.notifyDirect(sender, text, 1, threadId);
+    // 本地通知（不依赖界面是否开着）：标题用**用户名**（推送里只有数字 id，见 nameOf 的说明）。
+    const name: string = await MobileFbnsService.nameOf(sender);
+    PushCenter.notifyDirect(name, text, 1, threadId);
   }
 }
