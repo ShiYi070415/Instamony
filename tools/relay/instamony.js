@@ -603,11 +603,156 @@ async function runDaemon(cfg) {
   log('就绪：手机被杀了也能收到新私信通知（Ctrl+C 停）');
 }
 
+/* ------------------------------------------------- 交互输入（CAA 登录用） */
+
+/** 读一行；`hidden` 时密码不回显（TTY）。 */
+function readLine(prompt, hidden) {
+  return new Promise((resolve) => {
+    const stdin = process.stdin;
+    process.stdout.write(prompt);
+    if (hidden && stdin.isTTY) {
+      stdin.setRawMode(true);
+      let buffer = '';
+      const onData = (chunk) => {
+        for (const ch of chunk.toString('utf8')) {
+          if (ch === '\r' || ch === '\n') {
+            stdin.setRawMode(false);
+            stdin.pause();
+            stdin.removeListener('data', onData);
+            process.stdout.write('\n');
+            resolve(buffer);
+            return;
+          }
+          if (ch === '\u0003') {              // Ctrl+C
+            stdin.setRawMode(false);
+            process.exit(0);
+          }
+          if (ch === '\u007f' || ch === '\b') {
+            buffer = buffer.slice(0, -1);
+            continue;
+          }
+          buffer += ch;
+        }
+      };
+      stdin.resume();
+      stdin.setEncoding('utf8');
+      stdin.on('data', onData);
+      return;
+    }
+    stdin.resume();
+    stdin.once('data', (chunk) => {
+      stdin.pause();
+      resolve(chunk.toString('utf8').replace(/[\r\n]+$/, ''));
+    });
+  });
+}
+
+/**
+ * `--caa-login`：用**账号密码**登录（CAA/Bloks 流程，Node 版，不需要 Python）。
+ *
+ * 设备档案（phone_id / uuid / app_version / bloks_versioning_id / mid）取自
+ * `settings.json`；如果还没有那份文件，会先用一份内置的默认档案跑，
+ * 成功率略低（IG 对"新设备"更谨慎）。
+ */
+async function runCaaLogin(argv) {
+  const { caaLogin, loadDeviceProfile } = require('./caa-login.js');
+  const settingsAt = argv.indexOf('--settings');
+  const settingsFile = settingsAt >= 0 && argv[settingsAt + 1]
+    ? path.resolve(DIR, argv[settingsAt + 1]) : path.join(DIR, 'settings.json');
+  let profile = null;
+  if (fs.existsSync(settingsFile)) {
+    try {
+      profile = loadDeviceProfile(settingsFile);
+      log('设备档案取自 ' + settingsFile);
+    } catch (error) {
+      warn('读 settings.json 的设备档案失败：' + error.message);
+    }
+  }
+  if (profile === null) {
+    const cryptoMod = require('crypto');
+    profile = {
+      phoneId: 'android-' + cryptoMod.randomUUID(),
+      uuid: cryptoMod.randomUUID(),
+      androidId: cryptoMod.randomBytes(8).toString('hex'),
+      mid: '',
+      appVersion: '449.0.0.52.84',
+      versionCode: '1079242191',
+      bloksVersionId: '799db3e387d7a21a19c72918b8698b6cd28a1516ade363792c100ed45a0f9f0b',
+      userAgent: MOBILE_UA
+    };
+    log('没有 settings.json，用内置默认设备档案（成功率略低）');
+  }
+
+  const username = (await readLine('IG 用户名：')).trim();
+  if (username.length === 0) die('没输入用户名');
+  const password = await readLine('IG 密码（不回显）：', true);
+  if (password.length === 0) die('没输入密码');
+
+  const result = await caaLogin(profile, username, password, (text) => log(text));
+
+  for (const step of result.steps) {
+    log('  ' + step.step + ' → HTTP ' + step.status);
+  }
+
+  if (result.loggedIn !== true) {
+    warn('登录未成功：' + (result.reason || '未知原因'));
+    if (typeof result.twoStepContext === 'string' && result.twoStepContext.length > 0) {
+      log('已拿到 two_step_verification_context（长度 ' + result.twoStepContext.length + '）——'
+        + '两步验证链路还没接进本脚本（见 LOGIN.md 的待办）');
+    }
+    if (result.raw !== undefined) {
+      log('原始响应片段：' + JSON.stringify(result.raw).slice(0, 600));
+    }
+    process.exit(3);
+  }
+
+  // 成功：写会话 + 设备身份（格式与 --import-session 一致，后续命令可直接跑）
+  const cookieParts = [];
+  for (const name of Object.keys(result.cookies || {})) {
+    if (String(result.cookies[name]).length > 0) {
+      cookieParts.push(`${name}=${result.cookies[name]}`);
+    }
+  }
+  const cookie = cookieParts.join('; ');
+  const session = {
+    source: 'caa-login',
+    userId: cookieValueOf(cookie, 'ds_user_id'),
+    cookie,
+    sessionid: cookieValueOf(cookie, 'sessionid'),
+    csrf: cookieValueOf(cookie, 'csrftoken'),
+    authorization: result.authorization || '',
+    appVersion: profile.appVersion,
+    userAgent: profile.userAgent,
+    mid: profile.mid,
+    savedAt: Date.now()
+  };
+  fs.writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2), 'utf8');
+  fs.writeFileSync(DEVICE_FILE, JSON.stringify({
+    phoneId: profile.phoneId,
+    uuid: profile.uuid,
+    androidId: profile.androidId,
+    createdAt: Date.now()
+  }, null, 2), 'utf8');
+  try {
+    fs.unlinkSync(path.join(DIR, 'fbns-auth.json'));
+  } catch (error) {
+    // 没有就算了
+  }
+  log('登录成功：账号 ' + (session.userId || '?'));
+  log('会话已写入 ' + SESSION_FILE + '，设备身份已写入 ' + DEVICE_FILE);
+  log('下一步：node instamony.js --check  然后 node instamony.js');
+}
+
 /* ------------------------------------------------------------------ 入口 */
 
 async function main() {
   const argv = process.argv.slice(2);
   quiet = argv.indexOf('--quiet') >= 0;
+
+  if (argv.indexOf('--caa-login') >= 0) {
+    await runCaaLogin(argv);
+    return;
+  }
 
   const importAt = argv.indexOf('--import-session');
   if (importAt >= 0) {

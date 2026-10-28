@@ -41,6 +41,8 @@ tools/relay/token.json
 tools/relay/mqtt-device.json
 # FBNS 下发的设备凭据（等同设备身份，不该进仓库）
 tools/relay/fbns-auth.json
+# CAA 登录的设备签名私钥
+tools/relay/usdid.json
 # 密码登录后的会话（含 authorization，等同密码）
 tools/relay/session.json
 # instagrapi 登录后的会话（login_ig.py 产出，等同密码）
