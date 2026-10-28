@@ -34,6 +34,7 @@ import {
   HdsTabs,
   HdsTabsController,
   HdsTabsFloatingStyle,
+  IconStyleMode,
   hdsMaterial,
   ScrollEffectType,
   TextStyleMode
@@ -9337,58 +9338,6 @@ struct Index {
     })
   }
 
-  /**
-   * 会话页标题栏**中间的自定义区域**（头像 + 名字 + 用户名，与官方短信 App 同款）。
-   *
-   * 为什么用 `stackBuilder` 而不是 `title`：HDS 的 `title` 只接受 `HdsNavigationTitle`
-   * （mainTitle / subTitle 两行文字），放不进头像；`stackBuilder`（HDS 6.0.0(20) 起）替换的正是
-   * 标题栏中间那块，返回键与右侧菜单仍由 HDS 提供 —— 于是"返回 + 头像 + 标题 + menus"一次成型。
-   */
-  @Builder
-  directThreadTitleStack() {
-    /*
-     * 注意两点（都是真机反馈"向左偏移"的直接原因）：
-     *   · **不要给 `width('100%')` + `layoutWeight(1)`**：`stackBuilder` 拿到的是标题栏中间的
-     *     一段区域，撑满会把内容顶到最左边、和返回键叠在一起（看起来就是"整体左移"）；
-     *   · 文字列只给 `constraintSize(maxWidth)`，让它按内容收住、超长省略。
-     */
-    Row({ space: 8 }) {
-      if (this.directThreadVm.avatarNow().length > 0) {
-        Image(this.directThreadVm.avatarNow())
-          .draggable(false)
-          .width(32)
-          .height(32)
-          .borderRadius(16)
-          .objectFit(ImageFit.Cover)
-          .backgroundColor($r('app.color.field_background'))
-      } else {
-        Column()
-          .width(32)
-          .height(32)
-          .borderRadius(16)
-          .backgroundColor($r('app.color.field_background'))
-      }
-      Column({ space: 1 }) {
-        Text(this.directThreadVm.titleNow().length > 0
-          ? this.directThreadVm.titleNow() : $r('app.string.direct_empty'))
-          .fontSize(17)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.primary_text'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-        if (this.directThreadVm.subtitleNow().length > 0) {
-          Text(this.directThreadVm.subtitleNow())
-            .fontSize(12)
-            .fontColor($r('app.color.secondary_text'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-        }
-      }
-      .alignItems(HorizontalAlign.Start)
-      .constraintSize({ maxWidth: 200 })
-    }
-    .alignItems(VerticalAlign.Center)
-  }
 
   /**
    * 私信会话页右上角的两颗按钮：**电话 / 视频**（需求："menus分别有两个按钮，电话和视频，
@@ -11058,16 +11007,31 @@ struct Index {
       .titleBar({
         content: {
           /*
-           * **恢复 HDS 标题栏**（与官方短信 App 同款：返回键 + 头像 + 标题 + 菜单）。
+           * **回到 HDS 原生标题栏**（与官方短信 App 同款：返回键 + 头像 + 标题 + 菜单）。
            *
-           * 关键在 `stackBuilder`（HDS 6.0.0(20) 起提供）：它替换标题栏中间的**自定义区域**，
-           * 所以头像能放进标题栏 —— 以前的 `title` 只吃 `HdsNavigationTitle`（mainTitle/subTitle
-           * 两行文字），塞不进头像，于是整条栏被隐藏、改成页面自绘（那条路现在撤掉了）。
+           * 依据官方文档（UI Design Kit → HdsNavigation → TitleBarContentOptions）：
+           *   · `title`（HdsNavigationTitle）：mainTitle / subTitle —— 原生两行文字，排版交给 HDS；
+           *   · `subIcon`（HdsNavigationBadgeIconOptions）：标题栏**子图标**，渲染在标题左侧，
+           *     `content.icon` 的类型是 `ResourceStr | SymbolGlyphModifier | PixelMap`，
+           *     而 ResourceStr 允许字符串 —— 所以**头像的 URL 可以直接塞进去**；
+           *     配 `IconStyleMode.LARGE` 出来就是"头像 + 名字"的排布；
+           *   · `menu`：右侧电话 / 视频。
            *
-           * 返回键仍由 HDS 提供（`.hideBackButton(false)`），菜单是 `directThreadMenus()`。
+           * 注意 `stackBuilder` **不是**这个用途：文档明确它是"标题栏**顶部**自定义区域"
+           * （标题栏上方再加一行，例如分段按钮），所以之前用它放头像才会一直在"左偏/右偏"之间跳。
            */
-          stackBuilder: (): void => {
-            this.directThreadTitleStack();
+          title: {
+            mainTitle: this.directThreadVm.titleNow().length > 0
+              ? this.directThreadVm.titleNow() : $r('app.string.direct_empty'),
+            subTitle: this.directThreadVm.subtitleNow()
+          },
+          subIcon: {
+            content: {
+              label: 'avatar',
+              icon: this.directThreadVm.avatarNow(),
+              isEnabled: true,
+              type: IconStyleMode.LARGE
+            }
           },
           menu: this.directThreadMenus()
         },
