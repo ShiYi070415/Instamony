@@ -231,3 +231,26 @@ Instagram 的「消息请求」（陌生人首条私信，payload 里通常是 `
 点击行为：打开与 A 的私信会话
 ```
 
+自分类申请页「内容示例」框（限 1000 字符）可以直接用这两条——一条文本私信、
+一条图片私信，都是点对点互关私信，零营销词。控制台是英文就贴英文版：
+
+```
+Title: New message from alice_zhang
+Body: alice_zhang: Are you free to talk this evening?
+
+Title: New message from alice_zhang
+Body: alice_zhang sent you a photo.
+```
+
+```
+标题：alice_zhang 给你发来一条私信
+内容：alice_zhang：今晚有空聊两句吗？
+
+标题：alice_zhang 给你发来一条私信
+内容：alice_zhang 发来一张照片。
+```
+
+这个框是**处罚依据**，写的时候守住三条：不出现下载/更新/优惠/活动等营销词；
+不写第三方平台名（会把话题带偏到上架审核）；不照抄官方那句
+"A friend just sent you a message" 的泛化示例。
+
