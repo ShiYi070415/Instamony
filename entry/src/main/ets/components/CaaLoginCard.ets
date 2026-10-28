@@ -194,6 +194,34 @@ export struct CaaLoginCard {
           this.putClipboard(raw, '响应已复制（' + raw.length + ' 字符，失败响应里没有可用会话）');
         })
       /*
+       * **假账号探针**（不消耗真账号的尝试次数）。
+       *
+       * 真账号登录回 429 时，靠它一眼分开两种原因：
+       *   · 探针 200 + "can't find account" → 请求/设备这侧没问题，429 是 IG 对该账号的限流；
+       *   · 探针也 429 → 是我们这一侧的请求/设备身份问题。
+       */
+      Text('假账号探针（不消耗你的登录次数）')
+        .fontSize(12)
+        .fontColor($r('app.color.accent'))
+        .width('100%')
+        .onClick((): void => {
+          if (this.busy) {
+            return;
+          }
+          this.busy = true;
+          this.status = '正在用假账号探一次…';
+          this.steps = '';
+          CaaSession.probe().then((outcome: CaaOutcome): void => {
+            this.busy = false;
+            this.status = outcome.reason;
+            this.steps = outcome.steps;
+          }).catch((error: Error): void => {
+            this.busy = false;
+            this.status = `探针失败：${error.message}`;
+          });
+        })
+
+      /*
        * **清除限流冷却**（本机自己记的那个 10~60 分钟闸门）。
        *
        * 它只是一次 429 的记账，判断依据并不牢靠：这一轮就查到"提交密码那一发没带 Cookie /

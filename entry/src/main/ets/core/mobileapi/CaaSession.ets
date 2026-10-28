@@ -209,6 +209,43 @@ export class CaaSession {
   }
 
   /**
+   * **假账号探针**：用"肯定不存在的账号"把整条 CAA 跑到 `send_login_request`。
+   *
+   * 为什么需要它（这一轮就是被它分开的）：真账号登录回 429 时，有两种完全不同的原因 ——
+   *   ① 我们的请求/设备身份不成形（任何账号都会 429）；
+   *   ② IG 对这个**账号**的登录限流（换个不存在的账号就会正常回 200 + "Can't find account"）。
+   * 只看真账号那次是分不开的，而且每试一次就把限流窗口再推远一点。
+   *
+   * 假账号不会消耗真账号的尝试次数，也不会触碰它任何风控动作，可以随手多点几次。
+   * **它不经过限流冷却那一道闸**（`CaaSession.login` 才走），因为探针本身就该随时能跑。
+   */
+  static async probe(): Promise<CaaOutcome> {
+    const device: CaaUsdid | null = await CaaSession.deviceIdentity();
+    if (device === null) {
+      return CaaSession.outcome(false, '设备身份没准备好（preferences 没打开？）');
+    }
+    const identity: MobileIdentity = MobileSession.seedIdentity();
+    const suffix: string = Date.now().toString(36);
+    // 形状合法但一定不存在：IG 对这类用户名的回答是固定文案（见下）。
+    const bogusUser: string = `instarmony_probe_${suffix}`;
+    const bogusPass: string = `Zx9!${suffix}qq`;
+    const result: CaaResult = await CaaLogin.login(identity, bogusUser, bogusPass, device, null);
+    const steps: string = CaaSession.stepsText();
+    /*
+     * 结论怎么读：
+     *   · 走到 `send_login_request 200` 且文案是 "can't find an account" → **请求/设备这侧没问题**，
+     *     真账号那个 429 就是 IG 对该账号的登录限流（等 / 换网络 / 换设备身份都没用，得等）。
+     *   · 还是 `429` → 问题在我们这一侧（设备身份被拉黑、客户端指纹、IP），得继续查。
+     */
+    const text: string = result.rateLimited
+      ? '探针也是 429：**不是账号问题**，是我们这一侧的请求/设备身份被挡了（把下面这行发我）'
+      : `探针通过：请求与设备身份没问题（IG 回：${result.reason}）`;
+    const outcome: CaaOutcome = CaaSession.outcome(result.ok, text, steps);
+    CaaSession.rememberDiag('探针', outcome.reason, outcome.steps);
+    return outcome;
+  }
+
+  /**
    * 限流冷却还剩几分钟（0 = 可以试了）。
    *
    * 读 preferences 里的 `last_429_at`：冷却期内直接拒绝发请求，只提示还要等多久。

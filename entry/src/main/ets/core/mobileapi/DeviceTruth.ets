@@ -27,8 +27,16 @@ import { DeviceProfile } from './MobileConfig';
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'DeviceTruth';
 
-/** 华为/荣耀系的 Android 底版本（HarmonyOS 4 基于 Android 12）。 */
-const HUAWEI_ANDROID_VERSION: string = '12';
+/**
+ * 华为/荣耀系的 Android 底版本。
+ *
+ * ⚠️ 这里的第一个数是 **API level，不是 Android 版本号**（UA 的格式是
+ * `Android ({android_version}/{android_release}; …)`，instagrapi 的默认值 34/14 就是
+ * "API 34 / Android 14"）。以前写的是 12/12 —— 拼出来是 `Android (12/12; …)`，
+ * 等于声称"Android 3.1 上跑 IG 449"，形状就不像真客户端。HarmonyOS 4 的底是 Android 12，
+ * 所以正确值是 **31/12**。
+ */
+const HUAWEI_ANDROID_VERSION: string = '31';
 const HUAWEI_ANDROID_RELEASE: string = '12';
 /** 其它品牌的默认（与 instagrapi 的 DEVICE_SETTINGS 一致）。 */
 const DEFAULT_ANDROID_VERSION: string = '34';
