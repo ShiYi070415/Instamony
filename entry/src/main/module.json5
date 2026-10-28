@@ -97,6 +97,25 @@
                 "host": "open"
               }
             ]
+          },
+          /*
+           * **Push Kit 点通知进应用内页**的入口（与上面那条不同）。
+           *
+           * 华为的推送点按是**隐式 Want**：不带 action / entity，只带 uri。所以必须有一条
+           * `actions: []` 的 skill 才能被它匹配到 —— 只写 `viewData` 那条，点推送只会把
+           * App 拉到首页（或干脆不进），这就是"点通知没进正确会话"的另一半原因。
+           *
+           * uri 形如 `instarmony://open?route=direct&id=<会话id>&from=notify`，
+           * 由中继/网关写进推送的 `clickAction`；App 侧解析见 core/DeepLink、core/NotifyRoute。
+           */
+          {
+            "actions": [],
+            "uris": [
+              {
+                "scheme": "instarmony",
+                "host": "open"
+              }
+            ]
           }
         ]
       }

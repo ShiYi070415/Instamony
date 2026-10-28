@@ -85,16 +85,35 @@ function notifyIdOf(text) {
  *   · `appMessageId` 只允许 `[A-Za-z0-9+/=_-]`，带冒号会被整条拒收（80100003）；
  *   · 请求头必须带 `push-type: 0`，否则接口报参数错误。
  */
-async function sendPush(sa, token, title, body, itemKey) {
+/**
+ * 通知的点击跳转 URI（与 App 侧 `core/DeepLink` / `core/NotifyRoute` 同一套约定）。
+ *
+ * `instarmony://open?route=direct&id=<会话id>&from=notify`：`from=notify` 让 App 走
+ * "通知点击"分支直接进会话，而不是外部深链的落地页。
+ *
+ * 为什么必须有：华为 Push Kit 的点按行为由服务端下发的 `clickAction` 决定；
+ * `{actionType:0}` 点开永远是首页 —— 用户报的"没进正确会话"就是这个。
+ */
+function deepLinkOf(threadId) {
+  const id = String(threadId || '').trim();
+  if (id.length === 0) {
+    return '';
+  }
+  return 'instarmony://open?route=direct&id=' + encodeURIComponent(id) + '&from=notify';
+}
+
+async function sendPush(sa, token, title, body, itemKey, threadId) {
   const rawId = String(itemKey || Date.now());
   const messageId = /^[A-Za-z0-9+/=_\-\s]{1,64}$/.test(rawId) ? rawId : String(notifyIdOf(rawId));
+  const link = deepLinkOf(threadId);
   const payload = JSON.stringify({
     payload: {
       notification: {
         category: process.env.PUSH_CATEGORY || 'IM',
         title: title,
         body: body,
-        clickAction: { actionType: 0 },
+        // 点通知直达那条会话（见 deepLinkOf）；没有会话 id 时退回首页
+        clickAction: link.length > 0 ? { actionType: 3, uri: link } : { actionType: 0 },
         style: 0,
         notifyId: notifyIdOf(rawId),
         appMessageId: messageId
@@ -178,7 +197,8 @@ module.exports = async function handler(req, res) {
   const text = String(body.body || '').slice(0, 300);
 
   try {
-    const requestId = await sendPush(readServiceAccount(), token, title, text, body.itemKey);
+    const requestId = await sendPush(readServiceAccount(), token, title, text, body.itemKey,
+      body.threadId);
     reply(200, { ok: true, requestId });
   } catch (error) {
     reply(502, { ok: false, error: error.message });

@@ -5918,6 +5918,21 @@ struct Index {
     if (threadId.length === 0) {
       return;
     }
+    /*
+     * **登录态还没落定时先别动手**（也不消耗重试次数）。
+     *
+     * 冷启动点通知时，登录态核对（`refreshSessionFromJar`）可能还没完成：这时候建会话页
+     * 会被随后的"账号分区复位"连导航栈一起清掉 —— 用户看到的就是"点了没反应"。
+     * 每 500ms 复查一次的做法本来就在，这里只是把"还没登录"那几拍让出去。
+     */
+    if (!this.signedIn) {
+      if (this.notifyTries <= NOTIFY_ROUTE_MAX_TRIES) {
+        setTimeout((): void => {
+          this.consumeNotifyRoute();
+        }, NOTIFY_ROUTE_RETRY_MS);
+      }
+      return;
+    }
     const inDirectTab: boolean = this.selectedTab === AppTab.Direct;
     /*
      * **"已经在里面了吗"不能只看 `topPage`。**

@@ -286,16 +286,41 @@ function notifyIdOf(text) {
  * `appMessageId` 的字符集只有 `[A-Za-z0-9+/=_-]`（带冒号会被整条拒收，回 80100003
  * 且表现为"完全收不到消息"），这里统一清洗。
  */
-async function pushToPhone(cfg, title, body, itemKey) {
+/**
+ * 通知的点击跳转 URI（与 App 侧 `core/DeepLink` / `core/NotifyRoute` 同一套约定）。
+ *
+ * 格式：`instarmony://open?route=direct&id=<会话id>&from=notify`
+ *   · `route=direct`：进私信；
+ *   · `id`：会话 id（App 用 `NotifyRoute.stash` 记下，页面起来后进那条会话）；
+ *   · `from=notify`：告诉 App 这是**通知点击**，不要走"外部深链落地页"那条路
+ *     （见 entryability/EntryAbility.stashNotifyRoute 的注释）。
+ *
+ * 为什么必须放在通知里：华为 Push Kit 的点按行为由服务端下发的 `clickAction` 决定，
+ * 不带 uri 就只会打开 App 首页 —— 用户报的"点了没进正确会话"就是这个。
+ */
+function deepLinkOf(threadId) {
+  const id = String(threadId || '').trim();
+  if (id.length === 0) {
+    return '';
+  }
+  return 'instarmony://open?route=direct&id=' + encodeURIComponent(id) + '&from=notify';
+}
+
+async function pushToPhone(cfg, title, body, itemKey, threadId) {
   const notifyCfg = cfg.notify || {};
   const rawId = String(itemKey || Date.now());
   const messageId = /^[A-Za-z0-9+/=_\-\s]{1,64}$/.test(rawId) ? rawId : String(notifyIdOf(rawId));
   const token = process.env.INSTAMONY_PUSH_TOKEN || notifyCfg.pushToken || '';
 
   const gateway = notifyCfg.gateway || null;
+  const link = deepLinkOf(threadId);
   if (gateway !== null && typeof gateway.url === 'string' && gateway.url.length > 0) {
     if (token.length < 20) throw new Error('config.json 的 notify.pushToken 为空');
-    const payload = JSON.stringify({ token, title, body, itemKey: rawId, messageId });
+    // threadId 一起交给网关：点击跳转的 uri 由网关在 `clickAction` 里带上
+    const payload = JSON.stringify({
+      token, title, body, itemKey: rawId, messageId, threadId: String(threadId || ''),
+      deepLink: link
+    });
     const res = await httpRequest(gateway.url, {
       method: 'POST',
       headers: {
@@ -335,7 +360,10 @@ async function pushToPhone(cfg, title, body, itemKey) {
         category: agc.category || 'IM',
         title: title,
         body: body,
-        clickAction: { actionType: 0 },
+        // 点通知直达那条会话（见 deepLinkOf）；没有会话 id 时退回"打开 App 首页"
+        clickAction: link.length > 0
+          ? { actionType: 3, uri: link }
+          : { actionType: 0 },
         style: 0,
         // 每条消息一条通知（堆叠）；同一条消息重复投递由 appMessageId 兜住
         notifyId: notifyIdOf(rawId),
@@ -445,7 +473,8 @@ async function handlePush(cfg, session, device, push) {
   const sender = await usernameOf(session, device, push.s);
   const title = sender.length > 0 ? sender : '私信';
   const body = text.length > 0 ? text : '你有一条新私信';
-  await pushToPhone(cfg, title, body, `${threadId}_${itemId || Date.now()}`);
+  // 最后一个参数是 threadId：通知的 clickAction 靠它拼"点开进这条会话"的 uri
+  await pushToPhone(cfg, title, body, `${threadId}_${itemId || Date.now()}`, threadId);
   log('即时推送：' + title + ' —— ' + body);
 }
 

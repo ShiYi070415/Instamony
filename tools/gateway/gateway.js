@@ -139,7 +139,24 @@ function httpsRequest(url, options, body) {
  * `appMessageId` / `notifyId` 的字符集与长度限制很硬（带冒号会被整条拒收，回 80100003），
  * 这里统一做一次清洗。
  */
-async function sendToTokens(cfg, tokens, title, body, itemKey) {
+/**
+ * 通知的点击跳转 URI（与 App 侧 `core/DeepLink` / `core/NotifyRoute` 同一套约定）。
+ *
+ * `instarmony://open?route=direct&id=<会话id>&from=notify` —— `from=notify` 让 App
+ * 走"通知点击"分支（直接进会话），而不是外部深链的落地页。
+ *
+ * 为什么必须有：华为 Push Kit 的点按行为由服务端下发的 `clickAction` 决定；
+ * 只写 `{actionType:0}` 的话点开永远是 App 首页（用户报的"没进正确会话"就是这个）。
+ */
+function deepLinkOf(threadId) {
+  const id = String(threadId || '').trim();
+  if (id.length === 0) {
+    return '';
+  }
+  return 'instarmony://open?route=direct&id=' + encodeURIComponent(id) + '&from=notify';
+}
+
+async function sendToTokens(cfg, tokens, title, body, itemKey, threadId) {
   const agc = cfg.agc || {};
   const saFile = agc.serviceAccountFile
     ? path.resolve(DIR, agc.serviceAccountFile) : DEFAULT_SA_FILE;
@@ -150,13 +167,15 @@ async function sendToTokens(cfg, tokens, title, body, itemKey) {
 
   const rawId = String(itemKey || Date.now());
   const messageId = /^[A-Za-z0-9+/=_\-\s]{1,64}$/.test(rawId) ? rawId : String(notifyIdOf(rawId));
+  const link = deepLinkOf(threadId);
   const payload = JSON.stringify({
     payload: {
       notification: {
         category: agc.category || 'IM',
         title: title,
         body: body,
-        clickAction: { actionType: 0 },
+        // 点通知直达那条会话（见 deepLinkOf）；没有会话 id 时退回首页
+        clickAction: link.length > 0 ? { actionType: 3, uri: link } : { actionType: 0 },
         style: 0,
         notifyId: notifyIdOf(rawId),
         appMessageId: messageId
@@ -295,7 +314,7 @@ function startServer(cfg) {
       const title = String(body.title || 'Instamony').slice(0, 100);
       const text = String(body.body || '').slice(0, 300);
       try {
-        const requestId = await sendToTokens(cfg, list, title, text, body.itemKey);
+        const requestId = await sendToTokens(cfg, list, title, text, body.itemKey, body.threadId);
         log('已发（key ' + slot.slice(0, 6) + '…）：' + title + ' —— ' + text + '  [' + requestId + ']');
         reply(200, { ok: true, requestId });
       } catch (error) {
