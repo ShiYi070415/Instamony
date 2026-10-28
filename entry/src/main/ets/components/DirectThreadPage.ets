@@ -49,7 +49,7 @@ const SEND_SCROLL_SETTLE_MS: number = 260;
 const AVATAR_SIZE: number = 28;
 const BUBBLE_MAX_RATIO: number = 0.72;
 const BUBBLE_GAP_VP: number = 2;
-const GROUP_GAP_VP: number = 8;
+const GROUP_GAP_VP: number = 12;
 /** 气泡的四角基准圆角。 */
 const BUBBLE_RADIUS: number = 22;
 /**
@@ -63,7 +63,7 @@ const SENDER_NAME_SIZE: number = 12;
 const SENDER_NAME_LEFT_PAD: number = 24;
 /** 有发送人名字的组，和上一段之间额外加的距离（需求：顶部 margin 要和其他消息段拉开）。 */
 /** 名字行与它下面那颗气泡的距离（需求：分组 margin top 缩小到和它一样）。 */
-const SENDER_NAME_BOTTOM_GAP: number = 8;
+const SENDER_NAME_BOTTOM_GAP: number = 10;
 const GROUP_GAP_MS: number = 2 * 60 * 1000;
 /**
  * 顶部那行"加载中"动画的高度（vp）—— **始终占位**，不加载时高度为 0。
@@ -675,6 +675,35 @@ export struct DirectThreadPage {
    * 所以只做**上限裁剪**，不做强制：原图什么比例就什么比例，超出的才夹住。
    * 与「应用内拍摄 vs 图库上传」无关：那一层等以后有 `is_camera` 之类的字段再区分。
    */
+  /** 原图的原始比例（高 / 宽；拿不到给 0）。分档与裁剪都用它。 */
+  private static rawAspect(message: DirectMessage): number {
+    const w: number = message.mediaWidth;
+    const h: number = message.mediaHeight;
+    return w > 0 && h > 0 ? h / w : 0;
+  }
+
+  /**
+   * **贴图 / 动图**（透明 PNG / GIF）：小尺寸、Contain、**不铺底色**。
+   *
+   * 单独一个构造器而不是塞进图片分支：一是要做"透明底"，二是贴图不该有圆角与占位底色，
+   * 三是它要在卡片分支之前判断（见 bubbleContent）。
+   */
+  @Builder
+  stickerBubble(message: DirectMessage) {
+    Image(message.mediaUrl.length > 0 ? message.mediaUrl : $r('app.media.grid_placeholder'))
+      .draggable(false)
+      .width(this.mediaBoxWidth(message))
+      .height(this.mediaBoxHeight(message))
+      .objectFit(ImageFit.Contain)
+      .backgroundColor(Color.Transparent)
+      // 动图（GIF / 动态 WebP）交给系统解码器播；失败就停在首帧，不影响布局。
+      .onComplete((): void => {
+        if (this.pinnedToBottom) {
+          this.scrollToNewest(false);
+        }
+      })
+  }
+
   private static mediaAspect(message: DirectMessage): number {
     const w: number = message.mediaWidth;
     const h: number = message.mediaHeight;
@@ -691,13 +720,31 @@ export struct DirectThreadPage {
     return Math.max(ratio, 9 / 16);
   }
 
-  /** 气泡里图片的宽度：贴图是屏幕 1/3，普通图片仍是原来的宽度。 */
+  /**
+   * 气泡里图片的宽度，**按屏幕宽度分档**（需求）：
+   *   · 贴图：1/3 屏；
+   *   · 方形图（≈1:1）：4/7 屏；
+   *   · 长图（竖图）：1/2 屏；
+   *   · 横图：4/6 屏。
+   *
+   * 比例取自原图尺寸（见 mediaAspect），拿不到尺寸时按横图那一档算。
+   */
   private mediaBoxWidth(message: DirectMessage): number {
+    const screen: number = this.screenWidthVp > 0 ? this.screenWidthVp : FALLBACK_WIDTH_VP;
     if (message.mediaSticker) {
-      const screen: number = this.screenWidthVp > 0 ? this.screenWidthVp : FALLBACK_WIDTH_VP;
       return Math.round(screen / 3);
     }
-    return this.bubbleMediaWidth();
+    const ratio: number = DirectThreadPage.rawAspect(message);
+    if (ratio > 0 && Math.abs(ratio - 1) <= 0.02) {
+      // 方形：4/7
+      return Math.round(screen * 4 / 7);
+    }
+    if (ratio > 1.02) {
+      // 长图（高 > 宽）：1/2
+      return Math.round(screen / 2);
+    }
+    // 横图（含未知尺寸）：4/6
+    return Math.round(screen * 4 / 6);
   }
 
   /** 气泡里图片的高度：宽度 × 比例（见 mediaAspect）。 */
@@ -1196,7 +1243,15 @@ export struct DirectThreadPage {
   @Builder
   bubbleContent(message: DirectMessage, index: number) {
     Column({ space: 6 }) {
-      if (message.shareKind.length > 0) {
+      if (message.mediaSticker) {
+        /*
+         * **贴图 / 动图最先判断**（用户报："贴图被识别成卡片了"）。
+         *
+         * 以前这里先看 `shareKind`：某些贴图条目同时带了分享类字段，于是被画成了大卡片。
+         * 贴图就是一张小图，不该走卡片那条路 —— 所以把它提到最前面。
+         */
+        this.stickerBubble(message)
+      } else if (message.shareKind.length > 0) {
         // 分享的帖子/视频：画成卡片（见 sharePostCard / shareVideoCard）。
         this.shareCard(message)
       } else if (message.mediaUrl.length > 0) {
