@@ -160,6 +160,35 @@ iris 那条死了，但上网查到一个关键线索 —— instagrapi 官方�
 看它的请求头/字段与 instagrapi 有何差异 —— 差一步就成了，成了之后端到端延迟会从
 1~2 秒变成亚秒级。
 
+### 后来的补充：对照实现也试了，仍然 400
+
+照 `Nerixyz/instagram_mqtt`（TypeScript 的 FBNS 实现，297 star）核对过：
+
+- 它的注册字段与 instagrapi 完全一致（`device_type=android_mqtt`、`device_sub_type=2`、
+  `guid`/`uuid`、`family_device_id` 新 uuid4、`users`、`_csrftoken`）；
+- 它还揭示一件事：**token 内部的 `di` 是 FBNS 下发的设备 id**，而 instagrapi 注册时用的
+  `guid`/`uuid` 是**客户端自己的 uuid** —— 两者本来就不一致，所以"对齐它们"不是解法。
+
+又补试了 6 种组合（完整 40 头 + `X-IG-App-ID=567310203415052`、`is_main_push_channel=1`、
+设备 id 与 token 内 `di` 一致、`users=ck`、signed_body）—— 全部
+`400 {"message":"Invalid request","status":"fail"}`。
+
+累计试过 **16 种**。结合 iris 也是同一种失败模式，现在最可信的判断是：
+
+> **IG 的"设备信任"路径（iris 实时订阅 + FBNS push 注册）都要求会话来自一次真实的
+> 移动端登录（带设备注册）。我们这种"网页 Cookie 派生"的会话进不去这两条路。**
+
+这也是为什么 instagrapi / instagram_mqtt 的用户能用 —— 它们都是**密码登录**，
+登录过程本身就完成了设备注册。
+
+### 于是只剩两条路（需要你决定）
+
+1. **接受现状**：轮询 1~2 秒（当前实现），不碰密码登录；
+2. **在 relay 里加密码登录**（instagrapi 的 `login` 流程：密码 + 可能的 2FA/challenge），
+   拿到真实设备会话后 iris / FBNS 才有希望。代价：与本项目"只用网页会话、
+   不碰密码"的约定冲突，而且 2FA / 风控需要人工介入。
+
+
 ## 七、这些文件留着干什么
 
 | 文件 | 用途 |
