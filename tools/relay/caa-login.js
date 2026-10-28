@@ -495,6 +495,247 @@ function extractLoginPayload(data) {
   return null;
 }
 
+/* ------------------------------------------------- 两步验证（ap.2sv 链） */
+
+const AP_2SV_ENTRYPOINT = 'com.bloks.www.ap.two_step_verification.entrypoint';
+const AP_2SV_CODE_ENTRY = 'com.bloks.www.ap.two_step_verification.code_entry';
+const AP_2SV_CODE_ENTRY_ASYNC = 'com.bloks.www.ap.two_step_verification.code_entry_async';
+
+/** 取一对平衡括号内的表达式（Bloks 的 lispy 字符串里会嵌套、且含引号）。 */
+function bloksParenthesized(value, start) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < value.length; index++) {
+    const ch = value[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '(') depth++;
+    else if (ch === ')') {
+      depth--;
+      if (depth === 0) return value.slice(start, index + 1);
+    }
+  }
+  return '';
+}
+
+/** 读表达式的直接操作数（不展开嵌套表达式）。 */
+function bloksExpressionItems(value) {
+  if (!value.startsWith('(') || !value.endsWith(')')) return [];
+  const items = [];
+  let index = 1;
+  while (index < value.length - 1) {
+    const ch = value[index];
+    if (/\s/.test(ch)) {
+      index++;
+      continue;
+    }
+    let item = '';
+    if (ch === '(') {
+      item = bloksParenthesized(value, index);
+      if (item.length === 0) return [];
+    } else if (ch === '"') {
+      let end = index + 1;
+      let escaped = false;
+      for (; end < value.length; end++) {
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (value[end] === '\\') {
+          escaped = true;
+          continue;
+        }
+        if (value[end] === '"') break;
+      }
+      item = value.slice(index, end + 1);
+    } else {
+      const match = /^[^()\s"]+/.exec(value.slice(index));
+      if (match === null) return [];
+      item = match[0];
+    }
+    items.push(item);
+    index += item.length;
+  }
+  return items;
+}
+
+/**
+ * 从 Bloks 布局里取出"绑定在某个 app id 上的 context_data"。
+ *
+ * 布局里有 lispy 字符串形如 `(f4i (dkc "key1" "key2" …) (dkc "v1" "v2" …))`：
+ * 找到目标 app id 之后的第一处 `(f4i …)`，把键值对齐后取 `context_data`。
+ * 这是两步验证链唯一的通行证，取不到就走不下去。
+ */
+function bloksExtractContextValue(data, appId, contextKey) {
+  const strings = [];
+  collectStrings(data, strings);
+  const anchor = JSON.stringify(appId);
+  for (const text of strings) {
+    let from = 0;
+    for (;;) {
+      const found = text.indexOf(anchor, from);
+      if (found < 0) break;
+      from = found + anchor.length;
+      const mapStart = text.indexOf('(f4i', found);
+      if (mapStart < 0) continue;
+      const tail = text.slice(found + anchor.length);
+      const nextApp = /(^|[^_a-zA-Z0-9])com\.bloks\.[_a-zA-Z0-9.]+/.exec(tail);
+      if (nextApp !== null && (found + anchor.length + nextApp.index) < mapStart) continue;
+      let expression = bloksParenthesized(text, mapStart);
+      while (expression.length > 0) {
+        const items = bloksExpressionItems(expression);
+        if (items.length !== 3 || items[0] !== 'f4i') break;
+        const keys = bloksExpressionItems(items[1]);
+        const values = bloksExpressionItems(items[2]);
+        if (keys[0] !== 'dkc' || values[0] !== 'dkc' || keys.length !== values.length) break;
+        expression = '';
+        for (let index = 1; index < keys.length; index++) {
+          const key = keys[index];
+          const value = values[index];
+          if (!key.startsWith('"')) continue;
+          let name = '';
+          try {
+            name = JSON.parse(key);
+          } catch (error) {
+            continue;
+          }
+          if (name === contextKey) {
+            if (!value.startsWith('"')) return '';
+            try {
+              return JSON.parse(value);
+            } catch (error) {
+              return '';
+            }
+          }
+          if (name === 'server_params') expression = value;
+        }
+      }
+    }
+  }
+  return '';
+}
+
+/** 所有字符串拼起来（判断"是否需要两步验证"）。 */
+function bloksAllText(data) {
+  const strings = [];
+  collectStrings(data, strings);
+  return strings.join('\n');
+}
+
+/** 是否走了两步验证（布局里出现 ap.two_step_verification.entrypoint）。 */
+function bloksNeedsTwoStep(data) {
+  return bloksAllText(data).indexOf(AP_2SV_ENTRYPOINT) >= 0;
+}
+
+/** 从失败响应里挑出给人看的错误文案（IG 把它放在 UI 文本里）。 */
+function bloksErrorMessage(data) {
+  const text = bloksAllText(data);
+  const known = [
+    "Can't find account",
+    "We can't find",
+    'password you entered',
+    'incorrect',
+    'too many',
+    'wait a few minutes',
+    'suspended',
+    'checkpoint'
+  ];
+  for (const phrase of known) {
+    const index = text.indexOf(phrase);
+    if (index >= 0) {
+      return text.slice(index, Math.min(index + 120, text.length)).replace(/\s+/g, ' ').trim();
+    }
+  }
+  return '';
+}
+
+/**
+ * 走完两步验证链：entrypoint → code_entry → 提交验证码。
+ *
+ * @param getCode 异步回调，返回用户输入的验证码
+ */
+async function resolveTwoStep(profile, sendData, getCode, log) {
+  const entryContext = bloksExtractContextValue(sendData, AP_2SV_ENTRYPOINT, 'context_data');
+  if (entryContext.length === 0) {
+    return { loggedIn: false, reason: '两步验证：没取到 entrypoint 的 context_data' };
+  }
+  log('    两步验证 1/3：打开验证入口');
+  const entry = await bloksAsyncAction(profile, AP_2SV_ENTRYPOINT, {
+    client_input_params: {
+      auth_secure_device_id: '',
+      accounts_list: [],
+      has_whatsapp_installed: 0,
+      family_device_id: profile.phoneId,
+      machine_id: profile.mid
+    },
+    server_params: {
+      use_open_instead_of_push: 0,
+      context_data: entryContext,
+      INTERNAL__latency_qpl_marker_id: 36707139,
+      INTERNAL__latency_qpl_instance_id: Date.now(),
+      device_id: profile.uuid,
+      use_close_instead_of_back: 0
+    }
+  });
+
+  const codeContext = bloksExtractContextValue(entry.data, AP_2SV_CODE_ENTRY, 'context_data');
+  if (codeContext.length === 0) {
+    return { loggedIn: false, reason: '两步验证：没取到 code_entry 的 context_data' };
+  }
+  log('    两步验证 2/3：打开验证码输入页');
+  const codeEntry = await bloksApp(profile, AP_2SV_CODE_ENTRY, {
+    client_input_params: { aac: profile.caaAac || '' },
+    server_params: {
+      context_data: codeContext,
+      show_close_button: 0,
+      device_id: profile.uuid,
+      INTERNAL_INFRA_screen_id: 'generic_code_entry',
+      is_dismissable: 1
+    }
+  });
+
+  const submitContext = bloksExtractContextValue(codeEntry.data, AP_2SV_CODE_ENTRY_ASYNC, 'context_data');
+  if (submitContext.length === 0) {
+    return { loggedIn: false, reason: '两步验证：没取到 code_entry_async 的 context_data' };
+  }
+  const code = String(await getCode()).trim();
+  if (code.length === 0) {
+    return { loggedIn: false, reason: '两步验证：没有输入验证码' };
+  }
+  log('    两步验证 3/3：提交验证码');
+  const submit = await bloksAsyncAction(profile, AP_2SV_CODE_ENTRY_ASYNC, {
+    client_input_params: {
+      auth_secure_device_id: '',
+      aac: profile.caaAac || '',
+      code: code,
+      family_device_id: profile.phoneId,
+      device_id: profile.androidId,
+      machine_id: profile.mid
+    },
+    server_params: {
+      context_data: submitContext,
+      INTERNAL__latency_qpl_marker_id: 36707139,
+      INTERNAL__latency_qpl_instance_id: Date.now(),
+      device_id: profile.uuid
+    }
+  });
+  const parsed = extractLoginPayload(submit.data);
+  if (parsed === null) {
+    return {
+      loggedIn: false,
+      reason: '两步验证已提交，但响应里没找到登录结果：' + (bloksErrorMessage(submit.data) || '未知'),
+      raw: submit.data
+    };
+  }
+  return { loggedIn: true, parsed };
+}
+
 /* ---------------------------------------------------------------- 主流程 */
 
 /**
@@ -751,16 +992,50 @@ async function caaLogin(profile, username, password, log, options) {
     };
   }
 
-  const twoStep = extractTwoStepContext(send.data);
+  /*
+   * 登录结果没直接给。三种可能，按顺序判：
+   *   1. 走了两步验证（布局里有 ap.two_step_verification.entrypoint）
+   *      → 有 getCode 回调就把链走完，没有就把现场交回去；
+   *   2. 账号密码错 / 账号不存在 → IG 把文案放在 UI 文本里（如 "Can't find account"）；
+   *   3. 布局形状变了 → 返回原始响应供对齐。
+   */
+  profile.caaAac = aac;
+  if (bloksNeedsTwoStep(send.data)) {
+    if (typeof (options || {}).getCode === 'function') {
+      const resolved = await resolveTwoStep(profile, send.data, options.getCode, log);
+      if (resolved.loggedIn === true) {
+        const headers = resolved.parsed.headers || {};
+        const authorization = String(headers['IG-Set-Authorization'] || headers['ig-set-authorization'] || '');
+        return {
+          loggedIn: true,
+          aac,
+          cookies: resolved.parsed.cookies || {},
+          authorization: authorization.replace(/^IG-Set-Authorization:\s*/i, ''),
+          twoStepContext: '',
+          steps
+        };
+      }
+      return {
+        loggedIn: false, aac, cookies: {}, authorization: '', twoStepContext: '',
+        steps, reason: resolved.reason, raw: resolved.raw
+      };
+    }
+    return {
+      loggedIn: false, aac, cookies: {}, authorization: '', twoStepContext: '',
+      steps, reason: '需要两步验证：重新运行并允许输入验证码（--caa-login 会提示）', raw: send.data
+    };
+  }
+
+  const errorText = bloksErrorMessage(send.data);
   return {
     loggedIn: false,
     aac,
     cookies: {},
     authorization: '',
-    twoStepContext: twoStep,
+    twoStepContext: extractTwoStepContext(send.data),
     steps,
-    reason: twoStep.length > 0
-      ? '需要两步验证（已拿到 two_step_verification_context，下一步接 ap.two_step_verification 链）'
+    reason: errorText.length > 0
+      ? '登录失败：' + errorText
       : '响应里没找到登录结果（布局形状可能变了，见 LOGIN.md）',
     raw: send.data
   };

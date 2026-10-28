@@ -688,7 +688,10 @@ async function runCaaLogin(argv) {
   const password = await readLine('IG 密码（不回显）：', true);
   if (password.length === 0) die('没输入密码');
 
-  const result = await caaLogin(profile, username, password, (text) => log(text));
+  // 两步验证时按需提示输入验证码（2FA / 短信码）
+  const result = await caaLogin(profile, username, password, (text) => log(text), {
+    getCode: () => readLine('两步验证码（短信 / TOTP 六位）：')
+  });
 
   for (const step of result.steps) {
     log('  ' + step.step + ' → HTTP ' + step.status);

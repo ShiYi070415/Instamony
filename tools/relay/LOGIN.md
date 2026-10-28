@@ -1,5 +1,32 @@
 # IG 账号登录：这次踩通的路（存档，后续攻克 App 登录时看这里）
 
+## 0. 现在有两条登录路（推荐用 JS 版）
+
+| 方式 | 命令 | 依赖 |
+| --- | --- | --- |
+| **JS 版（正在完善）** | `node instamony.js --caa-login` | 只要 Node |
+| Python 版（已验证可用） | `python login_ig.py` → `node instamony.js --import-session settings.json` | Python + instagrapi |
+
+JS 版移植自 instagrapi 的 CAA/Bloks 流程，实测已打通的部分：
+
+| 步骤 | 实测结果 |
+| --- | --- |
+| USDID 设备身份注册 | ✅ `{"usdid_registration":{"success":true,...}}` |
+| attestation nonce | ✅ `challenge_nonce` |
+| 取 aac（CAA 账号访问上下文） | ✅ 303 字符 |
+| oauth token 预取 | ✅ HTTP 200 |
+| **提交账号密码** | ✅ HTTP 200，IG 真实处理（假账号回 `login_failed` + "Can't find account"） |
+| 两步验证链（ap.2sv） | 已实现 entrypoint → code_entry → 提交验证码，**待真账号验证** |
+
+三个关键结论（避免以后重复踩）：
+
+1. **`graphql_www` 的路径是 `https://i.instagram.com/graphql_www`，没有 `/api` 前缀**；
+   带 `/api` 会回 `404 + not-logged-in` 的 HTML，很容易误判成"未登录"。
+2. **设备证明不需要 Play Integrity**：IG 接受 keystore 不可用状态
+   （`{"attestation":[{"version":2,"type":"keystore","errors":[-1013],...}]}`），
+   USDID 只是本地 P-256 密钥 —— 所以 JS 甚至 ArkTS 都能做。
+3. 所有请求都要带 `X-Meta-Usdid`（设备签名头），否则像非本机设备。
+
 > 一句话结论：**网页 Cookie 派生的会话进不了 IG 的设备信任路径**（iris 实时订阅、FBNS 推送注册
 > 全部被拒）；换成**一次真机登录（instagrapi / 密码登录）产生的会话**后，两条通道**双双放行**。
 > 所以"要实时"的真正门槛不是代码，而是**会话从哪来**。
