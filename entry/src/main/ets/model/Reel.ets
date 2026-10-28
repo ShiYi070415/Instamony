@@ -290,6 +290,14 @@ export interface ReelStreamVm {
   loadFirst(): Promise<void>;
   /** 再要一页。 */
   requestMore(): Promise<void>;
+  /**
+   * 丢掉手上这份列表、把游标归零（"重新拉首屏"的第一步）。
+   *
+   * 需求（底栏点当前项）：在第一条时再点一下 = 刷新这一页。reels 没有下拉刷新，所以刷新
+   * 就是 `reset()` + `loadFirst()`（见 ReelsPage.onTabRepeatTap）。
+   * 个人主页那条链的数据是进页时带进来的，那边把它实现成"什么都不丢、只重报一次"。
+   */
+  reset(): void;
 }
 
 /** small JSON → 模型；拿不到必要字段就返回 null。 */

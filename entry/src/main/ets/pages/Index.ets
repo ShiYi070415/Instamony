@@ -89,7 +89,8 @@ import {
   SETTING_DARK_UI,
   SETTING_MATERIAL_LEVEL,
   SETTING_MATERIAL_THICKNESS,
-  SETTING_VIDEO_MUTED
+  SETTING_VIDEO_MUTED,
+  TAB_TAP_KEYS
 } from '../core/AppSettings';
 // 沉浸光感材质：验证弹窗的外观（见 showChallengeDialog）与首页胶囊共用同一套档位。
 import { immersiveMaterial } from '../components/MaterialSurface';
@@ -1735,6 +1736,14 @@ struct Index {
    * 滚动效果，所以这里建一个、同时交给 FeedList 用在 List 上。
    */
   private feedScroller: Scroller = new Scroller();
+  /**
+   * 搜索页瀑布流（探索流）的滚动控制器。
+   *
+   * 和 feedScroller 同一个用途：交给 `bindToScrollable`，HDS 标题栏才会跟着它做滚动
+   * 联动（内容滚到栏底下时背板渐显）。**不绑的话，搜索页标题栏永远停在"还没开始滚"
+   * 那一档**，配上不透明的材质就是用户看到的那块"盖住探索流的黑块"。
+   */
+  private searchFlowScroller: Scroller = new Scroller();
   /**
    * 信息流离开时停在哪一条（帖子 key）。
    *
@@ -8010,15 +8019,23 @@ struct Index {
    */
   private pageTitleStyle(): TitleBarStyleOptions {
     /*
-     * **Reels 页也用首页那套标题栏样式**（用户报："顶部还是黑块"）。
+     * **搜索页也用首页那套标题栏样式**（用户报："搜索页顶部有黑块，盖住探索流、内容穿不过
+     * 屏幕边缘"）。
      *
-     * 原来只有首页用 `feedTitleStyle()`（材质背板 + 滚动时渐变的动态背景），其余页签用
-     * `destinationTitleStyle()` —— 那套在"没有滚动绑定"时基本是一块**不透明底**，于是
-     * Reels 内容区上下留出的模糊背景带**在顶部被标题栏的黑底盖住**，看起来就是黑块。
-     * 换成首页那套之后，标题栏背后是材质/透明，模糊背景就能透出来。
+     * 两个条件缺一不可：
+     *   1. 样式用 `feedTitleStyle()`：它带 `enableScrollEffect`，内容滚到栏底下时背板才
+     *      渐显（"透"）；`destinationTitleStyle()` 是常驻材质 + 不做滚动联动，配上页面的
+     *      不透明底，整条栏就是一块**黑**。
+     *   2. 探索流那条瀑布流要绑到标题栏上（见 nativeShell 的 bindToScrollable）——
+     *      没绑的话滚动量永远是 0，第 1 条一样退化成一整块不透明背板。
+     * 内容能"穿"到栏底下还靠 Refresh / 瀑布流那两颗 `.clip(false)`（见 SearchPage.build）。
+     *
+     * Reels 页仍然用 destinationTitleStyle（用户要求把 hdsnavigation 的模糊加回来）。
      */
-    // Reels 页恢复用 destinationTitleStyle（用户要求把 hdsnavigation 的模糊加回来）。
-    return this.currentTab() === AppTab.Home ? this.feedTitleStyle() : this.destinationTitleStyle();
+    const tab: AppTab = this.currentTab();
+    return tab === AppTab.Home || tab === AppTab.Search
+      ? this.feedTitleStyle()
+      : this.destinationTitleStyle();
   }
 
   /**
@@ -8188,6 +8205,23 @@ struct Index {
     }
     hilog.debug(DOMAIN, TAG, 'tab click i=%{public}d sink=%{public}d sel=%{public}d',
       index, this.barSink, this.selectedIndex);
+    /*
+     * **点的是当前这一项**：不切页，改成"回到顶部 / 已在顶部就刷新"（需求）。
+     *
+     * 放在所有 mode 分支之前：这一段不涉及切页，只发一个"点了当前项"的信号（见 repeatTabTap），
+     * 由各分页自己决定"滚回顶部"还是"刷新"—— 滚动位置只有它们的 Scroller 知道。
+     *
+     * 吞点击窗口那条判断必须放在**这里、restoreBarByTap 之前**：restoreBarByTap 会开窗口，
+     * 开完再查会把我们自己的这一次点击吃掉（切页那条路也是这么绕开的，见下面）。
+     */
+    if (index === this.selectedIndex) {
+      if (Date.now() < this.barClickGuardUntilMs) {
+        // 同一次点击里多报进来的回调：吃掉，别让"回顶部"变成"回顶部 + 刷新"。
+        return;
+      }
+      this.repeatTabTap(index);
+      return;
+    }
     if (this.barHideMode === BAR_HIDE_SYSTEM && this.currentTab() !== AppTab.Reels) {
       this.selectedIndex = index;
       this.selectTab(TAB_ITEMS[index].tab);
@@ -8221,6 +8255,30 @@ struct Index {
     }
     this.selectedIndex = index;
     this.selectTab(TAB_ITEMS[index].tab);
+  }
+
+  /**
+   * 点了**当前这一项**（需求："点击当前页面 item 可以回到顶部，在顶部点击时触发刷新和系统下拉
+   * 刷新动画"）。
+   *
+   * 外壳这一层只做两件事：把沉着的栏捞回来（点一下就该恢复，和切页那条路一致，只是不切页），
+   * 然后发一个"点了当前项"的信号。**"回顶部还是刷新"由各分页自己判**：滚动位置只有它们手里的
+   * Scroller 知道（见 core/AppSettings 的 TAB_TAP_* 键，以及各页的 onTabRepeatTap）。
+   */
+  private repeatTabTap(index: number): void {
+    if (this.barSink !== 0) {
+      this.restoreBarByTap();
+    }
+    if (this.barHideMode === BAR_HIDE_SYSTEM && this.currentTab() !== AppTab.Reels) {
+      this.showBar();
+    }
+    const key: string = index < TAB_TAP_KEYS.length ? TAB_TAP_KEYS[index] : '';
+    if (key.length === 0) {
+      return;
+    }
+    hilog.debug(DOMAIN, TAG, 'tab repeat tap i=%{public}d', index);
+    // 时间戳而不是布尔：连点两次要各响一次（见 TAB_TAP_HOME 的说明）。
+    AppStorage.setOrCreate(key, Date.now());
   }
 
   /**
@@ -10321,6 +10379,8 @@ struct Index {
   searchPage() {
     SearchPage({
       vm: this.searchVm,
+      // 探索流那条瀑布流的控制器交给标题栏（见 searchFlowScroller 的说明）。
+      flowScroller: this.searchFlowScroller,
       onFeedScroll: (deltaY: number, offsetY: number, scrollState: ScrollState): void => {
         this.onFeedScroll(deltaY, offsetY, scrollState);
       },
@@ -10467,8 +10527,10 @@ struct Index {
       avoidLayoutSafeArea: false,
       enableComponentSafeArea: false
     })
-    // 把内容的滚动容器交给标题栏，滚动效果才有的放矢（当前效果本身是关的）。
-    .bindToScrollable([this.feedScroller])
+    // 把内容的滚动容器交给标题栏，滚动效果才有的放矢。
+    //   · 首页：信息流那条 List；
+    //   · 搜索页：探索流那条瀑布流（两条都交，HDS 按当前可见的那条算滚动量）。
+    .bindToScrollable([this.feedScroller, this.searchFlowScroller])
     // 这是应用根页面，没有上一级可回，所以不显示返回键（示例里是 false）。
     .hideBackButton(true)
     .titleMode(HdsNavigationTitleMode.MINI)

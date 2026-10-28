@@ -36,7 +36,8 @@ import { SearchPost, SearchUser } from '../model/Search';
 import { SearchViewModel } from '../viewmodel/SearchViewModel';
 import { ScrollDelta } from '../core/ScrollReport';
 import { MATERIAL_THICKNESS_ULTRA_THIN, SEARCH_BOX_COLLAPSED, SEARCH_BOX_FOCUS_REQUEST,
-  SETTING_MATERIAL_THICKNESS } from '../core/AppSettings';
+  SETTING_MATERIAL_THICKNESS, TAB_TAP_SEARCH, TAB_TAP_TOP_EPSILON_VP,
+  TAB_TAP_TOP_SCROLL_MS } from '../core/AppSettings';
 import { PlatformCap } from '../core/PlatformCap';
 import { SearchSurfaceModifier, SurfaceModifier } from './MaterialSurface';
 
@@ -232,8 +233,23 @@ export struct SearchPage {
    */
   private manualExpand: boolean = false;
   private readonly listScroller: Scroller = new Scroller();
-  /** 瀑布流自己的控制器：`currentOffset()` 只对**绑上去的那个容器**有效，不能和 List 共用。 */
-  private readonly flowScroller: Scroller = new Scroller();
+  /**
+   * 瀑布流自己的控制器：`currentOffset()` 只对**绑上去的那个容器**有效，不能和 List 共用。
+   *
+   * **对外可见、且允许宿主注入**（不能在宿主里再 new 一个：`currentOffset()` 只认真正绑上去
+   * 的那个实例）。宿主要把它交给 HDS 标题栏（`bindToScrollable`），标题栏才会随内容滚动做
+   * 动态模糊；不绑的话栏是一块不透明底 —— 就是用户看到的"顶部黑块把探索流裁掉"。
+   * 宿主不传时这里自己 new 一个（组件单独用也不会崩）。
+   */
+  flowScroller: Scroller = new Scroller();
+  /**
+   * **底栏点了「搜索」那一项**（毫秒时间戳，由 pages/Index 写）。
+   *
+   * 需求："点击当前页面 item 可以回到顶部，在顶部点击时触发刷新和系统下拉刷新动画"。
+   * 这一页有两种内容（探索瀑布流 / 搜索结果列表），用哪条 Scroller、刷哪一份数据，
+   * 只有本页知道（见 onTabRepeatTap）。
+   */
+  @StorageProp(TAB_TAP_SEARCH) @Watch('onTabRepeatTap') private tabRepeatTapMs: number = 0;
   /** 滚动增量记账（底栏下沉/隐藏用，见 core/ScrollReport）。 */
   private readonly scrollDelta: ScrollDelta = new ScrollDelta();
   /**
@@ -394,6 +410,41 @@ export struct SearchPage {
       return;
     }
     this.vm.search(text);
+  }
+
+  /**
+   * 底栏点了「搜索」那一项（需求："点击当前页面 item 可以回到顶部，在顶部点击时触发刷新"）。
+   *
+   * 这一页有两种内容，**各刷各的**：
+   *   · 关键词为空 → 探索瀑布流（`flowScroller`），刷新走 refreshRecommended；
+   *   · 有关键词 → 结果列表（`listScroller`），刷新就是把这句关键词重新搜一遍。
+   * 只给**当前这一种**的 Scroller 判位置并滚动：另一条不在树上，`currentOffset()` 恒为 0，
+   * 拿它判断会让"已经在顶部"永远成立、于是每次点都变成刷新。
+   */
+  private onTabRepeatTap(): void {
+    const hasQuery: boolean = this.searchText.length > 0;
+    const scroller: Scroller = hasQuery ? this.listScroller : this.flowScroller;
+    const offset: number = scroller.currentOffset().yOffset;
+    if (offset > TAB_TAP_TOP_EPSILON_VP) {
+      scroller.scrollTo({
+        xOffset: 0,
+        yOffset: 0,
+        animation: { duration: TAB_TAP_TOP_SCROLL_MS, curve: Curve.EaseOut }
+      });
+      return;
+    }
+    if (this.refreshing) {
+      return;
+    }
+    if (hasQuery) {
+      // 结果列表这一支**没有** Refresh（那是瀑布流专用的），刷新动作就是"同一句再查一次"。
+      this.vm.search(this.searchText);
+      return;
+    }
+    // 瀑布流这一支：先置 refreshing —— Refresh 是 `$$this.refreshing` 双向绑定的，
+    // 置真之后系统那颗转圈才会真的转（refreshRecommended 完成时自己置回 false）。
+    this.refreshing = true;
+    this.refreshRecommended();
   }
 
   /** 一列的宽度（vp）：(瀑布流宽 − 列缝) ÷ 列数。 */
@@ -758,9 +809,19 @@ export struct SearchPage {
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       Column() {
-        // 顶部让出标题栏 + 搜索框那一块（见 SEARCH_TOP_OFFSET）。
-        // 搜索框收起来时那一块不占位，留白跟着减掉 —— 加 animation 让它和搜索框的淡出同步
-        // （不然上面的框在动、下面的内容却是"啪"地跳一下）。
+        /*
+         * 顶部让出标题栏 + 搜索框那一块（见 SEARCH_TOP_OFFSET）。
+         *
+         * **这一层必须是"透明的空 Stack"**（和 FeedList 的 build 一致）：它只负责把内容的
+         * **起点**推下去避让标题栏，本身不画任何底色；真正的"内容能穿到标题栏底下"由
+         * Refresh / 瀑布流的 `.clip(false)` 负责（见 recommendFlow 与 build 里那颗 Refresh）。
+         *
+         * 这里曾经是问题的发源地：Refresh 少了 `.clip(false)`，于是瀑布流被 Refresh 的顶边
+         * 硬裁一刀 —— 用户看到的"顶部黑块把探索流裁掉、内容穿不过屏幕边缘"就是它。
+         *
+         * 搜索框收起来时那一块不占位，留白跟着减掉 —— 加 animation 让它和搜索框的淡出同步
+         * （不然上面的框在动、下面的内容却是"啪"地跳一下）。
+         */
         Stack()
           .width('100%')
           .height(this.searchBoxCollapsed ? SEARCH_BAR_TOP_OFFSET : SEARCH_TOP_OFFSET)
@@ -798,6 +859,14 @@ export struct SearchPage {
             .onRefreshing((): void => {
               this.refreshRecommended();
             })
+            /*
+             * **Refresh 也别裁**（这一条是本轮"顶部黑块裁掉探索流"的成因）：
+             * Refresh 自己是个容器，它的可滚动子节点被它裁在**自己的**边界以内 ——
+             * 只给瀑布流写 `.clip(false)` 不够，刷新器这一层就会先把越界的内容切掉，
+             * 表现就是"内容滚到搜索框下沿就没了、上不去标题栏"。
+             * FeedList 那边一直是两颗 `clip(false)`（列表 + Refresh），这里补齐成同一套。
+             */
+            .clip(false)
             .layoutWeight(1)
           }
         }

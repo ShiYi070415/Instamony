@@ -142,6 +142,36 @@ export const SEARCH_BOX_COLLAPSED: string = 'searchBoxCollapsed';
  */
 export const SEARCH_BOX_FOCUS_REQUEST: string = 'searchBoxFocusRequest';
 /**
+ * AppStorage 键：**"底栏点了当前这一项"的请求**（毫秒时间戳，由 pages/Index 写，各分页读）。
+ *
+ * 需求："点击当前页面 item 可以回到顶部，在顶部点击时触发刷新和系统下拉刷新动画"。
+ *
+ * 为什么走 AppStorage 而不是回调：`onTabBarClick` 发生在**底栏**（HdsTabs）那一层，而"现在滚到
+ * 哪了、要不要刷新"只有各个分页自己知道（它们的 Scroller 都是组件私有的）。两边不是同一棵子树，
+ * 只能靠全局这份事实对齐 —— 和搜索框那套（SEARCH_BOX_FOCUS_REQUEST）同一个做法。
+ *
+ * **一页一个键**：一个键的话每个页面都得自己解析"这次是不是给我的"，@Watch 一响全都要醒一遍；
+ * 分开之后只有被点的那一页会动手。值是时间戳而不是布尔：连点两次也要各响一次。
+ */
+export const TAB_TAP_HOME: string = 'tabTapHome';
+export const TAB_TAP_REELS: string = 'tabTapReels';
+export const TAB_TAP_DIRECT: string = 'tabTapDirect';
+export const TAB_TAP_SEARCH: string = 'tabTapSearch';
+export const TAB_TAP_PROFILE: string = 'tabTapProfile';
+/** 按底栏下标取"点了当前项"的键（下标顺序就是 tabs 的显示顺序，见 pages/Index 的 TAB_ITEMS）。 */
+export const TAB_TAP_KEYS: string[] = [
+  TAB_TAP_HOME, TAB_TAP_REELS, TAB_TAP_DIRECT, TAB_TAP_SEARCH, TAB_TAP_PROFILE
+];
+/**
+ * 偏移量小于这个值（vp）就算"已经在顶部"：这时候再点当前项就触发刷新。
+ *
+ * 给一点死区是因为回弹/惯性停下时 yOffset 常留个零点几 —— 严格 `> 0` 会把"已经在顶部"
+ * 判成"还没到顶部"，用户点一下只会滚一点点、刷新永远出不来。
+ */
+export const TAB_TAP_TOP_EPSILON_VP: number = 4;
+/** "回到顶部"那一跳的动画时长（毫秒）：和系统下拉刷新那种干脆感对齐。 */
+export const TAB_TAP_TOP_SCROLL_MS: number = 260;
+/**
  * AppStorage 键：**首屏封面已解码张数**（由 core/PosterCache 写，FeedList 读）。
  *
  * 需求："给首屏那 6 张封面用低一档的地址先解码"。解出来一张就 +1 —— 值一变，列表里那几格

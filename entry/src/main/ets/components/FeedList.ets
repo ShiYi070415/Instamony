@@ -15,7 +15,10 @@ import {
   MATERIAL_THICKNESS_ULTRA_THIN,
   SETTING_DARK_UI,
   SETTING_MATERIAL_THICKNESS,
-  SETTING_VIDEO_MUTED
+  SETTING_VIDEO_MUTED,
+  TAB_TAP_HOME,
+  TAB_TAP_TOP_EPSILON_VP,
+  TAB_TAP_TOP_SCROLL_MS
 } from '../core/AppSettings';
 import { MediaPrefetch } from '../core/MediaPrefetch';
 import { PosterCache } from '../core/PosterCache';
@@ -962,6 +965,14 @@ export struct FeedList {
    * 值本身也参与查询（`PosterCache.has(url, posterReady)`），所以它不是一个"读了没用"的状态。
    */
   @StorageProp(FEED_POSTER_READY) posterReady: number = 0;
+  /**
+   * **底栏点了「首页」那一项**（毫秒时间戳，由 pages/Index 写）。
+   *
+   * 需求："点击当前页面 item 可以回到顶部，在顶部点击时触发刷新和系统下拉刷新动画"。
+   * 判"回顶部还是刷新"要用滚动位置，而 Scroller 在本组件手里 —— 所以外壳只发信号，
+   * 决定权在这里（见 repeatTapToTop）。
+   */
+  @StorageProp(TAB_TAP_HOME) @Watch('onTabRepeatTap') private tabRepeatTapMs: number = 0;
   /**
    * 关注状态不再存在组件里 —— 见 core/FollowState。
    *
@@ -2105,6 +2116,37 @@ export struct FeedList {
     }
     this.lastAskMs = now;
     this.onNearEnd();
+  }
+
+  /**
+   * 底栏点了「首页」那一项（需求："点击当前页面 item 可以回到顶部，在顶部点击时触发刷新"）。
+   *
+   * **先判位置、再决定动作**：
+   *   · 在下面 → 平滑滚回顶部（跳动会让用户失去位置感）；
+   *   · 已经在顶部 → 走一次刷新。刷新用的是列表里那条**系统 Refresh**（`refreshing` 是
+   *     `$$` 双向绑定的），所以转圈就是系统那颗，不是自绘的。
+   */
+  private onTabRepeatTap(): void {
+    // 不在前台的分页不该响应（FeedList 平时只有首页那一份，留着是为了以后复用）。
+    if (!this.active) {
+      return;
+    }
+    const offset: number = this.listScroller.currentOffset().yOffset;
+    if (offset > TAB_TAP_TOP_EPSILON_VP) {
+      this.listScroller.scrollTo({
+        xOffset: 0,
+        yOffset: 0,
+        animation: { duration: TAB_TAP_TOP_SCROLL_MS, curve: Curve.EaseOut }
+      });
+      return;
+    }
+    // 正在刷就别再点一次（会把上一次的请求打断，转圈也会闪）。
+    if (this.refreshing) {
+      return;
+    }
+    // 交给宿主那条刷新流程（它会先置 refreshing=true，系统 Refresh 自己播转圈）。
+    this.refreshing = true;
+    this.onRefresh();
   }
 
   /**

@@ -1,4 +1,4 @@
-﻿/*
+/*
  * 「用户 / 我的」页面 → **视频分页**点进去的那个 Reels 页的视图模型。
  *
  * 需求："用户和我的页面的视频分页点进去是新的页面，采用 reels 模板"。所以这一页的界面就是
@@ -112,6 +112,16 @@ export class ProfileReelsViewModel implements ReelStreamVm {
     this.active = index > 0 ? index : 0;
     this.ensureDetail(this.active);
     this.ensureDetail(this.active + 1);
+  }
+
+  /**
+   * 「刷新」这一步（见 `ReelStreamVm.reset`）。
+   *
+   * 这一页的列表是进页时**带进来**的（某人的视频分页），没有"重新拉首屏"这回事 ——
+   * 数据源在 ProfileViewModel 手里。所以这里什么都不丢：紧接着的 `loadFirst()` 会把手上
+   * 那份原样重报一次（用户看到的就是"列表还在、只是被重新铺了一遍"）。
+   */
+  reset(): void {
   }
 
   /**

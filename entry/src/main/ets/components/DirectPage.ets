@@ -22,6 +22,7 @@ import { DirectViewModel } from '../viewmodel/DirectViewModel';
 import { ScrollDelta } from '../core/ScrollReport';
 // 回到前台的即时刷新（见 startPolling）。
 import { AppLifecycle } from '../core/AppLifecycle';
+import { TAB_TAP_DIRECT, TAB_TAP_TOP_EPSILON_VP, TAB_TAP_TOP_SCROLL_MS } from '../core/AppSettings';
 
 /** 顶部让出标题栏、底部让出悬浮 tab 栏（与首页/我的同一个数）。 */
 const DIRECT_TOP_OFFSET: number = 94;
@@ -79,6 +80,13 @@ export struct DirectPage {
   @State private hasMore: boolean = false;
   @State private screenWidthVp: number = FALLBACK_WIDTH_VP;
   private readonly listScroller: Scroller = new Scroller();
+  /**
+   * **底栏点了「私信」那一项**（毫秒时间戳，由 pages/Index 写）。
+   *
+   * 需求："点击当前页面 item 可以回到顶部，在顶部点击时触发刷新和系统下拉刷新动画"。
+   * 判"回顶部还是刷新"要用滚动位置，而 Scroller 在本组件手里（见 onTabRepeatTap）。
+   */
+  @StorageProp(TAB_TAP_DIRECT) @Watch('onTabRepeatTap') private tabRepeatTapMs: number = 0;
   /** 滚动增量记账（底栏下沉/隐藏用，见 core/ScrollReport）。 */
   private readonly scrollDelta: ScrollDelta = new ScrollDelta();
   /**
@@ -292,6 +300,28 @@ export struct DirectPage {
     }
     this.lastAskMs = now;
     this.vm.requestMore();
+  }
+
+  /**
+   * 底栏点了「私信」那一项（需求："点击当前页面 item 可以回到顶部，在顶部点击时触发刷新"）。
+   *
+   * 在下面 → 平滑滚回顶部；已经在顶部 → 走一次刷新（转圈是系统 Refresh 那颗，
+   * 因为 `refreshing` 是 `$$` 双向绑定的）。
+   */
+  private onTabRepeatTap(): void {
+    const offset: number = this.listScroller.currentOffset().yOffset;
+    if (offset > TAB_TAP_TOP_EPSILON_VP) {
+      this.listScroller.scrollTo({
+        xOffset: 0,
+        yOffset: 0,
+        animation: { duration: TAB_TAP_TOP_SCROLL_MS, curve: Curve.EaseOut }
+      });
+      return;
+    }
+    if (this.refreshing) {
+      return;
+    }
+    this.refresh();
   }
 
   /**

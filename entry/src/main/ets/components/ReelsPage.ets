@@ -21,7 +21,8 @@ import { TouchProbe } from '../core/TouchProbe';
 import { Reel, ReelStreamVm } from '../model/Reel';
 import { ReelsViewModel } from '../viewmodel/ReelsViewModel';
 import { VideoSurface } from './VideoSurface';
-import { MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS, SETTING_VIDEO_MUTED } from '../core/AppSettings';
+import { MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS, SETTING_VIDEO_MUTED,
+  TAB_TAP_REELS } from '../core/AppSettings';
 import { ReelsAction } from '../core/ReelsAction';
 import { ReelsCrashLog } from '../core/ReelsCrashLog';
 import { Haptics } from '../core/Haptics';
@@ -2270,6 +2271,14 @@ export struct ReelsPage {
   @Prop overlaySink: number = 0;
   @State private reels: Array<Reel> = [];
   @State private activeIndex: number = 0;
+  /**
+   * **底栏点了「视频」那一项**（毫秒时间戳，由 pages/Index 写）。
+   *
+   * 需求："点击当前页面 item 可以回到顶部，在顶部点击时触发刷新和系统下拉刷新动画"。
+   * 这一页是一屏一条的 Swiper，没有下拉刷新 —— 所以"回顶部"= 回到第一条，"刷新"=
+   * 重新拉首屏（见 onTabRepeatTap）。
+   */
+  @StorageProp(TAB_TAP_REELS) @Watch('onTabRepeatTap') private tabRepeatTapMs: number = 0;
   /** 当前这条的首帧出来了没有（决定封面叠层撤不撤，见 reelPage）。 */
   @State private videoReady: boolean = false;
   @State private busy: boolean = false;
@@ -2595,6 +2604,60 @@ export struct ReelsPage {
     this.logCurrent();
     // 记进视图模型：切 tab 会重建这个组件，位置要能恢复（见 ReelsViewModel.activeIndex）。
     this.vm.setActiveIndex(index);
+  }
+
+  /**
+   * 底栏点了「视频」那一项。
+   *
+   * 这一页是**一屏一条**的 Swiper（没有下拉刷新），所以：
+   *   · 不在第一条 → 回到第一条（走 Swiper 自己的切换动画，和用户滑上去一样）；
+   *   · 已经在第一条 → 重新拉首屏（`reset` + `loadFirst`），也就是这一页的"刷新"。
+   *
+   * 两个前提：
+   *   · 只有**可见的那一段**响应（探索 / 关注两段常驻，见 segment 与 activeSegment）；
+   *   · 重载期间拦一道 `busy`，别让连点叠出两次首屏请求（这一页对并发很敏感，见闪退那几条）。
+   */
+  private onTabRepeatTap(): void {
+    if (this.segment >= 0 && this.segment !== this.activeSegment) {
+      return;
+    }
+    if (this.reels.length === 0) {
+      // 还没内容：当成一次"重试"（首屏失败时用户点底栏也是这个意思）。
+      this.reloadFirstPage();
+      return;
+    }
+    if (this.activeIndex > 0) {
+      ReelsCrashLog.note(`repeat-tap -> first (from ${this.activeIndex}/${this.reels.length})`);
+      this.swiperController.changeIndex(0, true);
+      return;
+    }
+    this.reloadFirstPage();
+  }
+
+  /**
+   * 重新拉首屏（本页的"刷新"）。
+   *
+   * `reset()` 清掉视图模型里那份列表和分页游标，`loadFirst()` 重新取一页；回调里同步回本页，
+   * 列表换掉之后 `onReels` 自己会把 `activeIndex` 夹回合法范围（见那段说明）。
+   */
+  private reloadFirstPage(): void {
+    if (this.busy) {
+      return;
+    }
+    ReelsCrashLog.note(`repeat-tap reload src=${this.source}`);
+    ReelsCrashLog.flush();
+    try {
+      this.vm.reset();
+      this.vm.loadFirst()
+        .then((): void => {
+          this.syncFromVm();
+        })
+        .catch((): void => {
+        });
+    } catch (error) {
+      ReelsCrashLog.note('repeat-tap reload threw');
+      ReelsCrashLog.flush();
+    }
   }
 
   /**
