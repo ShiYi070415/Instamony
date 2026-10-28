@@ -1075,7 +1075,8 @@ async function runCaaLogin(argv) {
      * 结果是 `CAA_LOGIN_FALLBACK:fallback_triggered` + `embedded_payloads` + 2FA 票据）。
      * 落盘之后可以用工具扫一遍，不必再让用户重跑一次登录。
      */
-    if (result.raw !== undefined && result.raw !== null) {
+    if ((result.raw !== undefined && result.raw !== null)
+      || (result.sendRaw !== undefined && result.sendRaw !== null)) {
       try {
         const dumpDir = path.join(DIR, '.tmp');
         fs.mkdirSync(dumpDir, { recursive: true });
@@ -1086,7 +1087,7 @@ async function runCaaLogin(argv) {
           twoStepContextLength: typeof result.twoStepContext === 'string'
             ? result.twoStepContext.length : 0,
           steps: result.steps,
-          raw: result.raw
+          raw: result.raw === undefined ? null : result.raw
         }, null, 2), 'utf8');
         log('完整响应已保存：' + dumpFile + '（形状变了的话，把这个文件发我）');
         if (result.sendRaw !== undefined && result.sendRaw !== null) {

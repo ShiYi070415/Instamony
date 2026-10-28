@@ -1094,10 +1094,17 @@ async function firstLiveAsyncAction(profile, actionIds, params, log, label) {
  * 对当前 IG 版本已经不对了，与其继续猜，不如让响应告诉我们。
  */
 async function resolveTwoStepByContext(profile, context, sendData, getCode, log, steps) {
-  // 1) entrypoint：先把响应里出现的 2FA 相关 app id 都当候选
-  const entryCandidates = bloksCandidateApps(sendData, ['two_step', 'two_factor', '2sv']);
-  const entryIds = entryCandidates.length > 0 ? entryCandidates : [TSV_ENTRYPOINT];
-  log('    两步验证 1/4：entrypoint（候选 ' + entryIds.length + ' 个）');
+  // 1) entrypoint：先把响应里出现的 2FA 相关 app id 都当候选（关键词放宽，宁多勿漏）
+  const entryCandidates = bloksCandidateApps(sendData,
+    ['two_step', 'two_factor', '2sv', '2fa', 'verif', 'challenge']);
+  const entryIds = entryCandidates.length > 0
+    ? entryCandidates.slice(0, 8) : [TSV_ENTRYPOINT, AP_2SV_ENTRYPOINT];
+  log('    两步验证 1/4：entrypoint（响应里找到 ' + entryCandidates.length
+    + ' 个 2FA 相关 app id，将试 ' + entryIds.length + ' 个）');
+  // 把候选**全名**打出来：app id 是 IG 随时会改的东西，日志里有全名才能事后对齐。
+  for (const id of entryIds) {
+    log('      候选：' + id);
+  }
   const entryParams = {
     client_input_params: {
       device_id: profile.androidId,
