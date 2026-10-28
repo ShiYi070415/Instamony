@@ -20,7 +20,29 @@ config.example.json 配置模板
 
 所以：**一个用户、一台自己的机器、自己的出口 IP、自己的推送目标**。
 
-## 二、App 侧准备（一次性）
+## 二、IG 会话怎么来（两种，任选）
+
+### A. 让 relay 自己开浏览器登录（推荐）
+
+```bash
+node relay.js --login
+```
+
+它会用一个**专属 Edge/Chrome profile**（`.login-profile/`）打开 Instagram 登录页
+——你在窗口里正常登录（2FA、验证码都照常输），登录完成后 relay 通过浏览器调试协议
+（CDP）把 `instagram.com` 下的 Cookie 读回来，**自动写进 `config.json` 的 `ig.cookie`**，
+不需要你复制任何东西。
+
+- 全程不碰密码、不模拟点击，登录流程由你亲手完成，所以不会被"自动化登录"风控；
+- 会话过期（IG 会踢）时重跑同一条命令即可；
+- 登录状态留在那个 profile 里，下次连登录页都不用再登；
+- 只支持本机有 Edge / Chrome 的场合（Windows 默认就有）。
+- 想换等待时长：`--login-timeout 600`（秒，默认 300）。
+
+原理一句话：**IG 不会跳到我们指定的回调地址**，它只把 `sessionid` 写在自己域名下的
+Cookie 里；要读到它，只能让 relay 自己成为那个浏览器（细节见 `browser-login.js` 文件头）。
+
+### B. 从手机 App 复制（没有桌面浏览器时）
 
 1. 手机装上 Instamony 并登录 IG；
 2. 「设定 → 诊断 → **复制中转材料（会话 + 推送 token）**」——剪贴板里会得到一段 JSON：
@@ -111,6 +133,8 @@ config.example.json 配置模板
 
 ```bash
 cp config.example.json config.json     # 填好 cookie / token / AGC 或 MeoW
+node relay.js --login                    # 开浏览器登录，自动写回 ig.cookie
+node relay.js --login --login-timeout 600  # 同上，等 10 分钟
 node relay.js                          # 前台常驻，Ctrl+C 停
 node relay.js --once                   # 只跑一轮，验证配置
 node relay.js --test-push "通道自检"    # 只验通知通道：不看 IG、不占锁、不写 state

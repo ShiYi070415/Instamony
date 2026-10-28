@@ -277,7 +277,9 @@ async function fetchInboxRaw(cfg) {
     return { threads: [], seqId: 0, snapshotAtMs: 0 };
   }
   if (res.status === 401 || res.status === 403 || res.body.indexOf('login_required') >= 0) {
-    warn('IG 拒绝：会话失效（HTTP ' + res.status + '）。请在 App 里重新登录后重新导出材料。');
+    warn('IG 拒绝：会话失效（HTTP ' + res.status + '）。'
+      + '重跑 `node relay.js --login` 即可（会开浏览器让你重新登录并自动写回配置）；'
+      + '也可以去手机 App「复制中转材料」手工粘贴。');
     process.exit(3);
   }
   if (res.status === 404 && res.body.indexOf('not-logged-in') >= 0) {
@@ -811,6 +813,44 @@ function releaseLock() {
   }
 }
 
+/**
+ * `--login`：浏览器登录 → 自动写 config.json。
+ *
+ * 为什么要有这条路：原来拿会话得去手机 App 里「复制中转材料」再粘进配置，
+ * 会话一过期（IG 会踢）就得再来一遍。现在 relay 自己开一个专属浏览器窗口，
+ * 你在里面正常登录，它从调试协议里把 Cookie 读回来写进配置 —— 不碰密码，
+ * 也不需要你复制粘贴（机制见 browser-login.js 文件头）。
+ */
+async function runBrowserLogin() {
+  const { loginWithBrowser } = require('./browser-login.js');
+  const timeoutArg = process.argv.indexOf('--login-timeout');
+  const timeoutMs = timeoutArg >= 0 && process.argv[timeoutArg + 1]
+    ? Math.max(30, Number(process.argv[timeoutArg + 1])) * 1000 : 5 * 60 * 1000;
+  const result = await loginWithBrowser({
+    profileDir: path.join(__dirname, '.login-profile'),
+    timeoutMs: timeoutMs,
+    log: (text) => log(text)
+  });
+  if (result.cookie.length === 0) {
+    warn('这次没有拿到会话（窗口关太早 / 没登录成功 / 只登了一半）。');
+    warn('可以重跑 node relay.js --login，或者手动把 cookie 粘进 config.json 的 ig.cookie。');
+    process.exit(4);
+  }
+  const file = configPath();
+  let cfg = {};
+  try {
+    cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    cfg = { ig: {}, notify: { channel: 'agc' } };
+  }
+  cfg.ig = cfg.ig || {};
+  cfg.ig.cookie = result.cookie;
+  fs.writeFileSync(file, JSON.stringify(cfg, null, 2), 'utf8');
+  log(`已写入 ${file}（ig.cookie 长度 ${result.cookie.length}，账号 ${result.userId || '?'}）`);
+  log('下一步：node relay.js          # 60 秒一轮，聊天中即时推');
+  log('      或 node relay.js --once  # 先跑一轮验一下（只记账不推送）');
+}
+
 /* ------------------------------------------------------------------ 主循环 */
 
 /**
@@ -832,6 +872,14 @@ function intervalOverride() {
 async function main() {
   quiet = process.argv.indexOf('--quiet') >= 0;
   const once = process.argv.indexOf('--once') >= 0;
+  /*
+   * `--login`：打开浏览器让你登录，登完自动把会话写进 config.json。
+   * 放在 loadConfig 之前 —— 这一步的意义正是"还没有 cookie 的时候把 cookie 弄到手"。
+   */
+  if (process.argv.indexOf('--login') >= 0) {
+    await runBrowserLogin();
+    return;
+  }
   const cfg = loadConfig();
   // 先定"当前用哪个 token"：App 上报过就用那条，否则用配置里那条。
   initToken(cfg);

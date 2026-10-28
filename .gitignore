@@ -39,6 +39,8 @@ tools/relay/state.json
 # App 上报进来的 pushToken（等于"往哪台设备推送"的凭据）
 tools/relay/token.json
 tools/relay/mqtt-device.json
+# 登录用的专属浏览器 profile（里面有 IG 会话，等同密码）
+tools/relay/.login-profile/
 tools/relay/.relay.lock
 # release keystore (private key -- never commit)
 signing/*.p12
