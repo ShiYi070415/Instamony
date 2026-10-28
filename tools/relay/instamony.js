@@ -1378,10 +1378,42 @@ async function runCaaLogin(argv) {
   if (session.sessionid.length === 0 || session.userId.length === 0) {
     warn('响应里解析出了登录结果，但会话不完整（' + sessionProblemOf(session)
       + '）—— **不覆盖现有会话**');
-    // 只打名字（值里是会话材料）；这两行足够判断"布局变了"还是"cookie 少了"。
+    // 只打名字（值里是会话材料）；这几行足够判断"布局变了"还是"cookie 少了"。
     log('解析到的 cookie 名：' + JSON.stringify(result.cookieNames || []));
     log('响应里的 header 名：' + JSON.stringify(result.headerNames || []));
-    log('可能是 Bloks 布局形状变了：把上面两行发回来（不要发任何值）');
+    log('login_response.status：' + (result.loginStatus || '(无)')
+      + '，message：' + (result.loginMessage || '(无)'));
+    /*
+     * **把现场整份落盘**（本地文件，不提交）。
+     *
+     * 为什么要：这次的核心疑问是"IG 到底回了什么" —— cookies 空、headers 里却有
+     * `IG-Set-Authorization` / `ig-set-ig-u-ds-user-id`，要么是**中间态**（让重投密码），
+     * 要么是我们抠到了错的那个对象。没有原始响应就只能猜，而猜就是在赌账号。
+     * 落盘之后用 `--caa-replay` 离线对齐，不必再登录一次。
+     */
+    if (result.raw !== undefined && result.raw !== null) {
+      try {
+        const dumpDir = path.join(DIR, '.tmp');
+        fs.mkdirSync(dumpDir, { recursive: true });
+        const dumpFile = path.join(dumpDir, 'caa-last-response.json');
+        fs.writeFileSync(dumpFile, JSON.stringify({
+          at: new Date().toISOString(),
+          kind: 'incomplete-session',
+          reason: '解析出登录结果但没有 sessionid',
+          loginStatus: result.loginStatus || '',
+          loginMessage: result.loginMessage || '',
+          cookieNames: result.cookieNames || [],
+          headerNames: result.headerNames || [],
+          steps: result.steps,
+          raw: result.raw
+        }, null, 2), 'utf8');
+        log('完整响应已保存：' + dumpFile + '（这次别重试，把这个文件给我就够对齐了）');
+      } catch (error) {
+        warn('保存完整响应失败：' + error.message);
+      }
+    } else {
+      log('没有拿到原始响应（解析层没把它带回来）—— 需要先修 caa-login.js 才能离线对齐');
+    }
     process.exit(4);
   }
   fs.writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2), 'utf8');

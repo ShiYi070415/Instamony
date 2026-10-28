@@ -654,6 +654,15 @@ function loginPayloadFromText(text) {
   if (source.indexOf('login_response') < 0 && source.indexOf('ig-set-authorization') < 0) {
     return null;
   }
+  /*
+   * **优先"带 cookie 的那一份"**。
+   *
+   * 为什么：同一份响应里可能有好几个带 `login_response`/`headers` 的对象（布局规范、
+   * 中间态、真正的结果各有一份）。以前"第一个能解析的就返回"，于是可能拿到一个
+   * `headers` 有值、`cookies` 是空的中间对象 —— 表现是"解析出登录结果，但没有 sessionid"。
+   * 现在先把第一个候选留住当兜底，一旦遇到真正带 cookie 的就换掉。
+   */
+  let fallback = null;
   for (let index = 0; index < source.length; index++) {
     if (source[index] !== '"') continue;
     // 转义引号（`\"`）不是字符串起点。
@@ -680,12 +689,18 @@ function loginPayloadFromText(text) {
       // 同时给一份 `cookie` 串：ArkTS 那份（CaaLoginPayload）就是这个字段名，
       // 两边同名同形，读代码/写测试时才不会拿错（这里踩过一次）。
       const cookie = Object.keys(cookies).map((name) => `${name}=${cookies[name]}`).join('; ');
-      return { loginResponse, headers, cookies, cookie, cookieHeader, raw };
+      const found = { loginResponse, headers, cookies, cookie, cookieHeader, raw };
+      if (Object.keys(cookies).length > 0) {
+        return found;
+      }
+      if (fallback === null) {
+        fallback = found;
+      }
     } catch (error) {
-      continue;
+      // 换下一个字面量
     }
   }
-  return null;
+  return fallback;
 }
 
 /** 从 `layout.bloks_payload.action` 里抠（老位置）。 */
@@ -1761,7 +1776,18 @@ async function caaLogin(profile, username, password, log, options) {
   }
 
   const parsed = extractLoginPayload(send.data);
-  if (parsed !== null) {
+  /*
+   * **"解析出载荷"不等于"登录成功"**。
+   *
+   * 真机踩到的形状：`headers` 有值（`IG-Set-Authorization`、`ig-set-ig-u-ds-user-id` 等都在），
+   * 但 `cookies` 是空的 —— 那多半是**中间态**（IG 让客户端带着新下发的密码密钥重投一次），
+   * 或者响应里还带着 `two_step_verification_context`（那才是该接着走的链）。
+   * 所以：**没有 cookie 就先看有没有 2FA 票据**，有票据就往下走 2FA，别急着宣布"登录成功"。
+   */
+  const parsedCookies = parsed === null ? {} : parsed.cookies;
+  const parsedHasCookies = Object.keys(parsedCookies).length > 0;
+  const pendingTwoStep = parsed !== null && !parsedHasCookies ? twoStepContextOf(send.data) : '';
+  if (parsed !== null && (parsedHasCookies || pendingTwoStep.length === 0)) {
     const authorization = String(parsed.headers['IG-Set-Authorization']
       || parsed.headers['ig-set-authorization'] || '');
     const sessionHeaders = sessionHeadersOf(parsed.headers);
@@ -1776,6 +1802,10 @@ async function caaLogin(profile, username, password, log, options) {
       // 只给"名字"用于诊断（值里是会话材料，不能打到日志里）
       cookieNames: Object.keys(parsed.cookies),
       headerNames: Object.keys(parsed.headers),
+      loginStatus: String((parsed.loginResponse || {}).status || ''),
+      loginMessage: String((parsed.loginResponse || {}).message || ''),
+      // 原始响应带回上层：会话不全时要能落盘，离线对齐（不必再登录一次）
+      raw: send.data,
       twoStepContext: '',
       steps
     };
