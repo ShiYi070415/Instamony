@@ -1135,6 +1135,44 @@ async function main() {
     log('  node relay.js             # 无论上面成不成，轮询照旧兜底');
     return;
   }
+  /*
+   * `--import-session <settings.json>`：导入 instagrapi 的会话。
+   *
+   * 为什么需要：IG 已停用旧登录接口（`needs_upgrade`），现在唯一还能密码登录的
+   * 是 Bloks CAA 流程，而 instagrapi 已经把它跑通并持续维护。
+   * 所以让它在 Python 侧登录一次，`dump_settings()` 出文件，这里导入即可
+   * —— 拿到的是真机登录过的会话，iris / FBNS 才有希望放行。
+   */
+  const importAt = process.argv.indexOf('--import-session');
+  if (importAt >= 0) {
+    const file = process.argv[importAt + 1];
+    if (!file) {
+      die('用法：node relay.js --import-session <instagrapi 的 settings.json 路径>');
+    }
+    const { importInstagrapiSettings } = require('./login.js');
+    const session = importInstagrapiSettings(path.resolve(file), __dirname);
+    try {
+      const cfgFile = configPath();
+      let cfg2 = {};
+      try {
+        cfg2 = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+      } catch (error) {
+        cfg2 = { ig: {}, notify: { channel: 'agc' } };
+      }
+      cfg2.ig = cfg2.ig || {};
+      cfg2.ig.cookie = session.cookie;
+      fs.writeFileSync(cfgFile, JSON.stringify(cfg2, null, 2), 'utf8');
+      log('已把会话同步进 ' + cfgFile);
+    } catch (error) {
+      warn('同步 config.json 失败：' + error.message);
+    }
+    log('导入完成：账号 ' + (session.userId || '?') + '，设备 ' + session.device.phoneId
+      + '，authorization ' + (session.authorization.length > 0 ? '有' : '无'));
+    log('下一步：');
+    log('  node subscribe-probe.js   # iris 实时订阅是否放行');
+    log('  node fbns-test.js 90      # FBNS 推送是否放行');
+    return;
+  }
   const cfg = loadConfig();
   // 先定"当前用哪个 token"：App 上报过就用那条，否则用配置里那条。
   initToken(cfg);

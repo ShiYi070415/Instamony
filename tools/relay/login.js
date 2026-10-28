@@ -35,6 +35,20 @@ const { loadDeviceIdentity } = require('./realtime.js');
 const { MOBILE_UA } = require('./fbns.js');
 
 const IG_APP_ID = '567067343352427';
+/**
+ * 登录时的客户端版本。UA 里的版本号就是它 —— 
+eeds_upgrade 就是按它判的，
+ * 所以做成可配置，好在不改代码的情况下试不同版本。
+ */
+let appVersion = '449.0.0.52.84';
+let versionCode = '1079242191';
+
+/** 按当前版本号拼 UA（与 instagrapi 的 USER_AGENT_BASE 同格式）。 */
+function userAgentNow() {
+  return 'Instagram ' + appVersion +
+    ' Android (34/14; 480dpi; 1344x2992; Google/google; Pixel 8 Pro; husky; husky; en_US; ' +
+    versionCode + ')';
+}
 /** 密码加密里那个公钥不是固定的，从 qe/sync 的响应头现取。 */
 const QE_SYNC_URL = 'https://i.instagram.com/api/v1/qe/sync/';
 const LOGIN_URL = 'https://i.instagram.com/api/v1/accounts/login/';
@@ -124,7 +138,7 @@ async function encryptPassword(password, publicKeyId, publicKeyBase64) {
 /** 取 qe/sync 响应头里的公钥与 key id。 */
 async function fetchPasswordKey(device) {
   const headers = {
-    'User-Agent': MOBILE_UA,
+    'User-Agent': userAgentNow(),
     'X-IG-App-ID': IG_APP_ID,
     'X-IG-Capabilities': '3brTv10=',
     'X-IG-Connection-Type': 'WIFI',
@@ -188,15 +202,43 @@ async function passwordLogin(options) {
     path: '/api/v1/accounts/login/',
     method: 'POST',
     timeout: 30000,
+    /*
+     * 登录请求**不带** Authorization / Cookie（还没有会话），但**必须带全客户端身份头**：
+     * 少了 X-Bloks-Version-Id / X-Pigeon-* / X-IG-Bandwidth-* / X-FB-* 这些，
+     * IG 会直接判定"客户端版本太旧"回 `needs_upgrade` —— 而不是告诉你密码对不对。
+     * 这一组是照 instagrapi 的 base_headers 抄的。
+     */
     headers: {
-      // 登录请求本身**不带** Authorization / Cookie（还没有会话）
-      'User-Agent': MOBILE_UA,
+      'User-Agent': userAgentNow(),
       'X-IG-App-ID': IG_APP_ID,
       'X-IG-Capabilities': '3brTv10=',
       'X-IG-Connection-Type': 'WIFI',
       'X-IG-Device-ID': guide,
       'X-IG-Android-ID': androidDeviceId,
       'X-IG-Family-Device-ID': device.phoneId,
+      'X-IG-App-Locale': 'en_US',
+      'X-IG-Device-Locale': 'en_US',
+      'X-IG-Mapped-Locale': 'en_US',
+      'X-Pigeon-Session-Id': 'UFS-' + crypto.randomUUID() + '-1',
+      'X-Pigeon-Rawclienttime': (Date.now() / 1000).toFixed(3),
+      'X-IG-Bandwidth-Speed-KBPS': '-1.000',
+      'X-IG-Bandwidth-TotalBytes-B': '0',
+      'X-IG-Bandwidth-TotalTime-MS': '0',
+      'X-IG-App-Startup-Country': 'US',
+      'X-Bloks-Version-Id': '799db3e387d7a21a19c72918b8698b6cd28a1516ade363792c100ed45a0f9f0b',
+      'X-Bloks-Is-Layout-RTL': 'false',
+      'X-Bloks-Is-Panorama-Enabled': 'true',
+      'X-IG-Timezone-Offset': String(-new Date().getTimezoneOffset() * 60),
+      'X-FB-HTTP-Engine': 'Tigon/MNS/TCP',
+      'X-Tigon-Is-Retry': 'False',
+      'X-Zero-Balance': 'INIT',
+      'X-Zero-State': 'unknown',
+      'Zero-HTTP-Network-Interface': 'wifi',
+      'X-FB-Client-IP': 'True',
+      'X-FB-Server-Cluster': 'True',
+      'X-IG-WWW-Claim': '0',
+      'IG-INTENDED-USER-ID': '0',
+      'X-IG-Nav-Chain': '9MV:self_profile:2,ProfileMediaTabFragment:self_profile:3,9Xf:self_following:4',
       'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
       'Content-Length': Buffer.byteLength(form),
       Accept: '*/*'
@@ -392,7 +434,77 @@ async function interactiveLogin(stateDir, log) {
   return session;
 }
 
+/* ------------------------------------------- 导入 instagrapi 的会话（settings.json） */
+
+/**
+ * 把 **instagrapi 的 `settings.json`** 转成本项目要的会话 + 设备身份。
+ *
+ * 为什么走这条：IG 已经把旧的 `/api/v1/accounts/login/` 整体停用 —— 实测 5 个版本号、
+ * 完整客户端头、甚至**不存在的用户名**，一律回 `needs_upgrade`。真正还能登录的是
+ * **Bloks CAA 流程**，而 instagrapi 已经把它跑通并持续维护。
+ * 与其在 Node 里重写一遍脆弱流程，不如借它登录一次，再把会话导进来：
+ *
+ *   1. 用 instagrapi 登录（CAA / 2FA / challenge 它都处理了）；
+ *   2. `cl.dump_settings("settings.json")`；
+ *   3. 这里导入 —— 得到的才是**真机登录过**的会话，iris / FBNS 才有希望放行。
+ */
+function importInstagrapiSettings(settingsPath, stateDir) {
+  const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  const cookies = settings.cookies || {};
+  const parts = [];
+  for (const name of Object.keys(cookies)) {
+    const value = cookies[name];
+    if (value !== undefined && value !== null && String(value).length > 0) {
+      parts.push(`${name}=${String(value)}`);
+    }
+  }
+  const cookie = parts.join('; ');
+  const sessionid = pickCookie(cookie, 'sessionid');
+  if (sessionid.length === 0) {
+    throw new Error('settings.json 的 cookies 里没有 sessionid —— 这份会话不算登录成功');
+  }
+  const uuids = settings.uuids || {};
+  const phoneId = String(uuids.phone_id || '');
+  const deviceUuid = String(uuids.uuid || '');
+  let androidId = String(uuids.android_device_id || '');
+  if (androidId.startsWith('android-')) {
+    androidId = androidId.slice('android-'.length);
+  }
+  if (phoneId.length === 0 || deviceUuid.length === 0 || androidId.length === 0) {
+    throw new Error('settings.json 的 uuids 不全（需要 phone_id / uuid / android_device_id）');
+  }
+
+  // 设备身份：mqtt-device.json（实时通道与收件箱请求都读它）
+  const identity = { phoneId, uuid: deviceUuid, androidId, createdAt: Date.now() };
+  fs.writeFileSync(path.join(stateDir, 'mqtt-device.json'),
+    JSON.stringify(identity, null, 2), 'utf8');
+
+  // 会话：session.json
+  const authData = settings.authorization_data || {};
+  const authorization = Object.keys(authData).length === 0
+    ? '' : 'Bearer IGT:2:' + Buffer.from(JSON.stringify(authData)).toString('base64');
+  const session = {
+    source: 'instagrapi',
+    userId: pickCookie(cookie, 'ds_user_id'),
+    cookie,
+    sessionid,
+    csrf: pickCookie(cookie, 'csrftoken'),
+    authorization,
+    device: identity,
+    appVersion: String((settings.device_settings || {}).app_version || ''),
+    userAgent: String(settings.user_agent || ''),
+    mid: String(settings.mid || ''),
+    savedAt: Date.now()
+  };
+  fs.writeFileSync(path.join(stateDir, 'session.json'),
+    JSON.stringify(session, null, 2), 'utf8');
+  return session;
+}
+
 module.exports = {
+  setAppVersion: function (version, code) { appVersion = version; versionCode = String(code); },
+  userAgentNow: userAgentNow,
+  importInstagrapiSettings,
   passwordLogin,
   completeTwoFactor,
   interactiveLogin,
