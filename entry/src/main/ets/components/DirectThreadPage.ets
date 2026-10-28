@@ -731,20 +731,36 @@ export struct DirectThreadPage {
    */
   private mediaBoxWidth(message: DirectMessage): number {
     const screen: number = this.screenWidthVp > 0 ? this.screenWidthVp : FALLBACK_WIDTH_VP;
+    /*
+     * **两侧气泡内边距要扣掉**（需求："图片宽度需要减去右侧消息气泡的 padding/margin right * 2"）。
+     *
+     * 气泡所在那一行有 SIDE_PADDING 的留白；按屏幕比例算出来的宽度如果不扣这一侧，
+     * 图片就会顶到屏幕边缘（右侧消息尤其明显）。这里按"档位宽度 − SIDE_PADDING"给，
+     * 再和"这一行真正能用的宽度"取小值兜底（左侧消息还要让出头像的位置）。
+     */
+    const inset: number = SIDE_PADDING * 2;
+    const usable: number = message.mine
+      ? screen - inset
+      : screen - inset - AVATAR_SIZE - 8;
+    let wanted: number = 0;
     if (message.mediaSticker) {
-      return Math.round(screen / 3);
+      wanted = screen / 3;
+    } else {
+      const ratio: number = DirectThreadPage.rawAspect(message);
+      if (ratio > 0 && Math.abs(ratio - 1) <= 0.02) {
+        // 方形：4/7
+        wanted = screen * 4 / 7;
+      } else if (ratio > 1.02) {
+        // 长图（高 > 宽）：1/2
+        wanted = screen / 2;
+      } else {
+        // 横图（含未知尺寸）：4/6
+        wanted = screen * 4 / 6;
+      }
     }
-    const ratio: number = DirectThreadPage.rawAspect(message);
-    if (ratio > 0 && Math.abs(ratio - 1) <= 0.02) {
-      // 方形：4/7
-      return Math.round(screen * 4 / 7);
-    }
-    if (ratio > 1.02) {
-      // 长图（高 > 宽）：1/2
-      return Math.round(screen / 2);
-    }
-    // 横图（含未知尺寸）：4/6
-    return Math.round(screen * 4 / 6);
+    // 需求：只减**一侧**（不用 ×2）。
+    const target: number = wanted - SIDE_PADDING;
+    return Math.round(target > 0 ? Math.min(usable, target) : wanted);
   }
 
   /** 气泡里图片的高度：宽度 × 比例（见 mediaAspect）。 */
