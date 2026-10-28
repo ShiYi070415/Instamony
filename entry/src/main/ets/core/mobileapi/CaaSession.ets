@@ -17,6 +17,7 @@
 
 import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
+import { util } from '@kit.ArkTS';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { InstagramCookieJar, InstagramCookieSnapshot } from '../InstagramCookieJar';
 import { CaaLogin, CaaResult, CaaStep, CaaUsdid } from './CaaLogin';
@@ -376,6 +377,79 @@ export class CaaSession {
       }
     }
     return '';
+  }
+
+  /**
+   * **导出当前会话**（给 relay 用：反过来把手机上拿到的设备级会话搬回电脑）。
+   *
+   * 产出的是 **instagrapi `settings.json` 的形状**（`cookies` 映射 + `uuids` +
+   * `authorization_data`），所以电脑那边**不需要新命令**：直接
+   * `node instamony.js --import-session <这份文件>` 就能用。
+   *
+   * 这一步补上了闭环的另一半：以前只有"电脑 → 手机"（粘贴导入），现在是双向的。
+   * 用户可以在手机上用密码登录拿到会话，再把会话搬到电脑跑中转，不必在电脑上重登一次。
+   *
+   * @returns JSON 文本（没有会话时返回空串）
+   */
+  static async exportSession(): Promise<string> {
+    let identity: MobileIdentity | null = null;
+    try {
+      identity = await MobileSession.getInstance().ensure();
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'export: ensure failed %{public}s', (error as Error).message);
+    }
+    const snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
+    if (identity === null || !snapshot.signedIn) {
+      return '';
+    }
+    // cookie 串 → 映射（instagrapi settings.json 里是对象，不是串）
+    const cookies: Record<string, string> = {};
+    const parts: Array<string> = snapshot.cookie.split(';');
+    for (let index: number = 0; index < parts.length; index++) {
+      const one: string = parts[index].trim();
+      const cut: number = one.indexOf('=');
+      if (cut <= 0) {
+        continue;
+      }
+      cookies[one.substring(0, cut).trim()] = one.substring(cut + 1).trim();
+    }
+    const authorizationData: Record<string, ESObject> = CaaSession.authorizationDataOf(identity.authorization);
+    const uuids: Record<string, string> = {
+      'phone_id': identity.phoneId,
+      'uuid': identity.uuid,
+      'android_device_id': `android-${identity.androidDeviceId}`,
+      'client_session_id': identity.clientSessionId
+    };
+    const deviceSettings: Record<string, string> = {
+      'app_version': identity.app.appVersion,
+      'version_code': identity.app.versionCode,
+      'bloks_versioning_id': identity.app.bloksVersioningId
+    };
+    const out: Record<string, ESObject> = {};
+    out['cookies'] = cookies;
+    out['uuids'] = uuids;
+    out['authorization_data'] = authorizationData;
+    out['device_settings'] = deviceSettings;
+    out['user_agent'] = identity.userAgent();
+    out['mid'] = identity.mid;
+    out['last_login'] = new Date().toISOString();
+    return JSON.stringify(out, null, 2);
+  }
+
+  /** `Bearer IGT:2:<base64(JSON)>` → 那个 JSON 对象（解不开回空对象）。 */
+  private static authorizationDataOf(authorization: string): Record<string, ESObject> {
+    const marker: string = 'Bearer IGT:2:';
+    if (!authorization.startsWith(marker)) {
+      return {};
+    }
+    try {
+      const bytes: Uint8Array = new util.Base64Helper().decodeSync(authorization.substring(marker.length));
+      const text: string = new util.TextDecoder().decodeToString(bytes);
+      return JSON.parse(text) as Record<string, ESObject>;
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'authorization decode failed: %{public}s', (error as Error).message);
+      return {};
+    }
   }
 
   /** 逐步现场，压成一行（界面只有一行能显示）。 */

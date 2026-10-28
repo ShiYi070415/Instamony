@@ -81,12 +81,20 @@ USDID 令牌形状。改解析器前后都该跑一次 —— 它已经抓出过
 node instamony.js --import-session settings.json
 ```
 
+> 先想确认"这份文件能不能被吃下"、又不覆盖现有会话时，用 `--import-check <文件>`：
+> 只解析并打印账号 / sessionid 长度 / authorization / mid / app_version，不落盘。
+
 它会写两份文件（都已在 `.gitignore` 里）：
 
 | 文件 | 内容 |
 | --- | --- |
 | `session.json` | 会话（cookie + `Bearer IGT:2`） |
 | `mqtt-device.json` | 设备三件套（phoneId / uuid / androidId） |
+
+**会话可以从手机上搬过来**：App 的「App 协议登录（实验）」面板里有
+「**复制当前会话（给电脑上的中转用）**」，产出的是 instagrapi settings 形状的 JSON。
+把它存成文件（比如 `phone.json`），`--import-session phone.json` 即可 —— 手机登录一次，
+电脑不用再登。
 
 ### 3. 配置推送
 

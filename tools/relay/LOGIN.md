@@ -26,6 +26,21 @@ JS 版移植自 instagrapi 的 CAA/Bloks 流程，实测已打通的部分：
 > 其中 `qe/sync` 会显示 `HTTP 405` —— **这是 IG 对 `GET /api/v1/qe/sync/` 的固定答复**，
 > 公钥头照常下发（instagrapi 也是 GET，走同一条）。判据是"响应的头里有没有公钥"，不是状态码。
 
+### 会话可以双向搬运（两端形状统一到 instagrapi settings）
+
+| 方向 | 怎么做 |
+| --- | --- |
+| 电脑 → 手机 | App 面板「用已有会话导入」→ 粘 `settings.caa.json` / `session.json` |
+| 手机 → 电脑 | App 面板「复制当前会话（给电脑上的中转用）」→ 存成文件 → `node instamony.js --import-session 文件` |
+
+两边都收敛到 **instagrapi `settings.json` 的形状**（`cookies` 映射 + `uuids` +
+`authorization_data`），所以电脑侧不需要新命令：`--import-session` 直接吃手机导出的文件。
+想先确认不覆盖现有会话，用 `--import-check <文件>`（只解析、不落盘）。
+
+> 顺带记一个 Windows 上的坑：记事本 / `Set-Content -Encoding UTF8`（PS 5.1）写出来的 JSON
+> **带 BOM**，`JSON.parse` 见到 BOM 直接抛 —— 表现是"文件明明在，却报读不到"。
+> 现在所有读 JSON 的地方都会先去掉 BOM。
+
 > `--verify-session` 是**判据**，不是装饰：`push/register/` 那一步对网页 Cookie 派生的会话回
 > 400（实测过），只有设备级会话回 `{"status":"ok"}`。登录"成功"但这一步不过 = 常驻收不到推送。
 

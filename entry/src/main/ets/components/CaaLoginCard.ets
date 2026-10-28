@@ -142,6 +142,17 @@ export struct CaaLoginCard {
        *
        * 真机上既没有 hdc、hilog 也常被冲掉，失败原因只能靠这段文字带出来。
        */
+      /*
+       * **导出当前会话**（反向：手机 → 电脑）。产出 instagrapi settings 形状，
+       * 电脑上 `node instamony.js --import-session <文件>` 直接吃。
+       */
+      Text('复制当前会话（给电脑上的中转用）')
+        .fontSize(12)
+        .fontColor($r('app.color.secondary_text'))
+        .width('100%')
+        .onClick((): void => {
+          this.exportSession();
+        })
       Text('复制登录诊断')
         .fontSize(12)
         .fontColor($r('app.color.secondary_text'))
@@ -333,22 +344,45 @@ export struct CaaLoginCard {
     });
   }
 
+  /**
+   * 导出当前会话到剪贴板（instagrapi settings 形状，电脑上 `--import-session` 直接吃）。
+   *
+   * 里面**是等同密码的东西**（cookie + authorization），提示里要说清楚，别随手发人。
+   */
+  private exportSession(): void {
+    this.status = '正在导出会话…';
+    CaaSession.exportSession().then((text: string): void => {
+      if (text.length === 0) {
+        this.status = '当前没有可用会话（先登录或导入一份）';
+        return;
+      }
+      this.putClipboard(text, '会话已复制（等同密码，别外传）—— 存成文件后 '
+        + 'node instamony.js --import-session 文件名');
+    }).catch((error: Error): void => {
+      this.status = `导出失败：${error.message}`;
+    });
+  }
+
   /** 复制登录诊断（只含结论 / 步骤 / 名字，不含 cookie 与 authorization）。 */
   private copyDiag(): void {
-    const text: string = CaaSession.diagText();
+    this.putClipboard(CaaSession.diagText(), '诊断已复制，粘给我就行（里面没有密码/会话值）');
+  }
+
+  /** 写剪贴板 + 给一句提示（状态行）。 */
+  private putClipboard(text: string, okMessage: string): void {
     try {
       const data: pasteboard.PasteData =
         pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text);
       pasteboard.getSystemPasteboard().setData(data, (err: BusinessError | undefined) => {
         if (err !== undefined && err !== null) {
-          hilog.warn(DOMAIN, TAG, 'caa diag copy failed: %{public}s', err.message);
+          hilog.warn(DOMAIN, TAG, 'clipboard write failed: %{public}s', err.message);
           this.status = `复制失败：${err.message}`;
           return;
         }
-        this.status = '诊断已复制，粘给我就行（里面没有密码/会话值）';
+        this.status = okMessage;
       });
     } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'caa diag copy threw: %{public}s', (error as Error).message);
+      hilog.warn(DOMAIN, TAG, 'clipboard write threw: %{public}s', (error as Error).message);
       this.status = '复制失败（剪贴板不可用）';
     }
   }

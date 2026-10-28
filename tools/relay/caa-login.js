@@ -83,7 +83,8 @@ function request(options, body) {
  * 只取设备档案；那份会话本身不会被复用）。
  */
 function loadDeviceProfile(file) {
-  const settings = JSON.parse(fs.readFileSync(file, 'utf8'));
+  // 去 BOM（Windows 编辑器可能加），否则 JSON.parse 直接抛
+  const settings = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
   const uuids = settings.uuids || {};
   const app = settings.device_settings || {};
   const profile = {
@@ -165,7 +166,7 @@ class Usdid {
 
   load() {
     try {
-      const data = JSON.parse(fs.readFileSync(this.stateFile, 'utf8'));
+      const data = JSON.parse(fs.readFileSync(this.stateFile, 'utf8').replace(/^\uFEFF/, ''));
       if (data && typeof data.privateKey === 'string' && data.privateKey.length > 0) {
         return data;
       }

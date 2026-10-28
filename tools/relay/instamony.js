@@ -74,7 +74,10 @@ function die(text) {
 
 function readJson(file, fallback) {
   try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
+    // 去掉可能的 BOM：Windows 的记事本 / `Set-Content -Encoding UTF8`（PS 5.1）都会写 BOM，
+    // 而 `JSON.parse` 见到 BOM 直接抛 —— 表现是"文件明明在，却报读不到"（真踩过）。
+    const text = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
+    return JSON.parse(text);
   } catch (error) {
     return fallback;
   }
@@ -1173,6 +1176,28 @@ async function main() {
     const file = argv[importAt + 1];
     if (!file) die('用法：node instamony.js --import-session <settings.json>');
     importSession(file);
+    return;
+  }
+
+  /*
+   * `--import-check <file>`：**只解析、不落盘**。
+   *
+   * 用途：拿到一份 `settings.caa.json`（或 App 里「复制当前会话」导出的那份）时，
+   * 先确认"能不能被吃下、里面有没有 sessionid / authorization"，再决定要不要覆盖现有会话。
+   */
+  const checkAt = argv.indexOf('--import-check');
+  if (checkAt >= 0) {
+    const file = argv[checkAt + 1];
+    if (!file) die('用法：node instamony.js --import-check <settings.caa.json>');
+    log('解析 ' + file + '（不落盘）');
+    const parsed = importSession(file, { dryRun: true });
+    log('  账号          ' + (parsed.userId || '（缺 ds_user_id）'));
+    log('  sessionid     ' + parsed.sessionid.length + ' 字符');
+    log('  authorization ' + (parsed.authorization.length > 0 ? '有（' + parsed.authorization.length
+      + ' 字符）' : '无（会退回用 cookie 拼）'));
+    log('  mid           ' + (parsed.mid.length > 0 ? parsed.mid : '（无）'));
+    log('  app_version   ' + (parsed.appVersion || '（无）'));
+    log('结论：这份文件**可以**用 --import-session 导入');
     return;
   }
 
