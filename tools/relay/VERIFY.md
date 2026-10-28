@@ -89,5 +89,17 @@ App 侧同一套逻辑已移植并编译通过，待真机确认。**
 
 ```powershell
 cd tools/relay
-node test-caa-parse.js && node audit-arkts-parity.js
+node test-caa-parse.js && node audit-arkts-parity.js && node test-arkts-parsers.js
 ```
+
+## 五、怎么判定"目标完成"
+
+| 判据 | 现状 |
+| --- | --- |
+| ① CAA 密码登录（含 2FA）产出与 instagrapi settings **等价的会话** | ✅ 已用真实账号完成（`--caa-replay` 重建 + `--verify-session` 四步全绿） |
+| ② 该会话是**设备级**的（推送/实时认它） | ✅ `push/register/` 回 `{"status":"ok"}` |
+| ③ App 内能用同一套逻辑登录（解析/2FA 参数/会话字段） | ✅ 三块都用"真数据 + App 源码直跑"验过（`test-arkts-parsers.js` 10/10） |
+| ④ 真机上那次登录点得通（网络 + ArkUI + 2FA 交互） | ⏳ 待用户实测（代码侧已无已知缺口） |
+| ⑤ 实时私信与本地通知被真正启用 | ⏳ 依赖 ④；链路代码已就位（Worker 实时通道 → DirectRealtime → PushCenter.notifyDirect） |
+
+①–③ 有实测证据；④ 是唯一需要用户动手的一步。
