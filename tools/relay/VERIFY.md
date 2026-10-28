@@ -25,6 +25,31 @@ App 侧同一套逻辑已移植并编译通过，待真机确认。**
 
 即：**CAA 密码登录 + TOTP 2FA → 设备级会话**这条链路已被真实账号验证。
 
+### 追加（2026-10-28 深夜）：密码一次过、但响应里没有 cookie
+
+同账号再登一次（这次没触发 2FA）：`send_login_request` 返回 **200 + `login_response.status=ok`
++ `logged_in_user` 齐全**，但载荷里 `cookies` 是**空对象** —— 会话材料全在 `headers`：
+
+| 头 | 值 |
+| --- | --- |
+| `IG-Set-Authorization` | `Bearer IGT:2:…`（173 字符） |
+| `ig-set-ig-u-ds-user-id` | 账号 id |
+| `ig-set-ig-u-rur` | `KND` |
+| `x-ig-set-www-claim` | claim |
+
+旧解析器只认字符串 `cookies`，于是把"登录成功"判成"没有 sessionid"。修好后
+`--caa-replay`（不重新登录）直接重建会话，`--verify-session` 四项全绿：
+
+```
+② HTTP 200 —— 会话有效（@_yijin.__）
+③ sessionid 一致，authorization 一致，账号 一致
+④ push/register/ HTTP 200 {"status":"ok"} —— 设备信任通过
+```
+
+**结论：`sessionid` 不是必需的** —— IG 会下发"只有 `Authorization` + `ig-u-*` cookie"的
+设备级会话；判据改成「有账号 id，且 sessionid / authorization 至少有一个」，App 侧同步改了
+（`MobileSession.ensure` / `MobileIdentity.isComplete` / `CaaSession.applySession`）。
+
 途中修掉的四个真 bug（都由真机数据发现，均已加回归测试）：
 1. 2FA entrypoint 的 app id 少 `_async`；
 2. 2FA 票据抓错（13 字符 vs 真实 2234 字符）——改为**照布局里给的调用规范**；
@@ -52,7 +77,7 @@ App 侧同一套逻辑已移植并编译通过，待真机确认。**
 
 | 项目 | 怎么做 | 预期 |
 | --- | --- | --- |
-| **真机登录（App）** | 登录页 →「App 协议登录（实验）」→ 先「解析自检」(应 `6/6`) → 再「设备/网络前检」 → 填账号密码 → 输验证码 | 状态行走到 `2sv_verify_code 200`，壳切进主界面 |
+| **真机登录（App）** | 登录页 →「App 协议登录（实验）」→ 先「解析自检」(应 `7/7`，含设备级会话那条) → 再「设备/网络前检」 → 填账号密码 → 输验证码（若 IG 要） | 状态行走到 `send_login_request 200`（或 `2sv_verify_code 200`），壳切进主界面 |
 | **真机实时** | 面板「用已有会话导入」粘 `settings.caa.json`（或先完成上一步） | 私信页实时刷新；来消息弹出本地通知（标题=用户名、正文=内容） |
 
 > 命令行那份已经验证过了；App 侧是**同一套逻辑的移植**（含 2FA 两条链、spec 解析、

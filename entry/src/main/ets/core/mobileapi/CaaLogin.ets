@@ -631,7 +631,50 @@ export class CaaLogin {
     if (spec === null || spec.clientParams['machine_id'] !== 'MID-1') {
       failures.push('2sv-spec-params');
     }
-    return failures.length === 0 ? '解析自检 6/6 通过'
+    /*
+     * ⑦ **真机 2026-10 的形状**：`cookies` 是**空对象**，会话材料全在 `ig-set-*` 头里。
+     *
+     * 这一条不测的话，"登录其实成功、App 却说没拿到会话"只能靠真账号复现 —— 而真账号
+     * 每次复现都要动用一次登录尝试（会被 IG 记一笔）。所以必须固定成自检项。
+     */
+    const deviceLevelFields: Record<string, ESObject> = {};
+    deviceLevelFields['login_response'] =
+      JSON.stringify({ 'logged_in_user': { 'pk': 46473815227 }, 'status': 'ok',
+        'credential_type': 'password' } as Record<string, ESObject>);
+    const deviceLevelHeaders: Record<string, string> = {
+      'IG-Set-Authorization': 'Bearer IGT:2:DEVICE',
+      'ig-set-ig-u-ds-user-id': '46473815227',
+      'ig-set-ig-u-rur': 'KND',
+      'x-ig-set-www-claim': 'hmac.AAAA'
+    };
+    deviceLevelFields['headers'] = JSON.stringify(deviceLevelHeaders);
+    deviceLevelFields['cookies'] = {} as Record<string, string>;
+    const deviceLevelText: string = '(dsg (fom 15942 35 '
+      + JSON.stringify(JSON.stringify(deviceLevelFields)) + '))';
+    const deviceLevelFt: Record<string, ESObject> = {};
+    deviceLevelFt['a'] = deviceLevelText;
+    const deviceLevelPayload0: Record<string, ESObject> = {};
+    deviceLevelPayload0['ft'] = deviceLevelFt;
+    const deviceLevelBloks: Record<string, ESObject> = {};
+    deviceLevelBloks['bloks_payload'] = deviceLevelPayload0;
+    const deviceLevelLayout: Record<string, ESObject> = {};
+    deviceLevelLayout['layout'] = deviceLevelBloks;
+    const deviceLevel: CaaLoginPayload | null =
+      CaaLogin.extractLoginPayload(CaaLogin.parse(JSON.stringify(deviceLevelLayout)));
+    if (deviceLevel === null) {
+      failures.push('device-level-payload');
+    } else {
+      if (deviceLevel.cookie.indexOf('ds_user_id=46473815227') < 0) {
+        failures.push('device-level-uid');
+      }
+      if (deviceLevel.cookie.indexOf('rur=KND') < 0) {
+        failures.push('device-level-rur');
+      }
+      if (deviceLevel.authorization !== 'Bearer IGT:2:DEVICE') {
+        failures.push('device-level-auth');
+      }
+    }
+    return failures.length === 0 ? '解析自检 7/7 通过'
       : `解析自检未通过：${failures.join('、')}`;
   }
 
@@ -1803,6 +1846,142 @@ export class CaaLogin {
   }
 
   /**
+   * `ig-set-*` 响应头 → cookie 串。
+   *
+   * 为什么要这条：IG 有些响应**不下发 `Set-Cookie`**，而是把 cookie 的值放在 `ig-set-*` 头里
+   * 让客户端自己拼（真机 2026-10 的密码登录就是这种：`cookies` 是空对象，但
+   * `ig-set-ig-u-ds-user-id` / `ig-set-ig-u-rur` / `x-ig-set-www-claim` 都在）。
+   * 只认 `cookies` 字段的话，登录成功也会被当成"没拿到会话"（与 relay 同一套语义）。
+   */
+  private static cookiesFromSessionHeaders(headers: Record<string, ESObject>): string {
+    const pairs: Array<string> = [];
+    const seen: Array<string> = [];
+    let uid: string = '';
+    let rur: string = '';
+    let session: string = '';
+    let claim: string = '';
+    let mid: string = '';
+    for (const key of Object.keys(headers)) {
+      const lower: string = key.toLowerCase();
+      const value: string = `${headers[key]}`.replace(/^[A-Za-z-]+:\s*/, '').trim();
+      if (value.length === 0) {
+        continue;
+      }
+      if (lower === 'ig-set-ig-u-ds-user-id') {
+        uid = value;
+      } else if (lower === 'ig-set-ig-u-rur') {
+        rur = value;
+      } else if (lower === 'ig-set-ig-u-sessionid') {
+        session = value;
+      } else if (lower === 'x-ig-set-www-claim') {
+        claim = value;
+      } else if (lower === 'ig-set-x-mid') {
+        mid = value;
+      }
+    }
+    CaaLogin.pushCookiePair(pairs, seen, 'ds_user_id', uid);
+    CaaLogin.pushCookiePair(pairs, seen, 'ig-u-ds-user-id', uid);
+    CaaLogin.pushCookiePair(pairs, seen, 'rur', rur);
+    CaaLogin.pushCookiePair(pairs, seen, 'ig-u-rur', rur);
+    CaaLogin.pushCookiePair(pairs, seen, 'sessionid', session);
+    CaaLogin.pushCookiePair(pairs, seen, 'ig-u-sessionid', session);
+    CaaLogin.pushCookiePair(pairs, seen, 'ig-u-www-claim', claim);
+    CaaLogin.pushCookiePair(pairs, seen, 'mid', mid);
+    return pairs.join('; ');
+  }
+
+  /** 往 cookie 对里加一条（同名只加一次）。 */
+  private static pushCookiePair(pairs: Array<string>, seen: Array<string>,
+                                name: string, value: string): void {
+    if (name.length === 0 || value.length === 0 || seen.indexOf(name) >= 0) {
+      return;
+    }
+    seen.push(name);
+    pairs.push(`${name}=${value}`);
+  }
+
+  /**
+   * 载荷里的 `cookies` 有三种形状（IG 三种都下发过）：
+   *   · 字符串 `"sessionid=…; ds_user_id=…"`（老形状）
+   *   · 对象 `{sessionid: '…'}`（R12 之后的形状）
+   *   · **空对象 `{}` + 值全在 `headers` 里**（真机 2026-10 的密码登录，只看这一项会误判成失败）
+   * 以及数组 `[{name, value}]` 或 `["a=b"]`。
+   */
+  private static cookiesFromRaw(rawCookies: ESObject): string {
+    if (rawCookies === null || rawCookies === undefined) {
+      return '';
+    }
+    if (typeof rawCookies === 'string') {
+      return CaaLogin.parseCookieHeader(rawCookies as string);
+    }
+    const pairs: Array<string> = [];
+    if (Array.isArray(rawCookies)) {
+      const list: Array<ESObject> = rawCookies as Array<ESObject>;
+      for (let index: number = 0; index < list.length; index++) {
+        const item: ESObject = list[index];
+        if (typeof item === 'string') {
+          const one: string = CaaLogin.parseCookieHeader(item as string);
+          if (one.length > 0) {
+            pairs.push(one);
+          }
+        } else if (item !== null && item !== undefined && typeof item === 'object') {
+          const record: Record<string, ESObject> = item as Record<string, ESObject>;
+          const name: string = `${record['name'] === undefined ? '' : record['name']}`;
+          const value: string = `${record['value'] === undefined ? '' : record['value']}`;
+          if (name.length > 0 && value.length > 0) {
+            pairs.push(`${name}=${value}`);
+          }
+        }
+      }
+      return pairs.join('; ');
+    }
+    if (typeof rawCookies === 'object') {
+      const record: Record<string, ESObject> = rawCookies as Record<string, ESObject>;
+      for (const name of Object.keys(record)) {
+        const value: string = `${record[name]}`;
+        if (name.length > 0 && value.length > 0 && value !== 'undefined') {
+          pairs.push(`${name}=${value}`);
+        }
+      }
+    }
+    return pairs.join('; ');
+  }
+
+  /** 两个 cookie 串合并（同名以 `base` 为准）。 */
+  private static mergeCookieText(base: string, extra: string): string {
+    const parts: Array<string> = base.split(';');
+    const more: Array<string> = extra.split(';');
+    const merged: Array<string> = [];
+    for (let index: number = 0; index < more.length; index++) {
+      if (more[index].trim().length > 0) {
+        parts.push(more[index]);
+      }
+    }
+    for (let index: number = 0; index < parts.length; index++) {
+      CaaLogin.pushCookieText(merged, parts[index].trim());
+    }
+    return merged.join('; ');
+  }
+
+  /** 按 `name=value` 塞进合并结果（同名只留第一条）。 */
+  private static pushCookieText(merged: Array<string>, one: string): void {
+    const cut: number = one.indexOf('=');
+    if (cut <= 0) {
+      return;
+    }
+    const name: string = one.substring(0, cut).trim();
+    if (name.length === 0) {
+      return;
+    }
+    for (let index: number = 0; index < merged.length; index++) {
+      if (merged[index].substring(0, merged[index].indexOf('=')).trim() === name) {
+        return;
+      }
+    }
+    merged.push(one);
+  }
+
+  /**
    * 从**一段文本**里抠登录结果：**正向**遍历每个字符串字面量逐个试解。
    *
    * 为什么不能"从 `login_response` 第一次出现处往回扫"：真机响应里第一次出现的地方是一句
@@ -1814,6 +1993,8 @@ export class CaaLogin {
     if (text.indexOf('login_response') < 0 && text.indexOf('ig-set-authorization') < 0) {
       return null;
     }
+    // 兜底用：真正带 cookie 的那一份优先，找不到才退回"第一个能解析的对象"。
+    let fallback: CaaLoginPayload | null = null;
     let index: number = 0;
     while (index < text.length) {
       if (text.charAt(index) !== '"') {
@@ -1857,8 +2038,15 @@ export class CaaLogin {
             authorization = `${headers[key]}`;
           }
         }
-        const cookieRaw: string = typeof raw['cookies'] === 'string' ? raw['cookies'] as string : '';
-        const cookie: string = CaaLogin.parseCookieHeader(cookieRaw);
+        /*
+         * **cookie 有两个来源**，缺一不可（真机 2026-10：`cookies` 是空对象，值全在头里）：
+         *   · 载荷的 `cookies` 字段（字符串 / 对象 / 数组）；
+         *   · `ig-set-*` 响应头里夹带的 cookie 值。
+         * 之前只认字符串 `cookies`，于是"登录其实成功"被判成"没有 sessionid"。
+         */
+        const cookie: string = CaaLogin.mergeCookieText(
+          CaaLogin.cookiesFromRaw(raw['cookies']),
+          CaaLogin.cookiesFromSessionHeaders(headers));
         // 会话材料（mid / rur / claim）也要带回去，别只留 authorization。
         let mid: string = '';
         let rur: string = '';
@@ -1874,12 +2062,20 @@ export class CaaLogin {
             claim = value;
           }
         }
-        return new CaaLoginPayload(cookie, authorization, mid, rur, claim);
+        const found: CaaLoginPayload = new CaaLoginPayload(cookie, authorization, mid, rur, claim);
+        // 优先"带 cookie 的那一份"：同一响应里可能有好几个带 login_response 的对象
+        // （布局规范、中间态、真正的结果各一份），拿到中间态就会误判。
+        if (cookie.length > 0) {
+          return found;
+        }
+        if (fallback === null) {
+          fallback = found;
+        }
       } catch (error) {
         continue;
       }
     }
-    return null;
+    return fallback;
   }
 
   /**

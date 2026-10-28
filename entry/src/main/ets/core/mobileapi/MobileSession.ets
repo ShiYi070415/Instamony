@@ -26,6 +26,7 @@
 
 import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
+import { util } from '@kit.ArkTS';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { InstagramCookieJar, InstagramCookieSnapshot } from '../InstagramCookieJar';
 import {
@@ -140,13 +141,22 @@ export class MobileIdentity {
      *   · `Authorization: Bearer IGT:2:<base64{ds_user_id:<旧账号>, sessionid:<旧账号>}>`
      * 两个身份。IG 的表现要么按旧账号返回数据（"换号后看到的还是上一个人的东西"），
      * 要么直接判成异常会话。所以这里一律按当前值重建，`seed` 里那份只当"有没有过会话"的痕迹。
+     *
+     * **例外：设备级会话**（IG 2026-10 起会下发只有 `Authorization` + `ig-u-*` cookie、
+     * 没有 sessionid 的会话）。这时候 `derived` 必然是空，只能沿用服务端下发的那一份 ——
+     * 但必须确认它属于**当前**这个账号，否则就回到上面那个"两个身份"的坑里。
      */
     const derived: string = MobileIdentity.buildAuthorization(userId, sessionId);
-    if (seed.authorization.length > 0 && seed.authorization !== derived) {
-      hilog.info(DOMAIN, TAG, 'authorization rebuilt for current session (stored=%{public}db)',
-        seed.authorization.length);
+    if (derived.length === 0 && MobileIdentity.authorizationUserId(seed.authorization) === userId
+      && userId.length > 0) {
+      this.authorization = seed.authorization;
+    } else {
+      if (seed.authorization.length > 0 && seed.authorization !== derived) {
+        hilog.info(DOMAIN, TAG, 'authorization rebuilt for current session (stored=%{public}db)',
+          seed.authorization.length);
+      }
+      this.authorization = derived;
     }
-    this.authorization = derived;
     // 设备档案：用**这台机器自己的**品牌/型号/分辨率/DPI（见 DeviceTruth）。
     // 只生成一次、终身不变 —— 轮换等于"同一账号天天换手机"，比不换更可疑。
     this.device = COHERENT_FINGERPRINT ? DeviceTruth.profile() : DeviceProfile.DEFAULT;
@@ -160,9 +170,37 @@ export class MobileIdentity {
     this.pushDisabled = true;
   }
 
-  /** 会话是否可用（有 sessionid 且有 user id 才能打私有 API）。 */
+  /** 会话是否可用（有 user id，且**有 sessionid 或服务端下发的 authorization** 才能打私有 API）。 */
   isComplete(): boolean {
-    return this.sessionId.length > 0 && this.userId.length > 0;
+    if (this.userId.length === 0) {
+      return false;
+    }
+    return this.sessionId.length > 0 || this.authorization.length > 0;
+  }
+
+  /**
+   * `Bearer IGT:2:<base64url(JSON)>` 里带的 `ds_user_id`（解不开回空串）。
+   *
+   * 为什么要这一条：**设备级会话**（没有 sessionid，IG 2026-10 起会下发这种）只能沿用
+   * 服务端那份 authorization，而落盘那份可能是**上一个账号**的 —— 用错就是两个身份同时出现。
+   * 所以沿用之前先核对它属于当前账号。
+   */
+  static authorizationUserId(authorization: string): string {
+    const marker: string = 'Bearer IGT:2:';
+    const text: string = String(authorization || '');
+    if (!text.startsWith(marker)) {
+      return '';
+    }
+    try {
+      const bytes: Uint8Array =
+        new util.Base64Helper().decodeSync(text.substring(marker.length));
+      const decoded: string = new util.TextDecoder().decodeToString(bytes);
+      const record: Record<string, ESObject> = JSON.parse(decoded) as Record<string, ESObject>;
+      const value: ESObject = record['ds_user_id'];
+      return value === undefined || value === null ? '' : `${value}`;
+    } catch (error) {
+      return '';
+    }
   }
 
   /**
@@ -295,9 +333,22 @@ export class MobileSession {
       // 兜底：sessionid 的数字前缀就是 user id（instagrapi 的 `re.search(r"^\d+", sessionid)`）。
       userId = MobileSession.userIdOfSession(sessionId);
     }
-    if (sessionId.length === 0 || userId.length === 0) {
+    /*
+     * **设备级会话**：IG 2026-10 起会下发"只有 `Authorization: Bearer IGT:2:…` + `ig-u-*`
+     * cookie、没有 sessionid"的会话（真机实测探活 200、push 注册 ok）。
+     * 这种会话的凭据在 authorization 里，而它只可能来自落盘 —— 所以要求那份 authorization
+     * 属于当前账号（避免沿用上一个账号的 Bearer）。
+     */
+    if (userId.length === 0) {
       hilog.warn(DOMAIN, TAG, 'ensure: session incomplete sid=%{public}d uid=%{public}d',
         sessionId.length, userId.length);
+      return null;
+    }
+    if (sessionId.length === 0
+      && MobileIdentity.authorizationUserId(seed.authorization) !== userId) {
+      hilog.warn(DOMAIN, TAG,
+        'ensure: no sessionid and stored authorization is not this account (sid=0 uid=%{public}d)',
+        userId.length);
       return null;
     }
     const csrf: string = MobileSession.cookieOf(jar.cookie, COOKIE_CSRF);
@@ -308,6 +359,23 @@ export class MobileSession {
     this.identity = identity;
     hilog.info(DOMAIN, TAG, 'ensure ok %{public}s', identity.summary());
     return identity;
+  }
+
+  /**
+   * 把服务端下发的 `Authorization` **先写进落盘身份**。
+   *
+   * 用途：设备级会话（没有 sessionid）的唯一凭据就是它，而 `ensure()` 只从落盘 seed 里认这份
+   * 凭据（cookie 罐里没有 sessionid 可解析）。不先落盘的话，`ensure()` 会判"会话不完整"。
+   */
+  static adoptAuthorization(authorization: string): void {
+    const text: string = String(authorization || '');
+    if (text.length === 0) {
+      return;
+    }
+    const seed: StoredIdentity = MobileSession.loadSeed();
+    seed.authorization = text;
+    MobileSession.seed = seed;
+    MobileSession.writeSeed(seed);
   }
 
   /**

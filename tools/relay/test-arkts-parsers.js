@@ -105,6 +105,8 @@ function stripTypes(text) {
     .replace(/:\s*CaaMapEntry/g, '')
     .replace(/:\s*CaaCallSpec/g, '')
     .replace(/:\s*CaaCallSpec\s*\|\s*null/g, '')
+    .replace(/:\s*CaaLoginPayload\s*\|\s*null/g, '')
+    .replace(/:\s*CaaLoginPayload/g, '')
     .replace(/:\s*RegExpExecArray\s*\|\s*null/g, '')
     .replace(/:\s*RegExpExecArray/g, '')
     .replace(/:\s*RegExp/g, '')
@@ -181,6 +183,12 @@ const script = [
   // 类方法
   toFunction('jsonStringAt'),
   toFunction('parseCookieHeader'),
+  // 真机 2026-10：cookie 三形状 + ig-set-* 头还原（loginPayloadFromText 依赖这几个）
+  toFunction('cookiesFromRaw'),
+  toFunction('cookiesFromSessionHeaders'),
+  toFunction('pushCookiePair'),
+  toFunction('mergeCookieText'),
+  toFunction('pushCookieText'),
   toFunction('loginPayloadFromText'),
   toFunction('lispyMapEntries'),
   toFunction('lispyPairMap'),
@@ -269,6 +277,45 @@ check('载荷：日志文本挡在前面时仍能解析', () => {
   assert(parsed.authorization === 'Bearer IGT:2:REAL', 'ArkTS 版 authorization 不对');
 });
 
+check('真机形状（与 App 自检⑦同一条）：cookies 是空对象、材料全在 ig-set-* 头里', () => {
+  const inner = JSON.stringify({
+    login_response: JSON.stringify({ logged_in_user: { pk: 46473815227 }, status: 'ok' }),
+    headers: JSON.stringify({
+      'IG-Set-Authorization': 'Bearer IGT:2:DEVICE',
+      'ig-set-ig-u-ds-user-id': '46473815227',
+      'ig-set-ig-u-rur': 'KND',
+      'x-ig-set-www-claim': 'hmac.AAAA'
+    }),
+    cookies: {}
+  });
+  const text = '(dsg (fom 15942 35 ' + JSON.stringify(inner) + '))';
+  const parsed = Ark.loginPayloadFromText(text);
+  assert(parsed !== null, 'ArkTS 版把"cookies 空对象"判成没登录结果');
+  assert(parsed.cookie.indexOf('ds_user_id=46473815227') >= 0, '账号 id 没从头里还原：' + parsed.cookie);
+  assert(parsed.cookie.indexOf('rur=KND') >= 0, 'rur 没从头里还原：' + parsed.cookie);
+  assert(parsed.authorization === 'Bearer IGT:2:DEVICE', 'authorization 不对');
+});
+
+check('cookies 是对象 / 数组时也能取（ArkTS 与 JS 同形状）', () => {
+  const asObject = JSON.stringify({
+    login_response: JSON.stringify({ status: 'ok' }),
+    headers: '{}',
+    cookies: { sessionid: '777%3Aabc', ds_user_id: '777' }
+  });
+  const one = Ark.loginPayloadFromText('(x ' + JSON.stringify(asObject) + ')');
+  assert(one !== null && one.cookie.indexOf('sessionid=777%3Aabc') >= 0, '对象形状没认');
+
+  const asArray = JSON.stringify({
+    login_response: JSON.stringify({ status: 'ok' }),
+    headers: '{}',
+    cookies: [{ name: 'ds_user_id', value: '777' }, 'csrftoken=xyz']
+  });
+  const two = Ark.loginPayloadFromText('(x ' + JSON.stringify(asArray) + ')');
+  assert(two !== null, '数组形状没认');
+  assert(two.cookie.indexOf('ds_user_id=777') >= 0 && two.cookie.indexOf('csrftoken=xyz') >= 0,
+    '数组元素没解出来：' + two.cookie);
+});
+
 /** 从 dump 里解析出来的成功载荷（没有就是 null；后面"两个文件接力"那项要用）。 */
 let dumpPayload = null;
 
@@ -300,7 +347,10 @@ if (fs.existsSync(dumpFile)) {
       + ' 里没有成功会话（可能上次跑的是假账号 / 失败响应）');
   } else {
     check('真实响应（' + path.basename(dumpFile) + '）：ArkTS 版能解析出会话', () => {
-      assert(dumpPayload.cookie.indexOf('sessionid=') >= 0, 'ArkTS 版解析出的 cookie 里没有 sessionid');
+      // 真机 2026-10：载荷 `cookies` 是空对象，会话材料全在 `ig-set-*` 头里 →
+      // cookie 里可能**没有** sessionid（设备级会话），但必须有 ds_user_id 与 rur。
+      const hasUid = dumpPayload.cookie.indexOf('ds_user_id=') >= 0;
+      assert(hasUid, 'ArkTS 版解析出的 cookie 里没有账号 id：' + dumpPayload.cookie);
       assert(dumpPayload.authorization.indexOf('Bearer IGT:2:') === 0, 'authorization 形状不对');
       console.log('      （cookie：'
         + dumpPayload.cookie.split(';').map((one) => one.split('=')[0].trim()).join(',')
@@ -393,13 +443,15 @@ check('取 aac：initial 与 initial_lispy 两种形状都要能取（与 JS 版
 
 const sendDump = path.join(DIR, '.tmp', 'caa-send-response.json');
 if (dumpPayload !== null) {
-  check('真实响应 → 会话字段（两个文件的源码接力）：sessionid / ds_user_id / authorization',
+  check('真实响应 → 会话字段（两个文件的源码接力）：ds_user_id / authorization /（有就）sessionid',
     () => {
       const payload = dumpPayload;
       const sessionid = Session.cookieValue(payload.cookie, 'sessionid');
       const userId = Session.cookieValue(payload.cookie, 'ds_user_id');
-      assert(sessionid.length > 40, 'sessionid 太短：' + sessionid.length);
       assert(userId.length > 0, 'ds_user_id 空');
+      // 设备级会话允许没有 sessionid（IG 2026-10 起下发这种），但 authorization 必须有。
+      assert(sessionid.length > 0 || payload.authorization.length > 0,
+        '既没有 sessionid 也没有 authorization');
       assert(Session.cookieTextOf({ cookie: payload.cookie }) === payload.cookie,
         'cookieTextOf 没原样返回载荷里的 cookie');
       assert(payload.authorization.indexOf('Bearer IGT:2:') === 0, 'authorization 形状不对');

@@ -117,6 +117,14 @@ node instamony.js --clear --yes --all  # 连设备身份一起删
 别名：`--logout` / `--sign-out`。**不带 `--yes` 永远只演练**（删除是真删，不进回收站）。
 常驻中转还在跑时会先警告 —— 它内存里的旧会话不会因为删文件而失效，先停掉它再清。
 
+`--caa-login` 成功后除了写 `session.json`，还会写一份**instagrapi 形状**的
+`settings.caa.json`（当场用同一解析器读回比对）。
+
+> **关于 `sessionid`**：IG 现在会下发**设备级会话** —— 只有 `Authorization: Bearer IGT:2:…`
+> 和 `ig-u-*` cookie，**没有 `sessionid`**（真机 2026-10 实测：探活 200、`push/register/` ok）。
+> 这种会话照样能用，所以别拿"有没有 sessionid"判成败；判据是
+> 「有账号 id，且 sessionid / authorization 至少有一个」，落盘前还会真发一次探活。
+
 ### 2. 导入会话 + 设备身份
 
 ```powershell

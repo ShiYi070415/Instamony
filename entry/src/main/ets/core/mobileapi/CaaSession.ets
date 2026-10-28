@@ -345,9 +345,22 @@ export class CaaSession {
                                     mid: string = '', rur: string = '',
                                     claim: string = ''): Promise<CaaOutcome> {
     const sessionId: string = CaaSession.cookieValue(cookieText, 'sessionid');
-    if (sessionId.length === 0) {
-      return CaaSession.outcome(false, `${what}的会话里没有 sessionid（内容不完整）`,
+    /*
+     * **`sessionid` 不再是硬要求**：IG 现在会下发设备级会话 —— 只有
+     * `Authorization: Bearer IGT:2:…` + `ig-u-*` cookie（`ds_user_id` 在），没有 sessionid。
+     * 真机实测这种会话探活 200、`push/register/` 也 ok。判据改成"有账号 id，且
+     * sessionid / authorization 至少有一个"。
+     */
+    const cookieUserId: string = CaaSession.cookieValue(cookieText, 'ds_user_id');
+    if (cookieUserId.length === 0 || (sessionId.length === 0 && authorization.length === 0)) {
+      return CaaSession.outcome(false,
+        `${what}的会话不完整（没有 ds_user_id，或 sessionid / authorization 都缺）`,
         CaaSession.stepsText());
+    }
+    // authorization 先落到身份里：设备级会话没有 sessionid，只能靠它打私有 API。
+    if (sessionId.length === 0) {
+      hilog.info(DOMAIN, TAG, 'device-level session (no sessionid), adopting authorization');
+      MobileSession.adoptAuthorization(authorization);
     }
     // 整串都种：除了会话三件套，还带 mid / rur / ig_did 这类设备材料。
     let written: number = await InstagramCookieJar.adoptCookieText(cookieText);
