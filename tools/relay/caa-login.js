@@ -1748,6 +1748,17 @@ async function caaLogin(profile, username, password, log, options) {
       }
     }, attestParams.length > 0 ? { 'X-IG-Attest-Params': attestParams } : null);
   steps.push({ step: 'send_login_request', status: send.status });
+  /*
+   * **429 = IG 限流**（今天的登录尝试太多）。必须单独认出来：否则会被当成"布局变了"，
+   * 用户继续重跑只会把限流窗口推得更远。
+   */
+  if (send.status === 429) {
+    return {
+      loggedIn: false, aac, cookies: {}, authorization: '', twoStepContext: '',
+      steps, raw: send.data, rateLimited: true,
+      reason: 'IG 限流（429）：登录尝试太多了，等 10~30 分钟再试（期间别再跑）'
+    };
+  }
 
   const parsed = extractLoginPayload(send.data);
   if (parsed !== null) {

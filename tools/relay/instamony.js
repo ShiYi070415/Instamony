@@ -30,6 +30,7 @@
  *   node instamony.js --verify-session # 会话自证：形状 + 探活 + 设备信任闸门（push 注册）
  *   node instamony.js --import-session settings.json
  *   node instamony.js --test-push 文本
+ *   node instamony.js --clear          # 清除所有登录态（演练；加 --yes 真删，加 --all 连设备身份）
  *   node instamony.js --quiet          # 只打警告和错误
  */
 
@@ -1213,8 +1214,41 @@ async function runCaaReplay(argv) {
 /**
  * `--caa-login`：用**账号密码**登录（CAA/Bloks 流程，Node 版，不需要 Python）。
  */
+/*
+ * **429 冷却**：IG 的限流是按"尝试次数"记的，被拒之后继续点只会把窗口推远。
+ * 本地记一个时间戳，10 分钟内不再发起登录（App 侧 `CaaSession.rateLimitWaitMinutes()` 同一套逻辑）。
+ */
+const RATE_LIMIT_FILE = path.join(DIR, '.tmp', 'ratelimit.json');
+const RATE_LIMIT_GUARD_MINUTES = 10;
+
+/** 还要等几分钟（0 = 没限流记录 / 已过冷却）。 */
+function rateLimitWaitMinutes() {
+  const mark = readJson(RATE_LIMIT_FILE, null);
+  if (mark === null || typeof mark.at !== 'number') {
+    return 0;
+  }
+  const left = RATE_LIMIT_GUARD_MINUTES - (Date.now() - mark.at) / 60000;
+  return left > 0 ? Math.ceil(left) : 0;
+}
+
 async function runCaaLogin(argv) {
   const { caaLogin } = require('./caa-login.js');
+
+  /*
+   * **429 冷却闸门**：上一次被 IG 限流的话，这次直接拦住，别再把窗口往后推。
+   *
+   * 限流是账号级、按尝试次数算的"失信分"：被 429 之后继续点，等的时间只会变长，
+   * 甚至轮到"临时禁止登录"。所以宁可本地先拦住（10 分钟），比 IG 那边拦（可能几十分钟
+   * 到几天）划算得多。记号在 `.tmp/ratelimit.json`，`--clear` 会一并清掉。
+   */
+  const waitMin = rateLimitWaitMinutes();
+  if (waitMin > 0 && argv.indexOf('--force') < 0) {
+    die('上一次登录被 IG 限流（HTTP 429），还要等 ' + waitMin + ' 分钟才能再试。'
+      + '\n  · 这段时间别再点登录（点一次 IG 就把窗口推远一次）；'
+      + '\n  · 等着急就先用已有会话：node instamony.js --verify-session；'
+      + '\n  · 确实想硬试一次：node instamony.js --caa-login --force（很可能还是 429）。');
+  }
+
   const profile = resolveDeviceProfile(argv);
 
   /*
@@ -1240,6 +1274,22 @@ async function runCaaLogin(argv) {
 
   if (result.loggedIn !== true) {
     warn('登录未成功：' + (result.reason || '未知原因'));
+    /*
+     * **限流要留个记号**：半小时内再跑直接拒绝，省得把 IG 的窗口越推越远。
+     * 记号存在 `.tmp/ratelimit.json`（本机、不进仓库）。
+     */
+    if (result.rateLimited === true) {
+      try {
+        fs.mkdirSync(path.join(DIR, '.tmp'), { recursive: true });
+        fs.writeFileSync(RATE_LIMIT_FILE,
+          JSON.stringify({ at: Date.now() }, null, 2), 'utf8');
+        log('已记下冷却：' + RATE_LIMIT_GUARD_MINUTES + ' 分钟内 --caa-login 会被本地拦住'
+          + '（`.tmp/ratelimit.json`，`--clear` 可清）');
+      } catch (error) {
+        // 记不下来也不影响提示
+      }
+      process.exit(5);
+    }
     if (typeof result.twoStepContext === 'string' && result.twoStepContext.length > 0) {
       const ranTwoStep = Array.isArray(result.steps)
         && result.steps.some((one) => String(one.step || '').indexOf('2sv_') === 0);
@@ -1375,6 +1425,134 @@ async function runCaaLogin(argv) {
   log('下一步：node instamony.js --verify-session   （自证能收推送）然后 node instamony.js');
 }
 
+/* -------------------------------------------------------------- 清除会话 */
+
+/*
+ * `--clear`：**把本机所有登录态清干净**（退出登录 / 换账号 / 怀疑串号时用）。
+ *
+ * 为什么要有它：这台机器上"登录态"散在 8 个地方（会话、instagrapi 形状的两份、FBNS 设备凭据、
+ * push token 缓存、失败响应转储、429 冷却标记、playwright 浏览器档案）。手动删容易漏 ——
+ * 漏一个就等于没退出登录：比如 `fbns-auth.json` 还在，旧账号的 FBNS 连接会被"复活"；
+ * `.tmp/caa-last-response.json` 里可能还躺着 set-cookie；`.tmp/ratelimit.json` 还在会让
+ * 下一次登录直接被自己拦住 10 分钟。
+ *
+ * 分两档：
+ *   1. `--clear`      —— 只清**会话**（含会话备份、转储、限流标记、浏览器档案）；
+ *   2. `--clear --all` —— 连**设备身份**一起清（`mqtt-device.json` / `device-profile.json` /
+ *                       `usdid.json`）。换账号**不需要**清设备身份；只有"想换一台设备"或
+ *                       "设备身份被 IG 拉黑"时才要清 —— 清完下次登录就是一台全新机器，IG 会
+ *                       当成新设备（更容易触发风控），登录尝试次数也会重新算。
+ *
+ * 安全默认：**不带 `--yes` 只演练**（列出会删什么，不动文件）。删除是真删，不进回收站。
+ */
+const SESSION_STATE = [
+  { file: path.join(DIR, 'session.json'), what: '中转会话（cookie + authorization + mid）' },
+  { file: path.join(DIR, 'settings.json'), what: 'instagrapi 形状会话（login_ig.py 产出，--import-session 的来源）' },
+  { file: path.join(DIR, 'settings.caa.json'), what: 'instagrapi 形状会话（--caa-login 产出）' },
+  { file: path.join(DIR, 'fbns-auth.json'), what: 'FBNS 设备凭据（与登录态绑定，不清会被"复活"）' },
+  { file: path.join(DIR, 'token.json'), what: '华为 push token 缓存' },
+  { file: path.join(DIR, '.tmp', 'caa-last-response.json'), what: '上次 CAA 响应转储（可能含 set-cookie）' },
+  { file: path.join(DIR, '.tmp', 'caa-send-response.json'), what: '上次 send_login_request 响应转储' },
+  { file: RATE_LIMIT_FILE, what: '429 限流冷却标记（不清会拦住下一次登录）' },
+  { file: path.join(DIR, '.tmp', 'session.json.bak'), what: '会话备份' },
+  { file: path.join(DIR, '.tmp', 'session.json.keep'), what: '会话备份' },
+  { file: path.join(DIR, '.login-profile'), what: 'playwright 浏览器档案（里面是 IG 网页会话）' }
+];
+
+const IDENTITY_STATE = [
+  { file: path.join(DIR, 'mqtt-device.json'), what: 'FBNS 设备三元组' },
+  { file: path.join(DIR, 'device-profile.json'), what: '本机设备档案（机型/版本/mid）' },
+  { file: path.join(DIR, 'usdid.json'), what: 'CAA 设备签名私钥 + USDID 注册状态' }
+];
+
+/** 端口是否已被占用（判断常驻中转还在不在跑；只探测，不惊动对端）。 */
+function portBusy(port) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ port, host: '127.0.0.1' });
+    const done = (busy) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(busy);
+    };
+    socket.once('connect', () => done(true));
+    socket.once('error', () => done(false));
+    socket.setTimeout(800, () => done(false));
+  });
+}
+
+function sizeOf(file) {
+  try {
+    const stat = fs.statSync(file);
+    return stat.isDirectory() ? (fs.readdirSync(file).length + ' 项') : (stat.size + ' 字节');
+  } catch (error) {
+    return '?';
+  }
+}
+
+async function runClear(argv) {
+  const apply = argv.indexOf('--yes') >= 0 || argv.indexOf('-y') >= 0;
+  const withIdentity = argv.indexOf('--all') >= 0 || argv.indexOf('--device') >= 0;
+  const targets = withIdentity ? SESSION_STATE.concat(IDENTITY_STATE) : SESSION_STATE;
+
+  // 常驻进程手里的会话在内存里：不清掉它，删完文件它照样能推、还可能把会话写回去。
+  if (await portBusy(LOCK_PORT)) {
+    warn('检测到常驻中转还在跑（127.0.0.1:' + LOCK_PORT + ' 有响应）：'
+      + '先停掉它（Ctrl+C）再清，否则它内存里的旧会话还在用。');
+  }
+
+  log('将清除' + (withIdentity ? '**会话 + 设备身份**' : '**会话**')
+    + '（' + (apply ? '真删' : '演练，不动文件') + '）');
+  const hits = [];
+  for (const item of targets) {
+    const shown = path.relative(DIR, item.file).replace(/\\/g, '/');
+    if (fs.existsSync(item.file)) {
+      hits.push(item);
+      log('  [删] ' + shown + '（' + sizeOf(item.file) + '）  — ' + item.what);
+    } else {
+      log('  [无] ' + shown + '（不存在，跳过）');
+    }
+  }
+
+  if (!apply) {
+    log('');
+    if (hits.length === 0) {
+      log('没有任何会话文件，本机已经是"未登录"状态');
+    } else {
+      log('这是演练：共 ' + hits.length + ' 项会被删除。确认无误后加 --yes 真删：');
+      log('  node instamony.js --clear --yes');
+      if (!withIdentity) {
+        log('（要连设备身份一起清：node instamony.js --clear --yes --all）');
+      }
+    }
+    return;
+  }
+
+  let removed = 0;
+  const failed = [];
+  for (const item of hits) {
+    try {
+      fs.rmSync(item.file, { recursive: true, force: true });
+      removed++;
+    } catch (error) {
+      failed.push(item.file + '：' + error.message);
+    }
+  }
+  log('');
+  log('已删除 ' + removed + '/' + hits.length + ' 项（' + (withIdentity ? '会话 + 设备身份' : '会话')
+    + '）');
+  for (const text of failed) {
+    warn('删不掉：' + text);
+  }
+  if (!withIdentity) {
+    log('设备身份保留（mqtt-device.json / device-profile.json / usdid.json）：'
+      + '换账号不用重造设备；要一起清用 --clear --yes --all');
+  }
+  log('现在处于**未登录**状态。重新登录：node instamony.js --caa-login（或 --import-session <文件>）');
+  if (failed.length > 0) {
+    process.exit(4);
+  }
+}
+
 /* ------------------------------------------------------------------ 入口 */
 
 async function main() {
@@ -1383,6 +1561,16 @@ async function main() {
 
   if (argv.indexOf('--caa-login') >= 0) {
     await runCaaLogin(argv);
+    return;
+  }
+
+  /*
+   * `--clear`（别名 `--logout` / `--sign-out`）：清除本机所有登录态。
+   * 放在最前面 —— 它不该依赖 config.json 能读、也不该被别的分支截走。
+   */
+  if (argv.indexOf('--clear') >= 0 || argv.indexOf('--logout') >= 0
+    || argv.indexOf('--sign-out') >= 0) {
+    await runClear(argv);
     return;
   }
 

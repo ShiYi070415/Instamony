@@ -36,6 +36,15 @@ const KEY_PUBLIC: string = 'usdid_public';
 const KEY_LAST_DIAG: string = 'last_diag';
 /** 最近一次失败时的原始响应（截断 100KB；同样只在本机，重启还能复制）。 */
 const KEY_LAST_RAW: string = 'last_raw';
+/**
+ * 上次被 IG 限流（429）的时间戳（毫秒）。
+ *
+ * 为什么要记：限流是**会累加**的 —— 用户被 429 之后还可能继续点，每点一次 IG 就把窗口再推远。
+ * 记下来之后，10 分钟内直接拒绝发请求，只提示"还要等多久"，比让他反复撞限流好。
+ */
+const KEY_LAST_429_AT: string = 'last_429_at';
+/** 限流后的本地冷却时长：10 分钟。 */
+const RATE_LIMIT_COOLDOWN_MS: number = 10 * 60 * 1000;
 
 /** 登录结果（给 UI：不抛异常，全部放在字段里）。 */
 export class CaaOutcome {
@@ -136,6 +145,12 @@ export class CaaSession {
     if (user.length === 0 || password.length === 0) {
       return CaaSession.outcome(false, '用户名和密码都要填');
     }
+    // 限流冷却期内直接不发请求：反复撞限流只会把 IG 的窗口推得更远。
+    const waitMinutes: number = CaaSession.rateLimitWaitMinutes();
+    if (waitMinutes > 0) {
+      return CaaSession.outcome(false,
+        `上次被 IG 限流（429），还要等约 ${waitMinutes} 分钟再试（期间别点登录）`);
+    }
     const device: CaaUsdid | null = await CaaSession.deviceIdentity();
     if (device === null) {
       return CaaSession.outcome(false, '设备身份没准备好（preferences 没打开？）');
@@ -181,6 +196,29 @@ export class CaaSession {
     return CaaLogin.waitingCode();
   }
 
+  /**
+   * 限流冷却还剩几分钟（0 = 可以试了）。
+   *
+   * 读 preferences 里的 `last_429_at`：10 分钟内直接拒绝发请求，只提示还要等多久。
+   */
+  static rateLimitWaitMinutes(): number {
+    const text: string = CaaSession.readText(KEY_LAST_429_AT);
+    if (text.length === 0) {
+      return 0;
+    }
+    const at: number = Number.parseInt(text, 10);
+    if (!Number.isFinite(at) || at <= 0) {
+      return 0;
+    }
+    const remain: number = at + RATE_LIMIT_COOLDOWN_MS - Date.now();
+    if (remain <= 0) {
+      // 冷却期过了就清掉，别让它一直挡着
+      CaaSession.writeText(KEY_LAST_429_AT, '');
+      return 0;
+    }
+    return Math.max(1, Math.ceil(remain / 60000));
+  }
+
   /** 收尾：成功就把 Cookie 种进罐、让 MobileSession 捡起会话材料。 */
   private static async finish(result: CaaResult): Promise<CaaOutcome> {
     if (!result.ok) {
@@ -195,8 +233,14 @@ export class CaaSession {
       CaaSession.rememberDiag('登录', failed.reason, failed.steps);
       // 失败时把原始响应留下（真机上唯一的现场；成功时不存，避免会话材料被随手复制）。
       CaaSession.rememberRaw(result.raw);
+      // 被限流就记下时间：冷却期内不再发请求，避免把 IG 的窗口越推越远。
+      if (result.rateLimited) {
+        CaaSession.writeText(KEY_LAST_429_AT, `${Date.now()}`);
+      }
       return failed;
     }
+    // 登录成功：清掉限流记录（下次若再被限流重新计时）。
+    CaaSession.writeText(KEY_LAST_429_AT, '');
     const outcome: CaaOutcome = await CaaSession.applySession(result.cookie, result.authorization,
       '登录', result.mid, result.rur, result.claim);
     CaaSession.rememberDiag('登录', outcome.reason, outcome.steps);

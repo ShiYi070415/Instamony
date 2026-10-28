@@ -89,6 +89,34 @@ node instamony.js --caa-replay .tmp\caa-last-response.json
 登录失败时响应会自动落盘（`.tmp/`）。修好解析之后用这条命令重放，就能把那次登录**已经拿到**
 的会话写出来 —— 不必为了一个解析 bug 再登录一次（R12 真机就是这么救回来的）。
 
+### 1.8 退出登录 / 清除所有会话（`--clear`）
+
+```powershell
+node instamony.js --clear              # 演练：只列出会删什么，不动文件
+node instamony.js --clear --yes        # 真删（会话）
+node instamony.js --clear --yes --all  # 连设备身份一起删
+```
+
+这台机器上的"登录态"散在十来处，手动删很容易漏 —— 漏一个就等于没退出登录：
+
+| 文件 | 内容 |
+| --- | --- |
+| `session.json` | 中转会话（cookie + `Bearer IGT:2` + mid） |
+| `settings.json` / `settings.caa.json` | 两份 instagrapi 形状的会话 |
+| `fbns-auth.json` | FBNS 设备凭据（不清会被"复活"成旧账号的连接） |
+| `token.json` | 华为 push token 缓存 |
+| `.tmp/caa-last-response.json` 等 | 失败响应转储（可能含 `set-cookie`） |
+| `.tmp/ratelimit.json` | 429 冷却标记（不清会拦住下一次登录 10 分钟） |
+| `.tmp/session.json.bak` / `.keep` | 会话备份 |
+| `.login-profile/` | playwright 浏览器档案（里面是 IG 网页会话） |
+
+`--all` 额外删这些**设备身份**（换账号**不需要**；只有"想换一台设备"才要）：
+`mqtt-device.json`、`device-profile.json`、`usdid.json`。清完下次登录在 IG 眼里就是一台
+全新机器 —— 更容易触发风控，登录尝试次数也重新算。
+
+别名：`--logout` / `--sign-out`。**不带 `--yes` 永远只演练**（删除是真删，不进回收站）。
+常驻中转还在跑时会先警告 —— 它内存里的旧会话不会因为删文件而失效，先停掉它再清。
+
 ### 2. 导入会话 + 设备身份
 
 ```powershell
@@ -184,6 +212,8 @@ push token 注册成功 —— 之后新私信由 IG 主动推过来
 | `push token 注册失败` | 会话可能过期：重跑 `python login_ig.py` 并重新导入 |
 | 手机收不到 | `node instamony.js --test-push x` 若成功，说明是 IG 推送没到（检查会话）；若失败，看报错里的 HTTP/code |
 | 想临时关掉静音 | 把 `config.json` 的 `quietHours` 删掉 |
+| `--caa-login` 提示"被 IG 限流（429）" | 别硬试：等 10~30 分钟。本地 10 分钟冷却记在 `.tmp/ratelimit.json`（`--clear` 会清）；确实要硬试加 `--force` |
+| 换账号 / 怀疑串号 | `node instamony.js --clear --yes`，然后重新 `--caa-login` |
 | App 重装后 token 变了 | 重新「复制中转材料」，更新 `notify.pushToken` |
 
 ## 五、安全
@@ -191,4 +221,5 @@ push token 注册成功 —— 之后新私信由 IG 主动推过来
 `session.json` / `settings.json` / `settings.caa.json` / `fbns-auth.json` / `mqtt-device.json`
 都是**等同密码**的东西，全部已在 `.gitignore` 里，别提交、别外传。
 `device-profile.json`（本机设备档案）也一并忽略：它不是会话，但换掉就等于换了一台设备。
+用完/换账号就 `node instamony.js --clear --yes` 清干净（见 1.8），别留在机器上。
 本脚本只做只读的收私信 + 发通知，不发消息、不点赞、不关注。

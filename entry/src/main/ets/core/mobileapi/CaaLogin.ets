@@ -99,6 +99,8 @@ const LISPY_MAP_HEAD: string = '(f4i';
    * 失败响应里不含可用会话材料，由用户主动「复制最近响应」发出来。
    */
   raw: string = '';
+  /** 被 IG 限流（429）—— UI 据此提示"等一会儿再试"，并阻止连续重试。 */
+  rateLimited: boolean = false;
 
   constructor(ok: boolean, reason: string) {
     this.ok = ok;
@@ -970,6 +972,23 @@ export class CaaLogin {
     const step5: CaaHttpReply = await CaaLogin.bloks(identity, sendExtra,
       'com.bloks.www.bloks.caa.login.async.send_login_request', send);
     CaaLogin.steps.push(new CaaStep('send_login_request', step5.status, ''));
+    /*
+     * **429 = IG 限流**（今天登录尝试太多）。必须单独认出来：否则会被当成"布局变了"，
+     * 用户反复点只会让限流时间更长。给一句能照做的提示，并把现场留下。
+     */
+    if (step5.status === 429) {
+      const limited: CaaResult = new CaaResult(false,
+        'IG 限流（429）：登录尝试太多了，等 10~30 分钟再试（期间别再点）');
+      limited.aac = aac;
+      limited.rateLimited = true;
+      try {
+        limited.raw = String(step5.body).substring(0, 100000);
+      } catch (rawError) {
+        limited.raw = '';
+      }
+      hilog.info(DOMAIN, TAG, 'send_login_request 429 (rate limited)');
+      return limited;
+    }
 
     const payload: ESObject = CaaLogin.parse(step5.body);
     const login: CaaLoginPayload | null = CaaLogin.extractLoginPayload(payload);
