@@ -1,0 +1,1 @@
+fix(direct): 贴纸判定只认"贴纸专属信号"，不再扫字符串值 —— 上一版扫"键名或值里出现 sticker"，把分享卡片（载荷里带 sticker 相关字符串）也判成贴纸；现在只认 ①item_type/content_type 含 sticker|animated ②有 animated_media 对象 ③media 里的 is_sticker/sticker_asset_url/sticker_template/sticker_style ④XMA 附件**键名**含 sticker ⑤地址含 sticker/.gif/.webp，并且仍然要求"没有分享目标/短码"；图片因此恢复上一版的媒体样式（圆角+底色+Cover+档位宽度）

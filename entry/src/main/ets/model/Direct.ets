@@ -1297,15 +1297,10 @@ export class DirectMapper {
    * `generic_xma` + `xma_layout_type`、以及把贴纸塞进 `media` 的几种，字段名每版都变。
    * 而"sticker"这个子串在所有版本里都出现 —— 扫它比猜字段名可靠。
    */
-  private static mentionsSticker(record: Record<string, Object>): boolean {
+  private static hasStickerKey(record: Record<string, Object>): boolean {
     const keys: Array<string> = Object.keys(record);
     for (let index: number = 0; index < keys.length; index++) {
-      const key: string = keys[index];
-      if (key.toLowerCase().indexOf('sticker') >= 0) {
-        return true;
-      }
-      const value: string = JsonRead.strOf(record, key);
-      if (value.length > 0 && value.toLowerCase().indexOf('sticker') >= 0) {
+      if (keys[index].toLowerCase().indexOf('sticker') >= 0) {
         return true;
       }
     }
@@ -1313,10 +1308,32 @@ export class DirectMapper {
   }
 
   private static isSticker(item: Record<string, Object>): boolean {
-    // 第一道：整条载荷里出现 sticker 字样（键名或值）就算贴纸。
-    if (DirectMapper.mentionsSticker(item)) {
-      return true;
+    /*
+     * **先排除"用户发的图片"**（用户报："贴图正常了，但用户发的图片媒体全部变成贴图样式了"）。
+     *
+     * 上一版只做泛化扫描，结果把图片也扫进去了：图片渲染成 1/3 屏、透明、Contain 的贴纸样式。
+     * 现在贴纸必须**同时**满足下面两条硬条件，否则一律当图片：
+     *   ① 不可打开（没有 target / 没有帖子短码）—— 贴纸点了没地方去；
+     *   ② 素材很小或尺寸未知 —— 贴纸资源普遍 ≤512 宽，而相册/相机图基本 ≥720。
+     */
+    if (DirectMapper.shareUrlOf(item).length > 0 || DirectMapper.shareCodeOf(item).length > 0) {
+      return false;
     }
+    const size: Array<number> = DirectMapper.mediaSizeOf(item);
+    if (size[0] > 512) {
+      return false;
+    }
+    /*
+     * **只看"贴纸专属"的信号，不再看值**（用户报："分享卡片也受影响，变成贴图了"）。
+     *
+     * 上一版扫的是"键名或值里出现 sticker"，于是**分享卡片**也被扫中（它们的载荷里带贴纸相关的
+     * 字符串，比如 CDN 路径或 layout 名），直接画成了贴纸。现在只认下面这几类硬信号：
+     *   · 条目类型 / 内容类型里带 sticker 或 animated；
+     *   · 有 `animated_media` 对象；
+     *   · `media` 里的贴纸字段；
+     *   · XMA 附件的**键名**里带 sticker；
+     *   · 地址里带 sticker / .gif / .webp。
+     */
     const type: string = JsonRead.strOf(item, 'item_type').toLowerCase();
     const kind: string = JsonRead.strOf(item, 'content_type').toLowerCase();
     if (type.indexOf('sticker') >= 0 || type.indexOf('animated') >= 0
@@ -1356,7 +1373,8 @@ export class DirectMapper {
       JsonRead.strOf(item, 'item_type').length > 0 ? JsonRead.strOf(item, 'item_type') : 'generic_xma');
     for (let index: number = 0; index < attachments.length && index < 2; index++) {
       const one: Record<string, Object> | null = JsonRead.asRecord(attachments[index]);
-      if (one !== null && DirectMapper.mentionsSticker(one)) {
+      // **只看键名**（`sticker_image_url` / `sticker_template` 这种），不看值 —— 值扫描会误伤分享卡片。
+      if (one !== null && DirectMapper.hasStickerKey(one)) {
         return true;
       }
     }
