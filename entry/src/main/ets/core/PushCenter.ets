@@ -1,4 +1,4 @@
-﻿/*
+/*
  * **消息通知**：Push Kit（远端推送）+ NotificationKit（本地通知）。
  *
  * ## 两层各管什么
@@ -32,6 +32,8 @@ import { pushService } from '@kit.PushKit';
 import { NOTIFY_THREAD_KEY } from './NotifyRoute';
 // 会话 id 除了放进 parameters，也编码进 uri 兜底（见 wantAgentFor）。
 import { DEEPLINK_PREFIX } from './DeepLink';
+// token 变了就报给中转（见 core/PushTokenReporter 文件头：旧 token 会让推送静默失效）。
+import { PushTokenReporter } from './PushTokenReporter';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'PushCenter';
@@ -177,6 +179,8 @@ export class PushCenter {
           PushCenter.tokenError = '';
           hilog.info(DOMAIN, TAG, 'push token len=%{public}d head=%{public}s',
             token.length, token.substring(0, 12));
+          // 拿到就报给中转：不配地址时它自己会跳过，一次请求都不会发。
+          PushTokenReporter.report(token, 'startup');
         })
         .catch((error: BusinessError): void => {
           PushCenter.tokenError = '${error.code}';
@@ -190,6 +194,8 @@ export class PushCenter {
       pushService.on('tokenUpdate', ability, (token: string): void => {
         PushCenter.token = token;
         hilog.info(DOMAIN, TAG, 'push token updated len=%{public}d', token.length);
+        // **这条最关键**：token 轮换（重装/清数据/HMS 更新）后不报，中转手上就是废 token。
+        PushTokenReporter.report(token, 'tokenUpdate');
       });
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'pushService unavailable: %{public}s',

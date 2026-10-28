@@ -26,6 +26,7 @@
 'use strict';
 
 const fs = require('fs');
+const http = require('http');
 const https = require('https');
 const path = require('path');
 const zlib = require('zlib');
@@ -75,6 +76,14 @@ function configPath() {
 function loadConfig() {
   const file = configPath();
   if (!fs.existsSync(file)) {
+    /*
+     * `--report-only` 是"只收 token"的调试模式，不碰 IG、不需要 cookie/通道配置。
+     * 所以没 config.json 也让它跑起来（否则想验证上报还得先抄一份配置模板，太绕）。
+     */
+    if (process.argv.indexOf('--report-only') >= 0) {
+      warn('没有 ' + file + '，按 --report-only 的空配置跑（只验上报，不推任何东西）。');
+      return { notify: { channel: 'agc' }, listen: {}, ig: {} };
+    }
     die('找不到 ' + file + ' —— 先 cp config.example.json config.json 再填。');
   }
   const cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -86,7 +95,17 @@ function loadConfig() {
       warn('notify.agc 里的 clientId/clientSecret 已经作废（HarmonyOS 5+ 不再支持 OAuth 2.0 开放鉴权，'
         + 'v1 接口也停用了）。这两个字段会被忽略，请改用 serviceAccountFile。');
     }
-    if (!notify.pushToken) die('channel=agc 但 pushToken 是空的（App 里还没拿到 token）。');
+    if (!notify.pushToken && readTokenFile() === null) {
+      // 配了上报端口就不算错：先起来，等 App 把 token 报上来。
+      const canReport = Number((cfg.listen && cfg.listen.port) || 0) > 0
+        || process.argv.indexOf('--listen') >= 0;
+      if (!canReport) {
+        die('channel=agc 但既没有 pushToken，也没有 App 上报过的 token。'
+          + '\n要么先把 App 里复制出来的 token 填进 notify.pushToken，'
+          + '\n要么配 listen.port 让 App 自己上报。');
+      }
+      log('还没有 pushToken：等 App 上报（POST /token）之后才能推。');
+    }
     const saFile = resolveServiceAccountFile(agc);
     if (!fs.existsSync(saFile)) {
       die('找不到服务账号密钥文件 ' + saFile
@@ -357,7 +376,7 @@ async function pushAgc(cfg, title, body, threadId) {
         style: 0
       }
     },
-    target: { token: [cfg.notify.pushToken] },
+    target: { token: [pushTokenNow()] },
     pushOptions: { testMessage: agc.testMessage !== false, ttl: 3600 }
   });
   const res = await request(PUSH_SEND.replace('%s', projectId), {
@@ -466,6 +485,195 @@ async function send(cfg, title, body, threadId) {
   return pushWebhook(cfg, title, body, threadId);
 }
 
+/* --------------------------------------------- token 上报（App → 中转） */
+
+/**
+ * 为什么要有这个：pushToken 会变 —— 重装 App、清数据、系统更新 HMS、恢复出厂，
+ * 每次变都等于"中转手上那条是废的"，表现是**推送静默失败**（接口还回成功，
+ * 因为华为收下了，只是这个 token 不再对应任何设备）。
+ * 以前靠人手在设置页「复制中转材料」再粘进配置，几乎必然忘。
+ *
+ * 现在的路：App 启动和 `tokenUpdate` 时 POST 到这个中转，中转落盘即用。
+ * 协议极简（一条 JSON + 一个共享密钥），够用就好，别把它做成一门 RPC。
+ *
+ *   POST /token   {"token":"…","reason":"startup|tokenUpdate|manual","bundle":"…","version":"…"}
+ *   GET  /health  → 中转自报状态（有没有 token、多旧、走哪个通道）
+ *
+ * 只在配了 `listen.port`（或命令行 `--listen`）时才开端口：不配就完全不开，
+ * 免得默认给本机多开一个监听。
+ */
+
+const TOKEN_FILE = path.join(__dirname, 'token.json');
+/** App 上报的 token（优先于 config.json 里那条）。 */
+let liveToken = { token: '', at: 0, reason: '', source: 'config' };
+let liveTokenLoaded = false;
+
+function readTokenFile() {
+  try {
+    const data = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
+    if (data && typeof data.token === 'string' && data.token.length > 0) {
+      return data;
+    }
+  } catch (error) {
+    // 没有就是第一次跑
+  }
+  return null;
+}
+
+function saveTokenFile(state) {
+  const tmp = TOKEN_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8');
+  fs.renameSync(tmp, TOKEN_FILE);
+}
+
+/** 启动时定一次"当前该用哪个 token"，之后由上报端口更新。 */
+function initToken(cfg) {
+  if (liveTokenLoaded) return;
+  liveTokenLoaded = true;
+  const reported = readTokenFile();
+  if (reported !== null) {
+    liveToken = Object.assign({ source: 'report' }, reported);
+    log('pushToken 用 App 上报的那条（' + new Date(Number(reported.at) || 0).toLocaleString() + '）');
+    return;
+  }
+  liveToken = { token: (cfg.notify && cfg.notify.pushToken) || '', at: 0, reason: 'config', source: 'config' };
+}
+
+/** 实际发推送用的 token。 */
+function pushTokenNow() {
+  return liveToken.token || '';
+}
+
+/** App 上报进来一条 token：落盘 + 立刻生效（下一轮推送就用新的）。 */
+function acceptToken(body) {
+  const token = String(body.token || '').trim();
+  if (token.length < 20) {
+    return { ok: false, error: 'token 太短，不像 Push Kit 的 token' };
+  }
+  const state = {
+    token: token,
+    at: Date.now(),
+    reason: String(body.reason || 'unknown'),
+    bundle: String(body.bundle || ''),
+    version: String(body.version || '')
+  };
+  liveToken = Object.assign({ source: 'report' }, state);
+  try {
+    saveTokenFile(state);
+  } catch (error) {
+    warn('token 落盘失败：' + error.message + '（本次运行内仍生效）');
+  }
+  log('收到 App 上报的 pushToken：长度 ' + token.length + '，原因 ' + state.reason
+    + '，版本 ' + (state.version || '-') + '（已生效）');
+  return { ok: true, at: state.at, tokenLength: token.length };
+}
+
+function maskedToken() {
+  const token = pushTokenNow();
+  if (token.length === 0) return '';
+  return token.slice(0, 8) + '…' + token.slice(-4) + '（' + token.length + '）';
+}
+
+/** 读请求体（限长，别让一个畸形请求把内存吃了）。 */
+function readBody(req, limit) {
+  return new Promise((resolve) => {
+    let raw = '';
+    let tooBig = false;
+    req.setEncoding('utf8');
+    req.on('data', (chunk) => {
+      if (tooBig) return;
+      raw += chunk;
+      if (raw.length > limit) {
+        tooBig = true;
+        req.destroy();
+      }
+    });
+    req.on('end', () => resolve(tooBig ? null : raw));
+    req.on('error', () => resolve(null));
+  });
+}
+
+function listenPortOf(cfg) {
+  const at = process.argv.indexOf('--listen');
+  if (at >= 0 && process.argv[at + 1]) return Number(process.argv[at + 1]);
+  return Number((cfg.listen && cfg.listen.port) || 0);
+}
+
+function listenKeyOf(cfg) {
+  const at = process.argv.indexOf('--key');
+  if (at >= 0 && process.argv[at + 1]) return String(process.argv[at + 1]);
+  return String((cfg.listen && cfg.listen.key) || '');
+}
+
+/**
+ * 开上报端口。没配端口就返回 null（不监听）。
+ *
+ * 安全：配了 key 就必须带 `X-Relay-Key`（或 `?key=`）—— 这个端口只该在内网，
+ * 但它能改"往哪台设备推送"，所以别裸奔在公网上。
+ */
+function startReportServer(cfg) {
+  const port = listenPortOf(cfg);
+  if (!port) return null;
+  const key = listenKeyOf(cfg);
+  if (key.length < 8) {
+    warn('上报端口没设 key（或太短）：局域网里谁都能改推送目标。建议 --key 一串随机字符。');
+  }
+  const server = http.createServer((req, res) => {
+    const send2xx = (code, obj) => {
+      const text = JSON.stringify(obj);
+      res.writeHead(code, { 'Content-Type': 'application/json; charset=UTF-8' });
+      res.end(text);
+    };
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    if (req.method === 'GET' && url.pathname === '/health') {
+      const age = liveToken.at > 0 ? Math.round((Date.now() - liveToken.at) / 1000) : -1;
+      send2xx(200, {
+        ok: true,
+        tokenSet: pushTokenNow().length > 0,
+        tokenAgeSeconds: age,
+        tokenSource: liveToken.source || '',
+        tokenPreview: maskedToken(),
+        channel: (cfg.notify && cfg.notify.channel) || '',
+        now: Date.now()
+      });
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/token') {
+      const given = String(req.headers['x-relay-key'] || url.searchParams.get('key') || '');
+      if (key.length >= 8 && given !== key) {
+        warn('上报被拒：key 不对（来源 ' + (req.socket.remoteAddress || '-') + '）');
+        send2xx(401, { ok: false, error: 'bad key' });
+        return;
+      }
+      readBody(req, 8192).then((raw) => {
+        if (raw === null) {
+          send2xx(413, { ok: false, error: 'body too large' });
+          return;
+        }
+        let body = {};
+        try {
+          body = JSON.parse(raw || '{}');
+        } catch (error) {
+          send2xx(400, { ok: false, error: 'body is not json' });
+          return;
+        }
+        const result = acceptToken(body);
+        send2xx(result.ok ? 200 : 400, result);
+      });
+      return;
+    }
+    send2xx(404, { ok: false, error: 'not found' });
+  });
+  server.on('error', (error) => {
+    warn('上报端口开不起来（' + port + '）：' + error.message);
+  });
+  server.listen(port, '0.0.0.0', () => {
+    log('上报端口已开：http://<本机IP>:' + port + '（POST /token，GET /health）');
+    log('在 App 里「设定 → 中转上报」填 http://<本机IP>:' + port + ' 和同一串 key');
+  });
+  return server;
+}
+
 /* --------------------------------------------------------- 单实例 + 收尾 */
 
 function lockFile() {
@@ -504,11 +712,29 @@ async function main() {
   quiet = process.argv.indexOf('--quiet') >= 0;
   const once = process.argv.indexOf('--once') >= 0;
   const cfg = loadConfig();
+  // 先定"当前用哪个 token"：App 上报过就用那条，否则用配置里那条。
+  initToken(cfg);
+  const reportServer = startReportServer(cfg);
   const testAt = process.argv.indexOf('--test-push');
   if (testAt >= 0) {
     // 只验通道：不看 IG、不占锁、不写 state —— 让"手机到底能不能收到"独立成一步。
     const text = process.argv[testAt + 1] || '中转通道自检';
-    await send(cfg, 'Instamony', text, 'channel-test');
+    try {
+      await send(cfg, 'Instamony', text, 'channel-test');
+    } finally {
+      if (reportServer !== null) reportServer.close();
+    }
+    return;
+  }
+  /*
+   * 只开上报端口、不轮询：用来"先把 token 收上来"（还没拿到 IG cookie，
+   * 或者只想单独确定上报这条路通不通）。进程靠 server 的 handle 活着。
+   */
+  if (process.argv.indexOf('--report-only') >= 0) {
+    if (reportServer === null) {
+      die('--report-only 需要配 listen.port 或带 --listen <端口>。');
+    }
+    log('只开上报端口，不轮询（Ctrl+C 停）');
     return;
   }
   requireIgCookie(cfg);
@@ -525,6 +751,7 @@ async function main() {
 
   const finish = () => {
     if (dirty) saveState(stateFile, state);
+    if (reportServer !== null) reportServer.close();
     if (!once) releaseLock();
     process.exit(0);
   };

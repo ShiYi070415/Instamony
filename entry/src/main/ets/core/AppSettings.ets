@@ -148,6 +148,24 @@ export const SEARCH_BOX_FOCUS_REQUEST: string = 'searchBoxFocusRequest';
  * 就会重绘并把小图垫到真图下面（见 FeedList 的 posterReady）。同样**不是用户设置**、不落盘。
  */
 export const FEED_POSTER_READY: string = 'feedPosterReady';
+/**
+ * AppStorage 键：**中转上报地址**（BYO relay 的 `POST /token`）。
+ *
+ * 为什么需要：pushToken 会随重装 App、清数据、系统更新 HMS、恢复出厂而变，
+ * 一变就等于"中转手上那条是废的"，而接口照样回成功 —— 表现是**推送静默失效**。
+ * 以前靠人手「复制中转材料」再粘进配置，几乎必然忘。填了地址之后，
+ * App 启动和 tokenUpdate 时会自己把新 token 报给中转（见 core/PushTokenReporter）。
+ *
+ * 形如 `http://192.168.1.5:8787`（写不写 `/token` 都行，报的时候会补齐）。
+ */
+export const SETTING_RELAY_URL: string = 'relayReportUrl';
+/**
+ * AppStorage 键：**中转上报的共享密钥**（对应 relay 的 `listen.key` / `--key`）。
+ *
+ * 这个端口能改"往哪台设备推送"，所以不能裸奔：留空也能报（relay 只在配了 key 时才校验），
+ * 但同一内网里谁知道地址谁就能改。填一串随机字符更稳。
+ */
+export const SETTING_RELAY_KEY: string = 'relayReportKey';
 
 /**
  * 沉浸光感的材质等级。四个取值对应 HDS 的 `hdsMaterial.MaterialLevel`，**三档 + 一档自适应**
@@ -215,7 +233,28 @@ export class AppSettings {
       AppSettings.readString(SETTING_IMAGE_QUALITY, MEDIA_QUALITY_AUTO));
     AppStorage.setOrCreate(SETTING_VIDEO_QUALITY,
       AppSettings.readString(SETTING_VIDEO_QUALITY, MEDIA_QUALITY_AUTO));
+    // 中转上报：默认空 = 不报（不填就完全不会发任何请求）。
+    AppStorage.setOrCreate(SETTING_RELAY_URL, AppSettings.readString(SETTING_RELAY_URL, ''));
+    AppStorage.setOrCreate(SETTING_RELAY_KEY, AppSettings.readString(SETTING_RELAY_KEY, ''));
     AppSettings.refreshTheme(context);
+  }
+
+  /** 保存中转上报地址 + 密钥（空串 = 关掉上报）。 */
+  static setRelayReport(url: string, key: string): void {
+    AppStorage.setOrCreate(SETTING_RELAY_URL, url.trim());
+    AppStorage.setOrCreate(SETTING_RELAY_KEY, key.trim());
+    AppSettings.write(SETTING_RELAY_URL, url.trim());
+    AppSettings.write(SETTING_RELAY_KEY, key.trim());
+  }
+
+  /** 中转上报地址（空串 = 没配）。 */
+  static relayReportUrlNow(): string {
+    return AppStorage.get<string>(SETTING_RELAY_URL) ?? '';
+  }
+
+  /** 中转上报的共享密钥（可空）。 */
+  static relayReportKeyNow(): string {
+    return AppStorage.get<string>(SETTING_RELAY_KEY) ?? '';
   }
 
   /** 设置图片清晰度（存盘 + 发布到 AppStorage）。 */

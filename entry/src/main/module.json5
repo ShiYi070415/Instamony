@@ -42,6 +42,15 @@
         "value": "enable"
       }
     ],
+    /*
+     * 关于明文 HTTP（中转上报要 POST 到局域网 `http://192.168.x.x:8787`）：
+     * **不需要任何配置**。本 SDK 的 `@ohos.net.networkSecurity` 里写明
+     * `isCleartextPermitted()`「By default, plaintext HTTP access is allowed」
+     * 且默认返回 true —— 系统默认放行明文。
+     * 曾经试过在 module.json5 里加 `networkSecurityConfig`，这个 SDK 的 schema
+     * 直接报 "property name must be valid"（字段不在允许列表里），说明那套配置
+     * 在本 SDK 上不存在，别再照着网上帖子加。
+     */
     "abilities": [
       {
         "name": "EntryAbility",

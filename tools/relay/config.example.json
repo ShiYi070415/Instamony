@@ -30,5 +30,10 @@
     "quietHours": [23, 7]
   },
   "stateFile": "state.json",
-  "openUrl": "instamony://direct"
+  "openUrl": "instamony://direct",
+
+  "listen": {
+    "port": 8787,
+    "key": "换成一串随机字符，App 里填同一串（可空，但空=同一内网谁都能改推送目标）"
+  }
 }

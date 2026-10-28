@@ -62,6 +62,7 @@ import { MobileProbe } from '../core/mobileapi/MobileProbe';
 // BYO 中转要的两样东西：这份登录态（IG 的 Cookie）与这台设备的推送 token（AGC 的 Push Kit）。
 import { InstagramCookieJar, InstagramCookieSnapshot } from '../core/InstagramCookieJar';
 import { PushCenter } from '../core/PushCenter';
+import { PushTokenReporter } from '../core/PushTokenReporter';
 import { fileIo, picker } from '@kit.CoreFileKit';
 import { pasteboard, BusinessError } from '@kit.BasicServicesKit';
 import { promptAction } from '@kit.ArkUI';
@@ -278,6 +279,17 @@ export struct SettingsPanel {
    * 初值取 `-` 表示"还没跑过"（启动自检没跑或没登录）。
    */
   @State mobileProbeResult: string = MobileProbe.lastSummary();
+  /**
+   * 中转上报的输入框（见 core/PushTokenReporter）。
+   *
+   * 只做"记状态 → 保存"：真正发请求在 saveRelayAndReport 里，
+   * 输入过程中不碰网络（否则每敲一个字就发一次）。
+   */
+  @State private relayUrl: string = AppSettings.relayReportUrlNow();
+  @State private relayKey: string = AppSettings.relayReportKeyNow();
+  @State private relayStatus: string = PushTokenReporter.statusNow();
+  /** 正在上报（防连点）。 */
+  @State private relayBusy: boolean = false;
 
   /**
    * 进设置页时把已经跑过的那次自检结论捞进来（启动自检是定时跑的，多半这时已经有结果）。
@@ -947,6 +959,128 @@ export struct SettingsPanel {
     }
     .width('100%')
     .padding({ left: 16, right: 16, top: 16, bottom: 20 })
+  }
+
+  /**
+   * **中转上报区**（见 core/PushTokenReporter）。
+   *
+   * 两个输入（地址 + 共享密钥）、一颗「保存并立即上报」、一行状态。
+   * 状态必须显示出来：真机上 hilog 常被冲掉，测试者也没有 hdc —— 上报成没成
+   * 只能在界面上看得到，否则"点了没反应"和"报了但中转没开"完全分不清。
+   */
+  @Builder
+  relaySection() {
+    Column({ space: 0 }) {
+      this.relayUrlRow()
+      this.cardDivider()
+      this.relayKeyRow()
+      this.cardDivider()
+      this.actionRow('保存并立即上报', (): void => {
+        this.saveRelayAndReport();
+      })
+      this.cardDivider()
+      Text(this.relayStatus)
+        .fontSize(12)
+        .fontColor($r('app.color.secondary_text'))
+        .width('100%')
+        .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING, top: 10, bottom: 2 })
+      this.groupHint('填了之后，App 启动和 token 变化时会自动把 pushToken 报给中转；不填则一个请求都不发。'
+        + '地址形如 http://192.168.1.5:8787（末尾带不带 /token 都行）。')
+    }
+    .cardStyle()
+  }
+
+  /** 中转地址输入框。**状态在 Builder 内部读**（按值传参不参与状态观察）。 */
+  @Builder
+  relayUrlRow() {
+    Column({ space: 6 }) {
+      Text('中转上报地址')
+        .fontSize(13)
+        .fontColor($r('app.color.secondary_text'))
+        .width('100%')
+        .textAlign(TextAlign.Start)
+      Toggle({ type: ToggleType.Button, isOn: false }) {
+        TextInput({ text: this.relayUrl, placeholder: 'http://192.168.1.5:8787' })
+          .width('100%')
+          .height(42)
+          .fontSize(15)
+          .padding({ left: 14, right: 14 })
+          .backgroundColor(Color.Transparent)
+          .onChange((text: string): void => {
+            this.relayUrl = text;
+          })
+      }
+      .width('100%')
+      .height(42)
+      .padding(0)
+      .borderRadius(21)
+      .attributeModifier(new SurfaceModifier(this.materialThickness, true))
+      .backgroundColor($r('sys.color.comp_background_secondary'))
+      .onChange((): void => {
+      })
+    }
+    .width('100%')
+    .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING, top: 12, bottom: 12 })
+  }
+
+  /** 共享密钥输入框（对应 relay 的 `--key`，可空）。 */
+  @Builder
+  relayKeyRow() {
+    Column({ space: 6 }) {
+      Text('共享密钥（可空，对应 relay 的 key）')
+        .fontSize(13)
+        .fontColor($r('app.color.secondary_text'))
+        .width('100%')
+        .textAlign(TextAlign.Start)
+      Toggle({ type: ToggleType.Button, isOn: false }) {
+        TextInput({ text: this.relayKey, placeholder: '随便一串字符，和 relay 保持一致' })
+          .width('100%')
+          .height(42)
+          .fontSize(15)
+          .padding({ left: 14, right: 14 })
+          .backgroundColor(Color.Transparent)
+          .onChange((text: string): void => {
+            this.relayKey = text;
+          })
+      }
+      .width('100%')
+      .height(42)
+      .padding(0)
+      .borderRadius(21)
+      .attributeModifier(new SurfaceModifier(this.materialThickness, true))
+      .backgroundColor($r('sys.color.comp_background_secondary'))
+      .onChange((): void => {
+      })
+    }
+    .width('100%')
+    .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING, top: 12, bottom: 12 })
+  }
+
+  /** 存下来 → 立刻报一次（带结果提示）。地址清空视为关闭上报。 */
+  private saveRelayAndReport(): void {
+    if (this.relayBusy) {
+      return;
+    }
+    AppSettings.setRelayReport(this.relayUrl, this.relayKey);
+    if (this.relayUrl.trim().length === 0) {
+      this.relayStatus = '已关闭：不再上报';
+      this.toast('已关闭中转上报');
+      return;
+    }
+    const token: string = PushCenter.tokenNow();
+    this.relayBusy = true;
+    this.relayStatus = '正在上报…';
+    PushTokenReporter.reportNow(token, 'manual').then((status: string): void => {
+      this.relayBusy = false;
+      this.relayStatus = status;
+      hilog.info(DOMAIN, TAG, 'relay report: %{public}s', status);
+      this.toast(status);
+    }).catch((error: Error): void => {
+      this.relayBusy = false;
+      this.relayStatus = `上报失败：${error.message ?? '-'}`;
+      hilog.warn(DOMAIN, TAG, 'relay report threw: %{public}s', error.message ?? '-');
+      this.toast(this.relayStatus);
+    });
   }
 
   /** 一行输入：标题在上、输入框在下（"文本 / 输入框"交叉排布）。 */
@@ -1917,6 +2051,22 @@ export struct SettingsPanel {
       }
       ListItem() {
         this.proxySection()
+      }
+      .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+
+      /*
+       * **中转上报**（见 core/PushTokenReporter）。
+       *
+       * 为什么值得单独一组：pushToken 会随重装/清数据/HMS 更新而换，而旧 token 上
+       * 华为接口**照样回成功** —— 故障表现是"推送突然不响了、脚本却全是成功"。
+       * 填一次地址，之后启动和 tokenUpdate 时 App 自己报给中转，不用再手工复制。
+       * 不填 = 一个请求都不发（默认就是空）。
+       */
+      ListItem() {
+        this.groupHeader('中转上报')
+      }
+      ListItem() {
+        this.relaySection()
       }
       .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
 
