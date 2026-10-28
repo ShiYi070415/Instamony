@@ -535,6 +535,37 @@ check('调用规范：从布局里读出 app id + server/client 参数（含长�
     '票据太短，说明又抓到别处去了');
 });
 
+check('真机 Cookie 格式：\\r\\n 分隔 + 一堆属性，也要只取到三颗会话 Cookie', () => {
+  // R12 真机真实格式（值已替换成占位）
+  const cookieHeader = 'Set-Cookie: csrftoken=CSRFVALUE; Domain=.instagram.com; '
+    + 'expires=02-Dec-2027 13:57:44 GMT; Max-Age=31536000; Path=/; Secure\r\n'
+    + 'Set-Cookie: ds_user_id=46473815227; Domain=.instagram.com; '
+    + 'expires=26-Jan-2027 13:57:44 GMT; Max-Age=31536000; Path=/; Secure\r\n'
+    + 'Set-Cookie: sessionid=46473815227%3Aabcdefghij; Domain=.instagram.com; '
+    + 'expires=28-Oct-2027 13:57:44 GMT; HttpOnly; Max-Age=31536000; Path=/; Secure';
+  const cookies = caa.parseCookieHeader(cookieHeader);
+  assertEqual(Object.keys(cookies).join(','), 'csrftoken,ds_user_id,sessionid',
+    'Cookie 名不对（把属性当 Cookie 了？）');
+  assertEqual(cookies.ds_user_id, '46473815227', 'ds_user_id 值不对');
+  assertEqual(cookies.sessionid, '46473815227%3Aabcdefghij', 'sessionid 值不对');
+});
+
+check('登录结果的第一个 "login_response" 可能是日志文本 —— 必须继续往后找', () => {
+  // R12 真机：日志文本 `[trait:called_handle_login_response]` 先出现，
+  // 以前"从它往回扫"会永远找不到后面真正的载荷。
+  const payloadObj = {
+    login_response: JSON.stringify({ logged_in_user: { pk: 777 } }),
+    headers: JSON.stringify({ 'IG-Set-Authorization': 'Bearer IGT:2:REAL' }),
+    cookies: 'Set-Cookie: sessionid=777%3Areal; Path=/; Secure\r\nSet-Cookie: ds_user_id=777; Path=/'
+  };
+  const text = '(dey "MAA_LOGIN_FLOW" "[trait:called_handle_login_response] Calling") '
+    + '(dsg (fom 15942 35 ' + JSON.stringify(JSON.stringify(payloadObj)) + '))';
+  const deep = caa.extractLoginPayloadDeep({ layout: { bloks_payload: { ft: { a: text } } } });
+  assert(deep !== null, '被日志文本挡住，没找到真正的登录载荷');
+  assertEqual(deep.cookies.sessionid, '777%3Areal', 'sessionid 不对');
+  assertEqual(deep.headers['IG-Set-Authorization'], 'Bearer IGT:2:REAL', 'authorization 不对');
+});
+
 /* ------------------------------------------------ 汇总 */
 
 console.log('');

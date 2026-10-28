@@ -571,18 +571,22 @@ const COOKIE_ATTRIBUTES = [
 ];
 
 /**
- * 解析 Bloks 给的 Cookie 串（行为对齐 instagrapi 用的 Python `SimpleCookie`）。
+ * 解析 Bloks 给的 Cookie 串（对齐 instagrapi 用的 Python `SimpleCookie`）。
  *
- * 为什么不能只按 `;` 切：真实响应里有两种形状
- *   ① `sessionid=x; Path=/; Domain=.instagram.com; HttpOnly`（后面全是属性）
- *   ② `Set-Cookie: sessionid=x; Path=/, Set-Cookie: ds_user_id=1; Path=/`（多颗，逗号分隔）
- * 只按 `;` 切会把 `Path`、`Domain` 当成 Cookie 塞进罐里，而 `ds_user_id` 会因为名字带
- * `, Set-Cookie: ` 前缀**整个丢掉** —— 离线自检里就是这么暴露的（网页会话能建、账号 id 空）。
+ * 真实形状（R12 真机实测，`\r\n` 分隔、每颗后面跟一串属性）：
+ *   `Set-Cookie: csrftoken=…; Domain=.instagram.com; expires=02-Dec-2027 13:57:44 GMT;
+ *    Max-Age=…; Path=/; Secure\r\nSet-Cookie: ds_user_id=…; …\r\n
+ *    Set-Cookie: sessionid=…; …; HttpOnly; …`
+ *
+ * 所以切分符要包含**换行**：早先只按 `;` 与 `,` 切，`Secure\r\nSet-Cookie: ds_user_id`
+ * 会被当成一颗叫这名儿的 Cookie（于是 sessionid 明明在、却解析不出来）。
+ * 另外属性值里可能带空格（`expires=02-Dec-2027 13:57:44 GMT`），名字必须做合法性过滤。
  */
 function parseCookieHeader(text) {
   const out = {};
   const raw = String(text || '').replace(/Set-Cookie:\s*/gi, '');
-  for (const part of raw.split(/[;,]/)) {
+  const NAME_OK = /^[A-Za-z0-9_\-%]+$/;
+  for (const part of raw.split(/[;,\r\n]+/)) {
     const one = part.trim();
     if (one.length === 0) {
       continue;
@@ -594,6 +598,9 @@ function parseCookieHeader(text) {
     const name = one.slice(0, cut).trim();
     const value = one.slice(cut + 1).trim();
     if (name.length === 0 || value.length === 0) {
+      continue;
+    }
+    if (!NAME_OK.test(name)) {
       continue;
     }
     if (COOKIE_ATTRIBUTES.indexOf(name.toLowerCase()) >= 0) {
@@ -634,18 +641,26 @@ function sessionHeadersOf(headers) {
 /**
  * 从**一段文本**里抠登录结果（cookie + authorization）。
  *
- * 成功时这段文本里嵌着一个 JSON 字符串，内容是 `{login_response, headers, cookies}`。
+ * 做法：**正向**遍历这段文本里的每一个字符串字面量，逐个试解。
+ *
+ * 为什么不能"从 `login_response` 第一次出现的地方往回找"（以前的写法）：真机响应里
+ * 第一次出现的地方是一句日志文本 `"[trait:called_handle_login_response] Calling
+ * HandleLoginResponse"` —— 它**包含** `login_response` 这几个字，于是往回找的扫描
+ * 永远只在它前面转，而真正的载荷在它**后面**，所以一直解析不出来。
+ * （R12 真机：2FA 全 200、登录其实成功，却报"没找到登录结果"，就是这个原因。）
  */
 function loginPayloadFromText(text) {
-  const marker = String(text || '').indexOf('login_response');
-  if (marker < 0) return null;
-  // 从 marker 往前找最近的字符串起点，逐个试（越靠近 marker 越可能是那一段）。
-  for (let start = marker; start >= 0; start--) {
-    if (text[start] !== '"') continue;
-    // 转义引号（`\"`）不是起点。
-    if (start > 0 && text[start - 1] === '\\') continue;
-    const literal = jsonStringAt(text, start);
+  const source = String(text || '');
+  if (source.indexOf('login_response') < 0 && source.indexOf('ig-set-authorization') < 0) {
+    return null;
+  }
+  for (let index = 0; index < source.length; index++) {
+    if (source[index] !== '"') continue;
+    // 转义引号（`\"`）不是字符串起点。
+    if (index > 0 && source[index - 1] === '\\') continue;
+    const literal = jsonStringAt(source, index);
     if (literal.length === 0) continue;
+    index += literal.length - 1;
     let decoded = '';
     try {
       decoded = JSON.parse(literal);
@@ -655,6 +670,9 @@ function loginPayloadFromText(text) {
     if (typeof decoded !== 'string' || decoded.indexOf('login_response') < 0) continue;
     try {
       const raw = JSON.parse(decoded);
+      if (raw === null || typeof raw !== 'object') continue;
+      // 必须是"登录结果那种对象"（有 login_response / cookies / headers 之一）
+      if (!('login_response' in raw) && !('cookies' in raw) && !('headers' in raw)) continue;
       const loginResponse = JSON.parse(raw.login_response || '{}');
       const headers = JSON.parse(raw.headers || '{}');
       const cookieHeader = String(raw.cookies || '');
