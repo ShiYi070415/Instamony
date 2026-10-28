@@ -223,7 +223,14 @@ function mobileAuthorization(cookie) {
 
 /* --------------------------------------------------------------- 拉收件箱 */
 
-async function fetchInbox(cfg) {
+/**
+ * 拉一次收件箱，**连订阅位点一起**返回。
+ *
+ * `seq_id` / `snapshot_at_ms` 是实时通道的唯一门槛（instagrapi 的
+ * `direct_subscribe` 就是从收件箱响应顶层读这两个值），所以顺手带出来，
+ * 免得为了拿它们再打一次请求。
+ */
+async function fetchInboxRaw(cfg) {
   const cookie = cfg.ig.cookie;
   const query = querystring.stringify({
     limit: '15',
@@ -239,23 +246,35 @@ async function fetchInbox(cfg) {
   }
   let res;
   try {
-    res = await request(INBOX_URL + '?' + query, {
-      headers: {
-        Cookie: cookie,
-        Authorization: authorization,
-        'User-Agent': MOBILE_UA,
-        'X-IG-App-ID': MOBILE_APP_ID,
-        // 移动端身份里几条"固定串"：缺了 IG 会当成伪造客户端。
-        'X-IG-Capabilities': '3brTv10=',
-        'X-IG-Connection-Type': 'WIFI',
-        'X-IG-WWW-Claim': '0',
-        'X-CSRFToken': csrfOf(cookie),
-        Accept: '*/*'
-      }
-    });
+    const headers = {
+      Cookie: cookie,
+      Authorization: authorization,
+      'User-Agent': MOBILE_UA,
+      'X-IG-App-ID': MOBILE_APP_ID,
+      // 移动端身份里几条"固定串"：缺了 IG 会当成伪造客户端。
+      'X-IG-Capabilities': '3brTv10=',
+      'X-IG-Connection-Type': 'WIFI',
+      'X-IG-WWW-Claim': '0',
+      'X-CSRFToken': csrfOf(cookie),
+      Accept: '*/*'
+    };
+    /*
+     * **设备身份要跟实时通道那边用同一个**。
+     *
+     * 实时通道（MQTT）的 CONNECT 里带 `deviceId`，而 iris 订阅会校验"这个会话是不是
+     * 同一台设备报上来的快照" —— 两边对不上就被判 `Iris_IrisValidationException`。
+     * 所以 HTTP 这边也把同一条 device id 报上去（见 realtime.js 的 loadDeviceId）。
+     */
+    const deviceId = (cfg.ig && cfg.ig.deviceId) || '';
+    if (deviceId.length > 0) {
+      headers['X-IG-Device-ID'] = deviceId;
+      headers['X-IG-Android-ID'] = deviceId;
+      headers['X-IG-Family-Device-ID'] = deviceId;
+    }
+    res = await request(INBOX_URL + '?' + query, { headers: headers });
   } catch (error) {
     log('IG 请求失败，本轮跳过：' + error.message);
-    return [];
+    return { threads: [], seqId: 0, snapshotAtMs: 0 };
   }
   if (res.status === 401 || res.status === 403 || res.body.indexOf('login_required') >= 0) {
     warn('IG 拒绝：会话失效（HTTP ' + res.status + '）。请在 App 里重新登录后重新导出材料。');
@@ -264,20 +283,30 @@ async function fetchInbox(cfg) {
   if (res.status === 404 && res.body.indexOf('not-logged-in') >= 0) {
     // 这是"网页那条路"的特征响应。走移动端接口不该再出现，出现基本就是地址写错了。
     warn('IG 回 404 + not-logged-in：请求打到网页接口了（应该是 i.instagram.com 的移动端接口）。');
-    return [];
+    return { threads: [], seqId: 0, snapshotAtMs: 0 };
   }
   if (res.status !== 200) {
     log('IG HTTP ' + res.status + '，本轮跳过：' + res.body.slice(0, 140));
-    return [];
+    return { threads: [], seqId: 0, snapshotAtMs: 0 };
   }
   let data;
   try {
     data = JSON.parse(res.body);
   } catch (error) {
     log('IG 回的不是 JSON，本轮跳过：' + res.body.slice(0, 140));
-    return [];
+    return { threads: [], seqId: 0, snapshotAtMs: 0 };
   }
-  return (data.inbox || {}).threads || [];
+  return {
+    threads: (data.inbox || {}).threads || [],
+    seqId: Number(data.seq_id || 0),
+    snapshotAtMs: Number(data.snapshot_at_ms || 0)
+  };
+}
+
+/** 只要会话列表（老的调用方式）。 */
+async function fetchInbox(cfg) {
+  const raw = await fetchInboxRaw(cfg);
+  return raw.threads;
 }
 
 /* ------------------------------------------------------------------ 状态 */
@@ -832,8 +861,13 @@ async function main() {
   requireIgCookie(cfg);
   const ig = cfg.ig || {};
   const fast = intervalOverride();
-  const activeGap = fast > 0 ? fast : Math.max(MIN_POLL_SECONDS, Number(ig.pollSeconds || 90));
+  const activeGap = fast > 0 ? fast : Math.max(MIN_POLL_SECONDS, Number(ig.pollSeconds || 60));
   const idleMax = Math.max(activeGap, Number(ig.idleMaxSeconds || 300));
+  /** 连续安静几轮之后一步跳到安静档（默认 2 轮）。 */
+  const quietAfterRounds = Math.max(1, Number(ig.quietRoundsBeforeJump || 2));
+  /** 安静档的间隔：不超过 idleMax，也不低于活跃档。 */
+  const quietJump = Math.min(idleMax, Math.max(activeGap,
+    Number(ig.quietJumpSeconds || 240)));
   const stateFile = path.resolve(__dirname, cfg.stateFile || 'state.json');
   if (!once) acquireLock();
 
@@ -841,6 +875,7 @@ async function main() {
   let dirty = false;
   let firstRound = true;
   let gap = activeGap;
+  let quietRounds = 0;
 
   const finish = () => {
     if (dirty) saveState(stateFile, state);
@@ -914,8 +949,22 @@ async function main() {
     }
     firstRound = false;
 
-    // **自适应间隔**：这一轮有动静就回到活跃档，一直安静就慢慢退到 idleMax。
-    gap = fresh.length > 0 ? activeGap : Math.min(idleMax, Math.round(gap * 1.25));
+    /*
+     * **自适应间隔**：有动静就回到活跃档；连续安静几轮就**一步跳到安静档**，
+     * 而不是按 1.25 倍慢慢爬（那样要 20 分钟才退到底，等于白天大部分时间还在 60 秒一轮）。
+     *
+     * 真实形状：聊天时 60 秒一轮（够快）；停手 2 轮（约 3 分钟）后变 240 秒；
+     * 最终退到 idleMax（默认 300 秒）。一天下来请求量比固定 60 秒少 3~5 倍。
+     */
+    if (fresh.length > 0) {
+      quietRounds = 0;
+      gap = activeGap;
+    } else {
+      quietRounds++;
+      gap = quietRounds >= quietAfterRounds
+        ? quietJump
+        : Math.min(quietJump, Math.round(gap * 1.25));
+    }
     if (once) {
       if (!quiet) {
         let total = 0;
@@ -937,4 +986,12 @@ if (require.main === module) {
   });
 }
 
-module.exports = { complianceVerdict, looksLikeMessageRequest, hasConversationHistory };
+module.exports = {
+  complianceVerdict,
+  looksLikeMessageRequest,
+  hasConversationHistory,
+  fetchInbox,
+  fetchInboxRaw,
+  loadState,
+  saveState
+};
