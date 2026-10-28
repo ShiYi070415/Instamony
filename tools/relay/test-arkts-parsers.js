@@ -103,8 +103,8 @@ function stripTypes(text) {
     .replace(/:\s*Array<[^>]+>/g, '')
     .replace(/:\s*ESObject/g, '')
     .replace(/:\s*CaaMapEntry/g, '')
-    .replace(/:\s*CaaCallSpec/g, '')
     .replace(/:\s*CaaCallSpec\s*\|\s*null/g, '')
+    .replace(/:\s*CaaCallSpec/g, '')
     .replace(/:\s*CaaLoginPayload\s*\|\s*null/g, '')
     .replace(/:\s*CaaLoginPayload/g, '')
     .replace(/:\s*RegExpExecArray\s*\|\s*null/g, '')
@@ -113,7 +113,7 @@ function stripTypes(text) {
     .replace(/:\s*boolean/g, '')
     .replace(/:\s*number/g, '')
     .replace(/:\s*string/g, '')
-    .replace(/\s+as\s+Record<string,\s*ESObject>/g, '')
+    .replace(/\s+as\s+Record<[^>]+>/g, '')
     .replace(/\s+as\s+boolean/g, '')
     .replace(/\s+as\s+number/g, '')
     .replace(/\s+as\s+Array<[^>]+>/g, '')
@@ -146,6 +146,16 @@ function toGlobalFunction(name) {
 }
 
 const sandbox = { CaaLogin: {}, JSON, RegExp, Set, Array, Object, String };
+/*
+ * 模块级常量（被摘出来的函数直接用）。值必须与 CaaLogin.ets 里的一致 ——
+ * 抄错的后果是"离线全绿、装上才发现没识别"，所以这几行改动时要和 .ets 一起看。
+ */
+sandbox.AP_2SV_ENTRYPOINT = 'com.bloks.www.ap.two_step_verification.entrypoint_async';
+sandbox.AP_2SV_CODE_ENTRY = 'com.bloks.www.ap.two_step_verification.code_entry';
+sandbox.AP_2SV_CODE_ENTRY_ASYNC = 'com.bloks.www.ap.two_step_verification.code_entry_async';
+sandbox.TSV_ENTRYPOINT = 'com.bloks.www.two_step_verification.entrypoint';
+sandbox.LISPY_MAP_HEAD = '(f4i';
+sandbox.IG_APP_ID = '567067343352427';
 /*
  * 被摘出来的 `loginPayloadFromText` 会 `new CaaLoginPayload(...)`。这个类在 .ets 里是
  * 顺手写在文件末尾的小类，这里按同名字段补一个 —— 少了它构造会抛错，而那个错会被
@@ -180,7 +190,12 @@ const script = [
   toGlobalFunction('bloksParenthesized'),
   toGlobalFunction('bloksExpressionItems'),
   toGlobalFunction('collectStrings'),
+  toGlobalFunction('bloksAllText'),
+  toGlobalFunction('bloksErrorText'),
+  toGlobalFunction('bloksNeedsTwoStep'),
+  toGlobalFunction('bloksContextValue'),
   // 类方法
+  toFunction('parse'),
   toFunction('jsonStringAt'),
   toFunction('parseCookieHeader'),
   // 真机 2026-10：cookie 三形状 + ig-set-* 头还原（loginPayloadFromText 依赖这几个）
@@ -202,7 +217,11 @@ const script = [
   toFunction('ensureNulls'),
   toFunction('loginResponseBool'),
   toFunction('inferChallenge'),
-  toFunction('extractAac')
+  toFunction('extractAac'),
+  toFunction('extractLoginPayload'),
+  // App 里那张卡片上的「解析自检」（selfTest）本身也在这里复算 —— 它的结论会显示给用户，
+  // 离线先跑一遍就不会出现"装到手机上才知道哪项没过"。
+  toFunction('selfTest')
 ].join('\n');
 vm.runInContext(script, sandbox);
 const Ark = sandbox.CaaLogin;
@@ -439,6 +458,17 @@ check('取 aac：initial 与 initial_lispy 两种形状都要能取（与 JS 版
     'initial_lispy 形状没取到（这就是 App 报"没拿到 aac"的原因）：' + JSON.stringify(Ark.extractAac(withLispy)));
   const none = JSON.stringify({ layout: { bloks_payload: { data: [] } } });
   assert(Ark.extractAac(none) === '', '空布局不该给出 aac');
+});
+
+/*
+ * **App 卡片上那个「解析自检」的离线复算**。
+ *
+ * 为什么值得一条：它是用户唯一能看懂的结论（自检通过/未通过哪项），而它只能在手机上点。
+ * 装包前先在这跑一遍，就不会出现"装上去才发现哪项没过"，也不用为了看失误项再发一次登录。
+ */
+check('App 自检（selfTest）离线复算：应报 7/7 通过', () => {
+  const verdict = Ark.selfTest();
+  assert(verdict.indexOf('7/7 通过') >= 0, '自检结论：' + verdict);
 });
 
 const sendDump = path.join(DIR, '.tmp', 'caa-send-response.json');

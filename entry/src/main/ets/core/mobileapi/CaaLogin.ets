@@ -1716,10 +1716,17 @@ export class CaaLogin {
     }
   }
 
-  /** 从 Bloks 布局里取 aac。 */
-  private static extractAac(body: string): string {
-    const payload: ESObject = CaaLogin.parse(body);
-    if (payload === null) {
+  /**
+   * 从 Bloks 布局里取 aac。
+   *
+   * @param body 响应体字符串**或**已解析的对象 —— 两种都吃。
+   *   为什么两种都吃：真实链路传的是响应体字符串，而「解析自检」在内存里已经 parse 过了，
+   *   只收字符串的话自检会拿对象当 JSON 再解析一次 → 永远取不到 aac（真机就报了这一项）。
+   */
+  private static extractAac(body: ESObject): string {
+    const payload: ESObject =
+      typeof body === 'string' ? CaaLogin.parse(body as string) : body;
+    if (payload === null || payload === undefined) {
       return '';
     }
     // ① 布局里显式的 CAA_ACCOUNT_ACCESS_CONTEXT:aac 节点
