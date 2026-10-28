@@ -1,5 +1,32 @@
 # 推送网关（把通知能力开放给其他用户）
 
+## 当前已部署的实例
+
+```
+https://vercel-alpha-eight-69.vercel.app/api/push
+```
+
+- 项目名 `insta-65ef/vercel`，生产环境变量已配：`HUAWEI_SA_JSON`、`GATEWAY_KEYS`（1 个 key）、`PUSH_CATEGORY=IM`
+- 自检：`GET` 该地址应回 `{"ok":true,"service":"instamony-push-gateway","keys":1,...}`
+- 实测转发成功：`requestId 179319113648761452000207`（云端网关）／`179319114366286684000107`（客户端经网关）
+- 站长本人的 key 只通过私聊给出，**不写进仓库**
+
+### 加一个新用户（1 分钟）
+
+1. 生成一个 key，追加到 `GATEWAY_KEYS`（逗号分隔）：
+   ```powershell
+   cd tools/gateway/vercel
+   "旧key,新key-xxxx" | npx vercel env rm GATEWAY_KEYS production   # 先删
+   "旧key,新key-xxxx" | npx vercel env add GATEWAY_KEYS production  # 再加
+   npx vercel deploy --prod --yes
+   ```
+   （Vercel CLI 的 env 只能整条覆盖，所以是"删了再加"）
+2. 把 URL 和这个 key 发给对方；对方照下面「用户侧怎么配」写进 `config.json`。
+
+### 吊销某个用户
+
+把那个 key 从 `GATEWAY_KEYS` 里去掉，重新 `vercel deploy --prod --yes` 即可。
+
 ## 为什么需要它
 
 其他用户想用 `instamony.js` 收私信通知，就必须能发**华为 Push Kit**，而发推送需要
