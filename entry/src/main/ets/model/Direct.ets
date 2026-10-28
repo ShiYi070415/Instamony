@@ -149,6 +149,19 @@ export class DirectMessage {
    * 用它画所有气泡等于把每条消息都说成同一个人发的。所以解析时按 `user_id` 查会话的 `users[]`
    * 把人名/头像落到每条消息上；查不到时才退回会话那一份（1:1 会话就是这种情况）。
    */
+  /**
+   * 图片的**原始尺寸**（0 = 载荷没给；气泡里按它算显示比例，见 DirectThreadPage 的 mediaAspect）。
+   *
+   * 需求："图库上传的横图 16:9（自适应）、方形 1:1、长图最大 4:3" —— 没有原始尺寸就只能给个默认比例。
+   */
+  readonly mediaWidth: number;
+  readonly mediaHeight: number;
+  /**
+   * 这条是不是**贴图 / 动图**（`animated_media`，通常是透明 PNG / GIF / WebP）。
+   *
+   * 需求："贴图可能是 png 格式，背景可以透明而不是黑色占据，贴图大小是小的（屏幕宽度三分一左右）"。
+   */
+  readonly mediaSticker: boolean;
   readonly senderName: string;
   readonly senderAvatar: string;
 
@@ -157,7 +170,8 @@ export class DirectMessage {
               shareCode: string = '', shareUrl: string = '', shareIsVideo: boolean = false,
               shareKind: string = '', shareCover: string = '', shareUser: string = '',
               shareAvatar: string = '', shareCaption: string = '', sharePlayable: string = '',
-              senderName: string = '', senderAvatar: string = '') {
+              senderName: string = '', senderAvatar: string = '',
+              mediaWidth: number = 0, mediaHeight: number = 0, mediaSticker: boolean = false) {
     this.id = id;
     this.userId = userId;
     this.mine = mine;
@@ -177,6 +191,9 @@ export class DirectMessage {
     this.sharePlayable = sharePlayable;
     this.senderName = senderName;
     this.senderAvatar = senderAvatar;
+    this.mediaWidth = mediaWidth;
+    this.mediaHeight = mediaHeight;
+    this.mediaSticker = mediaSticker;
   }
 }
 
@@ -546,12 +563,14 @@ export class DirectMapper {
       const gqlCard: ShareCard = DirectMapper.shareCardOf(item);
       // 这条消息是谁发的（群聊里每人不一样，见 DirectMessage.senderName）。
       const gqlSender: DirectPerson | null = personOf(people, userId);
+      const gqlSize: Array<number> = DirectMapper.mediaSizeOf(item);
       messages.push(new DirectMessage(id, userId, me.length > 0 && userId === me, tsMs, kind,
         text, mediaUrl, DirectMapper.hasVideoMedia(item), DirectMapper.shareCodeOf(item),
         DirectMapper.shareUrlOf(item), DirectMapper.shareIsVideoOf(item),
         gqlCard.kind, gqlCard.cover, gqlCard.user, gqlCard.avatar, gqlCard.caption,
         gqlCard.playable, gqlSender === null ? '' : gqlSender.label,
-        gqlSender === null ? '' : gqlSender.avatar));
+        gqlSender === null ? '' : gqlSender.avatar,
+        gqlSize[0], gqlSize[1], DirectMapper.isSticker(item)));
     }
     if (messages.length === 0) {
       // 找到数组了但一条都没能用 —— 把第一条的原样键名和几个字段打出来（诊断用）。
@@ -1086,13 +1105,15 @@ export class DirectMapper {
       }
       // 这条消息是谁发的（群聊里每人不一样，见 DirectMessage.senderName）。
       const sender: DirectPerson | null = personOf(people, userId);
+      const mediaSize: Array<number> = DirectMapper.mediaSizeOf(item);
       messages.push(new DirectMessage(JsonRead.strOf(item, 'item_id'), userId,
         me.length > 0 && userId === me, micros > 0 ? Math.round(micros / 1000) : 0,
         kind, text, mediaUrl, isVideo, DirectMapper.shareCodeOf(item),
         DirectMapper.shareUrlOf(item), DirectMapper.shareIsVideoOf(item),
         card.kind, card.cover, card.user, card.avatar, card.caption,
         card.playable, sender === null ? '' : sender.label,
-        sender === null ? '' : sender.avatar));
+        sender === null ? '' : sender.avatar,
+        mediaSize[0], mediaSize[1], DirectMapper.isSticker(item)));
     }
     // items 是"新在前"，界面上按时间正序排（老的在上）。
     messages.sort((a: DirectMessage, b: DirectMessage): number => a.tsMs - b.tsMs);
@@ -1166,6 +1187,80 @@ export class DirectMapper {
    * IG 把图片放在 `image_versions2.candidates[]`（第一项是最大那张；气泡里够用了，
    * 不折腾档位）。视频消息同样有这个字段 —— 那是它的**封面帧** ✓。
    */
+  /**
+   * 一张图的**原始宽高**（拿不到给 0）。
+   *
+   * 私信的图片尺寸藏在 `image_versions2.candidates[]` 里（每档都带 width/height），
+   * 有些形状也在 `original_width/original_height`；两处都试。
+   */
+  private static imageSizeOf(host: Record<string, Object> | null): Array<number> {
+    if (host === null) {
+      return [0, 0];
+    }
+    const versions: Record<string, Object> | null = JsonRead.recordOf(host, 'image_versions2');
+    if (versions !== null) {
+      const candidates: Array<Object> = JsonRead.arrayOf(versions, 'candidates');
+      for (let index: number = 0; index < candidates.length; index++) {
+        const candidate: Record<string, Object> | null = JsonRead.asRecord(candidates[index]);
+        if (candidate === null) {
+          continue;
+        }
+        const w: number = JsonRead.numOf(candidate, 'width');
+        const h: number = JsonRead.numOf(candidate, 'height');
+        if (w > 0 && h > 0) {
+          return [w, h];
+        }
+      }
+    }
+    const ow: number = JsonRead.numOf(host, 'original_width');
+    const oh: number = JsonRead.numOf(host, 'original_height');
+    return [ow > 0 ? ow : 0, oh > 0 ? oh : 0];
+  }
+
+  /** 一条消息里那张图的原始宽高（依次试 media → animated_media；都没有 [0,0]）。 */
+  private static mediaSizeOf(item: Record<string, Object>): Array<number> {
+    const direct: Array<number> = DirectMapper.imageSizeOf(JsonRead.recordOf(item, 'media'));
+    if (direct[0] > 0 && direct[1] > 0) {
+      return direct;
+    }
+    const anim: Record<string, Object> | null = JsonRead.recordOf(item, 'animated_media');
+    if (anim !== null) {
+      const images: Record<string, Object> | null = JsonRead.recordOf(anim, 'images');
+      if (images !== null) {
+        const fixed: Record<string, Object> | null = JsonRead.recordOf(images, 'fixed_height');
+        if (fixed !== null) {
+          const w: number = JsonRead.numOf(fixed, 'width');
+          const h: number = JsonRead.numOf(fixed, 'height');
+          if (w > 0 && h > 0) {
+            return [w, h];
+          }
+        }
+      }
+      const original: Array<number> = DirectMapper.imageSizeOf(anim);
+      if (original[0] > 0 && original[1] > 0) {
+        return original;
+      }
+    }
+    return [0, 0];
+  }
+
+  /**
+   * 这条是不是**贴图 / 动图**（要透明底、按小尺寸画）。
+   *
+   * 判据：`item_type` 是 `animated_media`、载荷里有 `animated_media`、或者地址本身是 gif/webp。
+   */
+  private static isSticker(item: Record<string, Object>): boolean {
+    const kind: string = JsonRead.strOf(item, 'item_type');
+    if (kind === 'animated_media' || kind === 'sticker') {
+      return true;
+    }
+    if (JsonRead.recordOf(item, 'animated_media') !== null) {
+      return true;
+    }
+    const url: string = DirectMapper.mediaUrlOf(item).toLowerCase();
+    return url.indexOf('.gif') >= 0 || url.indexOf('.webp') >= 0;
+  }
+
   private static imageUrlOf(host: Record<string, Object> | null): string {
     if (host === null) {
       return '';

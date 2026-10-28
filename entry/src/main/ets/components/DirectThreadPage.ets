@@ -49,21 +49,21 @@ const SEND_SCROLL_SETTLE_MS: number = 260;
 const AVATAR_SIZE: number = 28;
 const BUBBLE_MAX_RATIO: number = 0.72;
 const BUBBLE_GAP_VP: number = 2;
-const GROUP_GAP_VP: number = 10;
+const GROUP_GAP_VP: number = 8;
 /** 气泡的四角基准圆角。 */
-const BUBBLE_RADIUS: number = 18;
+const BUBBLE_RADIUS: number = 22;
 /**
  * **贴在一起的两颗气泡**，接触那一侧用的小圆角（需求："贴着另一个消息气泡的左侧接触角用小圆角"）。
  * 左边（对方）收左角，右边（自己）收右角，见 bubbleCorners。
  */
 const BUBBLE_RADIUS_JOIN: number = 6;
 /** 群聊里"发送人名字"那一行的字号（需求：比正文小一点但要看得清，之前 11 太小）。 */
-const SENDER_NAME_SIZE: number = 13;
+const SENDER_NAME_SIZE: number = 12;
 /** 那一行相对头像左侧再多留的空白（需求：padding left 需要增加）。 */
 const SENDER_NAME_LEFT_PAD: number = 24;
 /** 有发送人名字的组，和上一段之间额外加的距离（需求：顶部 margin 要和其他消息段拉开）。 */
 /** 名字行与它下面那颗气泡的距离（需求：分组 margin top 缩小到和它一样）。 */
-const SENDER_NAME_BOTTOM_GAP: number = 10;
+const SENDER_NAME_BOTTOM_GAP: number = 8;
 const GROUP_GAP_MS: number = 2 * 60 * 1000;
 /**
  * 顶部那行"加载中"动画的高度（vp）—— **始终占位**，不加载时高度为 0。
@@ -668,6 +668,43 @@ export struct DirectThreadPage {
     return width * BUBBLE_MAX_RATIO;
   }
 
+  /**
+   * 图片在气泡里的**显示比例**（高 / 宽）。
+   *
+   * 需求："横图 16:9（自适应，非强制）、方形保持 1:1、长图最大 4:3" ——
+   * 所以只做**上限裁剪**，不做强制：原图什么比例就什么比例，超出的才夹住。
+   * 与「应用内拍摄 vs 图库上传」无关：那一层等以后有 `is_camera` 之类的字段再区分。
+   */
+  private static mediaAspect(message: DirectMessage): number {
+    const w: number = message.mediaWidth;
+    const h: number = message.mediaHeight;
+    if (w <= 0 || h <= 0) {
+      // 拿不到尺寸：贴图按方形，普通图片沿用老的 4:5。
+      return message.mediaSticker ? 1 : 1.25;
+    }
+    const ratio: number = h / w;
+    if (ratio >= 1) {
+      // 方形 / 长图：最多 4:3（即 高 ≤ 宽 × 4/3）。
+      return Math.min(ratio, 4 / 3);
+    }
+    // 横图：最多 16:9（即 高 ≥ 宽 × 9/16），比 16:9 更扁的才被夹住。
+    return Math.max(ratio, 9 / 16);
+  }
+
+  /** 气泡里图片的宽度：贴图是屏幕 1/3，普通图片仍是原来的宽度。 */
+  private mediaBoxWidth(message: DirectMessage): number {
+    if (message.mediaSticker) {
+      const screen: number = this.screenWidthVp > 0 ? this.screenWidthVp : FALLBACK_WIDTH_VP;
+      return Math.round(screen / 3);
+    }
+    return this.bubbleMediaWidth();
+  }
+
+  /** 气泡里图片的高度：宽度 × 比例（见 mediaAspect）。 */
+  private mediaBoxHeight(message: DirectMessage): number {
+    return Math.round(this.mediaBoxWidth(message) * DirectThreadPage.mediaAspect(message));
+  }
+
   private bubbleMediaWidth(): number {
     const width: number = this.screenWidthVp > 0 ? this.screenWidthVp : FALLBACK_WIDTH_VP;
     return Math.min(200, width * 0.52);
@@ -883,7 +920,7 @@ export struct DirectThreadPage {
         }
         .alignItems(HorizontalAlign.End)
       } else {
-        Column({ space: 2 }) {
+        Column({ space: 0 }) {
           // 群聊：这一组顶部写发送人（带文字阴影，压在深色背景上不糊）。
           if (this.showsSenderName(index, message) && this.senderLabel(message).length > 0) {
             Text(this.senderLabel(message))
@@ -1166,11 +1203,15 @@ export struct DirectThreadPage {
         Stack({ alignContent: Alignment.Center }) {
           Image(message.mediaUrl)
             .draggable(false)
-            .width(this.bubbleMediaWidth())
-            .height(this.bubbleMediaWidth() * 1.25)
-            .objectFit(ImageFit.Cover)
-            .borderRadius(14)
-            .backgroundColor($r('app.color.field_background'))
+            // 尺寸：贴图按屏幕 1/3 画、图片按原图比例（横 16:9 / 方 1:1 / 长最多 4:3）。
+            .width(this.mediaBoxWidth(message))
+            .height(this.mediaBoxHeight(message))
+            // 贴图（透明 PNG / GIF）用 Contain 完整显示，普通图片用 Cover 填满。
+            .objectFit(message.mediaSticker ? ImageFit.Contain : ImageFit.Cover)
+            .borderRadius(message.mediaSticker ? 0 : 16)
+            // 贴图不能有底色：透明贴图压在深色气泡底上就成一块黑块了（需求）。
+            .backgroundColor(message.mediaSticker ? Color.Transparent
+              : $r('app.color.field_background'))
             .alt($r('app.media.grid_placeholder'))
             /*
              * 图解码完 = 这一条的高度真正定下来了：如果用户还贴在底部，就再贴一次 ——
@@ -1211,10 +1252,11 @@ export struct DirectThreadPage {
          */
         Stack({ alignContent: Alignment.Center }) {
           Column()
-            .width(this.bubbleMediaWidth())
-            .height(this.bubbleMediaWidth() * 1.25)
-            .borderRadius(14)
-            .backgroundColor($r('app.color.field_background'))
+            .width(this.mediaBoxWidth(message))
+            .height(this.mediaBoxHeight(message))
+            .borderRadius(message.mediaSticker ? 0 : 16)
+            .backgroundColor(message.mediaSticker ? Color.Transparent
+              : $r('app.color.field_background'))
           SymbolGlyph($r(message.isVideo ? 'sys.symbol.play_fill' : 'sys.symbol.photo'))
             .fontSize(22)
             .fontColor([$r('app.color.secondary_text')])
