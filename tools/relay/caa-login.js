@@ -411,10 +411,14 @@ function encryptPasswordWithKey(password, publicKeyText, keyId) {
 }
 
 /**
- * `#PWD_INSTAGRAM:4:<timestamp>:<base64>`（RSA 传会话密钥 + AES-GCM 传密码）。
- * 公钥从 `qe/sync` 的响应头取；AES-GCM 的 **AAD 必须是那个时间戳**。
+ * 取密码加密公钥（`qe/sync` 的响应头）。
+ *
+ * 单独一条是为了**不联网登录也能验**：`--caa-preflight` 用它证明"到了提交密码那一步之前的
+ * 最后一块拼图（公钥）拿得到"，不需要任何账号。
+ *
+ * @returns `{ keyId, publicKey }`（publicKey 是 base64(PEM)）
  */
-async function encryptPassword(profile, password) {
+async function passwordKeyOf(profile) {
   const res = await request({
     hostname: 'i.instagram.com',
     path: '/api/v1/qe/sync/',
@@ -427,7 +431,16 @@ async function encryptPassword(profile, password) {
   if (!keyId || publicKey.length === 0) {
     throw new Error('qe/sync 没给密码加密公钥（HTTP ' + res.status + '）');
   }
-  return encryptPasswordWithKey(password, publicKey, keyId);
+  return { keyId, publicKey, status: res.status };
+}
+
+/**
+ * `#PWD_INSTAGRAM:4:<timestamp>:<base64>`（RSA 传会话密钥 + AES-GCM 传密码）。
+ * 公钥从 `qe/sync` 的响应头取；AES-GCM 的 **AAD 必须是那个时间戳**。
+ */
+async function encryptPassword(profile, password) {
+  const keys = await passwordKeyOf(profile);
+  return encryptPasswordWithKey(password, keys.publicKey, keys.keyId);
 }
 
 /* ------------------------------------------------------------- 响应解析 */
@@ -1223,6 +1236,7 @@ module.exports = {
   caaLogin,
   loadDeviceProfile,
   encryptPassword,
+  passwordKeyOf,
   // 纯函数部分（导出给 test-caa-parse.js 做离线自检：成功响应的解析路径只有真账号才会
   // 走到，测试用合成布局把这条路先验一遍）
   encryptPasswordWithKey,

@@ -102,6 +102,31 @@ export struct CaaLoginCard {
         })
 
       /*
+       * **设备/网络前检**（不填密码）：只跑 USDID → attestation → aac 三步。
+       * 它把"设备/网络这侧不通"和"账号不对"分开 —— 前检绿而登录挂，就不用再怀疑协议。
+       */
+      Text('设备/网络前检（不填密码）')
+        .fontSize(12)
+        .fontColor($r('app.color.accent'))
+        .width('100%')
+        .onClick((): void => {
+          if (this.busy) {
+            return;
+          }
+          this.busy = true;
+          this.status = '正在前检…（不提交密码）';
+          this.steps = '';
+          CaaSession.preflight().then((outcome: CaaOutcome): void => {
+            this.busy = false;
+            this.status = outcome.reason;
+            this.steps = outcome.steps;
+          }).catch((error: Error): void => {
+            this.busy = false;
+            this.status = `前检失败：${error.message}`;
+          });
+        })
+
+      /*
        * **粘贴会话导入**（备用路）：把电脑上跑出来的 `settings.caa.json` / `session.json`
        * 整份粘进来，直接把**设备级会话**搬进 App。
        *

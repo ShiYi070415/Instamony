@@ -145,6 +145,28 @@ export class CaaSession {
     return await CaaSession.finish(result);
   }
 
+  /**
+   * **设备 / 网络前检**（不填密码、不需要账号）。
+   *
+   * 只跑到"取到 aac"：USDID 注册 → attestation nonce → aac。这三步与账号无关，
+   * 所以它能把两类失败**分开**：
+   *   · 前检失败 → 设备身份 / 网络 / IG 端点这侧的问题（改了也白改密码）；
+   *   · 前检通过而登录失败 → 账号侧的问题（密码错、要验证码、被风控）。
+   *
+   * 注意返回的 `ok` 表示"前检通过"，**不是**"已登录"——UI 不要据此切换登录态。
+   */
+  static async preflight(): Promise<CaaOutcome> {
+    const device: CaaUsdid | null = await CaaSession.deviceIdentity();
+    if (device === null) {
+      return CaaSession.outcome(false, '设备身份没准备好（preferences 没打开？）');
+    }
+    const identity: MobileIdentity = MobileSession.seedIdentity();
+    const result: CaaResult = await CaaLogin.login(identity, '', '', device, null, true);
+    const outcome: CaaOutcome = CaaSession.outcome(result.ok, result.reason,
+      CaaSession.stepsText());
+    return outcome;
+  }
+
   /** 现在是不是等着交验证码。 */
   static waitingCode(): boolean {
     return CaaLogin.waitingCode();

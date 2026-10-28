@@ -927,13 +927,13 @@ function loadSavedProfile() {
 }
 
 /**
- * `--caa-login`：用**账号密码**登录（CAA/Bloks 流程，Node 版，不需要 Python）。
+ * 解析设备档案（`--caa-login` 与 `--caa-preflight` 共用）。
  *
- * 设备档案的取法（按优先级）：`settings.json`（`--settings` 可指定）→ `device-profile.json`
- * （上一次登录用过的那一套）→ 新生成一套并落盘。**同一台机器始终是同一台"手机"**。
+ * 取法（按优先级）：`settings.json`（`--settings` 可指定）→ `device-profile.json`
+ * （上一次用过的那一套）→ 新生成一套并落盘。**同一台机器始终是同一台"手机"**。
  */
-async function runCaaLogin(argv) {
-  const { caaLogin, loadDeviceProfile } = require('./caa-login.js');
+function resolveDeviceProfile(argv) {
+  const { loadDeviceProfile } = require('./caa-login.js');
   const settingsAt = argv.indexOf('--settings');
   const settingsFile = settingsAt >= 0 && argv[settingsAt + 1]
     ? path.resolve(DIR, argv[settingsAt + 1]) : path.join(DIR, 'settings.json');
@@ -967,6 +967,70 @@ async function runCaaLogin(argv) {
     log('没有 settings.json / device-profile.json → 生成一套设备档案并记下（下次复用同一台设备）');
   }
   saveDeviceProfile(profile);
+  return profile;
+}
+
+/**
+ * `--caa-preflight`：**只跑密码之前那半条链**（不需要账号密码）。
+ *
+ * 跑三步 + 一个前置检查：
+ *   1. USDID 注册（`graphql_www`，设备签名身份）；
+ *   2. attestation（`challenge_nonce`）；
+ *   3. 取 aac（`process_client_data`）；
+ *   4. `qe/sync` 的密码加密公钥（提交密码那一步的最后一块拼图）。
+ *
+ * 为什么要它：这四项是**与账号无关**的，任何机器人都能随时验。等真账号登录时如果卡住，
+ * 这四项已绿就说明问题出在"账号 ↔ 密码/2FA"那一侧，而不是设备/协议。也方便用户先跑一次
+ * 确认网络能通 IG 的 CAA 端点（有些网络会把 `b.i.instagram.com` 掐掉）。
+ */
+async function runCaaPreflight(argv) {
+  const { caaLogin, passwordKeyOf } = require('./caa-login.js');
+  const profile = resolveDeviceProfile(argv);
+  log('前检开始（不带账号）');
+  const result = await caaLogin(profile, '', '', (text) => log(text), { preflightOnly: true });
+  let failures = 0;
+  for (const step of result.steps) {
+    log('  ' + step.step + ' → HTTP ' + step.status + (step.aac ? '（aac ' + step.aac + '）' : ''));
+    if (step.status !== 200) {
+      failures++;
+    }
+  }
+  if (result.aac.length === 0) {
+    warn('没拿到 aac —— 前检没过：' + (result.reason || '原因未知'));
+    failures++;
+  } else {
+    log('  aac 长度 ' + result.aac.length);
+  }
+  try {
+    const keys = await passwordKeyOf(profile);
+    /*
+     * **405 是正常的**。IG 对 `GET /api/v1/qe/sync/` 固定回 405，但响应头里照样下发
+     * `ig-set-password-encryption-key-id` / `-pub-key`（instagrapi 也是 GET，走同一条路）。
+     * 所以判据是"头有没有"，不是状态码 —— 这里把这句话直接打出来，免得看日志的人误判。
+     */
+    const statusNote = keys.status === 200 ? ''
+      : '（HTTP ' + keys.status + ' 属预期：IG 对 GET 回 ' + keys.status + '，但公钥头照常下发）';
+    log('  qe/sync 密码公钥 → keyId=' + keys.keyId + '，公钥 ' + keys.publicKey.length
+      + ' 字符（base64）' + statusNote);
+  } catch (error) {
+    warn('  拿不到密码加密公钥：' + error.message);
+    failures++;
+  }
+  if (failures > 0) {
+    warn('前检结论：有 ' + failures + ' 项没过（设备/网络这一侧的问题，和账号无关）');
+    process.exitCode = 2;
+    return;
+  }
+  log('前检结论：设备身份 / attestation / aac / 密码公钥 全通 —— 剩下的只取决于账号');
+  process.exitCode = 0;
+}
+
+/**
+ * `--caa-login`：用**账号密码**登录（CAA/Bloks 流程，Node 版，不需要 Python）。
+ */
+async function runCaaLogin(argv) {
+  const { caaLogin } = require('./caa-login.js');
+  const profile = resolveDeviceProfile(argv);
 
   /*
    * 凭据来源：交互输入优先，其次环境变量（`INSTAMONY_IG_USER` / `INSTAMONY_IG_PASS`）。
@@ -1096,6 +1160,11 @@ async function main() {
 
   if (argv.indexOf('--caa-login') >= 0) {
     await runCaaLogin(argv);
+    return;
+  }
+
+  if (argv.indexOf('--caa-preflight') >= 0) {
+    await runCaaPreflight(argv);
     return;
   }
 

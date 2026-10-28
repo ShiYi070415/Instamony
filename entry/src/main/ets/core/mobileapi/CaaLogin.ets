@@ -77,6 +77,8 @@ export class CaaResult {
   mid: string = '';
   rur: string = '';
   claim: string = '';
+  /** 这是**前检**的结果（只跑到 aac 就停，没有提交密码）——UI 据此不当成"已登录"。 */
+  preflight: boolean = false;
 
   constructor(ok: boolean, reason: string) {
     this.ok = ok;
@@ -666,12 +668,15 @@ export class CaaLogin {
   /**
    * 用账号密码登录（CAA 流程）。
    *
-   * @param codeProvider 需要两步验证码时回调（返回用户输入的验证码）；
-   *                     传 null 表示"先探到需要验证码就停"，之后再用 continueTwoStep。
+   * @param codeProvider  需要两步验证码时回调（返回用户输入的验证码）；
+   *                      传 null 表示"先探到需要验证码就停"，之后再用 continueTwoStep。
+   * @param preflightOnly 只跑到"取到 aac"就停（**不提交密码**，不需要账号）——
+   *                      用来把"设备/网络这一侧通不通"和"账号对不对"分开。
    */
   static async login(identity: MobileIdentity, username: string, password: string,
                      usdid: CaaUsdid,
-                     codeProvider: (() => Promise<string>) | null): Promise<CaaResult> {
+                     codeProvider: (() => Promise<string>) | null,
+                     preflightOnly: boolean = false): Promise<CaaResult> {
     CaaLogin.steps = [];
     // 新的一次登录：上一次没交的验证码现场作废（免得数字串到别的账号上）。
     CaaLogin.pending = null;
@@ -778,6 +783,18 @@ export class CaaLogin {
         error.length > 0 ? `登录失败：${error}` : '没拿到 aac（CAA 流程可能变了）');
       result.aac = '';
       return result;
+    }
+
+    /*
+     * **前检就到这里**（`preflightOnly`）：前三步与账号无关，跑到 aac 已经能说明
+     * "设备身份 / attestation / 设备网络"这一侧是通的。后面的 oauth 与提交密码要用户名，
+     * 而且会触碰风控，不属于前检。
+     */
+    if (preflightOnly) {
+      const preflight: CaaResult = new CaaResult(true, `前检通过（aac ${aac.length} 字符）`);
+      preflight.aac = aac;
+      preflight.preflight = true;
+      return preflight;
     }
 
     // 4. oauth token 预取

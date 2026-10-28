@@ -36,6 +36,19 @@ IG ──FBNS 推送──▶ 本脚本 ──华为 Push Kit──▶ 手机通
 > 自测/自动化可以用环境变量免交互：`INSTAMONY_IG_USER` / `INSTAMONY_IG_PASS`
 > （密码不落盘、不打印；日常还是用交互输入）。
 
+### 1.4 前检（不需要账号密码，随时可跑）
+
+```powershell
+node instamony.js --caa-preflight
+```
+
+跑密码之前那半条链并逐项汇报：USDID 注册 → attestation（`challenge_nonce`）→ 取 aac
+→ `qe/sync` 的密码加密公钥。这几项**与账号无关**，所以能先把"设备/网络这侧通不通"与
+"账号对不对"分开：前检绿、登录挂 → 问题在账号（密码/2FA），不用再怀疑协议或网络。
+
+> `qe/sync` 那行会显示 `HTTP 405`，**这是预期的**：IG 对 `GET /api/v1/qe/sync/` 固定回 405，
+> 但公钥头照常下发（instagrapi 也走 GET，同一条路）。
+
 ### 1.5 会话自证（建议每次登录后跑一次）
 
 ```powershell
@@ -49,7 +62,7 @@ node instamony.js --verify-session
 ### 1.6 离线自检（不需要账号、不需要网络）
 
 ```powershell
-node test-caa-parse.js          # 16 项：加密可逆 / 布局解析 / Cookie / 会话等价 / USDID
+node test-caa-parse.js          # 19 项：加密可逆 / 布局解析 / Cookie / 会话等价 / USDID
 node audit-arkts-parity.js      # ArkTS 移植与 JS 的字段、请求头差异（改一边后跑它）
 ```
 

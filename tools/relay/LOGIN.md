@@ -19,6 +19,12 @@ JS 版移植自 instagrapi 的 CAA/Bloks 流程，实测已打通的部分：
 | 两步验证链（ap.2sv） | 已实现 entrypoint → code_entry → 提交验证码，**待真账号验证** |
 | 会话形状等价性 | ✅ `settings.caa.json` 经 `--import-session` 解析与 `session.json` 逐字段一致（实测） |
 | 设备信任闸门 | ✅ `--verify-session` 四步全绿：形状 / 探活 200 / 等价 / `push/register/` `{"status":"ok"}` |
+| 前检（不带账号） | ✅ `--caa-preflight`：attestation 200 / aac 303 / `qe/sync` keyId=181 + 公钥 604 字符（对真服务器实跑） |
+
+> `--caa-preflight` 只跑密码之前那半条链（USDID → attestation → aac → 密码公钥），**不需要账号**。
+> 它的用处是分诊：前检绿、登录挂 ⇒ 问题在账号侧（密码/2FA），不必再怀疑设备或协议。
+> 其中 `qe/sync` 会显示 `HTTP 405` —— **这是 IG 对 `GET /api/v1/qe/sync/` 的固定答复**，
+> 公钥头照常下发（instagrapi 也是 GET，走同一条）。判据是"响应的头里有没有公钥"，不是状态码。
 
 > `--verify-session` 是**判据**，不是装饰：`push/register/` 那一步对网页 Cookie 派生的会话回
 > 400（实测过），只有设备级会话回 `{"status":"ok"}`。登录"成功"但这一步不过 = 常驻收不到推送。
