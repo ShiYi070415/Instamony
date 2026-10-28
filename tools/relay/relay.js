@@ -1103,6 +1103,38 @@ async function main() {
     await runBrowserLogin();
     return;
   }
+  /*
+   * `--login-password`：用账号密码登录（本机输入、密码不回显），成功后写 session.json
+   * 并同步到 config.json。
+   *
+   * 为什么需要它：IG 的 iris 实时订阅 与 FBNS 推送注册**只接受"真机登录过一次"的会话**
+   * —— 网页 Cookie 派生的会话一律被拒（16 次尝试的结论，见 REALTIME.md）。
+   * 要让 IG 主动推，就绕不开密码登录。账号密码只在用户自己的机器上输入。
+   */
+  if (process.argv.indexOf('--login-password') >= 0) {
+    const { interactiveLogin } = require('./login.js');
+    const session = await interactiveLogin(__dirname, (text) => log(text));
+    try {
+      const file = configPath();
+      let cfg2 = {};
+      try {
+        cfg2 = JSON.parse(fs.readFileSync(file, 'utf8'));
+      } catch (error) {
+        cfg2 = { ig: {}, notify: { channel: 'agc' } };
+      }
+      cfg2.ig = cfg2.ig || {};
+      cfg2.ig.cookie = session.cookie;
+      fs.writeFileSync(file, JSON.stringify(cfg2, null, 2), 'utf8');
+      log('已把会话同步进 ' + file);
+    } catch (error) {
+      warn('同步 config.json 失败：' + error.message);
+    }
+    log('下一步可以试真·推送了：');
+    log('  node fbns-test.js 90      # FBNS：看 IG 是否收下 push token');
+    log('  node subscribe-probe.js   # iris：看实时订阅是否还被拒');
+    log('  node relay.js             # 无论上面成不成，轮询照旧兜底');
+    return;
+  }
   const cfg = loadConfig();
   // 先定"当前用哪个 token"：App 上报过就用那条，否则用配置里那条。
   initToken(cfg);
