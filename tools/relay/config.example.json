@@ -1,39 +1,11 @@
 {
-  "ig": {
-    "cookie": "把 App「复制中转材料」里的 cookie 整串粘这里",
-    "pollSeconds": 90,
-    "idleMaxSeconds": 300
-  },
   "notify": {
-    "channel": "agc",
-
+    "pushToken": "把 App「复制中转材料」里的 pushToken 粘这里",
     "agc": {
       "serviceAccountFile": "../agc/private.json",
       "category": "IM",
       "testMessage": true
     },
-    "pushToken": "把 App「复制中转材料」里的 pushToken 粘这里",
-
-    "meow": {
-      "nickname": "MeoW 昵称（channel=meow 时用）"
-    },
-    "telegram": {
-      "botToken": "123456:AA…（channel=telegram 时用）",
-      "chatId": "你的数字 chat id"
-    },
-    "webhook": {
-      "format": "wecom",
-      "url": "企业微信群机器人 或 飞书自定义机器人的 webhook 地址",
-      "headers": {}
-    },
-
     "quietHours": [23, 7]
-  },
-  "stateFile": "state.json",
-  "openUrl": "instamony://direct",
-
-  "listen": {
-    "port": 8787,
-    "key": "换成一串随机字符，App 里填同一串（可空，但空=同一内网谁都能改推送目标）"
   }
 }
