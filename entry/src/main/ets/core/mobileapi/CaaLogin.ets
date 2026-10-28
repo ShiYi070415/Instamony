@@ -43,6 +43,19 @@ const TAG: string = 'CaaLogin';
 const USDID_CLIENT_DOC_ID: string = '124930351917786857261002920888';
 /** CAA 专用域名（不是 i.instagram.com）。 */
 const CAA_HOST: string = 'b.i.instagram.com';
+/**
+ * 私有 API 的默认域名。**新版 2FA 的那几个 Bloks app 在这个域名上**（真机实测：
+ * `b.i.instagram.com` 上同一批 app 全回 404 "Payload returned is null"）。
+ */
+const PRIVATE_HOST: string = 'i.instagram.com';
+
+/* 新版 2FA（context 链）用到的 app / action（真机实测后确认走 i.instagram.com）。 */
+const TSV_ENTRYPOINT: string = 'com.bloks.www.two_step_verification.entrypoint';
+const TSV_METHOD_PICKER: string = 'com.bloks.www.two_step_verification.method_picker';
+const TSV_SELECT_METHOD: string =
+  'com.bloks.www.two_step_verification.method_picker.navigation.async';
+const TSV_VERIFY: string = 'com.bloks.www.two_step_verification.verify_code.async';
+const TSV_FLOW_SOURCE: string = 'two_factor_login';
 const IG_APP_ID: string = '567067343352427';
 
 /** 两步验证相关的三个 Bloks app。 */
@@ -53,8 +66,7 @@ const AP_2SV_CODE_ENTRY_ASYNC: string = 'com.bloks.www.ap.two_step_verification.
 /** Bloks 布局里那一段 lispy：`(f4i (dkc "k1" …) (dkc "v1" …))`。 */
 const LISPY_MAP_HEAD: string = '(f4i';
 
-/** 登录结果（给 UI 用；不抛异常，全部放在字段里）。 */
-export class CaaResult {
+/** 登录结果（给 UI 用；不抛异常，全部放在字段里）。 */export class CaaResult {
   /** 是否登录成功。 */
   ok: boolean = false;
   /** 失败原因 / 状态说明（给人看）。 */
@@ -876,6 +888,24 @@ export class CaaLogin {
     }
 
     // 两步验证？
+    /*
+     * **两套 2FA 都要认**（R12 真机实测）：
+     *   · 新版：响应里带 `two_step_verification_context`（TOTP/SMS/备用码），
+     *     **优先走它** —— 真机上 IG 对需要验证器的账号走的就是这条；
+     *   · 老版：布局里有 `ap.two_step_verification.entrypoint_async`（profile-code 链）。
+     */
+    const context: string = CaaLogin.twoStepContextOf(payload);
+    if (context.length > 0) {
+      if (codeProvider === null) {
+        const pending: CaaResult = new CaaResult(false, '需要两步验证（验证器/短信）');
+        pending.aac = aac;
+        pending.needsCode = true;
+        return pending;
+      }
+      const code: string = await codeProvider();
+      return await CaaLogin.resolveTwoStepContext(identity, extra, payload, context, code);
+    }
+
     if (bloksNeedsTwoStep(payload)) {
       const pending: CaaResult = new CaaResult(false, '需要两步验证');
       pending.aac = aac;
@@ -894,7 +924,305 @@ export class CaaLogin {
       error.length > 0 ? `登录失败：${error}` : '响应里没找到登录结果（布局形状可能变了）');
   }
 
-  /** 两步验证：entrypoint → code_entry → 提交验证码。 */
+  /* ------------------------------------------- 新版 2FA（context 链） */
+
+  /**
+   * 从响应里读出**下一步该调哪个 app、带什么参数**（Bloks 布局里的调用规范）。
+   *
+   * 真机响应里明写着：`35 "com.bloks.www.two_step_verification.entrypoint" … (f6m 6 "params"
+   * (fma (f4i (dkc "server_params" "client_input_params") (dkc <server f4i> <client f4i>))))`，
+   * 其中 `two_step_verification_context` 的值有 **2000+ 字符**。以前我们从别处硬抓一个
+   * 13 字符的短值去调，IG 回 "Payload returned is null" —— 那才是 404 的真因。
+   */
+  static nextCallSpecs(payload: ESObject): Array<CaaCallSpec> {
+    const out: Array<CaaCallSpec> = [];
+    const strings: Array<string> = [];
+    collectStrings(payload, strings);
+    for (let index: number = 0; index < strings.length; index++) {
+      const text: string = strings[index];
+      let from: number = 0;
+      for (;;) {
+        const paramsAt: number = text.indexOf('"params"', from);
+        if (paramsAt < 0) {
+          break;
+        }
+        const fmaAt: number = text.indexOf('(fma', paramsAt);
+        if (fmaAt < 0) {
+          break;
+        }
+        const expr: string = bloksParenthesized(text, fmaAt);
+        if (expr.length === 0) {
+          break;
+        }
+        // app id：在 params 之前找最近一个 `35 "com.bloks.…"`
+        const head: string = text.substring(0, paramsAt);
+        const re: RegExp = /35\s+"(com\.bloks\.[A-Za-z0-9_.]+)"/g;
+        let appId: string = '';
+        let match: RegExpExecArray | null = re.exec(head);
+        while (match !== null) {
+          appId = match[1];
+          match = re.exec(head);
+        }
+        out.push(CaaLogin.paramsFromFma(appId, expr));
+        from = fmaAt + expr.length;
+      }
+    }
+    return out;
+  }
+
+  /** `(fma <map>)` 或 `(fma <server> <client>)` → 规范对象。 */
+  private static paramsFromFma(appId: string, fmaExpr: string): CaaCallSpec {
+    const items: Array<string> = bloksExpressionItems(fmaExpr);
+    if (items.length >= 3) {
+      return new CaaCallSpec(appId, CaaLogin.lispyPairMap(items[1]), CaaLogin.lispyPairMap(items[2]));
+    }
+    let server: Record<string, string> = {};
+    let client: Record<string, string> = {};
+    if (items.length >= 2) {
+      const entries: Array<CaaMapEntry> = CaaLogin.lispyMapEntries(items[1]);
+      for (let index: number = 0; index < entries.length; index++) {
+        const entry: CaaMapEntry = entries[index];
+        if (entry.key === 'server_params') {
+          server = CaaLogin.lispyPairMap(entry.value);
+        } else if (entry.key === 'client_input_params') {
+          client = CaaLogin.lispyPairMap(entry.value);
+        }
+      }
+    }
+    return new CaaCallSpec(appId, server, client);
+  }
+
+  /** `(f4i (dkc "k1" "k2") (dkc v1 v2))` → `[{key, value}]`（value 可能是嵌套表达式）。 */
+  private static lispyMapEntries(expr: string): Array<CaaMapEntry> {
+    const out: Array<CaaMapEntry> = [];
+    const items: Array<string> = bloksExpressionItems(expr);
+    if (items.length !== 3 || items[0] !== 'f4i') {
+      return out;
+    }
+    const keys: Array<string> = bloksExpressionItems(items[1]);
+    const values: Array<string> = bloksExpressionItems(items[2]);
+    if (keys.length === 0 || values.length === 0 || keys[0] !== 'dkc' || values[0] !== 'dkc'
+      || keys.length !== values.length) {
+      return out;
+    }
+    for (let index: number = 1; index < keys.length; index++) {
+      const key: string = keys[index];
+      if (!key.startsWith('"')) {
+        continue;
+      }
+      let name: string = '';
+      try {
+        name = JSON.parse(key) as string;
+      } catch (error) {
+        continue;
+      }
+      out.push(new CaaMapEntry(name, values[index]));
+    }
+    return out;
+  }
+
+  /** 同上，但只取字面量值（表达式值原样保留字符串）。 */
+  private static lispyPairMap(expr: string): Record<string, string> {
+    const out: Record<string, string> = {};
+    const entries: Array<CaaMapEntry> = CaaLogin.lispyMapEntries(expr);
+    for (let index: number = 0; index < entries.length; index++) {
+      const entry: CaaMapEntry = entries[index];
+      if (!entry.value.startsWith('"')) {
+        out[entry.key] = entry.value;
+        continue;
+      }
+      try {
+        out[entry.key] = JSON.parse(entry.value) as string;
+      } catch (error) {
+        out[entry.key] = '';
+      }
+    }
+    return out;
+  }
+
+  /** 规范里挑 app id 命中关键词的第一个（没有返回 null）。 */
+  static pickCallSpec(specs: Array<CaaCallSpec>, keywords: Array<string>): CaaCallSpec | null {
+    for (let index: number = 0; index < specs.length; index++) {
+      const spec: CaaCallSpec = specs[index];
+      const lower: string = spec.appId.toLowerCase();
+      for (let k: number = 0; k < keywords.length; k++) {
+        if (lower.indexOf(keywords[k]) >= 0) {
+          return spec;
+        }
+      }
+    }
+    return null;
+  }
+
+  /** 新版 2FA 的票据：**优先从规范里取**（真值 2000+ 字符），取不到才回退旧逻辑。 */
+  static twoStepContextOf(payload: ESObject): string {
+    const specs: Array<CaaCallSpec> = CaaLogin.nextCallSpecs(payload);
+    for (let index: number = 0; index < specs.length; index++) {
+      const value: string = specs[index].serverParams['two_step_verification_context'];
+      if (value !== undefined && value.length > 0) {
+        return value;
+      }
+    }
+    const deep: ESObject = CaaLogin.findValueDeep(payload, 'two_step_verification_context', 0);
+    if (typeof deep === 'string' && (deep as string).trim().length > 0) {
+      return (deep as string).trim();
+    }
+    return '';
+  }
+
+  /** 默认值 + 规范值 → 合并后的参数（并把 "false"/"0" 还原类型）。 */
+  private static mergeParams(defaults: Record<string, string>,
+                             fromSpec: Record<string, string>): Record<string, ESObject> {
+    const merged: Record<string, string> = {};
+    for (const key of Object.keys(defaults)) {
+      merged[key] = defaults[key];
+    }
+    for (const key of Object.keys(fromSpec)) {
+      merged[key] = fromSpec[key];
+    }
+    return CaaLogin.normalizeFlags(merged);
+  }
+
+  /** 规范里的 `"false"` / `"0"` 还原成布尔与数字。 */
+  private static normalizeFlags(params: Record<string, string>): Record<string, ESObject> {
+    const out: Record<string, ESObject> = {};
+    for (const key of Object.keys(params)) {
+      const value: string = params[key];
+      const lower: string = value.trim().toLowerCase();
+      if (lower === 'true') {
+        out[key] = true;
+      } else if (lower === 'false') {
+        out[key] = false;
+      } else if (/^-?\d+$/.test(lower)) {
+        out[key] = Number.parseInt(lower, 10);
+      } else {
+        out[key] = value;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * **新版 2FA 链**：entrypoint → method_picker → select_method →（备用码才走 backup）→ verify_code，
+   * 每一跳的 app id 与参数**都从上一跳的响应里读**（IG 会把规范写在布局里）。
+   */
+  private static async resolveTwoStepContext(identity: MobileIdentity,
+                                             extra: Record<string, string>,
+                                             sendPayload: ESObject, context: string,
+                                             code: string): Promise<CaaResult> {
+    const sendSpecs: Array<CaaCallSpec> = CaaLogin.nextCallSpecs(sendPayload);
+    const entrySpec: CaaCallSpec | null =
+      CaaLogin.pickCallSpec(sendSpecs, ['two_step', 'two_factor']);
+    const entryApp: string = entrySpec === null ? TSV_ENTRYPOINT : entrySpec.appId;
+    const entryClientDefaults: Record<string, string> = {
+      'device_id': identity.androidDeviceId,
+      'is_whatsapp_installed': '0',
+      'machine_id': identity.mid
+    };
+    const entryServerDefaults: Record<string, string> = {
+      'should_fallback_to_sms': '0',
+      'family_device_id': identity.phoneId,
+      'device_id': identity.androidDeviceId,
+      'two_step_verification_context': context,
+      'flow_source': TSV_FLOW_SOURCE
+    };
+    const entryParams: Record<string, ESObject> = {};
+    entryParams['client_input_params'] = CaaLogin.mergeParams(entryClientDefaults,
+      entrySpec === null ? {} : entrySpec.clientParams);
+    entryParams['server_params'] = CaaLogin.mergeParams(entryServerDefaults,
+      entrySpec === null ? {} : entrySpec.serverParams);
+    CaaLogin.steps.push(new CaaStep('2sv_context', context.length, 'entrypoint'));
+    const entry: CaaHttpReply = await CaaLogin.bloksApp(identity, extra, entryApp, entryParams,
+      PRIVATE_HOST);
+    CaaLogin.steps.push(new CaaStep('2sv_entrypoint', entry.status, ''));
+
+    const entryPayload: ESObject = CaaLogin.parse(entry.body);
+    const entrySpecs: Array<CaaCallSpec> = CaaLogin.nextCallSpecs(entryPayload);
+    const pickerSpec: CaaCallSpec | null = CaaLogin.pickCallSpec(entrySpecs, ['method_picker']);
+    const pickerApp: string = pickerSpec === null ? TSV_METHOD_PICKER : pickerSpec.appId;
+    const pickerClientDefaults: Record<string, string> = { 'is_whatsapp_installed': '0' };
+    const pickerServerDefaults: Record<string, string> = {
+      'should_fallback_to_sms': '0',
+      'device_id': identity.androidDeviceId,
+      'two_step_verification_context': context,
+      'flow_source': TSV_FLOW_SOURCE
+    };
+    const pickerParams: Record<string, ESObject> = {};
+    pickerParams['client_input_params'] = CaaLogin.mergeParams(pickerClientDefaults,
+      pickerSpec === null ? {} : pickerSpec.clientParams);
+    pickerParams['server_params'] = CaaLogin.mergeParams(pickerServerDefaults,
+      pickerSpec === null ? {} : pickerSpec.serverParams);
+    const picker: CaaHttpReply = await CaaLogin.bloksApp(identity, extra, pickerApp, pickerParams,
+      PRIVATE_HOST);
+    CaaLogin.steps.push(new CaaStep('2sv_method_picker', picker.status, ''));
+
+    const challenge: string = CaaLogin.inferChallenge(sendPayload, code);
+    const pickerPayload: ESObject = CaaLogin.parse(picker.body);
+    const pickerSpecs: Array<CaaCallSpec> = CaaLogin.nextCallSpecs(pickerPayload);
+    const selectSpec: CaaCallSpec | null = CaaLogin.pickCallSpec(pickerSpecs, ['navigation', 'select']);
+    const selectApp: string = selectSpec === null ? TSV_SELECT_METHOD : selectSpec.appId;
+    const selectClientDefaults: Record<string, string> = {
+      'selected_method': challenge
+    };
+    const selectServerDefaults: Record<string, string> = {
+      'should_fallback_to_sms': '0',
+      'device_id': identity.androidDeviceId,
+      'two_step_verification_context': context,
+      'flow_source': TSV_FLOW_SOURCE
+    };
+    const selectParams: Record<string, ESObject> = {};
+    selectParams['client_input_params'] = CaaLogin.mergeParams(selectClientDefaults,
+      selectSpec === null ? {} : selectSpec.clientParams);
+    selectParams['server_params'] = CaaLogin.mergeParams(selectServerDefaults,
+      selectSpec === null ? {} : selectSpec.serverParams);
+    const selected: CaaHttpReply = await CaaLogin.bloks(identity, extra, selectApp, selectParams,
+      null, PRIVATE_HOST);
+    CaaLogin.steps.push(new CaaStep('2sv_select_method', selected.status, challenge));
+
+    const selectPayload: ESObject = CaaLogin.parse(selected.body);
+    const selectSpecs: Array<CaaCallSpec> = CaaLogin.nextCallSpecs(selectPayload);
+    const verifySpec: CaaCallSpec | null = CaaLogin.pickCallSpec(selectSpecs, ['verify_code', 'verify']);
+    const verifyApp: string = verifySpec === null ? TSV_VERIFY : verifySpec.appId;
+    const verifyClientDefaults: Record<string, string> = {
+      'auth_secure_device_id': '',
+      'block_store_machine_id': '',
+      'code': challenge === 'backup_codes' ? code.replace(/[\s-]+/g, '') : code,
+      'should_trust_device': '1',
+      'family_device_id': identity.phoneId,
+      'device_id': identity.androidDeviceId,
+      'machine_id': identity.mid
+    };
+    const verifyServerDefaults: Record<string, string> = {
+      'should_fallback_to_sms': '0',
+      'device_id': identity.androidDeviceId,
+      'challenge': challenge,
+      'two_step_verification_context': context,
+      'flow_source': TSV_FLOW_SOURCE
+    };
+    const verifyParams: Record<string, ESObject> = {};
+    verifyParams['client_input_params'] = CaaLogin.mergeParams(verifyClientDefaults,
+      verifySpec === null ? {} : verifySpec.clientParams);
+    verifyParams['server_params'] = CaaLogin.mergeParams(verifyServerDefaults,
+      verifySpec === null ? {} : verifySpec.serverParams);
+    const submit: CaaHttpReply = await CaaLogin.bloks(identity, extra, verifyApp, verifyParams,
+      null, PRIVATE_HOST);
+    CaaLogin.steps.push(new CaaStep('2sv_verify_code', submit.status, ''));
+    const login: CaaLoginPayload | null = CaaLogin.extractLoginPayload(CaaLogin.parse(submit.body));
+    if (login === null) {
+      const error: string = bloksErrorText(CaaLogin.parse(submit.body));
+      return new CaaResult(false, error.length > 0
+        ? `两步验证失败：${error}` : '两步验证已提交但没拿到会话（形状可能变了）');
+    }
+    const result: CaaResult = new CaaResult(true, '登录成功（两步验证）');
+    result.cookie = login.cookie;
+    result.authorization = login.authorization;
+    result.mid = login.mid;
+    result.rur = login.rur;
+    result.claim = login.claim;
+    return result;
+  }
+
+  /** 两步验证（老版 ap.* 链）：entrypoint → code_entry → 提交验证码。 */
   private static async resolveTwoStep(identity: MobileIdentity, extra: Record<string, string>,
                                       sendPayload: ESObject, aac: string,
                                       code: string): Promise<CaaResult> {
@@ -980,19 +1308,96 @@ export class CaaLogin {
 
   /* ---------------------------------------------------------------- 细节 */
 
+  /** 打 `bloks/async_action/`（`host` 默认 CAA 域名；**新版 2FA 要用私有域名**）。 */
   private static async bloks(identity: MobileIdentity, extra: Record<string, string>,
-                             action: string, params: Record<string, ESObject>): Promise<CaaHttpReply> {
+                             action: string, params: Record<string, ESObject>,
+                             aacUnused: string | null = null,
+                             host: string = CAA_HOST): Promise<CaaHttpReply> {
     const body: string = CaaLogin.bloksBody(identity, params);
     const headers: Record<string, string> = CaaLogin.headers(identity, extra);
     headers['X-FB-Friendly-Name'] = `IgApi: bloks/async_action/${action}/`;
-    return await CaaLogin.post(CAA_HOST, `/api/v1/bloks/async_action/${action}/`, body, headers);
+    return await CaaLogin.post(host, `/api/v1/bloks/async_action/${action}/`, body, headers);
   }
 
+  /** 打 `bloks/apps/`（`host` 同上）。 */
   private static async bloksApp(identity: MobileIdentity, extra: Record<string, string>,
-                                app: string, params: Record<string, ESObject>): Promise<CaaHttpReply> {
+                                app: string, params: Record<string, ESObject>,
+                                host: string = CAA_HOST): Promise<CaaHttpReply> {
     const body: string = CaaLogin.bloksBody(identity, params);
     const headers: Record<string, string> = CaaLogin.headers(identity, extra);
-    return await CaaLogin.post(CAA_HOST, `/api/v1/bloks/apps/${app}/`, body, headers);
+    return await CaaLogin.post(host, `/api/v1/bloks/apps/${app}/`, body, headers);
+  }
+
+  /**
+   * 推断 2FA 方式（照 instagrapi）：8 位数字 ⇒ 备用码；只开短信没开 TOTP ⇒ sms；其余 ⇒ totp。
+   */
+  private static inferChallenge(payload: ESObject, code: string): string {
+    const normalized: string = String(code).replace(/[\s-]+/g, '');
+    if (/^\d{8}$/.test(normalized)) {
+      return 'backup_codes';
+    }
+    const sms: boolean = CaaLogin.loginResponseBool(payload, 'sms_two_factor_on');
+    const totp: boolean = CaaLogin.loginResponseBool(payload, 'totp_two_factor_on');
+    return sms && !totp ? 'sms' : 'totp';
+  }
+
+  /** 在整棵响应里找一个布尔（值可能是 "true" / 1 / true）。 */
+  private static loginResponseBool(payload: ESObject, key: string): boolean {
+    const value: ESObject = CaaLogin.findValueDeep(payload, key, 0);
+    if (typeof value === 'boolean') {
+      return value as boolean;
+    }
+    if (typeof value === 'number') {
+      return (value as number) !== 0;
+    }
+    if (typeof value === 'string') {
+      const lower: string = (value as string).trim().toLowerCase();
+      return lower === '1' || lower === 'true' || lower === 'yes';
+    }
+    return false;
+  }
+
+  /** 递归找键（值可能是再嵌一层的 JSON 文本）。 */
+  private static findValueDeep(value: ESObject, key: string, depth: number): ESObject {
+    if (depth > 12 || value === null || value === undefined) {
+      return undefined;
+    }
+    if (Array.isArray(value)) {
+      const list: Array<ESObject> = value as Array<ESObject>;
+      for (let index: number = 0; index < list.length; index++) {
+        const hit: ESObject = CaaLogin.findValueDeep(list[index], key, depth + 1);
+        if (hit !== undefined) {
+          return hit;
+        }
+      }
+      return undefined;
+    }
+    if (typeof value === 'object') {
+      const record: Record<string, ESObject> = value as Record<string, ESObject>;
+      const own: ESObject = record[key];
+      if (own !== undefined && own !== null && own !== '') {
+        return own;
+      }
+      for (const childKey of Object.keys(record)) {
+        const hit: ESObject = CaaLogin.findValueDeep(record[childKey], key, depth + 1);
+        if (hit !== undefined) {
+          return hit;
+        }
+      }
+      return undefined;
+    }
+    if (typeof value === 'string') {
+      const text: string = value as string;
+      if (text.indexOf(key) < 0 || text.length > 400000) {
+        return undefined;
+      }
+      try {
+        return CaaLogin.findValueDeep(JSON.parse(text) as ESObject, key, depth + 1);
+      } catch (error) {
+        return undefined;
+      }
+    }
+    return undefined;
   }
 
   /** Bloks 请求体：`params` + `_uuid` + `bk_client_context` + `bloks_versioning_id`。 */
@@ -1108,16 +1513,19 @@ export class CaaLogin {
   /**
    * Cookie 串 → `name=value; …`（**对齐 Python SimpleCookie 的语义**）。
    *
-   * 两种真实形状：
-   *   ① `sessionid=x; Path=/; Domain=.instagram.com; HttpOnly`（后面全是属性）
-   *   ② `Set-Cookie: sessionid=x; Path=/, Set-Cookie: ds_user_id=1; Path=/`（多颗、逗号分隔）
-   * 只按 `;` 切会把 `Path` / `Domain` 当 Cookie 塞进罐里，而 `ds_user_id` 会因为名字带
-   * `, Set-Cookie: ` 前缀**整个丢掉**（网页会话能建、账号 id 却空）。
+   * 真机实测（R12）的格式是按 `\r\n` 分隔、每颗后面跟一串属性：
+   *   `Set-Cookie: csrftoken=…; Domain=…; expires=02-Dec-2027 13:57:44 GMT; Max-Age=…;
+   *    Path=/; Secure\r\nSet-Cookie: ds_user_id=…\r\nSet-Cookie: sessionid=…; HttpOnly; …`
+   *
+   * 所以切分符必须包含**换行**：只按 `;` `,` 切的话，`Secure\r\nSet-Cookie: ds_user_id`
+   * 会被当成一颗 Cookie 的名字 —— sessionid 明明在响应里、却解析不出来（真机就是这么丢的）。
+   * 属性值里可能带空格（`expires=02-Dec-2027 13:57:44 GMT`），名字要做合法性过滤。
    */
   private static parseCookieHeader(text: string): string {
     const attributes: Array<string> = ['path', 'domain', 'expires', 'max-age', 'secure',
       'httponly', 'samesite', 'priority', 'comment', 'commenturl', 'version', 'port', 'discard'];
-    const parts: Array<string> = text.replace(/Set-Cookie:\s*/gi, '').split(/[;,]/);
+    const NAME_OK: RegExp = /^[A-Za-z0-9_\-%]+$/;
+    const parts: Array<string> = text.replace(/Set-Cookie:\s*/gi, '').split(/[;,\r\n]+/);
     const pairs: Array<string> = [];
     for (let index: number = 0; index < parts.length; index++) {
       const one: string = parts[index].trim();
@@ -1130,6 +1538,9 @@ export class CaaLogin {
       if (name.length === 0 || value.length === 0) {
         continue;
       }
+      if (!NAME_OK.test(name)) {
+        continue;
+      }
       if (attributes.indexOf(name.toLowerCase()) >= 0) {
         continue;
       }
@@ -1138,40 +1549,34 @@ export class CaaLogin {
     return pairs.join('; ');
   }
 
-  /** 从 Bloks 响应里抠出 cookie + authorization。 */
-  private static extractLoginPayload(payload: ESObject): CaaLoginPayload | null {
-    if (payload === null || payload === undefined) {
+  /**
+   * 从**一段文本**里抠登录结果：**正向**遍历每个字符串字面量逐个试解。
+   *
+   * 为什么不能"从 `login_response` 第一次出现处往回扫"：真机响应里第一次出现的地方是一句
+   * 日志文本 `"[trait:called_handle_login_response] Calling HandleLoginResponse"` ——
+   * 它包含这几个字，往回扫永远只在它**前面**转，而真正的载荷在它**后面**。
+   * （R12 真机：2FA 全 200、登录其实成功，却报"没找到登录结果"，就是这个原因。）
+   */
+  private static loginPayloadFromText(text: string): CaaLoginPayload | null {
+    if (text.indexOf('login_response') < 0 && text.indexOf('ig-set-authorization') < 0) {
       return null;
     }
-    const layout: ESObject = (payload as Record<string, ESObject>)['layout'];
-    if (layout === null || layout === undefined) {
-      return null;
-    }
-    const bloks: ESObject = (layout as Record<string, ESObject>)['bloks_payload'];
-    if (bloks === null || bloks === undefined) {
-      return null;
-    }
-    const action: ESObject = (bloks as Record<string, ESObject>)['action'];
-    if (typeof action !== 'string') {
-      return null;
-    }
-    const text: string = action as string;
-    const marker: number = text.indexOf('login_response');
-    if (marker < 0) {
-      return null;
-    }
-    for (let start: number = marker; start >= 0; start--) {
-      if (text.charAt(start) !== '"') {
+    let index: number = 0;
+    while (index < text.length) {
+      if (text.charAt(index) !== '"') {
+        index++;
         continue;
       }
-      // 转义引号（`\"`）不是字符串起点。
-      if (start > 0 && text.charAt(start - 1) === '\\') {
+      if (index > 0 && text.charAt(index - 1) === '\\') {
+        index++;
         continue;
       }
-      const literal: string = CaaLogin.jsonStringAt(text, start);
+      const literal: string = CaaLogin.jsonStringAt(text, index);
       if (literal.length === 0) {
+        index++;
         continue;
       }
+      index += literal.length;
       let decoded: string = '';
       try {
         decoded = JSON.parse(literal) as string;
@@ -1183,6 +1588,14 @@ export class CaaLogin {
       }
       try {
         const raw: Record<string, ESObject> = JSON.parse(decoded) as Record<string, ESObject>;
+        if (raw === null || raw === undefined) {
+          continue;
+        }
+        // 必须是"登录结果那种对象"（有 login_response / cookies / headers 之一）
+        if (raw['login_response'] === undefined && raw['cookies'] === undefined
+          && raw['headers'] === undefined) {
+          continue;
+        }
         const headersText: string = typeof raw['headers'] === 'string' ? raw['headers'] as string : '{}';
         const headers: Record<string, ESObject> = JSON.parse(headersText) as Record<string, ESObject>;
         let authorization: string = '';
@@ -1211,6 +1624,38 @@ export class CaaLogin {
         return new CaaLoginPayload(cookie, authorization, mid, rur, claim);
       } catch (error) {
         continue;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 从 Bloks 响应里抠出 cookie + authorization：先试老位置 `layout.bloks_payload.action`，
+   * 再把**所有字符串**逐个正向扫一遍（真机把载荷放在 `embedded_payloads` / 日志串后面）。
+   */
+  private static extractLoginPayload(payload: ESObject): CaaLoginPayload | null {
+    if (payload === null || payload === undefined) {
+      return null;
+    }
+    const layout: ESObject = (payload as Record<string, ESObject>)['layout'];
+    if (layout !== null && layout !== undefined) {
+      const bloks: ESObject = (layout as Record<string, ESObject>)['bloks_payload'];
+      if (bloks !== null && bloks !== undefined) {
+        const action: ESObject = (bloks as Record<string, ESObject>)['action'];
+        if (typeof action === 'string') {
+          const direct: CaaLoginPayload | null = CaaLogin.loginPayloadFromText(action as string);
+          if (direct !== null) {
+            return direct;
+          }
+        }
+      }
+    }
+    const strings: Array<string> = [];
+    collectStrings(payload, strings);
+    for (let index: number = 0; index < strings.length; index++) {
+      const hit: CaaLoginPayload | null = CaaLogin.loginPayloadFromText(strings[index]);
+      if (hit !== null) {
+        return hit;
       }
     }
     return null;
@@ -1415,5 +1860,30 @@ class CaaLoginPayload {
     this.mid = mid;
     this.rur = rur;
     this.claim = claim;
+  }
+}
+
+/** 布局里一对键值（值可能是字面量，也可能是嵌套表达式）。 */
+export class CaaMapEntry {
+  readonly key: string;
+  readonly value: string;
+
+  constructor(key: string, value: string) {
+    this.key = key;
+    this.value = value;
+  }
+}
+
+/** IG 在布局里给出的"下一步调用规范"：调哪个 app、带什么参数。 */
+export class CaaCallSpec {
+  readonly appId: string;
+  readonly serverParams: Record<string, string>;
+  readonly clientParams: Record<string, string>;
+
+  constructor(appId: string, serverParams: Record<string, string>,
+              clientParams: Record<string, string>) {
+    this.appId = appId;
+    this.serverParams = serverParams;
+    this.clientParams = clientParams;
   }
 }
