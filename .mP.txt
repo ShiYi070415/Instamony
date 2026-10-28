@@ -1,0 +1,1 @@
+chore(release): 版本号固定为 1.4（versionCode 1003011），之后不再递增；同步产出 release/v1.4 的 hap/app
