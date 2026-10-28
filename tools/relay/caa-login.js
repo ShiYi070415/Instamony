@@ -638,7 +638,10 @@ function extractLoginPayload(data) {
       const headers = JSON.parse(raw.headers || '{}');
       const cookieHeader = String(raw.cookies || '');
       const cookies = parseCookieHeader(cookieHeader);
-      return { loginResponse, headers, cookies, cookieHeader, raw };
+      // 同时给一份 `cookie` 串：ArkTS 那份（CaaLoginPayload）就是这个字段名，
+      // 两边同名同形，读代码/写测试时才不会拿错（这里踩过一次）。
+      const cookie = Object.keys(cookies).map((name) => `${name}=${cookies[name]}`).join('; ');
+      return { loginResponse, headers, cookies, cookie, cookieHeader, raw };
     } catch (error) {
       continue;
     }

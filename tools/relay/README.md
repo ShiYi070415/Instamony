@@ -62,7 +62,7 @@ node instamony.js --verify-session
 ### 1.6 离线自检（不需要账号、不需要网络）
 
 ```powershell
-node test-caa-parse.js          # 19 项：加密可逆 / 布局解析 / Cookie / 会话等价 / USDID
+node test-caa-parse.js          # 23 项：加密可逆 / 布局解析 / Cookie / 会话等价 / USDID / App 自检镜像
 node audit-arkts-parity.js      # ArkTS 移植与 JS 的字段、请求头差异（改一边后跑它）
 ```
 
@@ -74,6 +74,10 @@ USDID 令牌形状。改解析器前后都该跑一次 —— 它已经抓出过
 `audit-arkts-parity.js` 比的是 App 里那份 ArkTS 实现（`CaaLogin.ets`）：**「只在 JS 里有」
 就是 ArkTS 少发了字段**（IG 会因此换判据），请求头一组只作提示（ArkTS 有意不发
 `Accept-Encoding` / `Host` / `Connection`）。当前结论：五个请求体字段齐全。
+
+`test-caa-parse.js` 的第⑤组是 **App「解析自检」的镜像**：真机上那个按钮跑的四项断言，
+这里用**同一批 fixture** 再跑一遍。自检若在手机上误报失败，会把整个真机测试带偏 ——
+所以这一段是必测的（★ 改自检 fixture 时两处要一起改）。
 
 ### 2. 导入会话 + 设备身份
 

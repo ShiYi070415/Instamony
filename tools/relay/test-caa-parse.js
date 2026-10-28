@@ -360,6 +360,57 @@ check('USDID JWT 的段数与字段（真机第一次登录才会生成）', () 
   }
 });
 
+/* ------------------------------------------------ ⑤ App 自检镜像 */
+
+/*
+ * **App 的「解析自检」用的是什么断言？**
+ *
+ * `CaaLogin.selfTest()`（ArkTS）在真机上跑四项：aac / 错误文案 / login_response / 2SV 上下文。
+ * 它跑不了单测，但它的**每一项都能在这里用同样的 fixture 复现** —— 万一自检在手机上误报失败，
+ * 就会把整个真机测试带偏，所以这段"镜像"是必测的。
+ *
+ * 这里的 fixture 必须与 CaaLogin.ets 的 selfTest 逐字一致；改一边就要改另一边。
+ */
+console.log('⑤ App 自检镜像（CaaLogin.selfTest 的四项）');
+
+check('自检①：aac（OTHER + CAA 两个节点，取后者）', () => {
+  const payload = JSON.parse('{"layout":{"bloks_payload":{"data":[{"data":{"key":"OTHER:x",'
+    + '"initial":"no"}},{"data":{"key":"CAA_ACCOUNT_ACCESS_CONTEXT:aac","initial":"AAC-TEST"}}]}}}');
+  assertEqual(caa.extractAac(payload), 'AAC-TEST', '自检①会误报失败');
+});
+
+check('自检②：错误文案（We can\'t find an account …）', () => {
+  const payload = JSON.parse('{"layout":{"bloks_payload":{"ft":{"a":'
+    + '" We can\'t find an account with nobody. "}}}}');
+  assert(caa.bloksErrorMessage(payload).indexOf('find an account') >= 0, '自检②会误报失败');
+});
+
+check('自检③：login_response 两层编码 → cookie 无属性、authorization 正确', () => {
+  const inner = JSON.stringify({
+    login_response: JSON.stringify({ status: 'ok' }),
+    headers: JSON.stringify({ 'IG-Set-Authorization': 'Bearer IGT:2:AAA' }),
+    cookies: 'Set-Cookie: sessionid=777%3Asecret; Path=/, Set-Cookie: ds_user_id=777; Path=/'
+  });
+  const actionText = 'bloks_action({"payload": ' + JSON.stringify(inner) + '})';
+  const payload = { layout: { bloks_payload: { action: actionText } } };
+  const parsed = caa.extractLoginPayload(payload);
+  assert(parsed !== null, '自检③会误报失败（没解析出结果）');
+  assert(parsed.cookie.indexOf('sessionid=777%3Asecret') >= 0, 'sessionid 丢了');
+  assert(parsed.cookie.indexOf('ds_user_id=777') >= 0, 'ds_user_id 丢了');
+  assertEqual(parsed.cookie.indexOf('Path='), -1, 'Cookie 里混进了 Path 属性');
+  assertEqual(parsed.headers['IG-Set-Authorization'], 'Bearer IGT:2:AAA', 'authorization 不对');
+});
+
+check('自检④：2SV 上下文（entrypoint_async + f4i）', () => {
+  const twoStepText = JSON.stringify('com.bloks.www.ap.two_step_verification.entrypoint_async')
+    + ' (f4i (dkc "context_data") (dkc "CTX-TEST"))';
+  const payload = { layout: { bloks_payload: { ft: { a: twoStepText } } } };
+  assert(caa.bloksNeedsTwoStep(payload), '自检④会误报失败（没判定成 2SV）');
+  assertEqual(caa.bloksExtractContextValue(payload,
+    'com.bloks.www.ap.two_step_verification.entrypoint_async', 'context_data'),
+  'CTX-TEST', '自检④会误报失败（上下文没取到）');
+});
+
 /* ------------------------------------------------ 汇总 */
 
 console.log('');
