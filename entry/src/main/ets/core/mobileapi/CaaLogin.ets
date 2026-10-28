@@ -725,7 +725,7 @@ export class CaaLogin {
       });
       const text: string = typeof response.result === 'string'
         ? response.result as string : JSON.stringify(response.result);
-      const reply: CaaHttpReply = new CaaHttpReply(response.responseCode, text);
+      const reply: CaaHttpReply = new CaaHttpReply(response.responseCode, text, host);
       // 会话 cookie 有时只出现在响应头里（IG-Set-Authorization 同理），这里留一份
       reply.headerOf = (name: string): string => {
         const raw: ESObject = response.header as ESObject;
@@ -1264,7 +1264,7 @@ export class CaaLogin {
     CaaLogin.steps.push(new CaaStep('2sv_context', context.length, 'entrypoint'));
     const entry: CaaHttpReply = await CaaLogin.bloksAppBestHost(identity, extra, entryApp,
       entryParams);
-    CaaLogin.steps.push(new CaaStep('2sv_entrypoint', entry.status, ''));
+    CaaLogin.steps.push(new CaaStep('2sv_entrypoint', entry.status, entry.host));
 
     const entryPayload: ESObject = CaaLogin.parse(entry.body);
     const entrySpecs: Array<CaaCallSpec> = CaaLogin.nextCallSpecs(entryPayload);
@@ -1284,7 +1284,7 @@ export class CaaLogin {
       pickerSpec === null ? {} : pickerSpec.serverParams);
     const picker: CaaHttpReply = await CaaLogin.bloksAppBestHost(identity, extra, pickerApp,
       pickerParams);
-    CaaLogin.steps.push(new CaaStep('2sv_method_picker', picker.status, ''));
+    CaaLogin.steps.push(new CaaStep('2sv_method_picker', picker.status, picker.host));
 
     const challenge: string = CaaLogin.inferChallenge(sendPayload, code);
     const pickerPayload: ESObject = CaaLogin.parse(picker.body);
@@ -1310,7 +1310,8 @@ export class CaaLogin {
       ['spectra_reg_login_data']);
     const selected: CaaHttpReply = await CaaLogin.bloksBestHost(identity, extra, selectApp,
       selectParams);
-    CaaLogin.steps.push(new CaaStep('2sv_select_method', selected.status, challenge));
+    CaaLogin.steps.push(new CaaStep('2sv_select_method', selected.status,
+      `${selected.host} ${challenge}`));
 
     /*
      * **备用码支路**：8 位备用码要先打开输入页（对齐 JS 那份，也对齐 instagrapi
@@ -1329,7 +1330,7 @@ export class CaaLogin {
       }, backupSpec === null ? {} : backupSpec.serverParams);
       const backup: CaaHttpReply = await CaaLogin.bloksAppBestHost(identity, extra, backupApp,
         backupParams);
-      CaaLogin.steps.push(new CaaStep('2sv_enter_backup_code', backup.status, ''));
+      CaaLogin.steps.push(new CaaStep('2sv_enter_backup_code', backup.status, backup.host));
     }
 
     const selectPayload: ESObject = CaaLogin.parse(selected.body);
@@ -1361,7 +1362,7 @@ export class CaaLogin {
       ['spectra_reg_login_data']);
     const submit: CaaHttpReply = await CaaLogin.bloksBestHost(identity, extra, verifyApp,
       verifyParams);
-    CaaLogin.steps.push(new CaaStep('2sv_verify_code', submit.status, ''));
+    CaaLogin.steps.push(new CaaStep('2sv_verify_code', submit.status, submit.host));
     const login: CaaLoginPayload | null = CaaLogin.extractLoginPayload(CaaLogin.parse(submit.body));
     if (login === null) {
       const error: string = bloksErrorText(CaaLogin.parse(submit.body));
@@ -2035,10 +2036,18 @@ class CaaHttpReply {
   readonly status: number;
   readonly body: string;
   headerOf: (name: string) => string = (name: string): string => '';
+  /**
+   * 这次请求打到了哪个域名（空 = 没记录）。
+   *
+   * 为什么记它：2FA 那几个 app 在两个域名上行为不同（一个空载荷、一个有载荷），真机失败时
+   * "哪一步打到了哪个域名"就是判断依据 —— 诊断里带上它，比只有状态码有用得多。
+   */
+  host: string = '';
 
-  constructor(status: number, body: string) {
+  constructor(status: number, body: string, host: string = '') {
     this.status = status;
     this.body = body;
+    this.host = host;
   }
 }
 
