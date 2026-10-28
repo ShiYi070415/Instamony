@@ -34,6 +34,9 @@ export struct CaaLoginCard {
   @State private steps: string = '';
   /** 服务端要求两步验证：验证码输入框与按钮文案随之变化。 */
   @State private needsCode: boolean = false;
+  /** 粘贴会话导入（备用路）的折叠状态与内容。 */
+  @State private pasteOpen: boolean = false;
+  @State private pasteText: string = '';
 
   build() {
     Column({ space: 10 }) {
@@ -97,6 +100,47 @@ export struct CaaLoginCard {
           this.status = CaaLogin.selfTest();
           this.steps = '';
         })
+
+      /*
+       * **粘贴会话导入**（备用路）：把电脑上跑出来的 `settings.caa.json` / `session.json`
+       * 整份粘进来，直接把**设备级会话**搬进 App。
+       *
+       * 为什么要留这条：CAA 登录要账号密码、还可能撞验证码；而实时私信/本地通知靠的是
+       * **设备级会话本身**。有了这条，即使密码登录那条路还没调通，实时这条线也能单独验。
+       */
+      Text(this.pasteOpen ? '收起「粘贴会话导入」' : '用已有会话导入（备用，粘贴 settings.caa.json）')
+        .fontSize(12)
+        .fontColor($r('app.color.secondary_text'))
+        .width('100%')
+        .onClick((): void => {
+          this.pasteOpen = !this.pasteOpen;
+        })
+      if (this.pasteOpen) {
+        TextArea({ text: this.pasteText, placeholder: '整份粘贴 JSON（settings.caa.json 或 session.json）' })
+          .width('100%')
+          .height(96)
+          .fontSize(11)
+          .padding(10)
+          .borderRadius(12)
+          .backgroundColor($r('sys.color.comp_background_secondary'))
+          .fontColor($r('app.color.primary_text'))
+          .placeholderColor($r('app.color.secondary_text'))
+          .enabled(!this.busy)
+          .onChange((text: string): void => {
+            this.pasteText = text;
+          })
+        Button('导入这份会话')
+          .width('100%')
+          .height(FIELD_HEIGHT)
+          .fontSize(15)
+          .enabled(!this.busy)
+          .backgroundColor($r('sys.color.comp_background_secondary'))
+          .fontColor($r('app.color.primary_text'))
+          .borderRadius(FIELD_HEIGHT / 2)
+          .onClick((): void => {
+            this.importPasted();
+          })
+      }
     }
     .width('100%')
     .padding(16)
@@ -223,6 +267,28 @@ export struct CaaLoginCard {
     }).catch((error: Error): void => {
       this.busy = false;
       this.status = `提交验证码失败：${error.message}`;
+    });
+  }
+
+  /** 点「导入这份会话」：把粘贴的 JSON 交给 CaaSession（两种形状都收）。 */
+  private importPasted(): void {
+    if (this.busy) {
+      return;
+    }
+    this.busy = true;
+    this.status = '正在导入会话…';
+    this.steps = '';
+    CaaSession.adoptPasted(this.pasteText).then((outcome: CaaOutcome): void => {
+      this.busy = false;
+      if (outcome.ok) {
+        // 导入成功：把粘贴框清掉（里面是等同密码的东西，别留）。
+        this.pasteText = '';
+        this.pasteOpen = false;
+      }
+      this.applyOutcome(outcome);
+    }).catch((error: Error): void => {
+      this.busy = false;
+      this.status = `导入失败：${error.message}`;
     });
   }
 

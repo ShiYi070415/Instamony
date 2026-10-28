@@ -21,6 +21,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { InstagramCookieJar, InstagramCookieSnapshot } from '../InstagramCookieJar';
 import { CaaLogin, CaaResult, CaaStep, CaaUsdid } from './CaaLogin';
 import { MobileIdentity, MobileSession } from './MobileSession';
+import { base64, utf8 } from './MobileSign';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'CaaSession';
@@ -160,17 +161,102 @@ export class CaaSession {
       }
       return CaaSession.outcome(false, result.reason, CaaSession.stepsText());
     }
-    const sessionId: string = CaaSession.cookieValue(result.cookie, 'sessionid');
+    return await CaaSession.applySession(result.cookie, result.authorization, '登录');
+  }
+
+  /**
+   * **粘贴会话导入**（备用路：不从密码登录拿会话，而是把已有的设备级会话搬进来）。
+   *
+   * 为什么要这条：CAA 登录要账号密码、还可能撞验证码；而**设备级会话**本身可以从别处拿
+   * （比如电脑上 `node instamony.js --caa-login` 跑出来的 `settings.caa.json` / `session.json`）。
+   * 有了它，App 内的实时私信与本地通知**今天就能验**，不必等密码登录先成功 —— 万一密码那条
+   * 路卡住，实时这条线也不是瞎子。
+   *
+   * 两种形状都收（都是我们自己产出的文件）：
+   *   · `session.json`：`{ cookie: "name=value; …", authorization: "Bearer IGT:2:…" }`
+   *   · `settings.caa.json`（instagrapi 形状）：`{ cookies: {…}, authorization_data: {…} }`
+   *
+   * @param text 粘贴进来的 JSON 文本
+   */
+  static async adoptPasted(text: string): Promise<CaaOutcome> {
+    const raw: string = text.trim();
+    if (raw.length === 0) {
+      return CaaSession.outcome(false, '粘贴框是空的');
+    }
+    let parsed: Record<string, ESObject>;
+    try {
+      parsed = JSON.parse(raw) as Record<string, ESObject>;
+    } catch (error) {
+      return CaaSession.outcome(false, '不是合法 JSON（整份复制，别漏括号）');
+    }
+    const cookie: string = CaaSession.cookieTextOf(parsed);
+    if (cookie.length === 0) {
+      return CaaSession.outcome(false, '里面没有会话 Cookie（要么是 session.json，'
+        + '要么是 instagrapi 的 settings.json）');
+    }
+    const authorization: string = CaaSession.authorizationOf(parsed);
+    return await CaaSession.applySession(cookie, authorization, '导入');
+  }
+
+  /** 从两种形状里取出 Cookie 串（`name=value; …`）。 */
+  private static cookieTextOf(parsed: Record<string, ESObject>): string {
+    const direct: ESObject = parsed['cookie'];
+    if (typeof direct === 'string' && (direct as string).trim().length > 0) {
+      return (direct as string).trim();
+    }
+    const map: ESObject = parsed['cookies'];
+    if (map === null || map === undefined || typeof map !== 'object') {
+      return '';
+    }
+    const record: Record<string, ESObject> = map as Record<string, ESObject>;
+    const pairs: Array<string> = [];
+    for (const name of Object.keys(record)) {
+      const value: string = `${record[name]}`;
+      if (name.length > 0 && value.length > 0) {
+        pairs.push(`${name}=${value}`);
+      }
+    }
+    return pairs.join('; ');
+  }
+
+  /** 从两种形状里取出 `authorization`（settings.json 里是解开的 `authorization_data`）。 */
+  private static authorizationOf(parsed: Record<string, ESObject>): string {
+    const direct: ESObject = parsed['authorization'];
+    if (typeof direct === 'string' && (direct as string).trim().length > 0) {
+      return (direct as string).trim();
+    }
+    const data: ESObject = parsed['authorization_data'];
+    if (data === null || data === undefined || typeof data !== 'object') {
+      return '';
+    }
+    const record: Record<string, ESObject> = data as Record<string, ESObject>;
+    if (Object.keys(record).length === 0) {
+      return '';
+    }
+    // 和 relay 的 `session-format.js` 同一个拼法：`Bearer IGT:2:` + base64(JSON)。
+    return `Bearer IGT:2:${base64(utf8(JSON.stringify(record)), false)}`;
+  }
+
+  /**
+   * **会话落地的唯一实现**（密码登录与粘贴导入共用）。
+   *
+   * @param cookieText    `name=value; …`
+   * @param authorization `Bearer IGT:2:…`（可为空：那就用本地按 userId/sessionid 拼的那份）
+   * @param what          用在提示文案里（"登录"/"导入"）
+   */
+  private static async applySession(cookieText: string, authorization: string,
+                                    what: string): Promise<CaaOutcome> {
+    const sessionId: string = CaaSession.cookieValue(cookieText, 'sessionid');
     if (sessionId.length === 0) {
-      return CaaSession.outcome(false, '登录成功但响应里没有 sessionid（布局形状可能变了）',
+      return CaaSession.outcome(false, `${what}的会话里没有 sessionid（内容不完整）`,
         CaaSession.stepsText());
     }
-    // 整串都种：CAA 的响应除了会话三件套，还带 mid / rur / ig_did 这类设备材料。
-    let written: number = await InstagramCookieJar.adoptCookieText(result.cookie);
+    // 整串都种：除了会话三件套，还带 mid / rur / ig_did 这类设备材料。
+    let written: number = await InstagramCookieJar.adoptCookieText(cookieText);
     if (written === 0) {
       // 兜底：退回只种会话三件套（和网页登录/切换账号同一个接口）。
-      const userId: string = CaaSession.cookieValue(result.cookie, 'ds_user_id');
-      const csrf: string = CaaSession.cookieValue(result.cookie, 'csrftoken');
+      const userId: string = CaaSession.cookieValue(cookieText, 'ds_user_id');
+      const csrf: string = CaaSession.cookieValue(cookieText, 'csrftoken');
       const adopted: boolean = await InstagramCookieJar.adoptSession(sessionId, userId, csrf);
       written = adopted ? 3 : 0;
     }
@@ -189,21 +275,20 @@ export class CaaSession {
       const session: MobileSession = MobileSession.getInstance();
       const identity: MobileIdentity | null = await session.ensure();
       if (identity !== null) {
-        if (result.authorization.length > 0) {
-          identity.authorization = result.authorization;
+        if (authorization.length > 0) {
+          identity.authorization = authorization;
         }
         session.persist();
         hilog.info(DOMAIN, TAG, 'session adopted uid=%{public}s', identity.userId);
-        const outcome: CaaOutcome = CaaSession.outcome(true,
-          `登录成功 · uid=${identity.userId}`, CaaSession.stepsText());
-        return outcome;
+        return CaaSession.outcome(true, `${what}成功 · uid=${identity.userId}`,
+          CaaSession.stepsText());
       }
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'mobile session ensure failed: %{public}s',
         (error as Error).message);
     }
     // Cookie 罐已经是登录态了（网页那边能用），只是移动 API 身份没建起来：不算失败。
-    return CaaSession.outcome(true, '登录成功（移动会话材料未就绪）', CaaSession.stepsText());
+    return CaaSession.outcome(true, `${what}成功（移动会话材料未就绪）`, CaaSession.stepsText());
   }
 
   private static outcome(ok: boolean, reason: string, steps: string = ''): CaaOutcome {

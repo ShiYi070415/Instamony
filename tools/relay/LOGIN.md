@@ -186,13 +186,18 @@ App 现在用 WebView 登录，拿到的就是"网页会话"——所以 **App �
 | 位置 | 作用 |
 | --- | --- |
 | `entry/src/main/ets/core/mobileapi/CaaLogin.ets` | 协议本体：USDID、attestation、aac、oauth、send_login_request、两步验证 |
-| `entry/src/main/ets/core/mobileapi/CaaSession.ets` | **落地面**：Cookie 种进罐 + `MobileSession` 重捡会话 + USDID 存 preferences |
-| `entry/src/main/ets/components/CaaLoginCard.ets` | 界面（输入框 / 验证码 / 逐步 HTTP 状态），登录页与设置页共用 |
+| `entry/src/main/ets/core/mobileapi/CaaSession.ets` | **落地面**：Cookie 种进罐 + `MobileSession` 重捡会话 + USDID 存 preferences；另有 `adoptPasted()`（粘贴会话导入） |
+| `entry/src/main/ets/components/CaaLoginCard.ets` | 界面（输入框 / 验证码 / 逐步 HTTP 状态 / 解析自检 / 粘贴导入），登录页与设置页共用 |
 | `entry/src/main/ets/core/InstagramCookieJar.ets` | `adoptCookieText`：把服务端给的每一颗 Cookie 都种进罐 |
 
 界面入口有两个（同一个组件）：
 - **未登录的整页登录页** → 底部「App 协议登录（实验）」→ 半模态面板；
 - **设置页** → 「账号登录（实验）」那一组。
+
+> **备用路：粘贴会话导入**。面板里还有「用已有会话导入」——把电脑上跑出来的
+> `settings.caa.json`（或 `session.json`）整份粘进去，直接把**设备级会话**搬进 App。
+> 它和密码登录共用同一个落地实现（`applySession`），所以：**实时私信与本地通知可以先单独验**，
+> 不必等密码登录调通；反过来，密码登录一旦成功，走的也是同一条落地。
 
 刻意做成"登录成功后会话直接进 Cookie 罐"。整个 App 只认罐（网页兜底、`MobileSession.ensure`、
 退出登录清罐都是），所以成功之后壳会自己从登录页切到已登录（`refreshSessionFromJar → applySession`），
