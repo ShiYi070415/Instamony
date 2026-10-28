@@ -554,13 +554,11 @@ export class MobileSession {
       keep ? '1' : '0', sameAccount ? '1' : '0', justAdopted ? '1' : '0',
       identity.sessionId.length, identity.authorization.length);
     if (keep) {
-      const keptAuth: string = identity.authorization;
-      const keptOwner: string = identity.authorizationOwner;
-      identity.mid = '';
-      identity.wwwClaim = '0';
-      identity.igURur = '';
-      identity.authorization = keptAuth;
-      identity.authorizationOwner = keptOwner;
+      /*
+       * 保留的是**整份会话材料**（mid / claim / rur 也都是这次登录下发的，与服务端一致）。
+       * 早先这里把它们清成空/`0`，会让后续请求带着"没有机器 id、claim=0"的客户端身份 ——
+       * 那正是历史上撞过 500 的组合，别为了"看起来干净"再造一次。
+       */
       const kept: StoredIdentity = identity.toStored();
       MobileSession.seed = kept;
       MobileSession.writeSeed(kept);
