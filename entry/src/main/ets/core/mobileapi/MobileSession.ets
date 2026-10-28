@@ -504,9 +504,37 @@ export class MobileSession {
    * 而 `persist()` 见身份为空直接返回 —— 于是盘上那份旧 claim / rur / authorization
    * 会被下一段会话继续带上（都是**会话级**材料，串会话用就是失败）。
    */
-  clearSession(): void {
+  clearSession(keepAuthorizationFor: string = ''): void {
     const identity: MobileIdentity | null = this.identity;
     if (identity === null) {
+      return;
+    }
+    /*
+     * **设备级会话的凭据不能跟着"登录态复位"一起抹掉**。
+     *
+     * 场景：粘贴导入一份设备级会话（没有 sessionid）→ Cookie 罐有 ds_user_id 但没有 sessionid →
+     * 登录态从"未登录"翻成"已登录" → 走一次换人/复位 → 这里把 authorization 清了 →
+     * 之后 `ensure()` 既没有 sessionid 也没有 authorization，界面"进去了却什么都没有"。
+     *
+     * 所以：要复位到的账号（`keepAuthorizationFor`）跟当前身份是**同一个人**、且当前就是
+     * 设备级会话时，只清会话缓存、保留 authorization（连同它的 owner）。
+     */
+    const sameAccount: boolean = keepAuthorizationFor.length > 0
+      && identity.sessionId.length === 0
+      && identity.userId === keepAuthorizationFor
+      && identity.authorizationOwner === keepAuthorizationFor;
+    if (sameAccount) {
+      const keptAuth: string = identity.authorization;
+      identity.mid = '';
+      identity.wwwClaim = '0';
+      identity.igURur = '';
+      identity.authorization = keptAuth;
+      const kept: StoredIdentity = identity.toStored();
+      MobileSession.seed = kept;
+      MobileSession.writeSeed(kept);
+      this.identity = null;
+      hilog.info(DOMAIN, TAG, 'session reset kept device-level authorization (uid=%{public}s)',
+        keepAuthorizationFor);
       return;
     }
     identity.mid = '';

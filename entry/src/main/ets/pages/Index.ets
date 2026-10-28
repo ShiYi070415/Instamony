@@ -3714,7 +3714,7 @@ struct Index {
       if (plan.restoreCurrent) {
         AccountScope.restoreAll(account.current);
       }
-      this.forgetAccountMemory();
+      this.forgetAccountMemory(account.current);
     }
     /*
      * **登录成功就记进花名册**（多账号用，见 core/AccountBook）。
@@ -3898,12 +3898,15 @@ struct Index {
    * 通知与信息流，于是托盘队列、私信快照、预取队列、设备会话材料、请求模板全都留给了下一个账号
    * （用户报的"快拍还是上一个人的"就是其中一条）。任何"按人"的新状态都加到这里，并且**只加这里**。
    */
-  private forgetAccountMemory(): void {
+  private forgetAccountMemory(keepSessionFor: string = ''): void {
     /*
      * **不依赖 UI 状态的那几步交给 core/SessionService**（顺序在那里有注释，且只有一份）：
      * 停实时通道 → 清验证台账 → 归零限流/熔断 → 清进程内按人缓存 → 作废会话材料。
+     *
+     * `keepSessionFor`：复位之后要用的账号。同一个人 + 设备级会话（没有 sessionid）时，
+     * SessionService 会保留 authorization —— 那是它唯一的凭据，抹掉就等于退出登录。
      */
-    SessionService.forgetAccountSession();
+    SessionService.forgetAccountSession(keepSessionFor);
     this.realtimeStarted = false;
     /*
      * 页面这一半交给 `core/SessionReset` 顺序执行：**每步各自 try/catch**。

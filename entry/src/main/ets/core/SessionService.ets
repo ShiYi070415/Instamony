@@ -36,9 +36,12 @@ export class SessionService {
   /**
    * 把"上一个账号的会话痕迹"从内存里清掉（幂等；换号与退出登录都走这里）。
    *
+   * @param keepAuthorizationFor 复位之后要用的账号 id（Cookie 罐里现读的 ds_user_id）。
+   *   同一个人 + 设备级会话时保留 authorization —— 否则"导入设备级会话 → 登录态翻转 → 复位"
+   *   会把唯一凭据抹掉，界面出现"进去了却什么都没有"。
    * @returns 是否真的停掉了实时通道（页面据此复位自己的 `realtimeStarted` 标志）
    */
-  static forgetAccountSession(): boolean {
+  static forgetAccountSession(keepAuthorizationFor: string = ''): boolean {
     /*
      * 1) **实时通道必须先下线**：它拿的是上一个账号的 sessionid，不下线就会继续收那个号的
      *    私信、并把帧派发到新账号的界面上（串号）。放在最前面 —— 后面的清理都假设
@@ -64,7 +67,7 @@ export class SessionService {
     AccountCaches.clearProcessCaches();
     // 5) 设备侧会话材料：设备身份（UUID/mid）留着，会话级材料（claim/rur/authorization）作废。
     try {
-      MobileSession.getInstance().clearSession();
+      MobileSession.getInstance().clearSession(keepAuthorizationFor);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'session clear failed: %{public}s', (error as Error).message);
     }
