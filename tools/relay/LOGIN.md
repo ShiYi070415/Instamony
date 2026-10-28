@@ -52,10 +52,21 @@ JS 版移植自 instagrapi 的 CAA/Bloks 流程，实测已打通的部分：
 2. **`password_text_input_id` / `username_text_input_id` 的形状是 `<4 位十六进制>ig:81|82`**
    （instagrapi 注释原文：纯十六进制/UUID 前缀能被 VM 接受，但可能回"空载荷 404"）。
 
-另注：instagrapi 里还有第二套 2FA（`two_step_verification.*` / `two_factor_login.*` 的
-TOTP/SMS 选法 + `verify_code.async`），**CAA 登录这条路不走它** —— 走的是上面那套
-`ap.two_step_verification` 的"profile-code"链（entrypoint → code_entry → code_entry_async），
-用布局里的 `context_data` 串起来。两条链别混。
+另注：**2FA 有两套链，两套都得在**（R12 真机实测踩到）：
+
+| 链 | 触发标志 | 走法 |
+| --- | --- | --- |
+| 新版（context 链） | 响应里有 `two_step_verification_context` | `two_step_verification.entrypoint` → `method_picker` → `method_picker.navigation.async`（选 totp/sms/backup_codes）→（备用码才走 `two_factor_login.enter_backup_code`）→ `two_step_verification.verify_code.async` |
+| 老版（profile-code 链） | 布局里有 `ap.two_step_verification.entrypoint_async` | entrypoint → code_entry → code_entry_async（用 `context_data` 串） |
+
+判哪套：**先看有没有 `two_step_verification_context`**（真机那次就是它，票据 13 字符），
+没有再试 `ap.*`。方式推断照 instagrapi：8 位数字 ⇒ 备用码；只开短信没开 TOTP ⇒ sms；其余 ⇒ totp。
+两套都实现前，遇到 context 链会报"布局形状变了"——**这正是 R12 真机第一次的结果**。
+
+另一个真机实测的重要形状：失败/兜底响应里有 `CAA_LOGIN_FALLBACK:fallback_triggered`，
+而且数据藏在 `embedded_payloads`（对象，不是字符串）里。所以登录结果的查找是三级：
+`layout.bloks_payload.action` → 所有字符串里的 JSON 文本 → 整棵树里的 `{login_response, headers, cookies}` 对象。
+失败时 relay 会把**完整响应**写到 `.tmp/caa-last-response.json`，形状变了就发这个文件，不必复现。
 
 ### 成功响应里的 `headers` 不止 authorization
 

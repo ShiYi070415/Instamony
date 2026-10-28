@@ -1047,9 +1047,9 @@ async function runCaaLogin(argv) {
   const password = envPass.length > 0 ? envPass : await readLine('IG 密码（不回显）：', true);
   if (password.length === 0) die('没输入密码');
 
-  // 两步验证时按需提示输入验证码（2FA / 短信码）
+  // 两步验证时按需提示输入验证码（TOTP 六位 / 短信码 / 备用码八位都走这里）
   const result = await caaLogin(profile, username, password, (text) => log(text), {
-    getCode: () => readLine('两步验证码（短信 / TOTP 六位）：')
+    getCode: () => readLine('两步验证码（验证器/短信 6 位，或备用码 8 位）：')
   });
 
   for (const step of result.steps) {
@@ -1059,11 +1059,33 @@ async function runCaaLogin(argv) {
   if (result.loggedIn !== true) {
     warn('登录未成功：' + (result.reason || '未知原因'));
     if (typeof result.twoStepContext === 'string' && result.twoStepContext.length > 0) {
-      log('已拿到 two_step_verification_context（长度 ' + result.twoStepContext.length + '）——'
-        + '两步验证链路还没接进本脚本（见 LOGIN.md 的待办）');
+      log('两步验证票据（two_step_verification_context）长度 ' + result.twoStepContext.length
+        + ' —— 这次没输入验证码？重跑 --caa-login 会提示输入');
     }
-    if (result.raw !== undefined) {
-      log('原始响应片段：' + JSON.stringify(result.raw).slice(0, 600));
+    /*
+     * **把完整响应落盘**（本地文件，不提交）。
+     *
+     * 为什么要：形状一变，只靠终端里截断的 600 字符根本没法对齐（R12 就是这么卡住的：
+     * 结果是 `CAA_LOGIN_FALLBACK:fallback_triggered` + `embedded_payloads` + 2FA 票据）。
+     * 落盘之后可以用工具扫一遍，不必再让用户重跑一次登录。
+     */
+    if (result.raw !== undefined && result.raw !== null) {
+      try {
+        const dumpDir = path.join(DIR, '.tmp');
+        fs.mkdirSync(dumpDir, { recursive: true });
+        const dumpFile = path.join(dumpDir, 'caa-last-response.json');
+        fs.writeFileSync(dumpFile, JSON.stringify({
+          at: new Date().toISOString(),
+          reason: result.reason,
+          twoStepContextLength: typeof result.twoStepContext === 'string'
+            ? result.twoStepContext.length : 0,
+          steps: result.steps,
+          raw: result.raw
+        }, null, 2), 'utf8');
+        log('完整响应已保存：' + dumpFile + '（形状变了的话，把这个文件发我）');
+      } catch (error) {
+        warn('保存完整响应失败：' + error.message);
+      }
     }
     process.exit(3);
   }

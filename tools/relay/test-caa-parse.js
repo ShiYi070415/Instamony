@@ -411,6 +411,83 @@ check('自检④：2SV 上下文（entrypoint_async + f4i）', () => {
   'CTX-TEST', '自检④会误报失败（上下文没取到）');
 });
 
+/* ------------------------------------- ⑥ 新版 2FA（context 链）与深层查找 */
+
+/*
+ * 真机实测（R12）：send_login_request 回 200，但响应里没有 login_response，
+ * 而是 `CAA_LOGIN_FALLBACK:fallback_triggered` + `two_step_verification_context`（13 字符），
+ * 并且数据藏在 `embedded_payloads` 里。这一组就是照那个真实形状造 fixture 的。
+ */
+console.log('⑥ 新版 2FA（context 链）与深层查找');
+
+check('深层查找：two_step_verification_context 藏在 embedded_payloads 的 JSON 串里', () => {
+  const inner = JSON.stringify({ two_step_verification_context: 'CTX-13-CHARS' });
+  const data = {
+    layout: {
+      bloks_payload: {
+        data: [{ data: { key: 'CAA_LOGIN_FALLBACK:fallback_triggered', initial: false } }],
+        embedded_payloads: [{ id: 'x', payload: { note: inner } }]
+      }
+    }
+  };
+  assertEqual(caa.twoStepContextOf(data), 'CTX-13-CHARS', '深层没找到 2FA 票据');
+});
+
+check('fallback 标记能识别（IG 把这次登录退回旧 accounts 流程）', () => {
+  const data = { layout: { bloks_payload: { data: [
+    { data: { key: 'CAA_LOGIN_FALLBACK:fallback_triggered' } }
+  ] } } };
+  const markers = caa.bloksFallbackMarkers(data);
+  assertEqual(markers.length, 1, '没识别出 fallback 标记');
+  assertEqual(markers[0], 'CAA_LOGIN_FALLBACK:fallback_triggered', '标记内容不对');
+  assertEqual(caa.bloksFallbackMarkers({ layout: null }).length, 0, '空响应不该有标记');
+});
+
+check('2FA 方式推断：8 位数字→备用码；只开短信→sms；其余→totp', () => {
+  assertEqual(caa.inferChallenge({}, '12345678'), 'backup_codes', '8 位数字应判成备用码');
+  assertEqual(caa.inferChallenge({}, '1234 5678'), 'backup_codes', '带空格的 8 位也算备用码');
+  assertEqual(caa.inferChallenge({ sms_two_factor_on: true, totp_two_factor_on: false },
+    '123456'), 'sms', '只开短信应判成 sms');
+  assertEqual(caa.inferChallenge({ sms_two_factor_on: true, totp_two_factor_on: true },
+    '123456'), 'totp', '两个都开时用 totp');
+  assertEqual(caa.inferChallenge({}, '123456'), 'totp', '默认 totp');
+});
+
+check('登录结果在 embedded_payloads 里也要能找到（对象结构，不是字符串）', () => {
+  // 真实形状（R12 真机）：embedded_payloads[].payload 是**对象**，登录结果就平铺在里面。
+  const data = {
+    layout: {
+      bloks_payload: {
+        embedded_payloads: [{
+          id: 'x',
+          payload: { layout: { bloks_payload: {
+            login_response: JSON.stringify({ status: 'ok' }),
+            headers: JSON.stringify({ 'IG-Set-Authorization': 'Bearer IGT:2:DEEP' }),
+            cookies: 'sessionid=999%3Adeep; ds_user_id=999'
+          } } }
+        }]
+      }
+    }
+  };
+  assertEqual(caa.extractLoginPayload(data), null, '老位置本来就不该找到（fixture 前提）');
+  const deep = caa.extractLoginPayloadDeep(data);
+  assert(deep !== null, '深层也没找到登录结果');
+  assertEqual(deep.cookies.sessionid, '999%3Adeep', '深层 sessionid 不对');
+  assertEqual(deep.headers['IG-Set-Authorization'], 'Bearer IGT:2:DEEP', '深层 authorization 不对');
+});
+
+check('登录结果藏在字符串里（再嵌一层 JSON 文本）也要能找到', () => {
+  const inner = JSON.stringify({
+    login_response: JSON.stringify({ status: 'ok' }),
+    headers: JSON.stringify({ 'IG-Set-Authorization': 'Bearer IGT:2:STR' }),
+    cookies: 'sessionid=888%3Astr; ds_user_id=888'
+  });
+  const data = { layout: { bloks_payload: { ft: { a: 'prefix ' + JSON.stringify(inner) + ' suffix' } } } };
+  const deep = caa.extractLoginPayloadDeep(data);
+  assert(deep !== null, '字符串里的登录结果没找到');
+  assertEqual(deep.cookies.sessionid, '888%3Astr', 'sessionid 不对');
+});
+
 /* ------------------------------------------------ 汇总 */
 
 console.log('');

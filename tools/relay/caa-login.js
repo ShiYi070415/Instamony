@@ -607,16 +607,12 @@ function sessionHeadersOf(headers) {
 }
 
 /**
- * 从 Bloks 响应里抠出登录结果（cookie + authorization）。
+ * 从**一段文本**里抠登录结果（cookie + authorization）。
  *
- * 成功时响应 `layout.bloks_payload.action` 里嵌着一段 JSON 字符串，含
- * `login_response` / `headers` / `cookies`。这里把它解出来。
+ * 成功时这段文本里嵌着一个 JSON 字符串，内容是 `{login_response, headers, cookies}`。
  */
-function extractLoginPayload(data) {
-  const action = ((data || {}).layout || {}).bloks_payload;
-  if (!action || typeof action.action !== 'string') return null;
-  const text = action.action;
-  const marker = text.indexOf('login_response');
+function loginPayloadFromText(text) {
+  const marker = String(text || '').indexOf('login_response');
   if (marker < 0) return null;
   // 从 marker 往前找最近的字符串起点，逐个试（越靠近 marker 越可能是那一段）。
   for (let start = marker; start >= 0; start--) {
@@ -647,6 +643,96 @@ function extractLoginPayload(data) {
     }
   }
   return null;
+}
+
+/** 从 `layout.bloks_payload.action` 里抠（老位置）。 */
+function extractLoginPayload(data) {
+  const action = ((data || {}).layout || {}).bloks_payload;
+  if (!action || typeof action.action !== 'string') return null;
+  return loginPayloadFromText(action.action);
+}
+
+/**
+ * **按结构**找登录结果：整棵树里那个带 `login_response`（以及 `headers` / `cookies`）的对象。
+ *
+ * 真机响应（R12）里 `embedded_payloads[].payload` 是**对象**，登录结果可能就平铺在里面，
+ * 不再是"藏在某个字符串里的 JSON 文本"。所以除了抠文本，还要认这种结构。
+ */
+function findLoginObjectDeep(value, depth = 0) {
+  if (depth > 12 || value === null || value === undefined) {
+    return null;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const hit = findLoginObjectDeep(item, depth + 1);
+      if (hit !== null) return hit;
+    }
+    return null;
+  }
+  if (typeof value === 'object') {
+    const record = value;
+    if (typeof record.login_response === 'string'
+      || typeof record.headers === 'string' || typeof record.cookies === 'string') {
+      const parsed = loginPayloadFromObject(record);
+      if (parsed !== null) return parsed;
+    }
+    for (const child of Object.values(record)) {
+      const hit = findLoginObjectDeep(child, depth + 1);
+      if (hit !== null) return hit;
+    }
+    return null;
+  }
+  if (typeof value === 'string' && value.length < 400000 && value.indexOf('login_response') >= 0) {
+    try {
+      return findLoginObjectDeep(JSON.parse(value), depth + 1);
+    } catch (error) {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** 把一个已是对象的 `{login_response, headers, cookies}` 解析成登录结果。 */
+function loginPayloadFromObject(raw) {
+  try {
+    const loginResponse = typeof raw.login_response === 'string'
+      ? JSON.parse(raw.login_response) : (raw.login_response || {});
+    const headers = typeof raw.headers === 'string' ? JSON.parse(raw.headers) : (raw.headers || {});
+    const cookieHeader = typeof raw.cookies === 'string'
+      ? raw.cookies : Object.keys(raw.cookies || {}).map((name) => `${name}=${raw.cookies[name]}`).join('; ');
+    const cookies = parseCookieHeader(cookieHeader);
+    if (Object.keys(headers).length === 0 && Object.keys(cookies).length === 0) {
+      return null;
+    }
+    const cookie = Object.keys(cookies).map((name) => `${name}=${cookies[name]}`).join('; ');
+    return { loginResponse, headers, cookies, cookie, cookieHeader, raw };
+  } catch (error) {
+    return null;
+  }
+}
+
+/**
+ * **在整棵响应里找**登录结果（老位置 → 字符串里 → 结构里，三级）。
+ *
+ * 为什么需要：IG 现在会把结果塞进 `embedded_payloads` / `initial_lispy` 里（真机那次
+ * `CAA_LOGIN_FALLBACK:fallback_triggered` 就是这种形状）。只看 `bloks_payload.action`
+ * 会把"其实已经登录成功"判成"没找到登录结果"。
+ */
+function extractLoginPayloadDeep(data) {
+  const direct = extractLoginPayload(data);
+  if (direct !== null) {
+    return direct;
+  }
+  const strings = [];
+  collectStrings(data, strings);
+  for (const text of strings) {
+    if (text.indexOf('login_response') < 0) continue;
+    const parsed = loginPayloadFromText(text);
+    if (parsed !== null) {
+      return parsed;
+    }
+  }
+  return findLoginObjectDeep(data);
 }
 
 /* ------------------------------------------------- 两步验证（ap.2sv 链） */
@@ -807,6 +893,212 @@ function bloksErrorMessage(data) {
     }
   }
   return '';
+}
+
+/**
+ * 在整棵 JSON 里递归找一个键（对齐 instagrapi 的 `_find_login_response_value`）。
+ *
+ * 为什么需要：Bloks 的响应会把东西藏进 `embedded_payloads`、`initial_lispy` 里的 JSON 串，
+ * 甚至再嵌一层。只按 `layout.bloks_payload.action` 找会漏 —— 真机那次
+ * `two_step_verification_context` 就是这么出来的。
+ */
+function findValueDeep(value, key, depth = 0) {
+  if (depth > 12 || value === null || value === undefined) {
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const hit = findValueDeep(item, key, depth + 1);
+      if (hit !== undefined) return hit;
+    }
+    return undefined;
+  }
+  if (typeof value === 'object') {
+    const own = value[key];
+    if (own !== undefined && own !== null && own !== '') return own;
+    for (const child of Object.values(value)) {
+      const hit = findValueDeep(child, key, depth + 1);
+      if (hit !== undefined) return hit;
+    }
+    return undefined;
+  }
+  if (typeof value === 'string' && value.indexOf('"') >= 0 && value.length < 400000) {
+    // 有些字段是**再嵌一层**的 JSON 文本
+    if (value.indexOf(key) < 0) return undefined;
+    try {
+      return findValueDeep(JSON.parse(value), key, depth + 1);
+    } catch (error) {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/** `two_step_verification_context`（新版 2FA 的握手票据）。 */
+function twoStepContextOf(data) {
+  const deep = findValueDeep(data, 'two_step_verification_context');
+  if (typeof deep === 'string' && deep.trim().length > 0) {
+    return deep.trim();
+  }
+  return extractTwoStepContext(data);
+}
+
+/** 有没有走到"新版 2FA（context 链）"或"旧版（ap.* 链）"。 */
+function bloksFallbackMarkers(data) {
+  const text = bloksAllText(data);
+  const out = [];
+  const re = /CAA_LOGIN_FALLBACK:[a-zA-Z0-9_]+/g;
+  let match = re.exec(text);
+  while (match !== null) {
+    out.push(match[0]);
+    match = re.exec(text);
+  }
+  return out;
+}
+
+/* ---------------------------------------- 新版 2FA（two_step_verification_context） */
+
+const TSV_ENTRYPOINT = 'com.bloks.www.two_step_verification.entrypoint';
+const TSV_METHOD_PICKER = 'com.bloks.www.two_step_verification.method_picker';
+const TSV_SELECT_METHOD = 'com.bloks.www.two_step_verification.method_picker.navigation.async';
+const TSV_ENTER_BACKUP = 'com.bloks.www.two_factor_login.enter_backup_code';
+const TSV_VERIFY = 'com.bloks.www.two_step_verification.verify_code.async';
+const TSV_FLOW_SOURCE = 'two_factor_login';
+
+/** 登录响应里那些"开了哪种 2FA"的布尔（instagrapi 的 `_login_response_bool`）。 */
+function loginResponseBool(data, key) {
+  const value = findValueDeep(data, key);
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    const lower = value.trim().toLowerCase();
+    return lower === '1' || lower === 'true' || lower === 'yes';
+  }
+  return false;
+}
+
+/**
+ * 推断这次的 2FA 方式（对齐 instagrapi `_infer_bloks_two_factor_challenge`）：
+ *   · 8 位数字 ⇒ 备用码（backup_codes）；
+ *   · 只开了短信、没开 TOTP ⇒ sms；
+ *   · 其余 ⇒ totp（验证器 App）。
+ */
+function inferChallenge(data, code) {
+  const normalized = String(code).replace(/[\s-]+/g, '');
+  if (/^\d{8}$/.test(normalized)) {
+    return 'backup_codes';
+  }
+  const sms = loginResponseBool(data, 'sms_two_factor_on');
+  const totp = loginResponseBool(data, 'totp_two_factor_on');
+  if (sms && !totp) {
+    return 'sms';
+  }
+  return 'totp';
+}
+
+/**
+ * **新版 2FA 链**（入口拿到 `two_step_verification_context` 时走它）：
+ * entrypoint → method_picker → select_method →（备用码才走 enter_backup_code）→ verify_code。
+ *
+ * 这是 instagrapi `_login_with_bloks_two_factor` 的逐条搬运。和 `ap.*` 那条
+ * "profile-code" 链是**两套**：那套用布局里的 `context_data` 串，这套用登录响应给的
+ * `two_step_verification_context`。真机上 IG 会用哪套取决于账号，两套都得在。
+ */
+async function resolveTwoStepByContext(profile, context, sendData, getCode, log, steps) {
+  const code = String(await getCode()).trim();
+  if (code.length === 0) {
+    return { loggedIn: false, reason: '两步验证：没有输入验证码', steps };
+  }
+  const challenge = inferChallenge(sendData, code);
+  const normalized = String(code).replace(/[\s-]+/g, '');
+  log('    两步验证（context 链，方式 ' + challenge + '）1/4：entrypoint');
+  const entry = await bloksApp(profile, TSV_ENTRYPOINT, {
+    client_input_params: {
+      device_id: profile.androidId,
+      is_whatsapp_installed: 0,
+      machine_id: profile.mid
+    },
+    server_params: {
+      should_fallback_to_sms: 0,
+      family_device_id: profile.phoneId,
+      device_id: profile.androidId,
+      two_step_verification_context: context,
+      flow_source: TSV_FLOW_SOURCE
+    }
+  });
+  steps.push({ step: '2sv_entrypoint', status: entry.status });
+  log('    两步验证 2/4：method_picker');
+  const picker = await bloksApp(profile, TSV_METHOD_PICKER, {
+    client_input_params: { is_whatsapp_installed: 0 },
+    server_params: {
+      should_fallback_to_sms: 0,
+      device_id: profile.androidId,
+      two_step_verification_context: context,
+      flow_source: TSV_FLOW_SOURCE
+    }
+  });
+  steps.push({ step: '2sv_method_picker', status: picker.status });
+  log('    两步验证 3/4：select_method（' + challenge + '）');
+  const selected = await bloksAsyncAction(profile, TSV_SELECT_METHOD, {
+    client_input_params: {
+      selected_method: challenge,
+      cloud_trust_token: null,
+      network_bssid: null
+    },
+    server_params: {
+      should_fallback_to_sms: 0,
+      device_id: profile.androidId,
+      spectra_reg_login_data: null,
+      two_step_verification_context: context,
+      flow_source: TSV_FLOW_SOURCE
+    }
+  });
+  steps.push({ step: '2sv_select_method', status: selected.status });
+  if (challenge === 'backup_codes') {
+    log('    两步验证 3.5/4：打开备用码输入页');
+    const backup = await bloksApp(profile, TSV_ENTER_BACKUP, {
+      server_params: {
+        device_id: profile.androidId,
+        two_step_verification_context: context,
+        flow_source: TSV_FLOW_SOURCE
+      }
+    });
+    steps.push({ step: '2sv_enter_backup_code', status: backup.status });
+  }
+  log('    两步验证 4/4：提交验证码');
+  const submit = await bloksAsyncAction(profile, TSV_VERIFY, {
+    client_input_params: {
+      auth_secure_device_id: '',
+      block_store_machine_id: '',
+      code: challenge === 'backup_codes' ? normalized : code,
+      should_trust_device: 1,
+      family_device_id: profile.phoneId,
+      device_id: profile.androidId,
+      cloud_trust_token: null,
+      network_bssid: null,
+      machine_id: profile.mid
+    },
+    server_params: {
+      should_fallback_to_sms: 0,
+      device_id: profile.androidId,
+      spectra_reg_login_data: null,
+      challenge: challenge,
+      two_step_verification_context: context,
+      flow_source: TSV_FLOW_SOURCE
+    }
+  });
+  steps.push({ step: '2sv_verify_code', status: submit.status });
+  const parsed = extractLoginPayloadDeep(submit.data);
+  if (parsed === null) {
+    const error = bloksErrorMessage(submit.data);
+    return {
+      loggedIn: false,
+      steps,
+      raw: submit.data,
+      reason: '两步验证已提交，但响应里没找到登录结果：' + (error.length > 0 ? error : '形状可能变了')
+    };
+  }
+  return { loggedIn: true, parsed, steps };
 }
 
 /**
@@ -1154,13 +1446,55 @@ async function caaLogin(profile, username, password, log, options) {
   }
 
   /*
-   * 登录结果没直接给。三种可能，按顺序判：
-   *   1. 走了两步验证（布局里有 ap.two_step_verification.entrypoint）
-   *      → 有 getCode 回调就把链走完，没有就把现场交回去；
-   *   2. 账号密码错 / 账号不存在 → IG 把文案放在 UI 文本里（如 "Can't find account"）；
-   *   3. 布局形状变了 → 返回原始响应供对齐。
+   * 登录结果没直接给。按顺序判：
+   *   1. **新版 2FA**：响应里带 `two_step_verification_context`（TOTP/SMS/备用码那一套）
+   *      → 有 getCode 就把 context 链走完，没有就把票据交回去；
+   *   2. **老版 2FA**：布局里有 `ap.two_step_verification.entrypoint_async`（profile-code 那套）；
+   *   3. 账号密码错 / 账号不存在 → IG 把文案放在 UI 文本里（如 "Can't find account"）；
+   *   4. 布局形状变了 → 返回原始响应供对齐。
+   *
+   * 注意顺序：真机上 IG 对同一个账号可能用①也可能用②，两套都必须能走。
+   * 另外 `CAA_LOGIN_FALLBACK:*` 表示 IG 把这次登录**退回旧的 accounts 流程**了，
+   * 看到它要说明白（旧接口我们现在拿不到会话，只能提示）。
    */
   profile.caaAac = aac;
+  const twoStepContext = twoStepContextOf(send.data);
+  if (twoStepContext.length > 0) {
+    log('    要两步验证（context 链，票据 ' + twoStepContext.length + ' 字符）');
+    if (typeof (options || {}).getCode === 'function') {
+      const resolved = await resolveTwoStepByContext(profile, twoStepContext, send.data,
+        options.getCode, log, steps);
+      if (resolved.loggedIn === true) {
+        const headers = resolved.parsed.headers || {};
+        const authorization = String(headers['IG-Set-Authorization']
+          || headers['ig-set-authorization'] || '');
+        const sessionHeaders = sessionHeadersOf(headers);
+        return {
+          loggedIn: true,
+          aac,
+          cookies: resolved.parsed.cookies || {},
+          authorization: authorization.replace(/^IG-Set-Authorization:\s*/i, ''),
+          mid: sessionHeaders.mid,
+          rur: sessionHeaders.rur,
+          claim: sessionHeaders.claim,
+          cookieNames: Object.keys(resolved.parsed.cookies || {}),
+          headerNames: Object.keys(headers),
+          twoStepContext: '',
+          steps
+        };
+      }
+      return {
+        loggedIn: false, aac, cookies: {}, authorization: '', twoStepContext,
+        steps, reason: resolved.reason, raw: resolved.raw
+      };
+    }
+    return {
+      loggedIn: false, aac, cookies: {}, authorization: '', twoStepContext,
+      steps, raw: send.data,
+      reason: '需要两步验证（context 链）：重新运行并输入验证码'
+    };
+  }
+
   if (bloksNeedsTwoStep(send.data)) {
     if (typeof (options || {}).getCode === 'function') {
       const resolved = await resolveTwoStep(profile, send.data, options.getCode, log);
@@ -1194,16 +1528,23 @@ async function caaLogin(profile, username, password, log, options) {
   }
 
   const errorText = bloksErrorMessage(send.data);
+  const markers = bloksFallbackMarkers(send.data);
+  let reason = errorText.length > 0
+    ? '登录失败：' + errorText
+    : '响应里没找到登录结果（布局形状可能变了，见 LOGIN.md）';
+  // 只有在"没有更具体的原因"时才补这句：`CAA_LOGIN_FALLBACK:*` 是 IG 的通用兜底标记
+  // （CAA 这次没直接给会话，具体原因它放在旧的 accounts 接口里），拿它当错误原因会误导。
+  if (markers.length > 0 && errorText.length === 0) {
+    reason += '（IG 标记 ' + markers.join(',') + '：CAA 这次没直接给会话）';
+  }
   return {
     loggedIn: false,
     aac,
     cookies: {},
     authorization: '',
-    twoStepContext: extractTwoStepContext(send.data),
+    twoStepContext,
     steps,
-    reason: errorText.length > 0
-      ? '登录失败：' + errorText
-      : '响应里没找到登录结果（布局形状可能变了，见 LOGIN.md）',
+    reason,
     raw: send.data
   };
 }
@@ -1249,6 +1590,11 @@ module.exports = {
   extractAac,
   extractTwoStepContext,
   extractLoginPayload,
+  extractLoginPayloadDeep,
+  twoStepContextOf,
+  inferChallenge,
+  findValueDeep,
+  bloksFallbackMarkers,
   parseCookieHeader,
   sessionHeadersOf,
   bloksExtractContextValue,
