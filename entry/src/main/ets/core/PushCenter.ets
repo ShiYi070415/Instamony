@@ -90,6 +90,9 @@ export class PushCenter {
    * 后续通知都是"带 agent 立刻发"，既有 uri 又没有额外等待。
    */
   private static agents: Map<string, WantAgent> = new Map<string, WantAgent>();
+  /** 最近一条私信通知的会话 id 与时间（见 takeRecentNotifyThread）。 */
+  private static lastNotifyThread: string = '';
+  private static lastNotifyAt: number = 0;
   /** "通知开关"那行日志打过了没有（见 logEnabledOnce）。 */
   private static enabledLogged: boolean = false;
   /** 上一条未读数：kind → total。 */
@@ -308,10 +311,34 @@ export class PushCenter {
     const body: string = preview.trim().length > 0 ? preview.trim() : '你有一条新私信';
     const id: number = messageId.length > 0
       ? PushCenter.idOfMessage(messageId) : NOTIFY_ID_DIRECT;
+    // 记下"最近一条私信通知是哪条会话"：点击若没把 want 送进来（真机上发生过），
+    // 回前台时还能靠它兜底进会话（见 takeRecentNotifyThread）。
+    PushCenter.lastNotifyThread = threadId;
+    PushCenter.lastNotifyAt = Date.now();
     hilog.info(DOMAIN, TAG, 'direct notify(each) from=%{public}s id=%{public}d',
       title, id);
     PushCenter.publish(id, title, body,
       notificationManager.SlotType.SOCIAL_COMMUNICATION, threadId);
+  }
+
+  /**
+   * 取"刚刚通知过的那条会话"（**一次性**；超出窗口或没有就返回空串）。
+   *
+   * 为什么需要它：真机日志里出现过"点了通知，App 起来了但 `onNewWant` 根本没被调用"
+   * （`Ability onForeground` 有、`want in` 没有）—— 那种情况 wantAgent 没起作用，
+   * 用户看到的就是"第一次点通知没反应"。回前台时用这条兜底，至少把这次点击变成"进了那条会话"。
+   *
+   * @param windowMs 只认这个时间窗内的通知（避免用户从桌面正常打开 App 时被莫名带走）
+   */
+  static takeRecentNotifyThread(windowMs: number): string {
+    const threadId: string = PushCenter.lastNotifyThread;
+    const at: number = PushCenter.lastNotifyAt;
+    if (threadId.length === 0 || at <= 0 || Date.now() - at > windowMs) {
+      return '';
+    }
+    PushCenter.lastNotifyThread = '';
+    PushCenter.lastNotifyAt = 0;
+    return threadId;
   }
 
   /**

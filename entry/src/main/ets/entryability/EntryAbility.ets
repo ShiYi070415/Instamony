@@ -494,6 +494,22 @@ export default class EntryAbility extends UIAbility {
     BackgroundInbox.stop();
     BackgroundKeep.cancel();
     /*
+     * **兜底：点了通知但系统没把 want 送进来**。
+     *
+     * 真机日志里出现过 `Ability onForeground` 有、`want in` 没有的情况（同一条通知第二次点
+     * 就正常）—— 用户看到的就是"第一次点通知没反应"。这里在回前台时补一次：如果刚刚
+     * （15 秒内）发过私信通知、且没有任何待处理的通知跳转，就把那条会话记进 NotifyRoute，
+     * 页面起来后照常进会话。
+     */
+    if (!NotifyRoute.hasPending()) {
+      const recent: string = PushCenter.takeRecentNotifyThread(15000);
+      if (recent.length > 0) {
+        hilog.info(DOMAIN, 'testTag', 'notify fallback (onForeground) → thread=%{public}d',
+          recent.length);
+        NotifyRoute.stash(recent);
+      }
+    }
+    /*
      * 让常驻的 WebView 恢复 JS 定时器与媒体（见 InstagramWebHost.applyVisibility），
      * 同时让**所有**监听者知道（视频播放器据此重建解码器，见 VideoSurface）。
      * 这里不再用 `isRegistered()` 拦：Web 宿主可能还没挂载，而播放器已经在跑了。
