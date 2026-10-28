@@ -43,8 +43,19 @@ const KEY_LAST_RAW: string = 'last_raw';
  * 记下来之后，10 分钟内直接拒绝发请求，只提示"还要等多久"，比让他反复撞限流好。
  */
 const KEY_LAST_429_AT: string = 'last_429_at';
-/** 限流后的本地冷却时长：10 分钟。 */
-const RATE_LIMIT_COOLDOWN_MS: number = 10 * 60 * 1000;
+/** 连续被限流的次数（冷却时长按它升级：10 → 20 → 40 分钟，上限 60）。 */
+const KEY_429_COUNT: string = 'count_429';
+
+/**
+ * 冷却时长：第 1 次 429 等 10 分钟，之后每次翻倍（20 / 40 / 60 封顶）。
+ *
+ * 为什么要升级：IG 的限流窗口本身会一次比一次长 —— 同等的"等 10 分钟"在第二次被拒后
+ * 根本不够，用户点了还是 429，只会以为"App 坏了"。宁可说得保守些。
+ */
+function cooldownMsOf(count: number): number {
+  const rounds: number = Math.max(1, Math.min(4, count));
+  return Math.min(60, 10 * Math.pow(2, rounds - 1)) * 60 * 1000;
+}
 
 /** 登录结果（给 UI：不抛异常，全部放在字段里）。 */
 export class CaaOutcome {
@@ -149,7 +160,8 @@ export class CaaSession {
     const waitMinutes: number = CaaSession.rateLimitWaitMinutes();
     if (waitMinutes > 0) {
       return CaaSession.outcome(false,
-        `上次被 IG 限流（429），还要等约 ${waitMinutes} 分钟再试（期间别点登录）`);
+        `上次密码登录被 IG 限流（429），还要等约 ${waitMinutes} 分钟（期间别再点）。`
+          + '**换会话不受影响**：先用「用已有会话导入」把电脑上的 settings.caa.json 粘进来即可。');
     }
     const device: CaaUsdid | null = await CaaSession.deviceIdentity();
     if (device === null) {
@@ -210,13 +222,20 @@ export class CaaSession {
     if (!Number.isFinite(at) || at <= 0) {
       return 0;
     }
-    const remain: number = at + RATE_LIMIT_COOLDOWN_MS - Date.now();
+    const remain: number = at + cooldownMsOf(CaaSession.rateLimitCount()) - Date.now();
     if (remain <= 0) {
       // 冷却期过了就清掉，别让它一直挡着
       CaaSession.writeText(KEY_LAST_429_AT, '');
       return 0;
     }
     return Math.max(1, Math.ceil(remain / 60000));
+  }
+
+  /** 连续 429 次数（读不到 / 脏数据当 0）。 */
+  private static rateLimitCount(): number {
+    const text: string = CaaSession.readText(KEY_429_COUNT);
+    const count: number = Number.parseInt(text, 10);
+    return Number.isFinite(count) && count > 0 ? count : 0;
   }
 
   /** 收尾：成功就把 Cookie 种进罐、让 MobileSession 捡起会话材料。 */
@@ -233,14 +252,25 @@ export class CaaSession {
       CaaSession.rememberDiag('登录', failed.reason, failed.steps);
       // 失败时把原始响应留下（真机上唯一的现场；成功时不存，避免会话材料被随手复制）。
       CaaSession.rememberRaw(result.raw);
-      // 被限流就记下时间：冷却期内不再发请求，避免把 IG 的窗口越推越远。
+      // 被限流就记下时间与次数：冷却期内不再发请求，避免把 IG 的窗口越推越远。
       if (result.rateLimited) {
+        const count: number = CaaSession.rateLimitCount() + 1;
+        CaaSession.writeText(KEY_429_COUNT, `${count}`);
         CaaSession.writeText(KEY_LAST_429_AT, `${Date.now()}`);
+        const waitMinutes: number = Math.max(1, Math.ceil(cooldownMsOf(count) / 60000));
+        const failedLimited: CaaOutcome = CaaSession.outcome(false,
+          `密码登录被 IG 限流（429）—— 这是按「尝试次数」算的，已记为第 ${count} 次：`
+            + `等约 ${waitMinutes} 分钟再点密码登录。`
+            + '**换会话不受影响**：可以先用「用已有会话导入」把电脑上的 settings.caa.json 粘进来。',
+          failed.steps);
+        CaaSession.rememberDiag('登录', failedLimited.reason, failedLimited.steps);
+        return failedLimited;
       }
       return failed;
     }
     // 登录成功：清掉限流记录（下次若再被限流重新计时）。
     CaaSession.writeText(KEY_LAST_429_AT, '');
+    CaaSession.writeText(KEY_429_COUNT, '');
     const outcome: CaaOutcome = await CaaSession.applySession(result.cookie, result.authorization,
       '登录', result.mid, result.rur, result.claim);
     CaaSession.rememberDiag('登录', outcome.reason, outcome.steps);

@@ -471,6 +471,28 @@ check('App 自检（selfTest）离线复算：应报 7/7 通过', () => {
   assert(verdict.indexOf('7/7 通过') >= 0, '自检结论：' + verdict);
 });
 
+/*
+ * **导入那条路**：密码登录被限流（429）时，用户靠「用已有会话导入」把电脑上的
+ * `settings.caa.json` 粘进来救场 —— 那份是**设备级会话**（没有 sessionid）。
+ * 这里用 App 自己的三个纯函数验证它认得这种文件。
+ */
+check('导入设备级 settings.caa.json：cookieTextOf / authorizationOf / cookieValue 都认', () => {
+  const settings = {
+    cookies: { ds_user_id: '46473815227', 'ig-u-ds-user-id': '46473815227',
+      rur: 'KND', 'ig-u-rur': 'KND', 'ig-u-www-claim': 'hmac.AAAA' },
+    uuids: { phone_id: 'p', uuid: 'u', android_device_id: 'android-a' },
+    authorization_data: { ds_user_id: '46473815227', sessionid: '' },
+    mid: 'MID-1'
+  };
+  const cookie = Session.cookieTextOf(settings);
+  assert(cookie.indexOf('ds_user_id=46473815227') >= 0, 'cookieTextOf 没拼出 Cookies：' + cookie);
+  const authorization = Session.authorizationOf(settings);
+  assert(authorization.indexOf('Bearer IGT:2:') === 0, 'authorizationOf 没从 authorization_data 重建');
+  assert(Session.cookieValue(cookie, 'ds_user_id') === '46473815227', 'cookieValue 取不到账号');
+  assert(Session.cookieValue(cookie, 'sessionid') === '',
+    '设备级会话不该凭空有 sessionid');
+});
+
 const sendDump = path.join(DIR, '.tmp', 'caa-send-response.json');
 if (dumpPayload !== null) {
   check('真实响应 → 会话字段（两个文件的源码接力）：ds_user_id / authorization /（有就）sessionid',
