@@ -370,38 +370,86 @@ function decodePacket(bytes) {
 /* ------------------------------------------------------------ 设备身份（持久化） */
 
 /**
- * MQTT 的 "设备身份"：`clientIdentifier` 取它前 20 字符，`deviceId` 用它全串。
+ * 设备身份（持久化在 `mqtt-device.json`）。
  *
- * **必须跨重启稳定**，否则每次连上都像一台新设备；同时也**故意不用 App 那台的身份**：
+ * 真实客户端有三条**不同**的 id，别混成一个（我第一次就混了，iris 订阅被拒）：
+ *   · `phoneId`   → MQTT 的 `deviceId` / `clientIdentifier`，HTTP 的 `X-IG-Family-Device-ID`
+ *   · `uuid`      → HTTP 的 `X-IG-Device-ID`
+ *   · `androidId` → HTTP 的 `X-IG-Android-ID`（16 位十六进制）
+ *
+ * **必须跨重启稳定**，否则每次连上都像一台新设备；同时**故意不用 App 那台的身份**：
  * 两个客户端共用一个 deviceId 会被对端当成同一台设备而互相踢掉。
- * 所以这里单独存一份（`mqtt-device.json`），首次随机生成，之后一直沿用。
  */
-function loadDeviceId(dir) {
+function loadDeviceIdentity(dir) {
   const file = path.join(dir, 'mqtt-device.json');
   try {
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (data && typeof data.phoneId === 'string' && data.phoneId.length >= 16) {
-      return data.phoneId;
+    if (data && typeof data.phoneId === 'string' && data.phoneId.length >= 16
+      && typeof data.uuid === 'string' && data.uuid.length >= 8
+      && typeof data.androidId === 'string' && data.androidId.length >= 8) {
+      return data;
     }
   } catch (error) {
     // 第一次跑
   }
-  // 形如 android-<uuid4>，长度足够切片也不会撞。
   const uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
     const random = Math.floor(Math.random() * 16);
     const value = ch === 'x' ? random : (random & 0x3) | 0x8;
     return value.toString(16);
   });
-  const phoneId = `android-${uuid}`;
+  let androidId = '';
+  for (let index = 0; index < 16; index++) {
+    androidId += Math.floor(Math.random() * 16).toString(16);
+  }
+  const identity = {
+    phoneId: `android-${uuid}`,
+    uuid: uuid,
+    androidId: androidId,
+    createdAt: Date.now()
+  };
   try {
-    fs.writeFileSync(file, JSON.stringify({ phoneId, createdAt: Date.now() }, null, 2), 'utf8');
+    fs.writeFileSync(file, JSON.stringify(identity, null, 2), 'utf8');
   } catch (error) {
     // 落盘失败也能继续跑（下次会换一个身份）
   }
-  return phoneId;
+  return identity;
+}
+
+/** 只要 phoneId（老接口）。 */
+function loadDeviceId(dir) {
+  return loadDeviceIdentity(dir).phoneId;
 }
 
 /* ------------------------------------------------------------------ 客户端 */
+
+/**
+ * **前台状态**（instagrapi 的 `send_foreground_state`，发到 topic 102）。
+ *
+ * 这是"私信秒更新"的真正开关：IG 只往**声明自己在前台**的客户端推 `message_sync`
+ * （topic 146）。不发这一条，CONNECT 里就算订阅了 146，也收不到任何补丁
+ * —— 我们前几轮"听 150 秒没有任何事件"就是这个原因，不是 iris 订阅的锅。
+ *
+ * 载荷是 Thrift 结构，而且 instagrapi 在压缩前**额外加一个 0x00 字节**，
+ * 这个字节不能少（对端按它做版本前缀）。
+ */
+function buildForegroundState() {
+  const writer = new ThriftWriter();
+  writer.writeField(1, T_TRUE);          // inForegroundApp = true
+  writer.writeField(2, T_TRUE);          // inForegroundDevice = true
+  writer.writeInt(3, 60, 32);            // keepAliveTimeout（秒）
+  // 4: subscribeTopics —— list<binary>
+  writer.writeField(4, T_LIST);
+  const topics = ['146', '133', '150'];
+  writer.bytes.push((topics.length << 4) | T_BINARY);
+  for (const topic of topics) {
+    writer.writeStringDirect(topic);
+  }
+  writer.writeField(8, T_I64);           // requestId
+  writer.writeVarint(zigzag(Date.now() % 2147483647));
+  writer.writeStop();
+  const raw = Buffer.concat([Buffer.from([0x00]), Buffer.from(writer.bytes)]);
+  return zlib.deflateSync(raw);
+}
 
 /**
  * 实时通道客户端。事件式：`on('up')` / `on('down')` / `on('event', topic, text)`。
@@ -427,6 +475,7 @@ class RealtimeClient {
     this.closed = false;
     this.packetId = Math.floor(Math.random() * 1000) + 1;
     this.pingTimer = null;
+    this.foregroundTimer = null;
     this.connack = -1;
     this.handlers = { up: [], down: [], event: [], subscribe: [] };
     this.stats = { frames: 0, packets: 0, events: 0, since: Date.now() };
@@ -495,6 +544,11 @@ class RealtimeClient {
             if (packet.returnCode === 0) {
               this.up = true;
               this.startHeartbeat();
+              /*
+               * **连上就声明"我在前台"**（topic 102）—— 不发这一条 IG 不会推
+               * message_sync（见 buildForegroundState）。
+               */
+              this.sendForegroundState();
               this.emit('up');
               finish(null);
             } else {
@@ -543,6 +597,16 @@ class RealtimeClient {
       return;
     }
     if (DIRECT_TOPICS.indexOf(packet.topic) >= 0) {
+      /*
+       * **保活帧不算事件**：IG 会往 topic 150 发 6 字节的 `PRN`（可能带控制字节/填充），
+       * 大量且无意义。不过滤掉的话，实时触发器会每 20 秒白拉一次收件箱 ——
+       * 不但没提速，请求量反而翻倍。
+       */
+      const printable = text.replace(/[^\x20-\x7E]/g, '').trim();
+      if (printable.length === 0 || printable === 'PRN') {
+        this.stats.keepalives = (this.stats.keepalives || 0) + 1;
+        return;
+      }
       this.stats.events++;
       this.emit('event', packet.topic, text);
     }
@@ -560,12 +624,39 @@ class RealtimeClient {
     }, KEEPALIVE_SECONDS * 1000);
     // 心跳定时器不该拖住进程退出
     if (typeof this.pingTimer.unref === 'function') this.pingTimer.unref();
+    // 前台状态每 45 秒续一次（比 keepAliveTimeout 略短，见 sendForegroundState）
+    this.foregroundTimer = setInterval(() => {
+      this.sendForegroundState();
+    }, 45000);
+    if (typeof this.foregroundTimer.unref === 'function') this.foregroundTimer.unref();
+  }
+
+  /**
+   * 发"我在前台"（topic 102）。
+   *
+   * 每隔 45 秒重发一次（比 keepAliveTimeout=60 略短）：IG 那边前台状态是有时效的，
+   * 过期就停止推 message_sync —— 只发一次的话，安静一两分钟后又会"收不到"。
+   */
+  sendForegroundState() {
+    if (!this.up || this.socket === null) return false;
+    try {
+      this.packetId = this.packetId >= 0xFFFF ? 1 : this.packetId + 1;
+      this.socket.write(buildPublish('102', buildForegroundState(), this.packetId));
+      return true;
+    } catch (error) {
+      this.log(`[realtime] foreground state failed: ${error.message}`);
+      return false;
+    }
   }
 
   stopHeartbeat() {
     if (this.pingTimer !== null) {
       clearInterval(this.pingTimer);
       this.pingTimer = null;
+    }
+    if (this.foregroundTimer !== null) {
+      clearInterval(this.foregroundTimer);
+      this.foregroundTimer = null;
     }
   }
 
@@ -618,6 +709,7 @@ class RealtimeClient {
 module.exports = {
   RealtimeClient,
   loadDeviceId,
+  loadDeviceIdentity,
   buildConnect,
   buildPublish,
   decodePacket,

@@ -223,6 +223,21 @@ function mobileAuthorization(cookie) {
 
 /* --------------------------------------------------------------- 拉收件箱 */
 
+/** 本机这套"移动设备身份"的缓存（首次生成、之后稳定，见 realtime.js）。 */
+let deviceIdentityCache = null;
+
+/**
+ * 本机这套"移动设备身份"（`mqtt-device.json`）。
+ *
+ * 实时通道和 HTTP 请求必须共用同一套，否则 iris 订阅会因为"快照不是这台设备报的"被拒。
+ */
+function deviceIdentity() {
+  if (deviceIdentityCache === null) {
+    deviceIdentityCache = require('./realtime.js').loadDeviceIdentity(__dirname);
+  }
+  return deviceIdentityCache;
+}
+
 /**
  * 拉一次收件箱，**连订阅位点一起**返回。
  *
@@ -232,9 +247,18 @@ function mobileAuthorization(cookie) {
  */
 async function fetchInboxRaw(cfg) {
   const cookie = cfg.ig.cookie;
+  const ig = cfg.ig || {};
   const query = querystring.stringify({
-    limit: '15',
-    thread_message_limit: '2',
+    /*
+     * **窗口大小决定会不会"吞消息"**。
+     *
+     * 原来 `limit=15 / thread_message_limit=2`：只回 15 个会话、每个会话最后 2~3 条。
+     * 于是"两轮之间连发 5 条"只能看到最后几条，前面的永久看不到 —— 这就是吞消息。
+     * 现在默认 30 个会话 / 每个会话 20 条；另外把"窗口里最旧一条比上次记录还新"
+     * 当作**可能有空洞**，去该会话详情页回填（见 backfillThread / neededBackfill）。
+     */
+    limit: String(Number(ig.inboxLimit || 30)),
+    thread_message_limit: String(Number(ig.threadMessageLimit || 20)),
     visual_message_return_type: 'unseen',
     persistentBadging: 'true'
   });
@@ -259,18 +283,34 @@ async function fetchInboxRaw(cfg) {
       Accept: '*/*'
     };
     /*
-     * **设备身份要跟实时通道那边用同一个**。
+     * **设备身份要跟实时通道那边用同一套**（`mqtt-device.json`）。
      *
-     * 实时通道（MQTT）的 CONNECT 里带 `deviceId`，而 iris 订阅会校验"这个会话是不是
-     * 同一台设备报上来的快照" —— 两边对不上就被判 `Iris_IrisValidationException`。
-     * 所以 HTTP 这边也把同一条 device id 报上去（见 realtime.js 的 loadDeviceId）。
+     * 真实客户端有三条不同的 id：`X-IG-Device-ID`=uuid、`X-IG-Android-ID`=16 位十六进制、
+     * `X-IG-Family-Device-ID`=phoneId（MQTT 的 deviceId 也是它）。
+     * 第一次我把三条填成同一个值，iris 订阅直接被拒；改成各按各的才有希望。
      */
-    const deviceId = (cfg.ig && cfg.ig.deviceId) || '';
-    if (deviceId.length > 0) {
-      headers['X-IG-Device-ID'] = deviceId;
-      headers['X-IG-Android-ID'] = deviceId;
-      headers['X-IG-Family-Device-ID'] = deviceId;
+    const device = deviceIdentity();
+    headers['X-IG-Device-ID'] = device.uuid;
+    headers['X-IG-Android-ID'] = device.androidId;
+    headers['X-IG-Family-Device-ID'] = device.phoneId;
+    const mid = cookieValueOf(cookie, 'mid');
+    if (mid.length > 0) {
+      headers['X-MID'] = mid;
     }
+    // 移动端身份的其余几条"固定串"（缺了容易被判伪造客户端）
+    headers['X-IG-App-Locale'] = 'en_US';
+    headers['X-IG-Device-Locale'] = 'en_US';
+    headers['X-IG-Mapped-Locale'] = 'en_US';
+    headers['X-IG-Timezone-Offset'] = String(-new Date().getTimezoneOffset() * 60);
+    headers['X-Bloks-Version-Id'] =
+      '799db3e387d7a21a19c72918b8698b6cd28a1516ade363792c100ed45a0f9f0b';
+    headers['X-Bloks-Is-Layout-RTL'] = 'false';
+    headers['X-Bloks-Is-Panorama-Enabled'] = 'true';
+    headers['X-FB-HTTP-Engine'] = 'Tigon/MNS/TCP';
+    headers['X-Tigon-Is-Retry'] = 'False';
+    headers['X-Zero-Balance'] = 'INIT';
+    headers['X-Zero-State'] = 'unknown';
+    headers['Priority'] = 'u=3';
     res = await request(INBOX_URL + '?' + query, { headers: headers });
   } catch (error) {
     log('IG 请求失败，本轮跳过：' + error.message);
@@ -311,6 +351,57 @@ async function fetchInbox(cfg) {
   return raw.threads;
 }
 
+/**
+ * 拉某个会话的一页消息 —— **只用于回填空洞**。
+ *
+ * 什么时候需要：两轮之间同一个人连发 N 条，而 N 超过了收件箱窗口里的
+ * `thread_message_limit`（尽管已提到 20，仍可能超）。这时收件箱里最旧的一条
+ * 都比我们上次记录的更新，说明中间有消息没看到 —— 到会话详情页补一页。
+ *
+ * 失败一律返回空数组：回填是"锦上添花"，不能因为它把一轮搞崩。
+ */
+async function fetchThreadItems(cfg, threadId, limit) {
+  const cookie = cfg.ig.cookie || '';
+  const authorization = mobileAuthorization(cookie);
+  if (authorization.length === 0) return [];
+  const query = querystring.stringify({
+    limit: String(Number(limit || (cfg.ig && cfg.ig.backfillLimit) || 50)),
+    visual_message_return_type: 'unseen'
+  });
+  const device = deviceIdentity();
+  const headers = {
+    Cookie: cookie,
+    Authorization: authorization,
+    'User-Agent': MOBILE_UA,
+    'X-IG-App-ID': MOBILE_APP_ID,
+    'X-IG-Capabilities': '3brTv10=',
+    'X-IG-Connection-Type': 'WIFI',
+    'X-IG-WWW-Claim': '0',
+    'X-CSRFToken': csrfOf(cookie),
+    'X-IG-Device-ID': device.uuid,
+    'X-IG-Android-ID': device.androidId,
+    'X-IG-Family-Device-ID': device.phoneId,
+    Accept: '*/*'
+  };
+  try {
+    const res = await request(
+      `https://i.instagram.com/api/v1/direct_v2/threads/${encodeURIComponent(threadId)}/?${query}`,
+      { headers: headers });
+    if (res.status !== 200) {
+      log('回填失败（HTTP ' + res.status + '）：' + res.body.slice(0, 120));
+      return [];
+    }
+    const data = JSON.parse(res.body);
+    const thread = data.thread || {};
+    const items = thread.items || [];
+    log('回填到 ' + items.length + ' 条');
+    return items;
+  } catch (error) {
+    log('回填异常：' + error.message);
+    return [];
+  }
+}
+
 /* ------------------------------------------------------------------ 状态 */
 
 function loadState(file) {
@@ -342,6 +433,15 @@ const KIND_TEXT = {
   like: '[赞了你的消息]'
 };
 
+/**
+ * 一条会话里**最新的一条消息**（顺带带上判重需要的标识）。
+ *
+ * ## 为什么要 `otid`
+ * IG 的私信有"双发"机制（`is_ae_dual_send`，端到端加密迁移期的兼容措施）：
+ * **同一条消息**会生成两个 item，`item_id` 不同但 `otid`（operation id）相同。
+ * 只按 `item_id` 判重就会把同一条消息推两次 —— 这就是"同一消息推两遍"的根因。
+ * 所以判重键用 `otid || item_id`，并且把它一起带出去（服务端 `appMessageId` 也用这个）。
+ */
 function newestOf(thread) {
   const items = thread.items || [];
   let best = null;
@@ -352,7 +452,17 @@ function newestOf(thread) {
     if (!text) text = KIND_TEXT[item.item_type] || '[消息]';
     const viewerId = thread.viewer_id ? String(thread.viewer_id) : '';
     const mine = !!(viewerId && item.user_id && String(item.user_id) === viewerId);
-    best = { id: String(item.item_id || ''), ts: stamp, text: text.slice(0, 120), mine: mine };
+    const itemId = String(item.item_id || '');
+    const otid = String(item.otid || '');
+    best = {
+      id: itemId,
+      // 判重键：同一条消息的双发共享 otid（没有 otid 时退回 item_id）
+      key: otid.length > 0 ? otid : itemId,
+      ts: stamp,
+      text: text.slice(0, 120),
+      mine: mine,
+      userId: String(item.user_id || '')
+    };
   }
   return best;
 }
@@ -468,11 +578,41 @@ function serviceJwt(sa) {
   return jwtCache.value;
 }
 
-async function pushAgc(cfg, title, body, threadId) {
+/**
+ * 判重键 → 稳定的**通知 id**（0 ~ 2^31-1）。
+ *
+ * 需求："每条通知都要显示，堆叠可展开"。所以**每条消息一个 notifyId**：
+ * 不同消息 = 不同通知，在通知中心里一条条堆起来；同一条消息下次再来也只会覆盖
+ * 自己那一条，不会重复堆。
+ *
+ * （早先按"会话"算 notifyId，同会话的新消息会覆盖旧通知 —— 那正是"只显示最新一条"的原因。）
+ */
+function notifyIdOf(itemKey) {
+  let sum = 0;
+  const text = String(itemKey || '');
+  for (let index = 0; index < text.length; index++) {
+    sum = (sum * 31 + text.charCodeAt(index)) % 2147483647;
+  }
+  return sum > 0 ? sum : 1;
+}
+
+async function pushAgc(cfg, title, body, threadId, itemKey) {
   const agc = cfg.notify.agc || {};
   const sa = loadServiceAccount(agc);
   const projectId = sa.project_id || agc.projectId;
   if (!projectId) throw new Error('服务账号密钥文件里没有 project_id，拼不出 v3 地址');
+  /*
+   * `appMessageId` 是**服务端的 24 小时去重**：同一 appMessageId 的消息只展示最早一条。
+   * 用它兜住"客户端状态丢了再推一次"（比如 relay 重启、state 被清）。
+   *
+   * ⚠️ 字符集有硬限制：官方只允许**大小写字母、数字、`+`、`/`、`=`、`-`、`_` 和空白**，
+   * 长度 [1,64]。我第一次写成 `会话:otid`，冒号不合法，被服务端整条拒收：
+   *   `80100003 Illegal payload, payload.notification invalid appMessageId`
+   * 表现是"完全收不到消息"—— 这种错只能靠看回包发现（HTTP 200 但 code 非 80000000）。
+   */
+  const rawMessageId = `${threadId}_${itemKey}`;
+  const messageKey = /^[A-Za-z0-9+/=_\-\s]{1,64}$/.test(rawMessageId)
+    ? rawMessageId : String(notifyIdOf(rawMessageId));
   const payload = JSON.stringify({
     payload: {
       notification: {
@@ -480,11 +620,15 @@ async function pushAgc(cfg, title, body, threadId) {
         title: title,
         body: body,
         clickAction: { actionType: 0, data: { threadId: threadId } },
-        style: 0
+        style: 0,
+        // 每条消息各自一条通知（堆叠），见 notifyIdOf。
+        notifyId: notifyIdOf(rawMessageId),
+        appMessageId: messageKey
       }
     },
     target: { token: [pushTokenNow()] },
-    pushOptions: { testMessage: agc.testMessage !== false, ttl: 3600 }
+    // collapseKey: -1 = 离线消息都缓存，不做同组覆盖（否则离线期间的几条会并成一条）
+    pushOptions: { testMessage: agc.testMessage !== false, ttl: 3600, collapseKey: -1 }
   });
   const res = await request(PUSH_SEND.replace('%s', projectId), {
     method: 'POST',
@@ -505,13 +649,22 @@ async function pushAgc(cfg, title, body, threadId) {
     log('AGC 推送成功：' + (data.requestId || ''));
     return;
   }
-  // pushToken 失效（应用重装/清数据/HMS 更新）是最常见的一种，单独点明怎么修。
-  warn('AGC 推送失败（HTTP ' + res.status + '）：' + res.body.slice(0, 220));
-  if (res.status === 401 || res.status === 403) {
-    warn('鉴权失败 = 服务账号 JWT 不对（alg/aud/key_id/project_id）。不是 token 的问题。');
-  } else {
-    warn('如果反复失败且通知到不了，先在 App 里「复制中转材料」重新取一次 pushToken。');
+  /*
+   * 这里必须**抛错**，不能只 warn 一句就完事：
+   * 调用方已经把这条消息记成"看过了"，静默失败就等于**永久丢掉这条消息**
+   * （`80100003 invalid appMessageId` 就是这么发生的：接口 HTTP 200、code 非成功，
+   * 于是"完全收不到消息"）。抛出去让上层回滚 state、下一轮重推。
+   */
+  const detail = res.body.slice(0, 220);
+  if (data.code === '80100003') {
+    throw new Error('payload 参数非法（80100003）：' + detail
+      + ' —— 检查 appMessageId / notifyId 的字符集与长度');
   }
+  if (res.status === 401 || res.status === 403) {
+    throw new Error('鉴权失败（' + res.status + '）：服务账号 JWT 不对（alg/aud/key_id/project_id）');
+  }
+  throw new Error('AGC 推送失败（HTTP ' + res.status + '）：' + detail
+    + ' —— 若反复失败，先在 App 里「复制中转材料」重新取一次 pushToken');
 }
 
 async function pushMeow(cfg, title, body) {
@@ -584,9 +737,9 @@ async function pushWebhook(cfg, title, body, threadId) {
   log('Webhook(' + format + ') 推送：' + res.body.slice(0, 120));
 }
 
-async function send(cfg, title, body, threadId) {
+async function send(cfg, title, body, threadId, itemKey) {
   const channel = cfg.notify.channel;
-  if (channel === 'agc') return pushAgc(cfg, title, body, threadId);
+  if (channel === 'agc') return pushAgc(cfg, title, body, threadId, itemKey || threadId);
   if (channel === 'meow') return pushMeow(cfg, title, body);
   if (channel === 'telegram') return pushTelegram(cfg, title, body);
   return pushWebhook(cfg, title, body, threadId);
@@ -916,6 +1069,15 @@ async function main() {
   /** 安静档的间隔：不超过 idleMax，也不低于活跃档。 */
   const quietJump = Math.min(idleMax, Math.max(activeGap,
     Number(ig.quietJumpSeconds || 240)));
+  /*
+   * **热档**：刚才有人发消息，说明正在聊天 —— 这时候延迟比请求量重要。
+   *
+   * 为什么不是一直这么快：IG 的收件箱响应很大（解开后 300KB 以上，gzip 后几十 KB），
+   * 一直 15 秒一轮既费电也容易被风控。但"聊天那几分钟"才是真正在意延迟的时段，
+   * 所以只在 `hotMinutes`（默认 10 分钟）内用 `hotSeconds`（默认 15 秒）。
+   */
+  const hotSeconds = Math.max(10, Math.min(activeGap, Number(ig.hotSeconds || 15)));
+  const hotWindowMs = Math.max(1, Number(ig.hotMinutes || 10)) * 60 * 1000;
   const stateFile = path.resolve(__dirname, cfg.stateFile || 'state.json');
   if (!once) acquireLock();
 
@@ -924,10 +1086,16 @@ async function main() {
   let firstRound = true;
   let gap = activeGap;
   let quietRounds = 0;
+  let lastActivityAt = 0;
+  /** 上一次打过的"下一轮间隔"（只在变化时打，避免刷屏）。 */
+  let lastLoggedGap = -1;
+  /** 实时通道客户端（null = 没连，靠轮询）。 */
+  let realtime = null;
 
   const finish = () => {
     if (dirty) saveState(stateFile, state);
     if (reportServer !== null) reportServer.close();
+    if (realtime !== null) realtime.close();
     if (!once) releaseLock();
     process.exit(0);
   };
@@ -937,34 +1105,188 @@ async function main() {
 
   log('启动：发起间隔 ' + activeGap + 's → 空闲退到 ' + idleMax + 's，通道 ' + cfg.notify.channel);
 
+  /*
+   * **实时通道当触发器**（不是数据源）。
+   *
+   * IG 会把 `message_sync`（topic 146）推给"声明在前台"的客户端（见 realtime.js 的
+   * buildForegroundState）。我们不去解析那些补丁，只在**收到任何 DM 相关帧**时
+   * 立刻插一次收件箱 —— 这样延迟从"最多 hotSeconds"降到"一次 HTTP 往返（几百毫秒）"，
+   * 而请求量并没有增加（只有真有事时才多发这一次）。
+   *
+   * 实时通道挂了也不影响主流程：轮询照旧（降级就是三档间隔）。
+   */
+  let wakeUp = null;
+  realtime = (function () {
+    const { RealtimeClient } = require('./realtime.js');
+    const cookie = (cfg.ig && cfg.ig.cookie) || '';
+    const userId = cookieValueOf(cookie, 'ds_user_id');
+    const sessionId = decodeURIComponent(cookieValueOf(cookie, 'sessionid'));
+    if (userId.length === 0 || sessionId.length === 0) return null;
+    const client = new RealtimeClient({
+      sessionId: sessionId,
+      userId: userId,
+      deviceDir: __dirname,
+      log: (text) => log(text)
+    });
+    client.on('up', () => {
+      log('实时通道已连上（IG 事件会立刻触发一次收件箱）');
+    });
+    client.on('down', (reason) => {
+      log('实时通道断开：' + reason + '（下次自动重连，期间靠轮询）');
+    });
+    client.on('event', (topic) => {
+      log('实时事件 topic=' + topic + ' → 立即拉一次收件箱');
+      if (wakeUp !== null) wakeUp();
+    });
+    const loop = () => {
+      client.connect().catch((error) => {
+        log('实时通道连接失败：' + error.message + '（30 秒后重试，期间靠轮询）');
+      });
+    };
+    loop();
+    // 断线重连：简单固定间隔，比指数退避更好预测
+    const reconnect = setInterval(() => {
+      if (!client.up) loop();
+    }, 30000);
+    if (typeof reconnect.unref === 'function') reconnect.unref();
+    return client;
+  })();
+
   for (;;) {
-    const threads = await fetchInbox(cfg);
+    /*
+     * 一轮：先拉收件箱，再把**每个会话里所有没推过的条目**逐条推出去。
+     *
+     * 为什么不用 MQTToT 直接收消息：IG 不给我们推（iris 订阅被拒，
+     * `Iris_IrisValidationException`，见 REALTIME.md），MQTT 只能当"有新动静"的触发器。
+     * 所以正确性完全取决于这里的比对逻辑 —— 这正是"吞消息 / 重复"要修的地方。
+     */
+    const inbox = await fetchInboxRaw(cfg);
+    let threads = inbox.threads;
+    /*
+     * **窗口空洞检测**：如果某个会话返回的最旧一条都比我们上次记录的新，
+     * 说明两轮之间来的消息超过了窗口大小（已经丢了）。这时去该会话详情页回填。
+     */
+    if (cfg.ig && cfg.ig.backfill !== false) {
+      const filled = [];
+      for (const thread of threads) {
+        const threadId = String(thread.thread_id || thread.thread_v2_id || '');
+        const last = threadId.length > 0 ? state[threadId] : undefined;
+        if (last === undefined) {
+          filled.push(thread);
+          continue;
+        }
+        const items = thread.items || [];
+        if (items.length === 0) {
+          filled.push(thread);
+          continue;
+        }
+        let oldest = Infinity;
+        for (const item of items) {
+          oldest = Math.min(oldest, Number(item.timestamp || 0));
+        }
+        if (Number(last.ts || 0) > 0 && oldest > Number(last.ts || 0)) {
+          log(`会话 ${thread.thread_title || threadId} 可能有空洞（窗口最旧 ${oldest} > 记录 ${last.ts}）→ 回填一页`);
+          const extra = await fetchThreadItems(cfg, threadId);
+          if (extra.length > 0) {
+            const merged = thread;
+            merged.items = extra.concat(items);
+            filled.push(merged);
+            continue;
+          }
+        }
+        filled.push(thread);
+      }
+      threads = filled;
+    }
     const fresh = [];
     const skipped = [];
     for (const thread of threads) {
       const threadId = String(thread.thread_id || thread.thread_v2_id || '');
       if (!threadId) continue;
-      const newest = newestOf(thread);
-      if (!newest) continue;
+      const items = thread.items || [];
+      if (items.length === 0) continue;
+      const viewerId = thread.viewer_id ? String(thread.viewer_id) : '';
       const last = state[threadId];
+      // 按时间升序：这样"两轮之间来的 3 条"会按顺序各推一条，而不是只推最后一条。
+      const ordered = items.slice().sort((left, right) =>
+        Number(left.timestamp || 0) - Number(right.timestamp || 0));
       if (!last) {
         // 第一次见这条会话：只记账不推送（否则一启动就把历史全弹一遍）。
-        state[threadId] = { id: newest.id, ts: newest.ts };
-        dirty = true;
+        const newest = newestOf(thread);
+        if (newest !== null) {
+          const all = [];
+          for (const item of ordered) {
+            all.push(String(item.otid || item.item_id || ''));
+          }
+          state[threadId] = {
+            key: newest.key, id: newest.id, ts: newest.ts, recent: [],
+            pushed: all.slice(-40)
+          };
+          dirty = true;
+        }
         continue;
       }
-      if (newest.id !== last.id && newest.ts > Number(last.ts || 0)) {
-        state[threadId] = { id: newest.id, ts: newest.ts };
-        dirty = true;
-        if (newest.mine || firstRound) continue;
+      /*
+       * **判重改成确定性的"已推 id 名单"**。
+       *
+       * `pushed` 里是该会话最近 40 条的 `otid || item_id`，只要在里面就绝不重推 ——
+       * 不再靠"文本相似 + 时间窗"去猜（那个既可能漏判、也可能误杀）。
+       * 名单随 state 落盘，所以 relay 重启后也不会把老消息重推一遍。
+       *
+       * 另外 `is_ae_dual_send === true` 的那一份直接跳过（IG 的端到端双发副本）。
+       */
+      const lastTs = Number(last.ts || 0);
+      const pushedIds = Array.isArray(last.pushed) ? last.pushed.slice() : [];
+      const known = new Set(pushedIds);
+      const recent = Array.isArray(last.recent) ? last.recent.slice() : [];
+      const freshReasons = [];
+      for (const item of ordered) {
+        if (item.is_ae_dual_send === true) continue;
+        const stamp = Number(item.timestamp || 0);
+        const itemId = String(item.item_id || '');
+        const otid = String(item.otid || '');
+        const key = otid.length > 0 ? otid : itemId;
+        if (key.length === 0) continue;
+        if (known.has(key) || (itemId.length > 0 && known.has(itemId))) continue;
+        known.add(key);
+        if (itemId.length > 0) known.add(itemId);
+        pushedIds.push(key);
+        let text = item.text || '';
+        if (!text) text = KIND_TEXT[item.item_type] || '[消息]';
+        text = text.slice(0, 120);
+        recent.push({ key: key, ts: stamp, text: text });
+        const mine = !!(viewerId && item.user_id && String(item.user_id) === viewerId);
+        if (mine || firstRound || stamp <= lastTs) continue;
         // IM 分类的合规红线：消息请求 / 没有历史往来的一律不推。
-        // 记账照记（上面已写 state），这样同一会话后续真成了正常往来还能正常推。
         const verdict = complianceVerdict(thread);
         if (verdict) {
-          skipped.push(verdict + ':' + (thread.thread_title || threadId));
+          freshReasons.push(verdict);
           continue;
         }
-        fresh.push({ id: threadId, title: thread.thread_title || '私信', text: newest.text });
+        fresh.push({
+          id: threadId,
+          key: key,
+          title: thread.thread_title || '私信',
+          text: text,
+          timestamp: stamp,
+          // 成功才真的算"看过了"；失败要回滚到这一份（见下面的 catch）。
+          prev: last
+        });
+      }
+      if (freshReasons.length > 0) {
+        skipped.push(`${freshReasons[0]}:${thread.thread_title || threadId}`);
+      }
+      const newest = newestOf(thread);
+      if (newest !== null) {
+        state[threadId] = {
+          key: newest.key,
+          id: newest.id,
+          ts: newest.ts,
+          recent: recent.slice(-8),
+          // 已推 id 名单（最近 40 条），落盘后重启也不会重推老消息
+          pushed: pushedIds.slice(-40)
+        };
+        dirty = true;
       }
     }
 
@@ -976,19 +1298,27 @@ async function main() {
       if (inQuietHours(cfg)) {
         log('安静时段：' + fresh.length + ' 条新私信只记账不推送');
       } else {
-        try {
-          if (fresh.length === 1) {
-            await send(cfg, fresh[0].title, fresh[0].text || '你有一条新私信', fresh[0].id);
-          } else {
-            // **一轮只推一条汇总**：手机少被唤醒几次，也避免连续弹一串。
-            await send(cfg, '私信',
-              fresh.length + ' 条新私信（' + fresh[0].title + ' 等）', fresh[0].id);
+        /*
+         * **每条消息一条通知**（需求："堆叠可展开，每一条都要显示"）。
+         *
+         * 通知 id 按"这条消息"算（见 notifyIdOf）：不同消息各自堆在通知中心里，
+         * 不会被后一条覆盖；服务端再用 `appMessageId` 兜住重复投递。
+         */
+        for (const item of fresh) {
+          try {
+            await send(cfg, item.title, item.text || '你有一条新私信', item.id, item.key);
+          } catch (error) {
+            /*
+             * **失败必须回滚**：上面进循环前已经把 state 更新成"这条看过了"，
+             * 若不回滚，这条消息就再也不会被推（用户看到的就是"彻底没收到"）。
+             */
+            state[item.id] = item.prev;
+            dirty = true;
+            warn('推送失败（' + item.title + '）：' + error.message + ' —— 已回滚，下一轮重推');
           }
-        } catch (error) {
-          log('推送失败（下一轮重新判定）：' + error.message);
         }
       }
-      log('本轮 ' + fresh.length + ' 条新私信');
+      log('本轮 ' + fresh.length + ' 条新私信（每条各一条通知）');
     }
 
     if (dirty) {
@@ -998,20 +1328,37 @@ async function main() {
     firstRound = false;
 
     /*
-     * **自适应间隔**：有动静就回到活跃档；连续安静几轮就**一步跳到安静档**，
-     * 而不是按 1.25 倍慢慢爬（那样要 20 分钟才退到底，等于白天大部分时间还在 60 秒一轮）。
+     * **三档间隔**（有动静就快，安静就退，聊天中走热档）：
      *
-     * 真实形状：聊天时 60 秒一轮（够快）；停手 2 轮（约 3 分钟）后变 240 秒；
-     * 最终退到 idleMax（默认 300 秒）。一天下来请求量比固定 60 秒少 3~5 倍。
+     *   · 热档（`hotSeconds`，默认 15s）：刚才 `hotMinutes`（默认 10 分钟）内有新私信
+     *     —— 正在聊天，这段才是真正在意延迟的时候；
+     *   · 活跃档（`pollSeconds`，默认 60s）：热档窗口过了但还没完全安静；
+     *   · 安静档（`quietJumpSeconds`，默认 240s）：连续安静几轮之后。
+     *
+     * 为什么不一直用 15 秒：收件箱响应解开后 300KB+，一直这么快既费电又容易被风控。
+     * 但要诚实说明：**真正的实时（来一条推一条）走不通** —— IG 的 iris 订阅拒绝
+     * 网页派生的会话（`Iris_IrisValidationException`，见 REALTIME.md），
+     * 所以热档的 15 秒就是能做到的最快响应。
      */
     if (fresh.length > 0) {
       quietRounds = 0;
-      gap = activeGap;
+      lastActivityAt = Date.now();
     } else {
       quietRounds++;
+    }
+    const hot = lastActivityAt > 0 && (Date.now() - lastActivityAt) < hotWindowMs;
+    if (hot) {
+      gap = hotSeconds;
+    } else if (fresh.length > 0) {
+      gap = activeGap;
+    } else {
       gap = quietRounds >= quietAfterRounds
         ? quietJump
         : Math.min(quietJump, Math.round(gap * 1.25));
+    }
+    if (gap !== lastLoggedGap) {
+      lastLoggedGap = gap;
+      log(`下一轮间隔 ${gap}s` + (hot ? '（热档：刚有新消息）' : ''));
     }
     if (once) {
       if (!quiet) {
@@ -1019,10 +1366,28 @@ async function main() {
         for (const key of Object.keys(state)) total++;
         log('一轮跑完：记了 ' + total + ' 条会话的时间点（state 已落盘）');
       }
+      // --once 也连了实时通道（为了让这一轮和常驻行为一致），这里必须关掉，
+      // 否则 socket 和定时器会把进程吊住（实测：--once 跑完不退出，卡到超时）。
+      if (realtime !== null) realtime.close();
       releaseLock();
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, Math.round(gap * 1000 * (0.85 + Math.random() * 0.3))));
+    /*
+     * 睡到下ー轮，但**可以被实时事件提前叫醒** —— 这是把延迟从"最多 hotSeconds"
+     * 压到"一次 HTTP 往返"的关键：IG 一来事件就醒来立刻拉一次。
+     */
+    await new Promise((resolve) => {
+      const delay = Math.round(gap * 1000 * (0.85 + Math.random() * 0.3));
+      const timer = setTimeout(() => {
+        wakeUp = null;
+        resolve();
+      }, delay);
+      wakeUp = () => {
+        clearTimeout(timer);
+        wakeUp = null;
+        resolve();
+      };
+    });
   }
 }
 
