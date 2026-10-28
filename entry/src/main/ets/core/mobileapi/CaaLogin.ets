@@ -453,6 +453,83 @@ export class CaaLogin {
   }
 
   /**
+   * **解析器离线自检**（不联网、不需要账号）。
+   *
+   * 为什么需要：JS 侧有一份同样的解析器，用 test-caa-parse.js 验过（并因此改掉两处真 bug：
+   * 转义引号截断、Cookie 属性当成 Cookie）。ArkTS 这边**跑不了单测**，而"登录成功之后解不出
+   * 会话"恰恰只会在真账号上暴露 —— 一条自检能让"解析器坏了"和"IG 拒绝了"当场分开。
+   *
+   * @returns 一行结论（`解析自检 4/4 通过` 或指出哪一项没过）
+   */
+  static selfTest(): string {
+    const failures: Array<string> = [];
+    // ① aac
+    const aacPayload: ESObject = CaaLogin.parse(
+      '{"layout":{"bloks_payload":{"data":[{"data":{"key":"OTHER:x","initial":"no"}},'
+        + '{"data":{"key":"CAA_ACCOUNT_ACCESS_CONTEXT:aac","initial":"AAC-TEST"}}]}}}');
+    if (CaaLogin.extractAac(aacPayload) !== 'AAC-TEST') {
+      failures.push('aac');
+    }
+    // ② 错误文案
+    const errorPayload: ESObject = CaaLogin.parse(
+      '{"layout":{"bloks_payload":{"ft":{"a":" We can\'t find an account with nobody. "}}}}');
+    if (bloksErrorText(errorPayload).indexOf('find an account') < 0) {
+      failures.push('error-text');
+    }
+    // ③ 成功响应（注意是**两层** JSON 字符串：action 里嵌着 JSON 文本）
+    const innerFields: Record<string, string> = {};
+    innerFields['login_response'] = JSON.stringify({ 'status': 'ok' } as Record<string, string>);
+    const innerHeaders: Record<string, string> = { 'IG-Set-Authorization': 'Bearer IGT:2:AAA' };
+    innerFields['headers'] = JSON.stringify(innerHeaders);
+    innerFields['cookies'] = 'Set-Cookie: sessionid=777%3Asecret; Path=/, '
+      + 'Set-Cookie: ds_user_id=777; Path=/';
+    const inner: string = JSON.stringify(innerFields);
+    const actionText: string = 'bloks_action({"payload": ' + JSON.stringify(inner) + '})';
+    const actionHolder: Record<string, ESObject> = {};
+    actionHolder['action'] = actionText;
+    const loginBloks: Record<string, ESObject> = {};
+    loginBloks['bloks_payload'] = actionHolder;
+    const loginLayout: Record<string, ESObject> = {};
+    loginLayout['layout'] = loginBloks;
+    const loginPayload: ESObject = CaaLogin.parse(JSON.stringify(loginLayout));
+    const parsed: CaaLoginPayload | null = CaaLogin.extractLoginPayload(loginPayload);
+    if (parsed === null) {
+      failures.push('login-payload');
+    } else {
+      if (parsed.cookie.indexOf('sessionid=777%3Asecret') < 0
+        || parsed.cookie.indexOf('ds_user_id=777') < 0) {
+        failures.push('cookie-parse');
+      }
+      if (parsed.cookie.indexOf('Path=') >= 0) {
+        failures.push('cookie-attributes');
+      }
+      if (parsed.authorization !== 'Bearer IGT:2:AAA') {
+        failures.push('authorization');
+      }
+    }
+    // ④ 两步验证上下文
+    const twoStepText: string = JSON.stringify('com.bloks.www.ap.two_step_verification.entrypoint_async')
+      + ' (f4i (dkc "context_data") (dkc "CTX-TEST"))';
+    const ftInner: Record<string, ESObject> = {};
+    ftInner['a'] = twoStepText;
+    const ftPayload: Record<string, ESObject> = {};
+    ftPayload['ft'] = ftInner;
+    const ftBloks: Record<string, ESObject> = {};
+    ftBloks['bloks_payload'] = ftPayload;
+    const ftLayout: Record<string, ESObject> = {};
+    ftLayout['layout'] = ftBloks;
+    const twoStepPayload: ESObject = CaaLogin.parse(JSON.stringify(ftLayout));
+    if (!bloksNeedsTwoStep(twoStepPayload)) {
+      failures.push('two-step-detect');
+    } else if (bloksContextValue(twoStepPayload,
+      'com.bloks.www.ap.two_step_verification.entrypoint_async', 'context_data') !== 'CTX-TEST') {
+      failures.push('two-step-context');
+    }
+    return failures.length === 0 ? '解析自检 4/4 通过'
+      : `解析自检未通过：${failures.join('、')}`;
+  }
+
+  /**
    * 交验证码，把两步验证这条链走完。
    *
    * 必须在 `login(..., null)` 返回 `needsCode` 之后调（现场在那一刻存下）。
@@ -966,6 +1043,68 @@ export class CaaLogin {
     return '';
   }
 
+  /**
+   * 从一个 `"` 开始取**完整的 JSON 字符串字面量**（含两端引号）。
+   *
+   * 真实 payload 里的字符串**层层转义**（`\"login_response\"`）。直接用
+   * `indexOf('"', start+1)` 找结尾会停在第一个转义引号上，截出来的东西 `JSON.parse`
+   * 必然失败 —— 表现就是"登录成功却解析不出会话"。（离线自检 test-caa-parse.js 抓到的。）
+   */
+  private static jsonStringAt(text: string, start: number): string {
+    if (text.charAt(start) !== '"') {
+      return '';
+    }
+    let escaped: boolean = false;
+    for (let index: number = start + 1; index < text.length; index++) {
+      const ch: string = text.charAt(index);
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (ch === '"') {
+        return text.substring(start, index + 1);
+      }
+    }
+    return '';
+  }
+
+  /**
+   * Cookie 串 → `name=value; …`（**对齐 Python SimpleCookie 的语义**）。
+   *
+   * 两种真实形状：
+   *   ① `sessionid=x; Path=/; Domain=.instagram.com; HttpOnly`（后面全是属性）
+   *   ② `Set-Cookie: sessionid=x; Path=/, Set-Cookie: ds_user_id=1; Path=/`（多颗、逗号分隔）
+   * 只按 `;` 切会把 `Path` / `Domain` 当 Cookie 塞进罐里，而 `ds_user_id` 会因为名字带
+   * `, Set-Cookie: ` 前缀**整个丢掉**（网页会话能建、账号 id 却空）。
+   */
+  private static parseCookieHeader(text: string): string {
+    const attributes: Array<string> = ['path', 'domain', 'expires', 'max-age', 'secure',
+      'httponly', 'samesite', 'priority', 'comment', 'commenturl', 'version', 'port', 'discard'];
+    const parts: Array<string> = text.replace(/Set-Cookie:\s*/gi, '').split(/[;,]/);
+    const pairs: Array<string> = [];
+    for (let index: number = 0; index < parts.length; index++) {
+      const one: string = parts[index].trim();
+      const cut: number = one.indexOf('=');
+      if (cut <= 0) {
+        continue;
+      }
+      const name: string = one.substring(0, cut).trim();
+      const value: string = one.substring(cut + 1).trim();
+      if (name.length === 0 || value.length === 0) {
+        continue;
+      }
+      if (attributes.indexOf(name.toLowerCase()) >= 0) {
+        continue;
+      }
+      pairs.push(`${name}=${value}`);
+    }
+    return pairs.join('; ');
+  }
+
   /** 从 Bloks 响应里抠出 cookie + authorization。 */
   private static extractLoginPayload(payload: ESObject): CaaLoginPayload | null {
     if (payload === null || payload === undefined) {
@@ -992,13 +1131,17 @@ export class CaaLogin {
       if (text.charAt(start) !== '"') {
         continue;
       }
-      const endQuote: number = text.indexOf('"', start + 1);
-      if (endQuote < 0) {
+      // 转义引号（`\"`）不是字符串起点。
+      if (start > 0 && text.charAt(start - 1) === '\\') {
+        continue;
+      }
+      const literal: string = CaaLogin.jsonStringAt(text, start);
+      if (literal.length === 0) {
         continue;
       }
       let decoded: string = '';
       try {
-        decoded = JSON.parse(text.substring(start, endQuote + 1)) as string;
+        decoded = JSON.parse(literal) as string;
       } catch (error) {
         continue;
       }
@@ -1016,11 +1159,7 @@ export class CaaLogin {
           }
         }
         const cookieRaw: string = typeof raw['cookies'] === 'string' ? raw['cookies'] as string : '';
-        const cookie: string = cookieRaw.replace(/Set-Cookie: /g, '')
-          .split(',')
-          .map((part: string): string => part.split(';')[0].trim())
-          .filter((part: string): boolean => part.indexOf('=') > 0)
-          .join('; ');
+        const cookie: string = CaaLogin.parseCookieHeader(cookieRaw);
         return new CaaLoginPayload(cookie, authorization);
       } catch (error) {
         continue;

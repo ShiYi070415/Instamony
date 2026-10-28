@@ -353,6 +353,64 @@ async function bloksApp(profile, app, params) {
 /* --------------------------------------------------------- 密码加密（混合） */
 
 /**
+ * 公钥输入统一成 PEM。
+ *
+ * `qe/sync` 的响应头 `ig-set-password-encryption-pub-key` 是 **base64(PEM)**；
+ * 但测试/其他调用方可能直接给 PEM 或 base64(DER)。三种都收，统一转成 PEM 再交给 OpenSSL
+ * —— 早先只按 base64 解、直接当 key 传给 `publicEncrypt`，遇到 DER 就报
+ * `DECODER routines::unsupported`（离线自检就是这么发现的）。
+ */
+function publicKeyPemOf(text) {
+  const raw = String(text || '').trim();
+  if (raw.length === 0) {
+    throw new Error('公钥是空的');
+  }
+  if (raw.indexOf('-----BEGIN') >= 0) {
+    return raw;
+  }
+  let decoded = '';
+  try {
+    decoded = Buffer.from(raw, 'base64').toString('utf8');
+  } catch (error) {
+    decoded = '';
+  }
+  if (decoded.indexOf('-----BEGIN') >= 0) {
+    return decoded;
+  }
+  // 剩下的当 base64(DER)：包成 PEM
+  const compact = raw.replace(/\s+/g, '');
+  const lines = compact.match(/.{1,64}/g) || [];
+  return '-----BEGIN PUBLIC KEY-----\n' + lines.join('\n') + '\n-----END PUBLIC KEY-----\n';
+}
+
+/**
+ * 纯加密部分：**不联网**（公钥 keyId/公钥由调用方给），方便单测。
+ *
+ * 报文格式（`#PWD_INSTAGRAM:4:<timestamp>:<base64>` 的 base64 段）：
+ *   `0x01 | keyId(1B) | iv(12B) | u16le(RSABlockLen) | RSA(sessionKey, PKCS1v1.5) | tag(16B) | AES-Ct`
+ * AES 是 AES-256-GCM，**AAD 必须是那个时间戳字符串**。
+ */
+function encryptPasswordWithKey(password, publicKeyText, keyId) {
+  const sessionKey = crypto.randomBytes(32);
+  const iv = crypto.randomBytes(12);
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const rsaEncrypted = crypto.publicEncrypt({
+    key: publicKeyPemOf(publicKeyText),
+    padding: crypto.constants.RSA_PKCS1_PADDING
+  }, sessionKey);
+  const cipher = crypto.createCipheriv('aes-256-gcm', sessionKey, iv);
+  cipher.setAAD(Buffer.from(timestamp, 'utf8'));
+  const aesEncrypted = Buffer.concat([cipher.update(password, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  const sizeBuffer = Buffer.alloc(2);
+  sizeBuffer.writeUInt16LE(rsaEncrypted.length, 0);
+  const payload = Buffer.concat([
+    Buffer.from([0x01, keyId & 0xFF]), iv, sizeBuffer, rsaEncrypted, tag, aesEncrypted
+  ]).toString('base64');
+  return `#PWD_INSTAGRAM:4:${timestamp}:${payload}`;
+}
+
+/**
  * `#PWD_INSTAGRAM:4:<timestamp>:<base64>`（RSA 传会话密钥 + AES-GCM 传密码）。
  * 公钥从 `qe/sync` 的响应头取；AES-GCM 的 **AAD 必须是那个时间戳**。
  */
@@ -369,23 +427,7 @@ async function encryptPassword(profile, password) {
   if (!keyId || publicKey.length === 0) {
     throw new Error('qe/sync 没给密码加密公钥（HTTP ' + res.status + '）');
   }
-  const sessionKey = crypto.randomBytes(32);
-  const iv = crypto.randomBytes(12);
-  const timestamp = String(Math.floor(Date.now() / 1000));
-  const rsaEncrypted = crypto.publicEncrypt({
-    key: Buffer.from(publicKey, 'base64'),
-    padding: crypto.constants.RSA_PKCS1_PADDING
-  }, sessionKey);
-  const cipher = crypto.createCipheriv('aes-256-gcm', sessionKey, iv);
-  cipher.setAAD(Buffer.from(timestamp, 'utf8'));
-  const aesEncrypted = Buffer.concat([cipher.update(password, 'utf8'), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  const sizeBuffer = Buffer.alloc(2);
-  sizeBuffer.writeUInt16LE(rsaEncrypted.length, 0);
-  const payload = Buffer.concat([
-    Buffer.from([0x01, keyId & 0xFF]), iv, sizeBuffer, rsaEncrypted, tag, aesEncrypted
-  ]).toString('base64');
-  return `#PWD_INSTAGRAM:4:${timestamp}:${payload}`;
+  return encryptPasswordWithKey(password, publicKey, keyId);
 }
 
 /* ------------------------------------------------------------- 响应解析 */
@@ -455,6 +497,75 @@ function extractTwoStepContext(data) {
 }
 
 /**
+ * 从一个 `"` 开始，取**完整的 JSON 字符串字面量**（含两端引号）。
+ *
+ * 为什么要自己走一遍：真实 payload 里的字符串**层层转义**（`\"login_response\"`），
+ * 直接用 `indexOf('"', start + 1)` 找结尾会停在第一个转义引号上，截出来的东西
+ * `JSON.parse` 必然失败 —— 于是"登录成功却解析不出会话"。离线自检就是这么暴露的。
+ */
+function jsonStringAt(text, start) {
+  if (text[start] !== '"') {
+    return '';
+  }
+  let escaped = false;
+  for (let index = start + 1; index < text.length; index++) {
+    const ch = text[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      return text.slice(start, index + 1);
+    }
+  }
+  return '';
+}
+
+/** Cookie 串里那些**是属性、不是 Cookie** 的名字（按 Python `SimpleCookie` 的语义）。 */
+const COOKIE_ATTRIBUTES = [
+  'path', 'domain', 'expires', 'max-age', 'secure', 'httponly', 'samesite', 'priority',
+  'comment', 'commenturl', 'version', 'port', 'discard'
+];
+
+/**
+ * 解析 Bloks 给的 Cookie 串（行为对齐 instagrapi 用的 Python `SimpleCookie`）。
+ *
+ * 为什么不能只按 `;` 切：真实响应里有两种形状
+ *   ① `sessionid=x; Path=/; Domain=.instagram.com; HttpOnly`（后面全是属性）
+ *   ② `Set-Cookie: sessionid=x; Path=/, Set-Cookie: ds_user_id=1; Path=/`（多颗，逗号分隔）
+ * 只按 `;` 切会把 `Path`、`Domain` 当成 Cookie 塞进罐里，而 `ds_user_id` 会因为名字带
+ * `, Set-Cookie: ` 前缀**整个丢掉** —— 离线自检里就是这么暴露的（网页会话能建、账号 id 空）。
+ */
+function parseCookieHeader(text) {
+  const out = {};
+  const raw = String(text || '').replace(/Set-Cookie:\s*/gi, '');
+  for (const part of raw.split(/[;,]/)) {
+    const one = part.trim();
+    if (one.length === 0) {
+      continue;
+    }
+    const cut = one.indexOf('=');
+    if (cut <= 0) {
+      continue;
+    }
+    const name = one.slice(0, cut).trim();
+    const value = one.slice(cut + 1).trim();
+    if (name.length === 0 || value.length === 0) {
+      continue;
+    }
+    if (COOKIE_ATTRIBUTES.indexOf(name.toLowerCase()) >= 0) {
+      continue;
+    }
+    out[name] = value;
+  }
+  return out;
+}
+
+/**
  * 从 Bloks 响应里抠出登录结果（cookie + authorization）。
  *
  * 成功时响应 `layout.bloks_payload.action` 里嵌着一段 JSON 字符串，含
@@ -466,12 +577,16 @@ function extractLoginPayload(data) {
   const text = action.action;
   const marker = text.indexOf('login_response');
   if (marker < 0) return null;
-  // 从 marker 往前找最近的 JSON 字符串起点，逐个试
+  // 从 marker 往前找最近的字符串起点，逐个试（越靠近 marker 越可能是那一段）。
   for (let start = marker; start >= 0; start--) {
     if (text[start] !== '"') continue;
+    // 转义引号（`\"`）不是起点。
+    if (start > 0 && text[start - 1] === '\\') continue;
+    const literal = jsonStringAt(text, start);
+    if (literal.length === 0) continue;
     let decoded = '';
     try {
-      decoded = JSON.parse(text.slice(start, text.indexOf('"', start + 1) + 1));
+      decoded = JSON.parse(literal);
     } catch (error) {
       continue;
     }
@@ -480,14 +595,9 @@ function extractLoginPayload(data) {
       const raw = JSON.parse(decoded);
       const loginResponse = JSON.parse(raw.login_response || '{}');
       const headers = JSON.parse(raw.headers || '{}');
-      const cookieHeader = String(raw.cookies || '').replace(/Set-Cookie: /g, '');
-      const cookies = {};
-      for (const part of cookieHeader.split(';')) {
-        const eq = part.indexOf('=');
-        if (eq <= 0) continue;
-        cookies[part.slice(0, eq).trim()] = part.slice(eq + 1).trim();
-      }
-      return { loginResponse, headers, cookies, raw };
+      const cookieHeader = String(raw.cookies || '');
+      const cookies = parseCookieHeader(cookieHeader);
+      return { loginResponse, headers, cookies, cookieHeader, raw };
     } catch (error) {
       continue;
     }
@@ -1069,4 +1179,20 @@ function networkInfo() {
   };
 }
 
-module.exports = { caaLogin, loadDeviceProfile, encryptPassword, Usdid, extractAac, extractLoginPayload };
+module.exports = {
+  caaLogin,
+  loadDeviceProfile,
+  encryptPassword,
+  // 纯函数部分（导出给 test-caa-parse.js 做离线自检：成功响应的解析路径只有真账号才会
+  // 走到，测试用合成布局把这条路先验一遍）
+  encryptPasswordWithKey,
+  publicKeyPemOf,
+  Usdid,
+  extractAac,
+  extractTwoStepContext,
+  extractLoginPayload,
+  parseCookieHeader,
+  bloksExtractContextValue,
+  bloksNeedsTwoStep,
+  bloksErrorMessage
+};

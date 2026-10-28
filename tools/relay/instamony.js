@@ -43,6 +43,8 @@ const https = require('https');
 const querystring = require('querystring');
 
 const { FbnsClient, MOBILE_UA } = require('./fbns.js');
+// 会话形状转换（纯函数、可单测；`--import-session` 与 `--caa-login` 共用同一份实现）
+const { sessionFromSettings, settingsShapeOf } = require('./session-format.js');
 
 const DIR = __dirname;
 const CONFIG_FILE = path.join(DIR, 'config.json');
@@ -204,54 +206,26 @@ function importSession(settingsPath, options) {
   if (settings === null) {
     die('读不到 ' + settingsPath);
   }
-  const cookies = settings.cookies || {};
-  const parts = [];
-  for (const name of Object.keys(cookies)) {
-    const value = cookies[name];
-    if (value !== undefined && value !== null && String(value).length > 0) {
-      parts.push(`${name}=${String(value)}`);
-    }
-  }
-  const cookie = parts.join('; ');
-  if (cookieValueOf(cookie, 'sessionid').length === 0) {
+  // 解析逻辑在纯模块里（session-format.js）：`--caa-login` 产出的文件也走它，
+  // 这样"两条登录路等价"才是同一份代码验出来的，而不是两处各解释一遍。
+  let parsed = null;
+  try {
+    parsed = sessionFromSettings(settings);
+  } catch (error) {
     if (dryRun) {
-      throw new Error('settings 里没有 sessionid —— 这份会话不算登录成功');
+      throw error;
     }
-    die('settings.json 里没有 sessionid —— 这份会话不算登录成功');
+    die('settings.json ' + error.message);
   }
-  const uuids = settings.uuids || {};
-  const phoneId = String(uuids.phone_id || '');
-  const uuid = String(uuids.uuid || '');
-  let androidId = String(uuids.android_device_id || '');
-  if (androidId.startsWith('android-')) androidId = androidId.slice('android-'.length);
-  if (phoneId.length === 0 || uuid.length === 0 || androidId.length === 0) {
-    if (dryRun) {
-      throw new Error('settings 的 uuids 不全（需要 phone_id / uuid / android_device_id）');
-    }
-    die('settings.json 的 uuids 不全（需要 phone_id / uuid / android_device_id）');
-  }
-  const authData = settings.authorization_data || {};
-  const authorization = Object.keys(authData).length === 0
-    ? '' : 'Bearer IGT:2:' + Buffer.from(JSON.stringify(authData)).toString('base64');
-
-  const session = {
-    source: 'instagrapi',
-    userId: cookieValueOf(cookie, 'ds_user_id'),
-    cookie,
-    sessionid: cookieValueOf(cookie, 'sessionid'),
-    csrf: cookieValueOf(cookie, 'csrftoken'),
-    authorization,
-    appVersion: String((settings.device_settings || {}).app_version || ''),
-    userAgent: String(settings.user_agent || ''),
-    mid: String(settings.mid || ''),
-    savedAt: Date.now()
-  };
+  const session = parsed.session;
+  const device = parsed.device;
   if (dryRun) {
     return session;
   }
   fs.writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2), 'utf8');
   fs.writeFileSync(DEVICE_FILE,
-    JSON.stringify({ phoneId, uuid, androidId, createdAt: Date.now() }, null, 2), 'utf8');
+    JSON.stringify({ phoneId: device.phoneId, uuid: device.uuid, androidId: device.androidId,
+      createdAt: Date.now() }, null, 2), 'utf8');
 
   // FBNS 的设备凭据在换会话后要重拿（ck/di 跟会话绑定）
   try {
@@ -262,7 +236,7 @@ function importSession(settingsPath, options) {
   }
 
   log('会话已写入 ' + SESSION_FILE);
-  log('设备身份已写入 ' + DEVICE_FILE + '（phoneId ' + phoneId + '）');
+  log('设备身份已写入 ' + DEVICE_FILE + '（phoneId ' + device.phoneId + '）');
   log('账号 ' + session.userId);
   return session;
 }
@@ -614,44 +588,6 @@ async function runDaemon(cfg) {
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
   log('就绪：手机被杀了也能收到新私信通知（Ctrl+C 停）');
-}
-
-/**
- * 把 CAA 登录结果整理成 **instagrapi settings.json 的形状**（`--import-session` 认这份）。
- *
- * 关键的一处转换：CAA 给的是 `Bearer IGT:2:<base64(JSON)>` 这一整串，而 settings.json 存的是
- * 解开的 `authorization_data` 对象。这里把它 base64 解回来 —— 这样两条登录路（Python 的
- * instagrapi / 这里的 Node 版）产出的文件才**逐字段等价**，而不只是"看起来能跑"。
- */
-function settingsShapeOf(result, profile) {
-  const authorization = String(result.authorization || '');
-  const marker = 'Bearer IGT:2:';
-  let authorizationData = {};
-  if (authorization.startsWith(marker)) {
-    try {
-      authorizationData = JSON.parse(
-        Buffer.from(authorization.slice(marker.length), 'base64').toString('utf8'));
-    } catch (error) {
-      warn('authorization 解不开（authorization_data 先留空）：' + error.message);
-    }
-  }
-  return {
-    cookies: result.cookies || {},
-    uuids: {
-      phone_id: profile.phoneId,
-      uuid: profile.uuid,
-      android_device_id: 'android-' + profile.androidId,
-      client_session_id: profile.uuid
-    },
-    authorization_data: authorizationData,
-    device_settings: {
-      app_version: profile.appVersion,
-      version_code: profile.versionCode
-    },
-    user_agent: profile.userAgent,
-    mid: profile.mid,
-    last_login: new Date().toISOString()
-  };
 }
 
 /**

@@ -14,6 +14,7 @@
  */
 
 import { CaaOutcome, CaaSession } from '../core/mobileapi/CaaSession';
+import { CaaLogin } from '../core/mobileapi/CaaLogin';
 
 /** 输入框高度（跟着登录页的 42 走，两处观感一致）。 */
 const FIELD_HEIGHT: number = 42;
@@ -82,6 +83,20 @@ export struct CaaLoginCard {
           .fontColor($r('app.color.secondary_text'))
           .width('100%')
       }
+      /*
+       * **解析器自检**（不联网、不用账号）。
+       *
+       * 真机上跑不了单测，而"登录成功之后解不出会话"只会在真账号上暴露。点一下就能确认
+       * 解析器本身没问题（aac / 错误文案 / login_response / 两步验证上下文四项）。
+       */
+      Text('先跑解析自检（不联网）')
+        .fontSize(12)
+        .fontColor($r('app.color.accent'))
+        .width('100%')
+        .onClick((): void => {
+          this.status = CaaLogin.selfTest();
+          this.steps = '';
+        })
     }
     .width('100%')
     .padding(16)

@@ -36,6 +36,26 @@ TOTP/SMS 选法 + `verify_code.async`），**CAA 登录这条路不走它** —�
 `ap.two_step_verification` 的"profile-code"链（entrypoint → code_entry → code_entry_async），
 用布局里的 `context_data` 串起来。两条链别混。
 
+### 离线自检抓出的两个真 bug（解析成功响应这条路径）
+
+成功响应那条路在真账号登录之前**一次都没被执行过**，所以写了 `test-caa-parse.js`
+（合成 Bloks 布局 + 本地 RSA 密钥对）。它当场抓出两处：
+
+1. **引号截断**：payload 里的字符串层层转义（`\"login_response\"`），用
+   `indexOf('"', start+1)` 找结尾会停在第一个**转义**引号上，截出来的东西 `JSON.parse`
+   必然失败 —— 现象就是"IG 说登录成功、我们却解析不出会话"。
+   现在按转义规则走完整字面量（`jsonStringAt`）。
+2. **Cookie 解析**：真实响应有两种形状 ——
+   `sessionid=x; Path=/; Domain=…; HttpOnly` 与
+   `Set-Cookie: sessionid=x; Path=/, Set-Cookie: ds_user_id=1; Path=/`。
+   只按 `;` 切会把 `Path`/`Domain` 当 Cookie 塞进罐，而 `ds_user_id` 因名字带
+   `, Set-Cookie: ` 前缀**整个丢掉**（网页会话能建、账号 id 空）。
+   现在对齐 Python `SimpleCookie` 的语义：属性名跳过、按 `;` 与 `,` 都切。
+
+这两处在 JS 与 ArkTS 两侧**同源实现**，改一侧必须改另一侧。ArkTS 跑不了单测，所以在
+`CaaLogin.selfTest()` 里放了同样四项断言，界面上的「先跑解析自检（不联网）」就是它 ——
+真机上先跑一次，就能把"解析器坏了"和"IG 拒绝了"分开。
+
 三个关键结论（避免以后重复踩）：
 
 1. **`graphql_www` 的路径是 `https://i.instagram.com/graphql_www`，没有 `/api` 前缀**；

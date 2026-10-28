@@ -46,6 +46,17 @@ node instamony.js --verify-session
 **设备信任闸门**（FBNS 申请 token 后 `push/register/` 是否回 `{"status":"ok"}`）。
 闸门不过就说明会话来源不对（网页 Cookie），常驻进程收不到推送。
 
+### 1.6 离线自检（不需要账号、不需要网络）
+
+```powershell
+node test-caa-parse.js
+```
+
+16 项断言，覆盖：密码加密能被 IG 的格式解开（RSA + AES-GCM 可逆）、Bloks 布局解析
+（aac / 错误文案 / `login_response` → cookie + authorization / 两步验证上下文）、
+Cookie 串解析（对齐 Python `SimpleCookie`）、CAA 结果 ⇄ settings.json 的**逐字段等价**、
+USDID 令牌形状。改解析器前后都该跑一次 —— 它已经抓出过两个真 bug（见 LOGIN.md）。
+
 ### 2. 导入会话 + 设备身份
 
 ```powershell
