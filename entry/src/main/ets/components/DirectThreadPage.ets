@@ -49,13 +49,21 @@ const SEND_SCROLL_SETTLE_MS: number = 260;
 const AVATAR_SIZE: number = 28;
 const BUBBLE_MAX_RATIO: number = 0.72;
 const BUBBLE_GAP_VP: number = 2;
-const GROUP_GAP_VP: number = 12;
+const GROUP_GAP_VP: number = 10;
+/** 气泡的四角基准圆角。 */
+const BUBBLE_RADIUS: number = 18;
+/**
+ * **贴在一起的两颗气泡**，接触那一侧用的小圆角（需求："贴着另一个消息气泡的左侧接触角用小圆角"）。
+ * 左边（对方）收左角，右边（自己）收右角，见 bubbleCorners。
+ */
+const BUBBLE_RADIUS_JOIN: number = 6;
 /** 群聊里"发送人名字"那一行的字号（需求：比正文小一点但要看得清，之前 11 太小）。 */
 const SENDER_NAME_SIZE: number = 13;
 /** 那一行相对头像左侧再多留的空白（需求：padding left 需要增加）。 */
-const SENDER_NAME_LEFT_PAD: number = 16;
+const SENDER_NAME_LEFT_PAD: number = 24;
 /** 有发送人名字的组，和上一段之间额外加的距离（需求：顶部 margin 要和其他消息段拉开）。 */
-const SENDER_NAME_TOP_GAP: number = 14;
+/** 名字行与它下面那颗气泡的距离（需求：分组 margin top 缩小到和它一样）。 */
+const SENDER_NAME_BOTTOM_GAP: number = 10;
 const GROUP_GAP_MS: number = 2 * 60 * 1000;
 /**
  * 顶部那行"加载中"动画的高度（vp）—— **始终占位**，不加载时高度为 0。
@@ -754,10 +762,40 @@ export struct DirectThreadPage {
     return !this.sameGroupAsPrev(index, message);
   }
 
+  /** 下一条算不算"同一组的下一颗"（同一个人、同方向、间隔不超过 GROUP_GAP_MS）。 */
+  private sameGroupAsNext(index: number, message: DirectMessage): boolean {
+    const next: DirectMessage | undefined = this.nextOf(index, message);
+    if (next === undefined) {
+      return false;
+    }
+    if (next.mine !== message.mine) {
+      return false;
+    }
+    if (DirectThreadPage.senderKeyOf(next) !== DirectThreadPage.senderKeyOf(message)) {
+      return false;
+    }
+    return next.tsMs - message.tsMs <= GROUP_GAP_MS;
+  }
+
   /** 这一条相对上一段要留多少顶部间距（带发送人名字的组再 +SENDER_NAME_TOP_GAP）。 */
   private topGapOf(index: number, message: DirectMessage): number {
-    const base: number = this.sameGroupAsPrev(index, message) ? BUBBLE_GAP_VP : GROUP_GAP_VP;
-    return this.showsSenderName(index, message) ? base + SENDER_NAME_TOP_GAP : base;
+    return this.sameGroupAsPrev(index, message) ? BUBBLE_GAP_VP : GROUP_GAP_VP;
+  }
+
+  /**
+   * 四角圆角：**同一组里贴着的那一侧收小**（左侧消息收左角、右侧消息收右角），
+   * 另一侧仍是 18 的大圆角 —— 这样连续几颗气泡看起来是一条，最外面那颗仍是完整的胶囊。
+   */
+  private bubbleCorners(index: number, message: DirectMessage): BorderRadiuses {
+    const joinedPrev: boolean = this.sameGroupAsPrev(index, message);
+    const joinedNext: boolean = this.sameGroupAsNext(index, message);
+    const corners: BorderRadiuses = {
+      topLeft: message.mine ? BUBBLE_RADIUS : (joinedPrev ? BUBBLE_RADIUS_JOIN : BUBBLE_RADIUS),
+      topRight: message.mine ? (joinedPrev ? BUBBLE_RADIUS_JOIN : BUBBLE_RADIUS) : BUBBLE_RADIUS,
+      bottomLeft: message.mine ? BUBBLE_RADIUS : (joinedNext ? BUBBLE_RADIUS_JOIN : BUBBLE_RADIUS),
+      bottomRight: message.mine ? (joinedNext ? BUBBLE_RADIUS_JOIN : BUBBLE_RADIUS) : BUBBLE_RADIUS
+    };
+    return corners;
   }
 
   /** 这条消息的发送人在界面上的名字（拿不到就给空串，界面上就不画那一行）。 */
@@ -811,7 +849,7 @@ export struct DirectThreadPage {
       if (message.mine) {
         Blank()
         Column({ space: 4 }) {
-          this.bubbleContent(message)
+          this.bubbleContent(message, index)
           /*
            * **发送失败的标记**（用户报："会出现一两条消息发不出去的情况"）。
            *
@@ -856,6 +894,7 @@ export struct DirectThreadPage {
               .textOverflow({ overflow: TextOverflow.Ellipsis })
               .textShadow({ radius: 4, color: '#A0000000', offsetX: 0, offsetY: 1 })
               .padding({ left: AVATAR_SIZE + SENDER_NAME_LEFT_PAD })
+              .margin({ bottom: SENDER_NAME_BOTTOM_GAP })
               .width('100%')
               .textAlign(TextAlign.Start)
           }
@@ -874,7 +913,7 @@ export struct DirectThreadPage {
             } else {
               Column().width(AVATAR_SIZE).height(AVATAR_SIZE)
             }
-            this.bubbleContent(message)
+            this.bubbleContent(message, index)
           }
           .width('100%')
           .alignItems(VerticalAlign.Bottom)
@@ -1118,7 +1157,7 @@ export struct DirectThreadPage {
 
   /** 气泡内容：有图先画图，文字跟在图下面。 */
   @Builder
-  bubbleContent(message: DirectMessage) {
+  bubbleContent(message: DirectMessage, index: number) {
     Column({ space: 6 }) {
       if (message.shareKind.length > 0) {
         // 分享的帖子/视频：画成卡片（见 sharePostCard / shareVideoCard）。
@@ -1189,20 +1228,22 @@ export struct DirectThreadPage {
       }
       if (message.text.length > 0) {
         Text(message.text)
-          .fontSize(15)
+          // 需求：气泡再大一点（字号 15→16、内边距 12/8→14/10）。
+          .fontSize(16)
           .fontColor(message.mine ? $r('app.color.on_accent') : $r('app.color.primary_text'))
-          .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+          .padding({ left: 14, right: 14, top: 10, bottom: 10 })
           .backgroundColor(message.mine ? $r('app.color.accent') : $r('app.color.field_background'))
-          .borderRadius(18)
+          // 贴着同组下一条的那一侧角收小（见 bubbleCorners）。
+          .borderRadius(this.bubbleCorners(index, message))
           .constraintSize({ maxWidth: this.bubbleMaxVp() })
       } else if (message.mediaUrl.length === 0 && !DirectThreadPage.isMediaKind(message.kind)) {
         // 没有封面也没有 media 类型：有分享目标时这一块就是入口（点了能查看）。
         Text($r('app.string.direct_kind_other'))
-          .fontSize(15)
+          .fontSize(16)
           .fontColor(message.mine ? $r('app.color.on_accent') : $r('app.color.primary_text'))
-          .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+          .padding({ left: 14, right: 14, top: 10, bottom: 10 })
           .backgroundColor(message.mine ? $r('app.color.accent') : $r('app.color.field_background'))
-          .borderRadius(18)
+          .borderRadius(this.bubbleCorners(index, message))
       }
     }
     .alignItems(message.mine ? HorizontalAlign.End : HorizontalAlign.Start)

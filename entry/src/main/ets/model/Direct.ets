@@ -184,8 +184,15 @@ export class DirectMessage {
 export class DirectPerson {
   /** `pk`（可能 19~20 位，走 big-id 解析，见 JsonRead.parseWithBigIds）。 */
   pk: string = '';
-  /** 用户名（`username`；没有就 `full_name`）。 */
+  /** 账号名（`username`，例如 `ken24624`）—— 用于分组建模，不直接上屏。 */
   name: string = '';
+  /**
+   * **界面上显示的名字**（`full_name`，例如 `Ken Wong`）。
+   *
+   * 用户要求显示的是「用户名称」而不是账号：`ken24624` 应该显示成 `Ken Wong`。
+   * 没有 full_name 时才退回 username（否则那一行会空着）。
+   */
+  label: string = '';
   /** 头像地址（空串 = 没有）。 */
   avatar: string = '';
 }
@@ -422,8 +429,10 @@ export class DirectMapper {
       // 参与者表：**不 break**，整份收下来（群聊靠它给每条消息对发送人）。
       const person: DirectPerson = new DirectPerson();
       person.pk = pk;
-      // 只认 username（账号）：需求要的是「用户名」而不是「用户名称」（full_name）。
       person.name = name;
+      // 界面上显示「用户名称」（full_name，例如 Ken Wong），没有才退回账号。
+      const personLabel: string = JsonRead.strOf(user, 'full_name');
+      person.label = personLabel.length > 0 ? personLabel : name;
       person.avatar = pic;
       people.push(person);
       if (withUsername.length === 0 && name.length > 0) {
@@ -541,7 +550,7 @@ export class DirectMapper {
         text, mediaUrl, DirectMapper.hasVideoMedia(item), DirectMapper.shareCodeOf(item),
         DirectMapper.shareUrlOf(item), DirectMapper.shareIsVideoOf(item),
         gqlCard.kind, gqlCard.cover, gqlCard.user, gqlCard.avatar, gqlCard.caption,
-        gqlCard.playable, gqlSender === null ? '' : gqlSender.name,
+        gqlCard.playable, gqlSender === null ? '' : gqlSender.label,
         gqlSender === null ? '' : gqlSender.avatar));
     }
     if (messages.length === 0) {
@@ -999,8 +1008,10 @@ export class DirectMapper {
       // 参与者表：**不 break**，整份收下来（群聊靠它给每条消息对发送人）。
       const person: DirectPerson = new DirectPerson();
       person.pk = pk;
-      // 只认 username（账号）：需求要的是「用户名」而不是「用户名称」（full_name）。
       person.name = name;
+      // 界面上显示「用户名称」（full_name，例如 Ken Wong），没有才退回账号。
+      const personLabel: string = JsonRead.strOf(user, 'full_name');
+      person.label = personLabel.length > 0 ? personLabel : name;
       person.avatar = pic;
       people.push(person);
       /*
@@ -1080,7 +1091,7 @@ export class DirectMapper {
         kind, text, mediaUrl, isVideo, DirectMapper.shareCodeOf(item),
         DirectMapper.shareUrlOf(item), DirectMapper.shareIsVideoOf(item),
         card.kind, card.cover, card.user, card.avatar, card.caption,
-        card.playable, sender === null ? '' : sender.name,
+        card.playable, sender === null ? '' : sender.label,
         sender === null ? '' : sender.avatar));
     }
     // items 是"新在前"，界面上按时间正序排（老的在上）。
