@@ -1093,6 +1093,9 @@ export class DirectMapper {
        * 界面上 `bubbleContent` 的 `shareKind.length > 0` 分支一次都进不去，画出来的仍是老封面/灰块。
        */
       const card: ShareCard = DirectMapper.shareCardOf(item);
+      if (mediaUrl.length > 0 || card.kind.length > 0) {
+        hilog.info(DOMAIN, TAG, 'shape %{public}s', DirectMapper.shapeBrief(item));
+      }
       // 既没文字也没画面的是系统条目（时间戳、加人、已读…）：画出来就是一堆空行，跳过。
       // 分享卡片有封面/正文/目标链接的也留下（外链卡片可能既没有文字也没有预览图以外的画面）。
       if (text.length === 0 && mediaUrl.length === 0 && card.kind.length === 0) {
@@ -1229,6 +1232,25 @@ export class DirectMapper {
    * 为什么留这一行：贴纸在真机上有好几种形状（animated_media / 透明 PNG 的 media / 分享类），
    * 肉眼判断不了是哪一种。下次还有贴纸被画成卡片时，看这行就知道该补哪条判据。
    */
+  /**
+   * **一条消息的形状摘要**（诊断用）：`item_type` + 顶层键名 + 尺寸 + 地址尾 + 判定结果。
+   *
+   * 用户报："贴图还是被识别为分享卡片" —— 只靠猜字段名已经绕了几轮，这里把真实键名打出来，
+   * 一眼就能看出贴纸那条到底是什么形状（是 animated_media、是 media、还是 xma/link）。
+   */
+  private static shapeBrief(item: Record<string, Object>): string {
+    const keys: Array<string> = Object.keys(item);
+    const brief: string = keys.slice(0, 10).join(',');
+    const size: Array<number> = DirectMapper.mediaSizeOf(item);
+    const url: string = DirectMapper.mediaUrlOf(item);
+    const tail: string = url.length > 0 ? url.substring(Math.max(0, url.length - 24)) : '-';
+    const card: ShareCard = DirectMapper.shareCardOf(item);
+    return `type=${JsonRead.strOf(item, 'item_type')}`
+      + ` keys=[${brief}] size=${size[0]}x${size[1]}`
+      + ` sticker=${DirectMapper.isSticker(item)} card=${card.kind.length > 0 ? card.kind : '-'}`
+      + ` tail=${tail}`;
+  }
+
   private static stickerBrief(item: Record<string, Object>, sticker: boolean): string {
     const type: string = JsonRead.strOf(item, 'item_type');
     const size: Array<number> = DirectMapper.mediaSizeOf(item);
@@ -1268,7 +1290,33 @@ export class DirectMapper {
    *
    * 判据：`item_type` 是 `animated_media`、载荷里有 `animated_media`、或者地址本身是 gif/webp。
    */
+  /**
+   * **泛化扫描：这坨载荷里有没有"贴纸"的痕迹**（键名或字符串值含 `sticker`）。
+   *
+   * 为什么用扫描而不是枚举字段：IG 给贴纸用过的形状至少有 `animated_media`、`xma_sticker`、
+   * `generic_xma` + `xma_layout_type`、以及把贴纸塞进 `media` 的几种，字段名每版都变。
+   * 而"sticker"这个子串在所有版本里都出现 —— 扫它比猜字段名可靠。
+   */
+  private static mentionsSticker(record: Record<string, Object>): boolean {
+    const keys: Array<string> = Object.keys(record);
+    for (let index: number = 0; index < keys.length; index++) {
+      const key: string = keys[index];
+      if (key.toLowerCase().indexOf('sticker') >= 0) {
+        return true;
+      }
+      const value: string = JsonRead.strOf(record, key);
+      if (value.length > 0 && value.toLowerCase().indexOf('sticker') >= 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private static isSticker(item: Record<string, Object>): boolean {
+    // 第一道：整条载荷里出现 sticker 字样（键名或值）就算贴纸。
+    if (DirectMapper.mentionsSticker(item)) {
+      return true;
+    }
     const type: string = JsonRead.strOf(item, 'item_type').toLowerCase();
     const kind: string = JsonRead.strOf(item, 'content_type').toLowerCase();
     if (type.indexOf('sticker') >= 0 || type.indexOf('animated') >= 0
@@ -1295,14 +1343,20 @@ export class DirectMapper {
         return true;
       }
       /*
-       * 最后一道：**小尺寸素材**当成贴纸。
+       * **不要再按"小尺寸"猜贴纸**。
        *
-       * 真机上贴纸的 `image_versions2` 往往只有一档、宽度很小（320~480），而用户从相册/相机发的
-       * 照片基本都 ≥720。这条兜底让"没有 animated_media 也没有 sticker 字段"的静态贴纸也能走
-       * 小尺寸+透明底那条分支。
+       * 上一版加过 `宽度 ≤ 512 → 贴纸` 这条兜底，结果把用户自己发的**图片**也判成贴纸了
+       * （小图、截图、压缩过的照片都可能 ≤512），于是图片被画成了小贴纸。
+       * 用户要求："要区分贴图和用户发的图片，图片媒体要改回上一版的样式" —— 所以这里只认
+       * **贴纸专属**的线索（类型名 / 贴纸字段 / 动图地址），尺寸不参与判断。
        */
-      const size: Array<number> = DirectMapper.imageSizeOf(media);
-      if (size[0] > 0 && size[0] <= 512) {
+    }
+    // XMA 附件（`xma_sticker` / `generic_xma` 之类）再扫一遍：有些版本把 sticker 字段放在附件里。
+    const attachments: Array<Object> = JsonRead.arrayOf(item,
+      JsonRead.strOf(item, 'item_type').length > 0 ? JsonRead.strOf(item, 'item_type') : 'generic_xma');
+    for (let index: number = 0; index < attachments.length && index < 2; index++) {
+      const one: Record<string, Object> | null = JsonRead.asRecord(attachments[index]);
+      if (one !== null && DirectMapper.mentionsSticker(one)) {
         return true;
       }
     }
@@ -1640,6 +1694,17 @@ export class DirectMapper {
     }
     const hasTarget: boolean = card.target.length > 0 || DirectMapper.shareCodeOf(item).length > 0;
     if (!hasTarget && card.cover.length === 0 && card.caption.length === 0) {
+      card.kind = '';
+      return card;
+    }
+    /*
+     * **没有可打开目标、也没有正文和作者的"分享"，其实是带图消息（贴纸就是这一类）**。
+     *
+     * 用户报："贴图还是被识别为分享卡片"：这类条目只有一张 `preview_url`，以前被当成
+     * `post` 卡片画出来（大卡片 + 作者行 + 正文），观感完全不对。现在让它们退回空 kind，
+     * 由界面按普通媒体/贴纸去画。
+     */
+    if (!hasTarget && card.caption.length === 0 && card.user.length === 0) {
       card.kind = '';
       return card;
     }

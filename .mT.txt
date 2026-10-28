@@ -1,0 +1,1 @@
+fix(direct): 贴纸被画成分享卡片的两条根因都堵上 —— ①新增 mentionsSticker 泛化扫描（整条载荷与 XMA 附件里任意键名/值含 sticker 即判贴纸），不再枚举字段名；②"没有可打开目标、没有正文、没有作者"的分享不再当卡片，退回普通媒体/贴纸绘制（贴纸就是这类：只有一张 preview_url）；另加 hilog `shape type=<item_type> keys=[...] size=WxH sticker=? card=? tail=<url尾>` 面包屑，贴纸再认错时一行就能定位
