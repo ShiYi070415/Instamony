@@ -821,8 +821,21 @@ export struct DirectThreadPage {
     return undefined;
   }
 
-  /** 这一条和上一条算不算"同一组"（同一个人、间隔不超过 GROUP_GAP_MS）。 */
-  private sameGroupAsPrev(index: number, message: DirectMessage): boolean {
+  /**
+   * **时间段**：这一条和上一条间隔不超过两分钟就算同一个时间段的。
+   *
+   * 需求："最新消息和上一条消息超过两分钟就开新组" —— 只看时间，不看是谁发的。
+   */
+  private sameTimeSegmentAsPrev(index: number, message: DirectMessage): boolean {
+    const prev: DirectMessage | undefined = this.prevOf(index, message);
+    if (prev === undefined) {
+      return false;
+    }
+    return message.tsMs - prev.tsMs <= GROUP_GAP_MS;
+  }
+
+  /** **同一个用户**：方向一致（都是收/发）、发送人相同。 */
+  private sameSenderAsPrev(index: number, message: DirectMessage): boolean {
     const prev: DirectMessage | undefined = this.prevOf(index, message);
     if (prev === undefined) {
       return false;
@@ -830,10 +843,17 @@ export struct DirectThreadPage {
     if (prev.mine !== message.mine) {
       return false;
     }
-    if (DirectThreadPage.senderKeyOf(prev) !== DirectThreadPage.senderKeyOf(message)) {
-      return false;
-    }
-    return message.tsMs - prev.tsMs <= GROUP_GAP_MS;
+    return DirectThreadPage.senderKeyOf(prev) === DirectThreadPage.senderKeyOf(message);
+  }
+
+  /**
+   * 这一条和上一条算不算"同一组"：**先按用户分组，再按时间段分组**（需求）。
+   *
+   * 也就是说两个条件都要满足：同一个人**并且**和上一条的间隔不超过两分钟；
+   * 任意一条不满足就开新组（新组才会写发送人名字、才会在组尾画头像）。
+   */
+  private sameGroupAsPrev(index: number, message: DirectMessage): boolean {
+    return this.sameSenderAsPrev(index, message) && this.sameTimeSegmentAsPrev(index, message);
   }
 
   /**
@@ -859,16 +879,29 @@ export struct DirectThreadPage {
   }
 
   /**
-   * **这一组要不要在顶部写发送人名字**（需求："消息时间段分组的顶部需要显示用户名，加文字阴影"）。
+   * **这一组要不要在顶部写发送人名字**（需求："消息时间段分组的顶部需要显示用户名"）。
    *
-   * 只在群聊里写（1:1 会话写名字是噪音），而且只在"这一组的第一条"、且不是自己发的消息上写。
+   * 判据就是"这一条开了新组"（见 sameGroupAsPrev）。
+   *
+   * 这里**不再看 `is_group` 标记**：真机上群聊条目偶尔没带这个字段，之前一漏就整屏都不写名字。
+   * 现在的规则是：只要这位发送人和"当前会话的对方资料"不一样就当群聊处理；1:1 会话里名字和
+   * 资料相同，就自然不重复写（顶栏已经有人名了）。
    */
   private showsSenderName(index: number, message: DirectMessage): boolean {
     if (message.mine) {
       return false;
     }
-    if (this.view === null || !this.view.isGroup) {
+    const label: string = this.senderLabel(message);
+    if (label.length === 0) {
       return false;
+    }
+    const group: boolean = this.view !== null && this.view.isGroup;
+    if (!group) {
+      const sameAsPeer: boolean = this.view !== null
+        && (label === this.view.withUsername || label === this.view.withFullName);
+      if (sameAsPeer) {
+        return false;
+      }
     }
     return !this.sameGroupAsPrev(index, message);
   }
