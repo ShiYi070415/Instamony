@@ -664,9 +664,12 @@ export class DirectMapper {
     if (threadId.length === 0) {
       threadId = DirectMapper.findString(root, 0, 'thread_fbid');
     }
-    const title: string = withFullName.length > 0 ? withFullName : withUsername;
+    const graphqlGroup: boolean = userList.length > 2;
+    const graphqlGroupName: string = DirectMapper.findString(root, 0, 'thread_title');
+    const title: string = graphqlGroup && graphqlGroupName.length > 0
+      ? graphqlGroupName : (withFullName.length > 0 ? withFullName : withUsername);
     return new DirectThreadView(threadId, title, withUsername, withAvatar, withId, ordered,
-      hasOlder, cursor, userList.length > 2, withFullName);
+      hasOlder, cursor, graphqlGroup, withFullName);
   }
 
   /**
@@ -943,7 +946,10 @@ export class DirectMapper {
       const unread: boolean = count >= 0
         ? count > 0
         : (readState === '1' || readState === 'true' || readState === 'unread');
-      threads.push(new DirectThread(id, '', title, isGroup ? '' : avatar, isGroup,
+      threads.push(new DirectThread(id, '', title,
+        // 群聊以前这里是空串（于是列表里群组没有头像）。现在：群自定义头像 → 第一个成员头像 → 空
+        isGroup ? (DirectMapper.groupImageOf(th).length > 0
+          ? DirectMapper.groupImageOf(th) : avatar) : avatar, isGroup,
         unread, JsonRead.boolOf(th, 'muted'),
         JsonRead.boolOf(th, 'is_pin'), ts, text, kind, username,
         count > 0 ? count : 0));
@@ -1127,10 +1133,21 @@ export class DirectMapper {
     messages.sort((a: DirectMessage, b: DirectMessage): number => a.tsMs - b.tsMs);
     hilog.info(DOMAIN, TAG, 'thread parse items=%{public}d msgs=%{public}d shareCards=%{public}d',
       items.length, messages.length, shareCards);
+    /*
+     * **群聊头像**：`withAvatar` 目前是"第一个真有头像的成员"（见上面的挑选循环）。
+     * 如果线程自己带了群头像（`thread_image*`），以它为准 —— 否则群聊会话里会显示成
+     * 某个成员的头像，看着像"进错了人"。
+     */
+    const isGroupThread: boolean = JsonRead.boolOf(thread, 'is_group');
+    if (isGroupThread) {
+      const groupPic: string = DirectMapper.groupImageOf(thread);
+      if (groupPic.length > 0) {
+        withAvatar = groupPic;
+      }
+    }
     return new DirectThreadView(id, title, withUsername, withAvatar, withId, messages,
       JsonRead.boolOf(thread, 'has_older'), JsonRead.strOf(thread, 'oldest_cursor'),
-      JsonRead.boolOf(thread, 'is_group'), fullName);
-  }
+      JsonRead.boolOf(thread, 'is_group'), fullName);  }
 
   /**
    * **一条 `items[]` 条目 → `DirectMessage`**（实时补丁用；REST 那两处内联映射保持原样）。
@@ -1184,6 +1201,56 @@ export class DirectMapper {
         if (url.length > 0) {
           return url;
         }
+      }
+    }
+    return '';
+  }
+
+  /**
+   * **群聊头像**（拿不到给空串）。
+   *
+   * 群组没有"对方头像"这个概念：REST 的线程里偶尔带 `thread_image*`（群自定义头像），
+   * 绝大多数群没有 —— 那种情况调用方退回"第一个成员的头像"（IG 网页端用的是成员头像拼图，
+   * 我们没做拼图，用第一个成员的比空白强）。
+   *
+   * 挨个试的原因：这几个字段在不同接口版本里轮流出现，还可能是纯字符串，也可能是
+   * `{image_versions2:{candidates:[{url}]}}` 这种对象。
+   */
+  static groupImageOf(thread: Record<string, Object>): string {
+    const names: Array<string> = ['thread_image_info', 'thread_image', 'group_image',
+      'thread_image_url', 'image_versions2'];
+    for (let index: number = 0; index < names.length; index++) {
+      const value: Object | undefined = thread[names[index]];
+      if (value === undefined || value === null) {
+        continue;
+      }
+      if (typeof value === 'string') {
+        const text: string = `${value}`;
+        if (text.indexOf('http') === 0) {
+          return text;
+        }
+        continue;
+      }
+      const holder: Record<string, Object> | null = JsonRead.asRecord(value);
+      if (holder === null) {
+        continue;
+      }
+      const versions: Record<string, Object> | null = JsonRead.recordOf(holder, 'image_versions2');
+      const source: Record<string, Object> = versions !== null ? versions : holder;
+      const candidates: Array<Object> = JsonRead.arrayOf(source, 'candidates');
+      for (let at: number = 0; at < candidates.length; at++) {
+        const one: Record<string, Object> | null = JsonRead.asRecord(candidates[at]);
+        if (one === null) {
+          continue;
+        }
+        const url: string = JsonRead.strOf(one, 'url');
+        if (url.length > 0) {
+          return url;
+        }
+      }
+      const direct: string = JsonRead.strOf(source, 'url');
+      if (direct.length > 0) {
+        return direct;
       }
     }
     return '';

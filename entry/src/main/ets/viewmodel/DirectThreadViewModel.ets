@@ -1,4 +1,4 @@
-﻿/*
+/*
  * 一条私信会话（会话详情）的视图模型。
  *
  * ## 和 DirectViewModel 的分工
@@ -358,8 +358,20 @@ export class DirectThreadViewModel {
     return this.busy;
   }
 
-  /** 标题：真名优先，其次收件箱那一行的标题，最后兜底"私信"。 */
+  /** 标题：群聊用群名；1:1 用真名 → 收件箱标题 → 兜底"私信"。 */
   titleNow(): string {
+    /*
+     * **群聊用群名**：`withFullName` 是"某个成员"的名字（解析时挑出来当对方的），
+     * 拿它当群标题会显示成某个群成员的名字 —— 用户反馈的"群组名字显示不对"就是这个。
+     * 群名在 `view.title`（REST 的 `thread_title`；GraphQL 那条也补了同名兜底）。
+     */
+    const isGroup: boolean = this.view !== null ? this.view.isGroup : this.fallbackGroup;
+    if (isGroup) {
+      if (this.view !== null && this.view.title.length > 0) {
+        return this.view.title;
+      }
+      return this.fallbackTitle;
+    }
     // 需求：第一行是**名字**（full_name），第二行才是用户名。
     if (this.view !== null && this.view.withFullName.length > 0) {
       return this.view.withFullName;
