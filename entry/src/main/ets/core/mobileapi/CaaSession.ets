@@ -31,6 +31,8 @@ const KEY_USDID: string = 'usdid';
 const KEY_KID: string = 'usdid_kid';
 const KEY_PRIVATE: string = 'usdid_private';
 const KEY_PUBLIC: string = 'usdid_public';
+/** 最近一次登录/前检/导入的诊断（只有结论与名字，没有密钥；重启还能复制）。 */
+const KEY_LAST_DIAG: string = 'last_diag';
 
 /** 登录结果（给 UI：不抛异常，全部放在字段里）。 */
 export class CaaOutcome {
@@ -61,6 +63,8 @@ export class CaaSession {
     }
     try {
       CaaSession.store = preferences.getPreferencesSync(context, { name: STORE_NAME });
+      // 上次的诊断读回来：重启之后仍然能"复制诊断"（不然失败一次就得再复现一次）。
+      CaaSession.lastDiag = CaaSession.readText(KEY_LAST_DIAG);
       hilog.info(DOMAIN, TAG, 'usdid store opened');
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'open usdid store failed: %{public}s', (error as Error).message);
@@ -164,6 +168,7 @@ export class CaaSession {
     const result: CaaResult = await CaaLogin.login(identity, '', '', device, null, true);
     const outcome: CaaOutcome = CaaSession.outcome(result.ok, result.reason,
       CaaSession.stepsText());
+    CaaSession.rememberDiag('前检', outcome.reason, outcome.steps);
     return outcome;
   }
 
@@ -179,12 +184,17 @@ export class CaaSession {
         const waiting: CaaOutcome = CaaSession.outcome(false, '需要两步验证码',
           CaaSession.stepsText());
         waiting.needsCode = true;
+        CaaSession.rememberDiag('登录', waiting.reason, waiting.steps);
         return waiting;
       }
-      return CaaSession.outcome(false, result.reason, CaaSession.stepsText());
+      const failed: CaaOutcome = CaaSession.outcome(false, result.reason, CaaSession.stepsText());
+      CaaSession.rememberDiag('登录', failed.reason, failed.steps);
+      return failed;
     }
-    return await CaaSession.applySession(result.cookie, result.authorization, '登录',
-      result.mid, result.rur, result.claim);
+    const outcome: CaaOutcome = await CaaSession.applySession(result.cookie, result.authorization,
+      '登录', result.mid, result.rur, result.claim);
+    CaaSession.rememberDiag('登录', outcome.reason, outcome.steps);
+    return outcome;
   }
 
   /**
@@ -219,9 +229,11 @@ export class CaaSession {
     }
     const authorization: string = CaaSession.authorizationOf(parsed);
     // 粘贴的两种形状都带 `mid`（instagrapi 的 settings.json 里是 `mid` 字段），有就一起用上。
-    return await CaaSession.applySession(cookie, authorization, '导入',
+    const outcome: CaaOutcome = await CaaSession.applySession(cookie, authorization, '导入',
       CaaSession.textFieldOf(parsed, 'mid'), CaaSession.textFieldOf(parsed, 'rur'),
       CaaSession.textFieldOf(parsed, 'claim'));
+    CaaSession.rememberDiag('导入', outcome.reason, outcome.steps);
+    return outcome;
   }
 
   /** 取一个字符串字段（不是字符串就当没有）。 */
@@ -375,6 +387,43 @@ export class CaaSession {
       parts.push(one.status > 0 ? `${one.name} ${one.status}` : one.name);
     }
     return parts.join(' → ');
+  }
+
+  /*
+   * **登录诊断（一键复制）**。
+   *
+   * 为什么要它：CAA 登录的失败点很多（USDID / attestation / aac / oauth / send_login_request /
+   * 2SV），而真机上既没有 hdc、hilog 又会被冲掉。把最近一次的结论 + 逐步现场 + 响应里出现过的
+   * **名字**（cookie 名 / header 名，**不含任何值**）攒成一段文字，用户复制出来发给我们，
+   * 就能判断是"布局形状变了"还是"账号侧的问题"。
+   */
+  private static lastDiag: string = '';
+
+  /** 最近一次登录/前检/导入的诊断文本（给"复制诊断"用）。 */
+  static diagText(): string {
+    if (CaaSession.lastDiag.length === 0) {
+      return '还没有跑过登录 / 前检 / 导入（先点一次「设备/网络前检」）';
+    }
+    return CaaSession.lastDiag;
+  }
+
+  /** 把一次结论记成诊断文本（只存给人看的字段，不含 cookie / authorization）。 */
+  private static rememberDiag(what: string, reason: string, steps: string,
+                              extra: string = ''): void {
+    const lines: Array<string> = [];
+    lines.push(`[CAA ${what}] ${reason}`);
+    if (steps.length > 0) {
+      lines.push(`步骤：${steps}`);
+    }
+    if (extra.length > 0) {
+      lines.push(extra);
+    }
+    lines.push(`设备身份：${CaaSession.hasDevice() ? '有' : '无'}`);
+    lines.push(`等待验证码：${CaaSession.waitingCode() ? '是' : '否'}`);
+    const text: string = lines.join('\n');
+    CaaSession.lastDiag = text;
+    CaaSession.writeText(KEY_LAST_DIAG, text);
+    hilog.info(DOMAIN, TAG, 'diag remembered (%{public}d chars)', text.length);
   }
 
   private static readText(key: string): string {

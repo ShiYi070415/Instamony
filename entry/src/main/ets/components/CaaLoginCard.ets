@@ -15,10 +15,14 @@
 
 import { CaaOutcome, CaaSession } from '../core/mobileapi/CaaSession';
 import { CaaLogin } from '../core/mobileapi/CaaLogin';
+import { BusinessError, pasteboard } from '@kit.BasicServicesKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 
 /** 输入框高度（跟着登录页的 42 走，两处观感一致）。 */
 const FIELD_HEIGHT: number = 42;
 const FIELD_RADIUS: number = 14;
+const DOMAIN: number = 0xFF00;
+const TAG: string = 'CaaLoginCard';
 
 @Component
 export struct CaaLoginCard {
@@ -133,6 +137,18 @@ export struct CaaLoginCard {
        * 为什么要留这条：CAA 登录要账号密码、还可能撞验证码；而实时私信/本地通知靠的是
        * **设备级会话本身**。有了这条，即使密码登录那条路还没调通，实时这条线也能单独验。
        */
+      /*
+       * **复制诊断**：把最近一次的结论 + 逐步现场 + 名字（不含任何密钥）复制出去。
+       *
+       * 真机上既没有 hdc、hilog 也常被冲掉，失败原因只能靠这段文字带出来。
+       */
+      Text('复制登录诊断')
+        .fontSize(12)
+        .fontColor($r('app.color.secondary_text'))
+        .width('100%')
+        .onClick((): void => {
+          this.copyDiag();
+        })
       Text(this.pasteOpen ? '收起「粘贴会话导入」' : '用已有会话导入（备用，粘贴 settings.caa.json）')
         .fontSize(12)
         .fontColor($r('app.color.secondary_text'))
@@ -315,6 +331,26 @@ export struct CaaLoginCard {
       this.busy = false;
       this.status = `导入失败：${error.message}`;
     });
+  }
+
+  /** 复制登录诊断（只含结论 / 步骤 / 名字，不含 cookie 与 authorization）。 */
+  private copyDiag(): void {
+    const text: string = CaaSession.diagText();
+    try {
+      const data: pasteboard.PasteData =
+        pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text);
+      pasteboard.getSystemPasteboard().setData(data, (err: BusinessError | undefined) => {
+        if (err !== undefined && err !== null) {
+          hilog.warn(DOMAIN, TAG, 'caa diag copy failed: %{public}s', err.message);
+          this.status = `复制失败：${err.message}`;
+          return;
+        }
+        this.status = '诊断已复制，粘给我就行（里面没有密码/会话值）';
+      });
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'caa diag copy threw: %{public}s', (error as Error).message);
+      this.status = '复制失败（剪贴板不可用）';
+    }
   }
 
   private applyOutcome(outcome: CaaOutcome): void {
