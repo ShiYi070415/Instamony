@@ -1128,6 +1128,9 @@ async function caaLogin(profile, username, password, log, options) {
       mid: sessionHeaders.mid,
       rur: sessionHeaders.rur,
       claim: sessionHeaders.claim,
+      // 只给"名字"用于诊断（值里是会话材料，不能打到日志里）
+      cookieNames: Object.keys(parsed.cookies),
+      headerNames: Object.keys(parsed.headers),
       twoStepContext: '',
       steps
     };
@@ -1156,6 +1159,8 @@ async function caaLogin(profile, username, password, log, options) {
           mid: sessionHeaders.mid,
           rur: sessionHeaders.rur,
           claim: sessionHeaders.claim,
+          cookieNames: Object.keys(resolved.parsed.cookies || {}),
+          headerNames: Object.keys(headers),
           twoStepContext: '',
           steps
         };

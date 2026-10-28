@@ -44,7 +44,7 @@ const querystring = require('querystring');
 
 const { FbnsClient, MOBILE_UA } = require('./fbns.js');
 // 会话形状转换（纯函数、可单测；`--import-session` 与 `--caa-login` 共用同一份实现）
-const { sessionFromSettings, settingsShapeOf } = require('./session-format.js');
+const { sessionFromSettings, settingsShapeOf, sessionProblemOf } = require('./session-format.js');
 
 const DIR = __dirname;
 const CONFIG_FILE = path.join(DIR, 'config.json');
@@ -1031,6 +1031,22 @@ async function runCaaLogin(argv) {
     claim: String(result.claim || ''),
     savedAt: Date.now()
   };
+  /*
+   * **落盘前先验一遍**：解析出"登录成功"不等于拿到了可用会话。
+   *
+   * 没有 `sessionid` 的会话写下去只会把**上一份好会话覆盖掉**，之后 `--check` / 常驻全部
+   * 报"缺少有效会话"，而人还以为登录成功了。这里宁可什么都不写、把现场打出来（含原始
+   * 响应片段），让人知道是"布局形状变了"而不是"我密码错了"。
+   */
+  if (session.sessionid.length === 0 || session.userId.length === 0) {
+    warn('响应里解析出了登录结果，但会话不完整（' + sessionProblemOf(session)
+      + '）—— **不覆盖现有会话**');
+    // 只打名字（值里是会话材料）；这两行足够判断"布局变了"还是"cookie 少了"。
+    log('解析到的 cookie 名：' + JSON.stringify(result.cookieNames || []));
+    log('响应里的 header 名：' + JSON.stringify(result.headerNames || []));
+    log('可能是 Bloks 布局形状变了：把上面两行发回来（不要发任何值）');
+    process.exit(4);
+  }
   fs.writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2), 'utf8');
   fs.writeFileSync(DEVICE_FILE, JSON.stringify({
     phoneId: profile.phoneId,

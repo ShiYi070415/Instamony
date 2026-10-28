@@ -134,11 +134,33 @@ function sessionFromSettings(settings) {
   return { session, device: { phoneId, uuid, androidId } };
 }
 
+/**
+ * **落盘前的可用性检查**：这份会话值不值得写下去。
+ *
+ * 为什么单独一条：解析出"登录成功"不等于拿到可用会话。把缺 `sessionid` 的会话写下去，
+ * 只会**覆盖掉上一份好会话**，之后 `--check` / 常驻全报"缺少有效会话"，而人还以为成功了。
+ *
+ * @returns 空串 = 可用；否则是给人看的问题描述
+ */
+function sessionProblemOf(session) {
+  if (session === null || session === undefined || typeof session !== 'object') {
+    return '会话不是对象';
+  }
+  if (String(session.sessionid || '').length === 0) {
+    return '没有 sessionid';
+  }
+  if (String(session.userId || '').length === 0) {
+    return '没有 ds_user_id（账号 id）';
+  }
+  return '';
+}
+
 module.exports = {
   IGT_MARKER,
   cookieStringOf,
   cookieValueOf,
   authorizationDataOf,
   settingsShapeOf,
-  sessionFromSettings
+  sessionFromSettings,
+  sessionProblemOf
 };

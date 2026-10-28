@@ -318,6 +318,15 @@ check('sessionFromSettings：缺 sessionid / uuids 时要抛（而不是产出�
   assert(threw, 'uuids 不全时没有抛');
 });
 
+check('sessionProblemOf：不完整的会话要被拦住（宁可什么都不写，也别覆盖好会话）', () => {
+  assertEqual(format.sessionProblemOf(null), '会话不是对象', 'null 没被拦');
+  assertEqual(format.sessionProblemOf({ cookie: 'sessionid=x' }), '没有 sessionid', '缺 sessionid 没被拦');
+  assertEqual(format.sessionProblemOf({ sessionid: '777%3Asecret' }),
+    '没有 ds_user_id（账号 id）', '缺 userId 没被拦');
+  assertEqual(format.sessionProblemOf({ sessionid: '777%3Asecret', userId: '777' }), '',
+    '完整会话不该被判成有问题');
+});
+
 check('authorizationDataOf：非法串回空对象（不炸）', () => {
   assertEqual(Object.keys(format.authorizationDataOf('Bearer IGT:2:not-base64!!')).length, 0, '不该给出键');
   assertEqual(Object.keys(format.authorizationDataOf('')).length, 0, '空串不该给出键');
