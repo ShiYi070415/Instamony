@@ -32,8 +32,27 @@ const path = require('path');
 const zlib = require('zlib');
 const querystring = require('querystring');
 
-const INBOX_URL = 'https://www.instagram.com/api/v1/direct_v2/inbox/';
-const WEB_APP_ID = '936619743392459';
+/*
+ * 收件箱地址：**移动端私有接口**（`i.instagram.com`），不是网页那条。
+ *
+ * 为什么会换：网页的 `www.instagram.com/api/v1/direct_v2/inbox/` 用这套会话会话
+ * 直接回 **HTTP 404 + `class="no-js not-logged-in"` 的 HTML**（不是 401，很有迷惑性）——
+ * 也就是说网页那条路对这个会话已经关了。而移动端接口 + `Authorization: IGT:2:<base64>`
+ * 一次就 200，返回完整收件箱。
+ *
+ * 依据：App 自己早就走这条路（`core/mobileapi/*`，从 instagrapi 移植），
+ * `INSTAGRAPI_PORT.md` 里也写明「用网页会话打移动 API 是一等公民」：
+ * 把 `{ds_user_id, sessionid, should_use_header_over_cookies:true}` base64 进
+ * `Authorization: Bearer IGT:2:`，就等价于移动端登录态。
+ */
+const INBOX_URL = 'https://i.instagram.com/api/v1/direct_v2/inbox/';
+/** instagrapi 的 `app_id`（移动端 Instagram 的 X-IG-App-ID）。 */
+const MOBILE_APP_ID = '567067343352427';
+/** 移动端 UA 模板（instagrapi 同款；网页 UA 打这个接口会被认成伪造）。 */
+const MOBILE_UA =
+  'Instagram 448.0.0.52.84 Android (34/14; 480dpi; 1080x2400; samsung; SM-G991B; ' +
+  'o1s; exynos2100; en_US; 269890874)';
+/** 网页 UA（只在排错时用得到，正常路径不用）。 */
 const DEFAULT_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
@@ -168,12 +187,38 @@ function request(url, options, body) {
 }
 
 function csrfOf(cookie) {
+  return cookieValueOf(cookie, 'csrftoken');
+}
+
+/** 从 Cookie 串里取一个字段（`name=value; name2=value2` 那种）。 */
+function cookieValueOf(cookie, name) {
   for (const part of cookie.split(';')) {
     const eq = part.indexOf('=');
     if (eq < 0) continue;
-    if (part.slice(0, eq).trim() === 'csrftoken') return part.slice(eq + 1).trim();
+    if (part.slice(0, eq).trim() === name) return part.slice(eq + 1).trim();
   }
   return '';
+}
+
+/**
+ * `Authorization: Bearer IGT:2:<base64url({ds_user_id,sessionid,should_use_header_over_cookies})>`
+ *
+ * 这就是"网页会话当移动会话用"的那把钥匙：`should_use_header_over_cookies` 必须是
+ * **真布尔**，意思是"请优先认这个头，别只认 Cookie 罐"。
+ * （App 侧同一个构造见 `core/mobileapi/MobileSession.buildAuthorization`。）
+ */
+function mobileAuthorization(cookie) {
+  const userId = cookieValueOf(cookie, 'ds_user_id');
+  const sessionId = decodeURIComponent(cookieValueOf(cookie, 'sessionid'));
+  if (userId.length === 0 || sessionId.length === 0) {
+    return '';
+  }
+  const payload = JSON.stringify({
+    ds_user_id: userId,
+    sessionid: sessionId,
+    should_use_header_over_cookies: true
+  });
+  return 'Bearer IGT:2:' + Buffer.from(payload).toString('base64url');
 }
 
 /* --------------------------------------------------------------- 拉收件箱 */
@@ -186,18 +231,26 @@ async function fetchInbox(cfg) {
     visual_message_return_type: 'unseen',
     persistentBadging: 'true'
   });
+  const authorization = mobileAuthorization(cookie);
+  if (authorization.length === 0) {
+    warn('Cookie 里缺 ds_user_id / sessionid —— 这不是一份完整的 IG 会话，'
+      + '请在 App「设定 → 诊断 → 复制中转材料」重新导出。');
+    process.exit(3);
+  }
   let res;
   try {
     res = await request(INBOX_URL + '?' + query, {
       headers: {
         Cookie: cookie,
-        'User-Agent': DEFAULT_UA,
-        'X-IG-App-ID': WEB_APP_ID,
-        'X-CSRFToken': csrfOf(cookie),
-        'X-ASBD-ID': '129477',
+        Authorization: authorization,
+        'User-Agent': MOBILE_UA,
+        'X-IG-App-ID': MOBILE_APP_ID,
+        // 移动端身份里几条"固定串"：缺了 IG 会当成伪造客户端。
+        'X-IG-Capabilities': '3brTv10=',
+        'X-IG-Connection-Type': 'WIFI',
         'X-IG-WWW-Claim': '0',
-        'X-Requested-With': 'XMLHttpRequest',
-        Referer: 'https://www.instagram.com/direct/inbox/'
+        'X-CSRFToken': csrfOf(cookie),
+        Accept: '*/*'
       }
     });
   } catch (error) {
@@ -207,6 +260,11 @@ async function fetchInbox(cfg) {
   if (res.status === 401 || res.status === 403 || res.body.indexOf('login_required') >= 0) {
     warn('IG 拒绝：会话失效（HTTP ' + res.status + '）。请在 App 里重新登录后重新导出材料。');
     process.exit(3);
+  }
+  if (res.status === 404 && res.body.indexOf('not-logged-in') >= 0) {
+    // 这是"网页那条路"的特征响应。走移动端接口不该再出现，出现基本就是地址写错了。
+    warn('IG 回 404 + not-logged-in：请求打到网页接口了（应该是 i.instagram.com 的移动端接口）。');
+    return [];
   }
   if (res.status !== 200) {
     log('IG HTTP ' + res.status + '，本轮跳过：' + res.body.slice(0, 140));
@@ -281,12 +339,29 @@ function newestOf(thread) {
  * 判据都是"保守方向"的：拿不准就当消息请求，不推。
  */
 
-/** 线程标了 pending / 需要审批 —— Instagram 对陌生人首条的处理方式。 */
+/**
+ * 线程标了 pending / 需要审批 —— Instagram 对陌生人首条的处理方式。
+ *
+ * 字段名是**实测**的（`i.instagram.com` 移动端收件箱返回体，2026-10 抓的）：
+ * 有 `pending`（布尔）、`pending_user_ids`、`pending_users`、`total_pending_users`、
+ * `has_reached_message_request_limit`、`spam`；**没有** `is_pending`（网页版老字段，留着兜底）。
+ */
 function looksLikeMessageRequest(thread) {
-  if (thread.is_pending === true) return true;
   if (thread.pending === true) return true;
+  if (thread.is_pending === true) return true;
   if (thread.approval_factor !== undefined && thread.approval_factor !== null) return true;
+  if (Array.isArray(thread.pending_user_ids) && thread.pending_user_ids.length > 0) return true;
   return false;
+}
+
+/**
+ * 已被 IG 判为垃圾/骚扰的会话。
+ *
+ * 对应 IM 分类里"不得推送官方号/商家批量、广告"那半句：落进 spam 的会话
+ * 不是用户想收的对话，宁可不推。
+ */
+function looksLikeSpam(thread) {
+  return thread.spam === true || thread.is_spam === true;
 }
 
 /**
@@ -304,6 +379,7 @@ function hasConversationHistory(thread) {
  * 顺序有意义：先认消息请求，再认"没有历史"。
  */
 function complianceVerdict(thread) {
+  if (looksLikeSpam(thread)) return 'spam';
   if (looksLikeMessageRequest(thread)) return 'message-request';
   if (!hasConversationHistory(thread)) return 'no-history';
   return '';
@@ -708,6 +784,22 @@ function releaseLock() {
 
 /* ------------------------------------------------------------------ 主循环 */
 
+/**
+ * `--interval <秒>`：只在**人工验证时**用，把轮询压到 15 秒以上。
+ *
+ * 常驻时别用：`MIN_POLL_SECONDS`（60）是给账号上的保险，别为了"测得快"去踩 IG 限流。
+ * 但验证时一轮等 60 秒实在难受，所以给一个下限 15 的显式开关，验完就撤。
+ */
+function intervalOverride() {
+  const at = process.argv.indexOf('--interval');
+  if (at >= 0 && process.argv[at + 1]) {
+    const seconds = Math.max(15, Number(process.argv[at + 1]) || 0);
+    warn('用 --interval ' + seconds + 's 快速轮询：只用于验证，验证完别再带这个参数。');
+    return seconds;
+  }
+  return 0;
+}
+
 async function main() {
   quiet = process.argv.indexOf('--quiet') >= 0;
   const once = process.argv.indexOf('--once') >= 0;
@@ -739,7 +831,8 @@ async function main() {
   }
   requireIgCookie(cfg);
   const ig = cfg.ig || {};
-  const activeGap = Math.max(MIN_POLL_SECONDS, Number(ig.pollSeconds || 90));
+  const fast = intervalOverride();
+  const activeGap = fast > 0 ? fast : Math.max(MIN_POLL_SECONDS, Number(ig.pollSeconds || 90));
   const idleMax = Math.max(activeGap, Number(ig.idleMaxSeconds || 300));
   const stateFile = path.resolve(__dirname, cfg.stateFile || 'state.json');
   if (!once) acquireLock();

@@ -313,5 +313,27 @@ Body: alice_zhang sent you a photo.
 **还没验证的**：多个线程连续推送时的频控表现、token 轮换后的失效处理、
 以及 relay 侧的合规过滤（见下条待办）。
 
+**2026-10-28：真实 IG 私信 → 手机通知，端到端跑通。**
+
+`tools/relay` 用真实会话轮询收件箱，你发一条私信，15 秒内手机收到通知：
+
+| 轮次 | AGC requestId | 结果 |
+| --- | --- | --- |
+| 18:25:02 | `179318310217289589000106` | 1 条新私信，推送成功 |
+| 18:25:19 | `179318311975686256000306` | 1 条新私信，推送成功 |
+| 18:25:34 | `179318313443786327000306` | 1 条新私信，推送成功 |
+
+这一轮同时定死了一个坑：**收件箱必须打移动端接口**。
+`www.instagram.com/api/v1/direct_v2/inbox/` 用同一份会话回
+**HTTP 404 + `<html class="no-js not-logged-in">`**（不是 401，很容易误判成会话失效），
+而 `i.instagram.com/api/v1/direct_v2/inbox/` + Android UA + `X-IG-App-ID: 567067343352427`
+\+ `Authorization: Bearer IGT:2:<base64url{ds_user_id,sessionid,should_use_header_over_cookies}>`
+一次就 200。
+
+移动端返回体的字段名也和网页不同，合规过滤按实测字段判断：
+`pending`（网页版是 `is_pending`）、`pending_user_ids`、`spam`；
+`items` 实测回 3 条，所以"≥2 条 = 有历史往来"的判据成立。
+
+
 
 

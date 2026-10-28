@@ -3,8 +3,11 @@
  * 合规过滤自测 —— 不需要 IG cookie，也不需要手机。
  *
  * 为什么值得单独测：这段逻辑决定"哪些私信允许推"，判错了直接踩 IM 分类的
- * 合规红线（未关注人私信 / 消息请求一律不得推送）。以前它埋在轮询循环里，
+ * 合规红线（未关注人私信 / 消息请求 / 垃圾会话一律不得推送）。以前它埋在轮询循环里，
  * 没法单独验证；现在抽成 complianceVerdict() 就可以用假数据跑。
+ *
+ * 用例里的字段名来自**移动端收件箱实测**（2026-10 抓的返回体）：
+ * `pending` / `pending_user_ids` / `spam` 是真的存在，`is_pending` 是网页版老字段（兜底保留）。
  *
  * 跑法：node filter-test.js
  */
@@ -15,26 +18,48 @@ const { complianceVerdict } = require('./relay.js');
 
 const cases = [
   {
-    name: '陌生人首条私信（消息请求）',
+    name: '陌生人首条私信（pending=true，移动端真实字段）',
     thread: {
-      is_pending: true,
+      pending: true,
       items: [
         { item_id: '1', timestamp: 1700000200, user_id: '999', text: '嗨，看到你的主页…' },
-        { item_id: '0', timestamp: 1700000100, user_id: '999', text: '' }
+        { item_id: '0', timestamp: 1700000100, user_id: '999', text: '在吗' }
       ]
     },
     expect: 'message-request'
   },
   {
-    name: '带审批标记的线程',
+    name: '待审批成员（pending_user_ids 非空）',
     thread: {
-      approval_factor: 'approval_required',
+      pending_user_ids: ['999'],
       items: [
-        { item_id: '2', timestamp: 1700000200, user_id: '999', text: '买粉吗' },
-        { item_id: '1', timestamp: 1700000100, user_id: '999', text: '在吗' }
+        { item_id: '2', timestamp: 1700000200, user_id: '999', text: '拉我进群' },
+        { item_id: '1', timestamp: 1700000100, user_id: '111', text: '好的' }
       ]
     },
     expect: 'message-request'
+  },
+  {
+    name: '老字段 is_pending（网页版兜底）',
+    thread: {
+      is_pending: true,
+      items: [
+        { item_id: '1', timestamp: 1700000200, user_id: '999', text: 'x' },
+        { item_id: '0', timestamp: 1700000100, user_id: '999', text: 'y' }
+      ]
+    },
+    expect: 'message-request'
+  },
+  {
+    name: '垃圾/骚扰会话（spam=true）',
+    thread: {
+      spam: true,
+      items: [
+        { item_id: '1', timestamp: 1700000200, user_id: '999', text: '买粉吗，限时优惠' },
+        { item_id: '0', timestamp: 1700000100, user_id: '999', text: '在吗' }
+      ]
+    },
+    expect: 'spam'
   },
   {
     name: '首次搭话（只有一条消息，没有历史）',
@@ -44,7 +69,7 @@ const cases = [
     expect: 'no-history'
   },
   {
-    name: '正常往来（两条消息，说明前面还有历史）',
+    name: '正常往来（两条以上消息，说明前面还有历史）',
     thread: {
       items: [
         { item_id: '3', timestamp: 1700000300, user_id: '999', text: '今晚有空聊两句吗？' },
@@ -54,11 +79,12 @@ const cases = [
     expect: ''
   },
   {
-    name: '互关好友的老会话（两条且都不是首条）',
+    name: '互关好友的老会话（三条消息）',
     thread: {
       items: [
         { item_id: '9', timestamp: 1700000900, user_id: '999', text: '照片收到了' },
-        { item_id: '8', timestamp: 1700000800, user_id: '999', text: '' }
+        { item_id: '8', timestamp: 1700000800, user_id: '999', text: '' },
+        { item_id: '7', timestamp: 1700000700, user_id: '111', text: '发你了' }
       ]
     },
     expect: ''
