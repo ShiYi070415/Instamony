@@ -59,8 +59,12 @@ JS 版移植自 instagrapi 的 CAA/Bloks 流程，实测已打通的部分：
 | 新版（context 链） | 响应里有 `two_step_verification_context` | `two_step_verification.entrypoint` → `method_picker` → `method_picker.navigation.async`（选 totp/sms/backup_codes）→（备用码才走 `two_factor_login.enter_backup_code`）→ `two_step_verification.verify_code.async` |
 | 老版（profile-code 链） | 布局里有 `ap.two_step_verification.entrypoint_async` | entrypoint → code_entry → code_entry_async（用 `context_data` 串） |
 
-判哪套：**先看有没有 `two_step_verification_context`**（真机那次就是它，票据 13 字符），
+判哪套：**先看有没有 `two_step_verification_context`**（真机那次就是它，票据 2234 字符），
 没有再试 `ap.*`。方式推断照 instagrapi：8 位数字 ⇒ 备用码；只开短信没开 TOTP ⇒ sms；其余 ⇒ totp。
+
+> **实测补充**：真机的 send 响应里**没有** `sms_two_factor_on` / `totp_two_factor_on` 这两个键
+> （整份响应都搜过），所以实际走的是默认 `totp`，而那次是成功的。也就是说"方式推断"里
+> 只有"8 位数字 ⇒ 备用码"这条在真机上会被触发。
 两套都实现前，遇到 context 链会报"布局形状变了"——**这正是 R12 真机第一次的结果**。
 
 另一个真机实测的重要形状：失败/兜底响应里有 `CAA_LOGIN_FALLBACK:fallback_triggered`，

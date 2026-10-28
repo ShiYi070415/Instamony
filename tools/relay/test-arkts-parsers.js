@@ -110,6 +110,8 @@ function stripTypes(text) {
     .replace(/:\s*number/g, '')
     .replace(/:\s*string/g, '')
     .replace(/\s+as\s+Record<string,\s*ESObject>/g, '')
+    .replace(/\s+as\s+boolean/g, '')
+    .replace(/\s+as\s+number/g, '')
     .replace(/\s+as\s+Array<[^>]+>/g, '')
     .replace(/\s+as\s+ESObject/g, '')
     .replace(/\s+as\s+string/g, '')
@@ -179,7 +181,12 @@ const script = [
   toFunction('nextCallSpecs'),
   toFunction('pickCallSpec'),
   toFunction('findValueDeep'),
-  toFunction('twoStepContextOf')
+  toFunction('twoStepContextOf'),
+  toFunction('normalizeFlags'),
+  toFunction('mergeParams'),
+  toFunction('ensureNulls'),
+  toFunction('loginResponseBool'),
+  toFunction('inferChallenge')
 ].join('\n');
 vm.runInContext(script, sandbox);
 const Ark = sandbox.CaaLogin;
@@ -257,6 +264,55 @@ if (fs.existsSync(dumpFile)) {
 } else {
   console.log('  · 跳过"真实响应"一项：没有 ' + dumpFile);
 }
+
+check('2FA 参数拼装：normalizeFlags 把规范里的字符串还原成正确类型', () => {
+  const out = Ark.normalizeFlags({
+    'should_fallback_to_sms': 'false',
+    'is_whatsapp_installed': '0',
+    'device_id': 'ANDROID-1',
+    'INTERNAL_INFRA_screen_id': '6d6cez:3',
+    'two_step_verification_context': 'A'.repeat(2000)
+  });
+  assert(out['should_fallback_to_sms'] === false, 'false 没还原成布尔');
+  assert(out['is_whatsapp_installed'] === 0, '0 没还原成数字');
+  assert(out['device_id'] === 'ANDROID-1', '设备 id 被改了');
+  assert(out['INTERNAL_INFRA_screen_id'] === '6d6cez:3', 'screen_id 被改了');
+  assert(String(out['two_step_verification_context']).length === 2000, '长票据被截断');
+});
+
+check('2FA 参数拼装：mergeParams 用规范覆盖默认值，缺的保留默认', () => {
+  const merged = Ark.mergeParams(
+    { 'should_fallback_to_sms': '0', 'device_id': 'DEFAULT-DEV', 'flow_source': 'two_factor_login' },
+    { 'should_fallback_to_sms': 'false', 'family_device_id': 'PHONE-1' });
+  assert(merged['should_fallback_to_sms'] === false, '规范里的值没覆盖默认');
+  assert(merged['device_id'] === 'DEFAULT-DEV', '默认值被丢了');
+  assert(merged['family_device_id'] === 'PHONE-1', '规范里多出来的键没合并进来');
+});
+
+check('2FA 参数拼装：ensureNulls 把 IG 要 null 的三个字段补成 null', () => {
+  const params = {};
+  params['client_input_params'] = { 'selected_method': 'totp' };
+  params['server_params'] = { 'device_id': 'D' };
+  Ark.ensureNulls(params, ['cloud_trust_token', 'network_bssid'], ['spectra_reg_login_data']);
+  assert(params['client_input_params']['cloud_trust_token'] === null, 'client 的 null 没补上');
+  assert(params['client_input_params']['network_bssid'] === null, 'client 的 null 没补上');
+  assert(params['server_params']['spectra_reg_login_data'] === null, 'server 的 null 没补上');
+  assert(params['client_input_params']['selected_method'] === 'totp', '已有字段被动了');
+});
+
+check('2FA 方式推断：8 位→备用码；只开短信→sms；其余→totp', () => {
+  /*
+   * 注意：**真机的 send 响应里没有** `sms_two_factor_on` / `totp_two_factor_on` 这两个键
+   * （R12 实测，整份响应里都找不到）——所以实际走的就是默认 `totp`，而那次是成功的。
+   * 这里用 findValueDeep 支持的形状（键直接挂在对象/JSON 文本上）覆盖这些分支。
+   */
+  const smsOnly = { login_response: JSON.stringify({ sms_two_factor_on: true, totp_two_factor_on: false }) };
+  const both = { login_response: JSON.stringify({ sms_two_factor_on: true, totp_two_factor_on: true }) };
+  assert(Ark.inferChallenge({}, '12345678') === 'backup_codes', '8 位数字应判成备用码');
+  assert(Ark.inferChallenge(smsOnly, '123456') === 'sms', '只开短信应判成 sms');
+  assert(Ark.inferChallenge(both, '123456') === 'totp', '两个都开应判成 totp');
+  assert(Ark.inferChallenge({}, '123456') === 'totp', '默认应为 totp');
+});
 
 const sendDump = path.join(DIR, '.tmp', 'caa-send-response.json');
 if (fs.existsSync(sendDump)) {

@@ -64,6 +64,7 @@ node instamony.js --verify-session
 ```powershell
 node test-caa-parse.js          # 23 项：加密可逆 / 布局解析 / Cookie / 会话等价 / USDID / App 自检镜像
 node audit-arkts-parity.js      # ArkTS 移植与 JS 的字段、请求头差异（改一边后跑它）
+node test-arkts-parsers.js      # **把 App 的 ArkTS 解析源码摘出来直跑真数据**（8 项）
 ```
 
 `test-caa-parse.js` 覆盖：密码加密能被 IG 的格式解开（RSA + AES-GCM 可逆）、Bloks 布局解析
