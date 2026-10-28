@@ -9338,6 +9338,54 @@ struct Index {
   }
 
   /**
+   * 会话页标题栏**中间的自定义区域**（头像 + 名字 + 用户名，与官方短信 App 同款）。
+   *
+   * 为什么用 `stackBuilder` 而不是 `title`：HDS 的 `title` 只接受 `HdsNavigationTitle`
+   * （mainTitle / subTitle 两行文字），放不进头像；`stackBuilder`（HDS 6.0.0(20) 起）替换的正是
+   * 标题栏中间那块，返回键与右侧菜单仍由 HDS 提供 —— 于是"返回 + 头像 + 标题 + menus"一次成型。
+   */
+  @Builder
+  directThreadTitleStack() {
+    Row({ space: 8 }) {
+      if (this.directThreadVm.avatarNow().length > 0) {
+        Image(this.directThreadVm.avatarNow())
+          .draggable(false)
+          .width(32)
+          .height(32)
+          .borderRadius(16)
+          .objectFit(ImageFit.Cover)
+          .backgroundColor($r('app.color.field_background'))
+      } else {
+        Column()
+          .width(32)
+          .height(32)
+          .borderRadius(16)
+          .backgroundColor($r('app.color.field_background'))
+      }
+      Column({ space: 1 }) {
+        Text(this.directThreadVm.titleNow().length > 0
+          ? this.directThreadVm.titleNow() : $r('app.string.direct_empty'))
+          .fontSize(17)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.primary_text'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        if (this.directThreadVm.subtitleNow().length > 0) {
+          Text(this.directThreadVm.subtitleNow())
+            .fontSize(12)
+            .fontColor($r('app.color.secondary_text'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Center)
+  }
+
+  /**
    * 私信会话页右上角的两颗按钮：**电话 / 视频**（需求："menus分别有两个按钮，电话和视频，
    * sys.symbol.phone 和 sys.symbol.video，先不用做功能"）。
    *
@@ -10973,6 +11021,8 @@ struct Index {
       HdsNavDestination() {
         DirectThreadPage({
           vm: this.directThreadVm,
+          // 标题栏交给 HDS（头像 + 名字 + 用户名 + 返回键 + 菜单），页面不再自绘
+          externalHeader: true,
           onOpenWeb: (): void => {
             // 兜底出口：关掉原生会话页、把隐藏网页导航到这条会话（老行为）。
             const url: string = this.directThreadVm.webUrl();
@@ -11003,17 +11053,16 @@ struct Index {
       .titleBar({
         content: {
           /*
-           * 需求：返回键右边是头像、再右边是"名字 + id"上下排列（群聊只显示群名）。
+           * **恢复 HDS 标题栏**（与官方短信 App 同款：返回键 + 头像 + 标题 + 菜单）。
            *
-           * **HDS 的 `title` 只接受 `HdsNavigationTitle` 对象（mainTitle / subTitle），不接受
-           * 自定义 builder**（传 builder 会报 `Type 'void' is not assignable to 'HdsNavigationTitle'`）。
-           * 所以这里用它的两行式：mainTitle 大字（HDS 自己给粗体）+ subTitle 灰色小字；
-           * **头像因此放不进标题栏**，改放在右上角菜单那一排的第一个（见 directThreadMenus）。
+           * 关键在 `stackBuilder`（HDS 6.0.0(20) 起提供）：它替换标题栏中间的**自定义区域**，
+           * 所以头像能放进标题栏 —— 以前的 `title` 只吃 `HdsNavigationTitle`（mainTitle/subTitle
+           * 两行文字），塞不进头像，于是整条栏被隐藏、改成页面自绘（那条路现在撤掉了）。
+           *
+           * 返回键仍由 HDS 提供（`.hideBackButton(false)`），菜单是 `directThreadMenus()`。
            */
-          title: {
-            mainTitle: this.directThreadVm.titleNow().length > 0
-              ? this.directThreadVm.titleNow() : $r('app.string.direct_empty'),
-            subTitle: this.directThreadVm.subtitleNow()
+          stackBuilder: (): void => {
+            this.directThreadTitleStack();
           },
           menu: this.directThreadMenus()
         },
@@ -11021,8 +11070,7 @@ struct Index {
         avoidLayoutSafeArea: false,
         enableComponentSafeArea: false
       })
-      // 需求：标题里要有用户/群组头像 —— HDS 标题只支持两行文字，所以换成页面自绘（见 DirectThreadPage.pageHeader）。
-      .hideTitleBar(true)
+      .hideTitleBar(false)
       .hideBackButton(false)
       .titleMode(HdsNavDestinationTitleMode.MINI)
       .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])

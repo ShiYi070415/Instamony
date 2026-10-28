@@ -42,6 +42,13 @@ const PAGE_TOP_OFFSET: number = 96;
  * 所以把标题栏隐藏，改成页面内这一层；高度与 PAGE_TOP_OFFSET 对齐，列表的滚动留白不用改。
  */
 const HEADER_HEIGHT_VP: number = 96;
+/**
+ * 标题栏交给外层 HDS 导航栏时，内容顶部要留的空白（vp）。
+ *
+ * HDS 的 MINI 标题栏是 56vp；本页内容整体在标题栏**下面**（不再走"藏起来 + 自己画"那套），
+ * 所以要把它让出来，否则第一条消息会被标题栏压住。
+ */
+const EXTERNAL_HEADER_OFFSET: number = 56;
 const HEADER_TOP_PAD_VP: number = 40;
 const HEADER_AVATAR_VP: number = 36;
 const BOTTOM_OFFSET: number = 92;
@@ -175,6 +182,13 @@ const POP_NONE: number = -1;
 @Component
 export struct DirectThreadPage {
   vm: DirectThreadViewModel = new DirectThreadViewModel();
+  /**
+   * 标题栏由**外层 HDS 导航栏**提供（头像 + 名字 + 用户名，见 pages/Index 的 stackBuilder）。
+   *
+   * true 时本页不再自绘标题（否则会和系统标题栏叠成两层），内容顶部留白也换成本页常量
+   * `EXTERNAL_HEADER_OFFSET`（= HDS MINI 标题栏的高度）。
+   */
+  @Prop externalHeader: boolean = false;
   /**
    * **在网页里打开这条会话**（兜底出口）。
    *
@@ -645,7 +659,7 @@ export struct DirectThreadPage {
       // **+1**：列表第 0 格是那行"加载中"占位（见 LOADING_ROW_VP），消息从下标 1 开始。
       this.listScroller.scrollToIndex(added + 1, false, ScrollAlign.START);
       // 再退回标题栏那一条的高度，让它停在栏下方而不是藏在栏背后（见方法头）。
-      this.listScroller.scrollBy(0, -PAGE_TOP_OFFSET);
+      this.listScroller.scrollBy(0, -this.topOffsetVp());
     } catch (error) {
     }
   }
@@ -1439,6 +1453,11 @@ export struct DirectThreadPage {
    * 头像位置按需求在"名字与用户名左边"；群聊用 `vm.avatarNow()`（那是会话头像吗，
    * 群聊时服务端给的就是群头像）。
    */
+  /** 内容顶部的留白：外层 HDS 标题栏接管时只需让出栏高，否则要让出自绘标题那一层。 */
+  private topOffsetVp(): number {
+    return this.externalHeader ? EXTERNAL_HEADER_OFFSET : PAGE_TOP_OFFSET;
+  }
+
   @Builder
   pageHeader() {
     Row({ space: 10 }) {
@@ -1614,7 +1633,7 @@ export struct DirectThreadPage {
          * 顶部让位（vp）：标题栏那块（含它下面那层毛玻璃）的高度。它属于**内容**，
          * 滚动时会跟着走 —— 这正是"停在最上面时第一条不被压住、滑动时消息从栏下穿过"的实现。
          */
-        .contentStartOffset(PAGE_TOP_OFFSET)
+        .contentStartOffset(this.topOffsetVp())
         .contentEndOffset(BOTTOM_OFFSET)
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring)
@@ -1696,7 +1715,9 @@ export struct DirectThreadPage {
        * `HitTestMode.Transparent`：不阻塞列表的滚动与点击，返回键自己仍然收得到点击。
        */
       Column() {
-        this.pageHeader()
+        if (!this.externalHeader) {
+          this.pageHeader()
+        }
       }
       .width('100%')
       .height('100%')
