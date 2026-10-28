@@ -141,12 +141,23 @@ export class DirectMessage {
    * 只有封面的话点进视频分享就是个静止画面。
    */
   readonly sharePlayable: string;
+  /**
+   * **这条消息是谁发的**（群聊里每个人都不一样；1:1 会话里就是对方）。
+   *
+   * 为什么不再用"会话的对方资料"画所有气泡（用户报："私信群组会话名字和消息发起人没有正确区分，
+   * 全部用了同一个用户的资料"）：群聊里 `DirectThreadView.withUsername/withAvatar` 只是**其中一个人**，
+   * 用它画所有气泡等于把每条消息都说成同一个人发的。所以解析时按 `user_id` 查会话的 `users[]`
+   * 把人名/头像落到每条消息上；查不到时才退回会话那一份（1:1 会话就是这种情况）。
+   */
+  readonly senderName: string;
+  readonly senderAvatar: string;
 
   constructor(id: string, userId: string, mine: boolean, tsMs: number, kind: string,
               text: string, mediaUrl: string = '', isVideo: boolean = false,
               shareCode: string = '', shareUrl: string = '', shareIsVideo: boolean = false,
               shareKind: string = '', shareCover: string = '', shareUser: string = '',
-              shareAvatar: string = '', shareCaption: string = '', sharePlayable: string = '') {
+              shareAvatar: string = '', shareCaption: string = '', sharePlayable: string = '',
+              senderName: string = '', senderAvatar: string = '') {
     this.id = id;
     this.userId = userId;
     this.mine = mine;
@@ -164,7 +175,32 @@ export class DirectMessage {
     this.shareAvatar = shareAvatar;
     this.shareCaption = shareCaption;
     this.sharePlayable = sharePlayable;
+    this.senderName = senderName;
+    this.senderAvatar = senderAvatar;
   }
+}
+
+/** 会话 `users[]` 里的一位参与者（群聊里按 user_id 把每条消息对上人）。 */
+export class DirectPerson {
+  /** `pk`（可能 19~20 位，走 big-id 解析，见 JsonRead.parseWithBigIds）。 */
+  pk: string = '';
+  /** 用户名（`username`；没有就 `full_name`）。 */
+  name: string = '';
+  /** 头像地址（空串 = 没有）。 */
+  avatar: string = '';
+}
+
+/** 按 `pk` 在参与者里找人（找不到给 null；1:1 会话里常常只有对方一个人）。 */
+export function personOf(people: Array<DirectPerson>, pk: string): DirectPerson | null {
+  if (pk.length === 0) {
+    return null;
+  }
+  for (let index: number = 0; index < people.length; index++) {
+    if (people[index].pk === pk) {
+      return people[index];
+    }
+  }
+  return null;
 }
 
 /** 分享卡片要的字段（由 DirectMapper.shareCardOf 从载荷里抠出来）。 */
@@ -362,6 +398,9 @@ export class DirectMapper {
     if (viewerFbid.length > 0) {
       me = viewerFbid;
     }
+    // 参与者表（群聊按 user_id 给每条消息对发送人，见 DirectMessage.senderName）。
+    const people: Array<DirectPerson> = [];
+    let partnerPicked: boolean = false;
     let withUsername: string = '';
     let withAvatar: string = '';
     let withId: string = '';
@@ -380,6 +419,12 @@ export class DirectMapper {
       }
       const name: string = JsonRead.strOf(user, 'username');
       const pic: string = DirectMapper.pictureOf(user);
+      // 参与者表：**不 break**，整份收下来（群聊靠它给每条消息对发送人）。
+      const person: DirectPerson = new DirectPerson();
+      person.pk = pk;
+      person.name = name.length > 0 ? name : JsonRead.strOf(user, 'full_name');
+      person.avatar = pic;
+      people.push(person);
       if (withUsername.length === 0 && name.length > 0) {
         withUsername = name;
       }
@@ -389,11 +434,12 @@ export class DirectMapper {
       if (withId.length === 0) {
         withId = pk;
       }
-      if (pic.length > 0) {
+      if (!partnerPicked && pic.length > 0) {
         withId = pk;
         withUsername = name;
         withAvatar = pic;
-        break;
+        // 不能 break：后面的参与者还要收进 people（群聊要按人区分消息）。
+        partnerPicked = true;
       }
     }
     const messages: Array<DirectMessage> = [];
@@ -488,11 +534,14 @@ export class DirectMapper {
       }
       // GraphQL 这条同理（见 threadFromJson 里的说明）：分享卡片的 share* 字段一个都不能少。
       const gqlCard: ShareCard = DirectMapper.shareCardOf(item);
+      // 这条消息是谁发的（群聊里每人不一样，见 DirectMessage.senderName）。
+      const gqlSender: DirectPerson | null = personOf(people, userId);
       messages.push(new DirectMessage(id, userId, me.length > 0 && userId === me, tsMs, kind,
         text, mediaUrl, DirectMapper.hasVideoMedia(item), DirectMapper.shareCodeOf(item),
         DirectMapper.shareUrlOf(item), DirectMapper.shareIsVideoOf(item),
         gqlCard.kind, gqlCard.cover, gqlCard.user, gqlCard.avatar, gqlCard.caption,
-        gqlCard.playable));
+        gqlCard.playable, gqlSender === null ? '' : gqlSender.name,
+        gqlSender === null ? '' : gqlSender.avatar));
     }
     if (messages.length === 0) {
       // 找到数组了但一条都没能用 —— 把第一条的原样键名和几个字段打出来（诊断用）。
@@ -923,6 +972,12 @@ export class DirectMapper {
     const me: string = viewerId.length > 0 ? viewerId : ownId;
     // 参与者：自己以外的那几个（1:1 就是对方；群聊取第一个当标题里的名字）。
     const users: Array<Object> = JsonRead.arrayOf(thread, 'users');
+    /*
+     * **参与者表**：群聊里每条消息的发送人都不一样（用户报："全部用了同一个用户的资料"）。
+     * 这里把 `users[]` 整份收下来，下面按 `user_id` 给每条消息对上人名/头像。
+     */
+    const people: Array<DirectPerson> = [];
+    let partnerPicked: boolean = false;
     let withUsername: string = '';
     let withAvatar: string = '';
     let withId: string = '';
@@ -940,6 +995,12 @@ export class DirectMapper {
       }
       const name: string = JsonRead.strOf(user, 'username');
       const pic: string = DirectMapper.pictureOf(user);
+      // 参与者表：**不 break**，整份收下来（群聊靠它给每条消息对发送人）。
+      const person: DirectPerson = new DirectPerson();
+      person.pk = pk;
+      person.name = name.length > 0 ? name : JsonRead.strOf(user, 'full_name');
+      person.avatar = pic;
+      people.push(person);
       /*
        * 用户名 / 名字**独立于头像**收集（这一条是"标题栏第二行退成数字 id"的修复）：
        * 原来只把 username/full_name 放在"挑中头像"的分支里赋值，挑中的那个用户对象恰好
@@ -962,12 +1023,13 @@ export class DirectMapper {
        * `profile_pic_url`（或只给了 `hd_profile_pic_url_info`），按位置盲取第一个就会
        * 得到"有名字没头像"的标题栏（用户看到的是一块空白头像）。
        */
-      if (pic.length > 0) {
+      if (!partnerPicked && pic.length > 0) {
         withId = pk;
         withUsername = name;
         fullName = JsonRead.strOf(user, 'full_name');
         withAvatar = pic;
-        break;
+        // 注意：这里**不能 break** —— 后面的参与者还要收进 people（群聊要按人区分消息）。
+        partnerPicked = true;
       }
     }
     if (withId.length === 0) {
@@ -1009,12 +1071,15 @@ export class DirectMapper {
       if (card.kind.length > 0) {
         shareCards++;
       }
+      // 这条消息是谁发的（群聊里每人不一样，见 DirectMessage.senderName）。
+      const sender: DirectPerson | null = personOf(people, userId);
       messages.push(new DirectMessage(JsonRead.strOf(item, 'item_id'), userId,
         me.length > 0 && userId === me, micros > 0 ? Math.round(micros / 1000) : 0,
         kind, text, mediaUrl, isVideo, DirectMapper.shareCodeOf(item),
         DirectMapper.shareUrlOf(item), DirectMapper.shareIsVideoOf(item),
         card.kind, card.cover, card.user, card.avatar, card.caption,
-        card.playable));
+        card.playable, sender === null ? '' : sender.name,
+        sender === null ? '' : sender.avatar));
     }
     // items 是"新在前"，界面上按时间正序排（老的在上）。
     messages.sort((a: DirectMessage, b: DirectMessage): number => a.tsMs - b.tsMs);

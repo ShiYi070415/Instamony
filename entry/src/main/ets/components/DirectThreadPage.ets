@@ -682,15 +682,86 @@ export struct DirectThreadPage {
     return undefined;
   }
 
-  private showsAvatar(index: number, message: DirectMessage): boolean {
+  /** 下一条消息（没有给 undefined；索引对不上时按 id 反查，理由同 prevOf）。 */
+  private nextOf(index: number, message: DirectMessage): DirectMessage | undefined {
+    const list: Array<DirectMessage> = this.allMessages();
+    if (index >= 0 && index + 1 < list.length && list[index].id === message.id) {
+      return list[index + 1];
+    }
+    for (let at: number = 0; at < list.length; at++) {
+      if (list[at].id === message.id) {
+        return at + 1 < list.length ? list[at + 1] : undefined;
+      }
+    }
+    return undefined;
+  }
+
+  /** 这一条和上一条算不算"同一组"（同一个人、间隔不超过 GROUP_GAP_MS）。 */
+  private sameGroupAsPrev(index: number, message: DirectMessage): boolean {
     const prev: DirectMessage | undefined = this.prevOf(index, message);
     if (prev === undefined) {
-      return true;
+      return false;
     }
     if (prev.mine !== message.mine) {
+      return false;
+    }
+    if (DirectThreadPage.senderKeyOf(prev) !== DirectThreadPage.senderKeyOf(message)) {
+      return false;
+    }
+    return message.tsMs - prev.tsMs <= GROUP_GAP_MS;
+  }
+
+  /**
+   * **头像画在"这一组最新那条"的左侧**（需求："头像要显示在消息时间段分组最新消息的左侧"）。
+   *
+   * 判据是"下一条不跟它同组"：换人、换方向、或者隔得超过 GROUP_GAP_MS。
+   */
+  private showsAvatar(index: number, message: DirectMessage): boolean {
+    if (message.mine) {
+      return false;
+    }
+    const next: DirectMessage | undefined = this.nextOf(index, message);
+    if (next === undefined) {
       return true;
     }
-    return message.tsMs - prev.tsMs > GROUP_GAP_MS;
+    if (next.mine) {
+      return true;
+    }
+    if (DirectThreadPage.senderKeyOf(next) !== DirectThreadPage.senderKeyOf(message)) {
+      return true;
+    }
+    return next.tsMs - message.tsMs > GROUP_GAP_MS;
+  }
+
+  /**
+   * **这一组要不要在顶部写发送人名字**（需求："消息时间段分组的顶部需要显示用户名，加文字阴影"）。
+   *
+   * 只在群聊里写（1:1 会话写名字是噪音），而且只在"这一组的第一条"、且不是自己发的消息上写。
+   */
+  private showsSenderName(index: number, message: DirectMessage): boolean {
+    if (message.mine) {
+      return false;
+    }
+    if (this.view === null || !this.view.isGroup) {
+      return false;
+    }
+    return !this.sameGroupAsPrev(index, message);
+  }
+
+  /** 这条消息的发送人在界面上的名字（拿不到就给空串，界面上就不画那一行）。 */
+  private senderLabel(message: DirectMessage): string {
+    if (message.senderName.length > 0) {
+      return message.senderName;
+    }
+    return this.view !== null ? this.view.withUsername : '';
+  }
+
+  /** 分组建模用的"人"（同一人多条连续消息算一组）；空名时退回 user_id。 */
+  private static senderKeyOf(message: DirectMessage): string {
+    if (message.senderName.length > 0) {
+      return message.senderName;
+    }
+    return message.userId.length > 0 ? message.userId : (message.mine ? 'me' : 'other');
   }
 
   private isNewGroup(index: number, message: DirectMessage): boolean {
@@ -762,19 +833,41 @@ export struct DirectThreadPage {
         }
         .alignItems(HorizontalAlign.End)
       } else {
-        if (this.showsAvatar(index, message)) {
-          Image(this.view !== null && this.view.withAvatar.length > 0
-            ? this.view.withAvatar : $r('app.media.startIcon'))
-            .draggable(false)
-            .width(AVATAR_SIZE)
-            .height(AVATAR_SIZE)
-            .borderRadius(AVATAR_SIZE / 2)
-            .objectFit(ImageFit.Cover)
-            .backgroundColor($r('app.color.field_background'))
-        } else {
-          Column().width(AVATAR_SIZE).height(AVATAR_SIZE)
+        Column({ space: 2 }) {
+          // 群聊：这一组顶部写发送人（带文字阴影，压在深色背景上不糊）。
+          if (this.showsSenderName(index, message) && this.senderLabel(message).length > 0) {
+            Text(this.senderLabel(message))
+              .fontSize(11)
+              .fontColor($r('app.color.secondary_text'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .textShadow({ radius: 4, color: '#A0000000', offsetX: 0, offsetY: 1 })
+              .padding({ left: AVATAR_SIZE + 8 })
+              .width('100%')
+              .textAlign(TextAlign.Start)
+          }
+          Row({ space: 8 }) {
+            if (this.showsAvatar(index, message)) {
+              Image(message.senderAvatar.length > 0
+                ? message.senderAvatar
+                : (this.view !== null && this.view.withAvatar.length > 0
+                  ? this.view.withAvatar : $r('app.media.startIcon')))
+                .draggable(false)
+                .width(AVATAR_SIZE)
+                .height(AVATAR_SIZE)
+                .borderRadius(AVATAR_SIZE / 2)
+                .objectFit(ImageFit.Cover)
+                .backgroundColor($r('app.color.field_background'))
+            } else {
+              Column().width(AVATAR_SIZE).height(AVATAR_SIZE)
+            }
+            this.bubbleContent(message)
+          }
+          .width('100%')
+          .alignItems(VerticalAlign.Bottom)
         }
-        this.bubbleContent(message)
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
         Blank()
       }
     }
