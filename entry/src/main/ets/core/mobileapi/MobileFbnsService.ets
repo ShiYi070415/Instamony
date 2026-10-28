@@ -29,6 +29,14 @@ import { RealtimeEvent } from './MobileRealtime';
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'MobileFbnsService';
 
+/** 待发的一条通知（同一条会话的连发会合并成一条，见 handlePush 末尾）。 */
+class FbnsPendingNotify {
+  name: string = '';
+  text: string = '';
+  added: number = 0;
+  timer: number = -1;
+}
+
 export class MobileFbnsService {
   private static client: MobileFbnsClient | null = null;
   private static started: boolean = false;
@@ -42,6 +50,18 @@ export class MobileFbnsService {
    * `users/{id}/info/`（一发很小的请求）。缓存住之后同一个人只查一次。
    */
   private static senderNames: Map<string, string> = new Map<string, string>();
+  /**
+   * 正在查的 uid → 查名请求（**同一人只查一次**）。
+   *
+   * 为什么必须去重：一条消息连发时，推送会在几百毫秒内来好几条。若每条都各发一次
+   * `users/{id}/info/`，就会被节流排队 —— 真机上表现为"通知晚 20 秒才弹、还连弹 6 次"。
+   * 现在同一 uid 共用同一个 Promise，后到的等它就行。
+   */
+  private static pendingNames: Map<string, Promise<string>> =
+    new Map<string, Promise<string>>();
+  /** 正在合并的通知（会话 id → 待发）。 */
+  private static pendingNotifies: Map<string, FbnsPendingNotify> =
+    new Map<string, FbnsPendingNotify>();
 
   /** 当前是不是设备级会话（没有 sessionid）。 */
   static isDeviceLevel(identity: MobileIdentity): boolean {
@@ -149,6 +169,22 @@ export class MobileFbnsService {
     if (cached !== undefined) {
       return cached;
     }
+    // 已经在查了就等同一发（见 pendingNames 的说明）
+    const pending: Promise<string> | undefined = MobileFbnsService.pendingNames.get(id);
+    if (pending !== undefined) {
+      return pending;
+    }
+    const task: Promise<string> = MobileFbnsService.lookupName(id);
+    MobileFbnsService.pendingNames.set(id, task);
+    try {
+      return await task;
+    } finally {
+      MobileFbnsService.pendingNames.delete(id);
+    }
+  }
+
+  /** 真正去查一次用户名（`nameOf` 负责缓存与去重）。 */
+  private static async lookupName(id: string): Promise<string> {
     try {
       const body: MobileUserBody | null = await MobileProfile.info(id, '');
       if (body === null) {
@@ -219,12 +255,45 @@ export class MobileFbnsService {
         'op': 'add',
         'value': item
       };
-      const data: Record<string, ESObject> = { 'data': [patch] };
-      const event: RealtimeEvent = new RealtimeEvent('146', JSON.stringify([data]));
+      /*
+       * **两条补丁一起发**：
+       *   ① 消息补丁（带 value）→ 开着的会话即时插入；
+       *   ② 会话级补丁（`value` 故意不给）→ `DirectRealtime.applyPatch` 见到空 value 就当成
+       *      "这条会话有别的变化"，emitThread → 私信列表补刷一次。
+       *
+       * 只发①的话真机表现是"会话里实时更新、但私信列表不动"——列表读的是 inbox 的摘要，
+       * 必须由"会话变了"这个信号去刷。
+       */
+      const threadPatch: Record<string, ESObject> = {
+        'path': `/direct_v2/inbox/threads/${threadId}/`,
+        'op': 'replace'
+      };
+      const group: Record<string, ESObject> = { 'data': [patch, threadPatch] };
+      const event: RealtimeEvent = new RealtimeEvent('146', JSON.stringify([group]));
       DirectRealtime.handle(event);
     }
-    // 本地通知（不依赖界面是否开着）：标题用**用户名**（推送里只有数字 id，见 nameOf 的说明）。
+    /*
+     * **同一会话的连发合并成一条通知**（700ms 窗口）。
+     *
+     * 为什么：一条消息连发时推送是"一条一条来"的，每条都弹一次就是连响 6 下、正文还停在
+     * 中间某条。合并之后只弹一次、正文取最后一条 —— 与 IG 自己的通知行为一致。
+     */
     const name: string = await MobileFbnsService.nameOf(sender);
-    PushCenter.notifyDirect(name, text, 1, threadId);
+    let pending: FbnsPendingNotify | undefined = MobileFbnsService.pendingNotifies.get(threadId);
+    if (pending === undefined) {
+      pending = new FbnsPendingNotify();
+      MobileFbnsService.pendingNotifies.set(threadId, pending);
+    }
+    pending.name = name;
+    pending.text = text;
+    pending.added = pending.added + 1;
+    if (pending.timer >= 0) {
+      clearTimeout(pending.timer);
+    }
+    const merged: FbnsPendingNotify = pending;
+    merged.timer = setTimeout((): void => {
+      MobileFbnsService.pendingNotifies.delete(threadId);
+      PushCenter.notifyDirect(merged.name, merged.text, merged.added, threadId);
+    }, 700);
   }
 }

@@ -143,6 +143,12 @@ export class MobileFbnsClient {
   private packetId: number = 1;
   private up: boolean = false;
   private pingTimer: number = -1;
+  /** 断线重连定时器（-1 = 没有排程）。 */
+  private reconnectTimer: number = -1;
+  /** 当前重连退避（毫秒）。 */
+  private reconnectDelay: number = 1000;
+  /** 是否已经被显式 stop()（stop 之后不再自动重连）。 */
+  private stopped: boolean = true;
   private connackWaiter: ((result: FbnsConnack) => void) | null = null;
   private onToken: FbnsTokenHandler | null = null;
   private onPush: FbnsPushHandler | null = null;
@@ -164,6 +170,7 @@ export class MobileFbnsClient {
    */
   async start(clientId: string, onToken: FbnsTokenHandler,
               onPush: FbnsPushHandler): Promise<boolean> {
+    this.stopped = false;
     this.onToken = onToken;
     this.onPush = onPush;
     this.clientId = clientId.length > 0 ? clientId : this.clientId;
@@ -242,6 +249,7 @@ export class MobileFbnsClient {
             }
             this.up = false;
             hilog.info(DOMAIN, TAG, 'fbns closed');
+            this.scheduleReconnect('closed');
           });
           ref.on('error', (err: BusinessError): void => {
             const detail: string = `${err === undefined || err === null ? 'unknown' : err.code}`
@@ -253,6 +261,7 @@ export class MobileFbnsClient {
             }
             this.up = false;
             finish(new FbnsConnack(-1, new Uint8Array(0)));
+            this.scheduleReconnect('error');
           });
           const packet: Uint8Array = MobileFbns.buildConnect(auth, FBNS_KEEPALIVE_S, Date.now());
           await ref.send(packet.buffer as ArrayBuffer);
@@ -447,6 +456,43 @@ export class MobileFbnsClient {
     }
   }
 
+  /**
+   * 断线后自动重连（指数退避，封顶 30 秒）。
+   *
+   * 为什么必须有：FBNS 的 socket 会在服务端换连接、网络切换、静默超时等情况下被动断开
+   * （真机上首条私信之后 26 秒就收到过一次 `socket error`）。没有重连 = **此后一条推送都收不到**，
+   * 表现正是"通知突然没反应"，而且没有任何可见提示。
+   */
+  private scheduleReconnect(reason: string): void {
+    if (this.stopped || this.reconnectTimer >= 0) {
+      return;
+    }
+    const delay: number = this.reconnectDelay;
+    this.reconnectDelay = Math.min(30000, this.reconnectDelay * 2);
+    hilog.info(DOMAIN, TAG, 'reconnect in %{public}dms (%{public}s)', delay, reason);
+    this.reconnectTimer = setTimeout((): void => {
+      this.reconnectTimer = -1;
+      if (this.stopped) {
+        return;
+      }
+      const token: FbnsTokenHandler | null = this.onToken;
+      const push: FbnsPushHandler | null = this.onPush;
+      if (token === null || push === null) {
+        return;
+      }
+      this.start(this.clientId, token, push).then((ok: boolean): void => {
+        if (ok) {
+          this.reconnectDelay = 1000;
+          hilog.info(DOMAIN, TAG, 'reconnect ok');
+        } else {
+          this.scheduleReconnect('retry-failed');
+        }
+      }).catch((): void => {
+        this.scheduleReconnect('retry-threw');
+      });
+    }, delay);
+  }
+
   /** 只关 socket（引导连接用完就走这里）。 */
   private closeSocket(): void {
     const ref: socket.TLSSocket | null = this.sock;
@@ -463,6 +509,11 @@ export class MobileFbnsClient {
   }
 
   stop(): void {
+    this.stopped = true;
+    if (this.reconnectTimer >= 0) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = -1;
+    }
     this.stopPing();
     this.closeSocket();
     this.buffer = [];
