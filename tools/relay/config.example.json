@@ -8,9 +8,9 @@
     "channel": "agc",
 
     "agc": {
-      "appId": "AGC 里的 App ID（数字）",
-      "clientId": "AGC 的 OAuth Client ID",
-      "clientSecret": "AGC 的 OAuth Client Secret"
+      "serviceAccountFile": "../agc/private.json",
+      "category": "IM",
+      "testMessage": true
     },
     "pushToken": "把 App「复制中转材料」里的 pushToken 粘这里",
 

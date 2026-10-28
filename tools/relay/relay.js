@@ -37,8 +37,11 @@ const DEFAULT_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 const MIN_POLL_SECONDS = 60;
-const AGC_TOKEN_URL = 'https://oauth-login.cloud.huawei.com/oauth2/v3/token';
-const AGC_PUSH_URL = 'https://push-api.cloud.huawei.com/v1/%s/messages:send';
+/** 官方文档：HarmonyOS 5+ 只认服务账号 JWT + v3 接口（v2 只服务 3.x/4.x）。 */
+const PUSH_SEND = 'https://push-api.cloud.huawei.com/v3/%s/messages:send';
+const SA_SCOPE_AUD = 'https://oauth-login.cloud.huawei.com/oauth2/v3/token';
+/** 默认去隔壁 agc 工具目录找服务账号密钥，省得每处都配一遍。 */
+const DEFAULT_SA_FILE = path.join(__dirname, '..', 'agc', 'private.json');
 
 /** keepAlive Agent：整轮轮询只建一次连接（省电的主要来源，别改成每发新建）。 */
 const agent = new https.Agent({ keepAlive: true, keepAliveMsecs: 120000, maxSockets: 2 });
@@ -75,18 +78,20 @@ function loadConfig() {
     die('找不到 ' + file + ' —— 先 cp config.example.json config.json 再填。');
   }
   const cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
-  const cookie = (cfg.ig && cfg.ig.cookie) || '';
-  if (cookie.length < 20) {
-    die('config.ig.cookie 无效：先到 App「设定 → 诊断 → 复制中转材料」。');
-  }
   const notify = cfg.notify || {};
   const channel = notify.channel || 'agc';
   if (channel === 'agc') {
     const agc = notify.agc || {};
-    if (!agc.appId || !agc.clientId || !agc.clientSecret) {
-      die('channel=agc 但 appId/clientId/clientSecret 没填全。');
+    if (agc.clientId || agc.clientSecret) {
+      warn('notify.agc 里的 clientId/clientSecret 已经作废（HarmonyOS 5+ 不再支持 OAuth 2.0 开放鉴权，'
+        + 'v1 接口也停用了）。这两个字段会被忽略，请改用 serviceAccountFile。');
     }
     if (!notify.pushToken) die('channel=agc 但 pushToken 是空的（App 里还没拿到 token）。');
+    const saFile = resolveServiceAccountFile(agc);
+    if (!fs.existsSync(saFile)) {
+      die('找不到服务账号密钥文件 ' + saFile
+        + '\n去 AGC → API Console 创建「服务账号密钥」凭证，下载推送服务 API 的 json。');
+    }
   } else if (channel === 'meow') {
     if (!(notify.meow && notify.meow.nickname)) die('channel=meow 但没填昵称。');
   } else if (channel === 'telegram') {
@@ -99,6 +104,14 @@ function loadConfig() {
     die('未知的 notify.channel: ' + channel);
   }
   return cfg;
+}
+
+/** IG cookie 只有"真的要轮询"时才需要，--test-push 不碰它。 */
+function requireIgCookie(cfg) {
+  const cookie = (cfg.ig && cfg.ig.cookie) || '';
+  if (cookie.length < 20) {
+    die('config.ig.cookie 无效：先到 App「设定 → 诊断 → 复制中转材料」。');
+  }
 }
 
 /* ------------------------------------------------------------- HTTP 小工具 */
@@ -236,6 +249,47 @@ function newestOf(thread) {
   return best;
 }
 
+/* ------------------------------------------------- 自分类 IM 合规过滤 */
+
+/**
+ * 为什么要"过滤"而不是"能发就发"：
+ * 我们给通知消息申请的 category 是 IM（即时聊天）。官方对 IM 的硬性承诺是
+ * **只包含互相关注用户之间的点对点私信**，明确排除：未关注人的私信请求
+ * （message request / 首次搭话）、官方号或商家批量推送、任何广告内容。
+ * 违反分类标准会按《通知违规处罚标准》处理（轻则收回权益、重则判违规），
+ * 所以宁可不推，也不要为了一条陌生人的私信把 IM 权益搞掉。
+ *
+ * 判据都是"保守方向"的：拿不准就当消息请求，不推。
+ */
+
+/** 线程标了 pending / 需要审批 —— Instagram 对陌生人首条的处理方式。 */
+function looksLikeMessageRequest(thread) {
+  if (thread.is_pending === true) return true;
+  if (thread.pending === true) return true;
+  if (thread.approval_factor !== undefined && thread.approval_factor !== null) return true;
+  return false;
+}
+
+/**
+ * 是否"已有历史往来"。
+ * 收件箱请求带 thread_message_limit=2，最多回两条消息：
+ *   - 回来的只有 1 条 → 这就是这条会话的第一条消息（首次搭话 / 消息请求），不推；
+ *   - 回来 2 条 → 说明前面还有消息，属正常往来，可以推。
+ */
+function hasConversationHistory(thread) {
+  return (thread.items || []).length >= 2;
+}
+
+/**
+ * 返回空串表示可以推，否则返回跳过原因（会打进日志，便于事后核对）。
+ * 顺序有意义：先认消息请求，再认"没有历史"。
+ */
+function complianceVerdict(thread) {
+  if (looksLikeMessageRequest(thread)) return 'message-request';
+  if (!hasConversationHistory(thread)) return 'no-history';
+  return '';
+}
+
 /* ------------------------------------------------------------- 安静时段 */
 
 function inQuietHours(cfg) {
@@ -250,50 +304,88 @@ function inQuietHours(cfg) {
 
 /* ------------------------------------------------------------------ 推送 */
 
-async function agcAccessToken(agc) {
-  const body = querystring.stringify({
-    grant_type: 'client_credentials',
-    client_id: agc.clientId,
-    client_secret: agc.clientSecret
+/** 服务账号密钥文件路径：配置优先，否则用 tools/agc/private.json。 */
+function resolveServiceAccountFile(agc) {
+  const name = (agc && agc.serviceAccountFile) || DEFAULT_SA_FILE;
+  return path.isAbsolute(name) ? name : path.resolve(__dirname, name);
+}
+
+function loadServiceAccount(agc) {
+  const file = resolveServiceAccountFile(agc);
+  const sa = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (!sa.private_key) throw new Error(file + ' 里找不到 private_key');
+  return sa;
+}
+
+/**
+ * 服务账号 JWT（PS256）——按官方文档：header 带 kid=key_id、alg=PS256，
+ * payload 的 iss=sub_account、aud 固定、exp=iat+3600。这个 JWT 本身**就是**
+ * Authorization 里的 Bearer，不用再换 access_token。
+ *
+ * 有效期一小时，所以缓存起来：轮询每分钟一轮，没必要每轮都 RSA 签一次。
+ */
+let jwtCache = { value: '', exp: 0 };
+
+function serviceJwt(sa) {
+  const crypto = require('crypto');
+  const now = Math.floor(Date.now() / 1000);
+  if (jwtCache.value && jwtCache.exp - 60 > now) return jwtCache.value;
+  const b64 = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
+  const signingInput = b64({ kid: sa.key_id, typ: 'JWT', alg: 'PS256' })
+    + '.' + b64({ aud: SA_SCOPE_AUD, iss: sa.sub_account, iat: now, exp: now + 3600 });
+  const signature = crypto.sign('sha256', Buffer.from(signingInput), {
+    key: String(sa.private_key).replace(/\\n/g, '\n'),
+    padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+    saltLength: crypto.constants.RSA_PSS_SALTLEN_DIGEST
+  }).toString('base64url');
+  jwtCache = { value: signingInput + '.' + signature, exp: now + 3600 };
+  return jwtCache.value;
+}
+
+async function pushAgc(cfg, title, body, threadId) {
+  const agc = cfg.notify.agc || {};
+  const sa = loadServiceAccount(agc);
+  const projectId = sa.project_id || agc.projectId;
+  if (!projectId) throw new Error('服务账号密钥文件里没有 project_id，拼不出 v3 地址');
+  const payload = JSON.stringify({
+    payload: {
+      notification: {
+        category: agc.category || 'IM',
+        title: title,
+        body: body,
+        clickAction: { actionType: 0, data: { threadId: threadId } },
+        style: 0
+      }
+    },
+    target: { token: [cfg.notify.pushToken] },
+    pushOptions: { testMessage: agc.testMessage !== false, ttl: 3600 }
   });
-  const res = await request(AGC_TOKEN_URL, {
+  const res = await request(PUSH_SEND.replace('%s', projectId), {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Content-Length': Buffer.byteLength(body)
+      Authorization: 'Bearer ' + serviceJwt(sa),
+      'Content-Type': 'application/json; charset=UTF-8',
+      'Content-Length': Buffer.byteLength(payload),
+      'push-type': '0'
     }
-  }, body);
+  }, payload);
   let data = {};
   try {
     data = JSON.parse(res.body);
   } catch (error) {
     data = {};
   }
-  if (!data.access_token) throw new Error('AGC 取 token 失败：' + res.body.slice(0, 200));
-  return data.access_token;
-}
-
-async function pushAgc(cfg, title, body, threadId) {
-  const agc = cfg.notify.agc;
-  const token = await agcAccessToken(agc);
-  const payload = JSON.stringify({
-    validate_only: false,
-    message: {
-      data: JSON.stringify({ threadId: threadId, kind: 'direct' }),
-      notification: { title: title, body: body },
-      android: { ttl: '86400s', data: JSON.stringify({ threadId: threadId }) },
-      token: [cfg.notify.pushToken]
-    }
-  });
-  const res = await request(AGC_PUSH_URL.replace('%s', agc.appId), {
-    method: 'POST',
-    headers: {
-      Authorization: 'Bearer ' + token,
-      'Content-Type': 'application/json; charset=UTF-8',
-      'Content-Length': Buffer.byteLength(payload)
-    }
-  }, payload);
-  log('AGC 推送：' + res.body.slice(0, 160));
+  if (data.code === '80000000') {
+    log('AGC 推送成功：' + (data.requestId || ''));
+    return;
+  }
+  // pushToken 失效（应用重装/清数据/HMS 更新）是最常见的一种，单独点明怎么修。
+  warn('AGC 推送失败（HTTP ' + res.status + '）：' + res.body.slice(0, 220));
+  if (res.status === 401 || res.status === 403) {
+    warn('鉴权失败 = 服务账号 JWT 不对（alg/aud/key_id/project_id）。不是 token 的问题。');
+  } else {
+    warn('如果反复失败且通知到不了，先在 App 里「复制中转材料」重新取一次 pushToken。');
+  }
 }
 
 async function pushMeow(cfg, title, body) {
@@ -412,6 +504,14 @@ async function main() {
   quiet = process.argv.indexOf('--quiet') >= 0;
   const once = process.argv.indexOf('--once') >= 0;
   const cfg = loadConfig();
+  const testAt = process.argv.indexOf('--test-push');
+  if (testAt >= 0) {
+    // 只验通道：不看 IG、不占锁、不写 state —— 让"手机到底能不能收到"独立成一步。
+    const text = process.argv[testAt + 1] || '中转通道自检';
+    await send(cfg, 'Instamony', text, 'channel-test');
+    return;
+  }
+  requireIgCookie(cfg);
   const ig = cfg.ig || {};
   const activeGap = Math.max(MIN_POLL_SECONDS, Number(ig.pollSeconds || 90));
   const idleMax = Math.max(activeGap, Number(ig.idleMaxSeconds || 300));
@@ -437,6 +537,7 @@ async function main() {
   for (;;) {
     const threads = await fetchInbox(cfg);
     const fresh = [];
+    const skipped = [];
     for (const thread of threads) {
       const threadId = String(thread.thread_id || thread.thread_v2_id || '');
       if (!threadId) continue;
@@ -453,8 +554,19 @@ async function main() {
         state[threadId] = { id: newest.id, ts: newest.ts };
         dirty = true;
         if (newest.mine || firstRound) continue;
+        // IM 分类的合规红线：消息请求 / 没有历史往来的一律不推。
+        // 记账照记（上面已写 state），这样同一会话后续真成了正常往来还能正常推。
+        const verdict = complianceVerdict(thread);
+        if (verdict) {
+          skipped.push(verdict + ':' + (thread.thread_title || threadId));
+          continue;
+        }
         fresh.push({ id: threadId, title: thread.thread_title || '私信', text: newest.text });
       }
+    }
+
+    if (skipped.length > 0) {
+      log('合规过滤跳过 ' + skipped.length + ' 条（不推 IM 类以外的场景）：' + skipped.join('，'));
     }
 
     if (fresh.length > 0) {
@@ -497,8 +609,12 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  warn('中转异常退出：' + (error && error.stack ? error.stack : error));
-  if (process.argv.indexOf('--once') < 0) releaseLock();
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    warn('中转异常退出：' + (error && error.stack ? error.stack : error));
+    if (process.argv.indexOf('--once') < 0) releaseLock();
+    process.exit(1);
+  });
+}
+
+module.exports = { complianceVerdict, looksLikeMessageRequest, hasConversationHistory };

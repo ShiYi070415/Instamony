@@ -40,30 +40,59 @@ config.example.json 配置模板
 
 ### A. AGC（HarmonyOS 原生通知，推荐）
 
-需要你在 AppGallery Connect 里把应用登记好（这一步只能你操作）：
+**先记住这条，能省掉几个小时**：HarmonyOS 5+ 的 Push Kit **只认服务账号 JWT + v3 接口**，
+`client_credentials` 换 access_token 那套（v1/v2 接口）已经废弃，会回
+`{"error":1101,"sub_error":20003}`。详见 `docs/PUSH_SERVER.md`。
 
-1. AGC 控制台 →「我的项目」→ 创建项目 → 添加应用，**包名必须与 App 一致**：
-   `com.oneleaf.instamony`；
-2. 「项目设置 → 常规 → 应用」里取得 **App ID**；「项目设置 → 常规 → API 密钥 / OAuth」
-   里创建 **Client ID / Client Secret**（服务账号凭据）；
-3. 「增长 → Push Kit」里**开启推送**；
-4. 让应用拿到 token：用 AGC 的这个应用对应的**签名证书**重新打包安装（现在装的是调试证书，
-   真机日志是 `push token unavailable (1000900010) Illegal application identity … clientid
-   configuration`，就是"没登记/没配 client id"的意思）。装好后再点一次「复制中转材料」，
-   `pushToken` 应该不为空。
+需要你在 AppGallery Connect 里做的（只能你操作）：
 
-配置里的三项对应关系：
+1. 应用已通过 **AppGallery 正式签名**分发（邀测也行）。侧载的 debug 包永远拿不到 token：
+   `push token unavailable (1000900010) Illegal application identity`，跟配置无关，修不了；
+2. 「增长 → 推送服务 → 配置」里**开启推送**；
+3. **申请通知消息自分类权益**，只勾 `IM`（即时聊天）。不申请的话所有通知被算成
+   「资讯营销类」→ 静默、只在通知中心、**每天每设备限 2 条**；通过后要在页面点「激活功能」；
+4. 到 **API Console**（https://developer.huawei.com/consumer/cn/console/api/myApi）
+   → 选项目 → 创建「**服务账号密钥**」凭证 → 下载**推送服务 API** 的 json，
+   存成 `tools/agc/private.json`（relay 默认就去这儿找，不用配路径）；
+5. 让应用拿到 token：装好 AppGallery 包后再点一次「复制中转材料」，`pushToken` 应该不为空。
+
+配置：
 
 ```json
 "notify": {
   "channel": "agc",
-  "agc": { "appId": "<App ID>", "clientId": "<Client ID>", "clientSecret": "<Client Secret>" }
+  "agc": {
+    "serviceAccountFile": "../agc/private.json",
+    "category": "IM",
+    "testMessage": true
+  },
+  "pushToken": "<App 里复制出来的 pushToken>"
 }
 ```
 
-脚本做的事：用 `client_credentials` 换 access token →
-`POST https://push-api.cloud.huawei.com/v1/{appId}/messages:send`，
-带 `notification`（标题/正文）与 `data`（里面放 `threadId`，供以后点通知直达会话）。
+- `serviceAccountFile` 不给就用默认的 `tools/agc/private.json`；
+- `project_id` 从密钥文件里读，**不用手填**（也别填成 App ID / OAuth Client ID）；
+- `testMessage: true` 走测试通道：单项目每天 1000 条、每次 ≤10 个 token，调通阶段用它。
+
+脚本做的事：用密钥文件的私钥签 PS256 JWT（一小时一签，进程内缓存）→
+`POST https://push-api.cloud.huawei.com/v3/{projectId}/messages:send`，
+带 `push-type: 0` 头和 `category`；`threadId` 放在 `clickAction.data` 里，供以后点通知直达会话。
+
+### 合规过滤（用 AGC 通道时必看）
+
+我们申请的分类是 `IM`，官方对它的硬性承诺是**只包含互相关注用户之间的点对点私信**，
+明确排除未关注人的私信请求、官方号/商家批量推送、广告。违者按《通知违规处罚标准》处理。
+
+所以 relay 在推送前会过一道 `complianceVerdict()`：
+
+| 判据 | 跳过原因 | 说明 |
+| --- | --- | --- |
+| `is_pending` / `pending` / `approval_factor` | `message-request` | Instagram 的陌生人首条私信 |
+| 收件箱只回了 1 条消息 | `no-history` | `thread_message_limit=2`，只有 1 条说明这是该会话第一条 |
+
+跳过时**照常记账**（写 state），所以这条会话以后真成了正常往来仍能正常推送。
+日志里会打 `合规过滤跳过 N 条（…）`，跳了谁、为什么跳，一眼能看见。
+自测：`node filter-test.js`（不碰网络、不要 cookie）。
 
 ### B. MeoW（零配置，但通知是 MeoW App 弹的）
 
@@ -82,8 +111,9 @@ config.example.json 配置模板
 
 ```bash
 cp config.example.json config.json     # 填好 cookie / token / AGC 或 MeoW
-python relay.py --config config.json    # 前台跑，Ctrl+C 停
-python relay.py --config config.json --once   # 只跑一轮，验证配置
+node relay.js                          # 前台常驻，Ctrl+C 停
+node relay.js --once                   # 只跑一轮，验证配置
+node relay.js --test-push "通道自检"    # 只验通知通道：不看 IG、不占锁、不写 state
 ```
 
 - 默认 **90 秒一轮**（最低 60），每轮 ±15% 随机抖动 —— 模仿"人打开 App 看一眼"的节奏；
@@ -126,8 +156,11 @@ sudo systemctl enable --now instamony-relay
 | 启动就报「配置里没有有效的 cookie」 | 没填 / 填成了别的东西 | 重新在 App 里「复制中转材料」 |
 | `IG 拒绝：会话失效` | `sessionid` 过期或被 IG 踢了 | 在 App 里重新登录，再导出一次 |
 | `IG HTTP 429` | 这个出口 IP 被限流 | 停 10~30 分钟；把 `pollSeconds` 调到 120 以上 |
-| `AGC 取 token 失败` | Client ID/Secret 不对，或服务没开 | 回 AGC 检查「Push Kit 是否开启」「凭据是不是这个应用的」 |
-| `AGC 推送已发` 但手机没弹 | token 不匹配 / 通知权限关了 | 重新「复制中转材料」确认 `pushToken` 变了；检查系统通知权限 |
+| `找不到服务账号密钥文件` | 没下 `private.json` | AGC → API Console → 创建「服务账号密钥」→ 下载推送服务 API 的 json |
+| `AGC 推送失败` + HTTP 401/403 | 服务账号 JWT 不对（alg/aud/key_id/project_id） | 用 `node ../agc/agc.js --whoami` 核对密钥文件；注意接口必须是 v3 |
+| `AGC 推送失败` + token 相关错误码 | pushToken 失效（重装/清数据/HMS 更新） | 回 App 重新「复制中转材料」，换掉 `notify.pushToken` |
+| `AGC 推送成功` 但手机没弹 | 通知权限关了 / 忘了点「激活功能」 | 检查系统通知权限；没激活的话消息会被降级成静默的营销类 |
+| `合规过滤跳过 …` | 消息请求或没有历史往来 | 正常行为，不是故障（见上文「合规过滤」） |
 | MeoW 返回 429 | IP 被判成攻击 | 换出口 IP，或按文档联系开发者加白名单 |
 
 ## 六、安全底线
