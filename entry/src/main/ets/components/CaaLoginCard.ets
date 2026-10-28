@@ -237,6 +237,22 @@ export struct CaaLoginCard {
           this.status = '已清除限流冷却，可以直接再点一次登录';
           this.steps = '';
         })
+      /*
+       * **复制登录请求体（脱敏）**：`password` / `aac` 已换成占位符，只有字段结构。
+       * 桌面 JS 那条同样的链路是通的，两边逐键比对就能看出是"某个字段值不对"还是传输层问题。
+       */
+      Text('复制登录请求体（脱敏，给排查用）')
+        .fontSize(12)
+        .fontColor($r('app.color.secondary_text'))
+        .width('100%')
+        .onClick((): void => {
+          const text: string = CaaSession.lastRequestText();
+          if (text.length === 0) {
+            this.status = '还没有请求体可复制（先点一次登录或假账号探针）';
+            return;
+          }
+          this.putClipboard(text, '请求体已复制（' + text.length + ' 字符，密码与会话上下文已打码）');
+        })
       Text(this.pasteOpen ? '收起「粘贴会话导入」' : '用已有会话导入（备用，粘贴 settings.caa.json）')
         .fontSize(12)
         .fontColor($r('app.color.secondary_text'))

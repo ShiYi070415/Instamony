@@ -36,6 +36,8 @@ const KEY_PUBLIC: string = 'usdid_public';
 const KEY_LAST_DIAG: string = 'last_diag';
 /** 最近一次失败时的原始响应（截断 100KB；同样只在本机，重启还能复制）。 */
 const KEY_LAST_RAW: string = 'last_raw';
+/** 最近一次登录请求体（脱敏副本；和响应分开存，见 rememberRequest）。 */
+const KEY_LAST_REQUEST: string = 'last_request';
 /**
  * 上次被 IG 限流（429）的时间戳（毫秒）。
  *
@@ -89,6 +91,7 @@ export class CaaSession {
       // 上次的诊断读回来：重启之后仍然能"复制诊断"（不然失败一次就得再复现一次）。
       CaaSession.lastDiag = CaaSession.readText(KEY_LAST_DIAG);
       CaaSession.lastRaw = CaaSession.readText(KEY_LAST_RAW);
+      CaaSession.lastRequest = CaaSession.readText(KEY_LAST_REQUEST);
       hilog.info(DOMAIN, TAG, 'usdid store opened');
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'open usdid store failed: %{public}s', (error as Error).message);
@@ -231,6 +234,8 @@ export class CaaSession {
     const bogusPass: string = `Zx9!${suffix}qq`;
     const result: CaaResult = await CaaLogin.login(identity, bogusUser, bogusPass, device, null);
     const steps: string = CaaSession.stepsText();
+    // 探针也会生成"这一发请求体"的脱敏副本：真账号那次不必再消耗次数才能拿到它。
+    CaaSession.rememberRequest(CaaLogin.lastRequestDump);
     /*
      * 结论怎么读：
      *   · 走到 `send_login_request 200` 且文案是 "can't find an account" → **请求/设备这侧没问题**，
@@ -304,6 +309,8 @@ export class CaaSession {
       CaaSession.rememberDiag('登录', failed.reason, failed.steps);
       // 失败时把原始响应留下（真机上唯一的现场；成功时不存，避免会话材料被随手复制）。
       CaaSession.rememberRaw(result.raw);
+      // 这一发请求体（脱敏）也留一份：和桌面 JS 那条回 200 的链路逐键比对用。
+      CaaSession.rememberRequest(CaaLogin.lastRequestDump);
       // 被限流就记下时间与次数：冷却期内不再发请求，避免把 IG 的窗口越推越远。
       if (result.rateLimited) {
         const count: number = CaaSession.rateLimitCount() + 1;
@@ -624,6 +631,8 @@ export class CaaSession {
   private static lastDiag: string = '';
   /** 最近一次失败时的原始响应（截断；有就存 preferences，重启后仍可复制）。 */
   private static lastRaw: string = '';
+  /** 最近一次 `send_login_request` 的请求体（脱敏副本，见 rememberRequest）。 */
+  private static lastRequest: string = '';
 
   /** 最近一次登录/前检/导入的诊断文本（给"复制诊断"用）。 */
   static diagText(): string {
@@ -704,4 +713,23 @@ export class CaaSession {
       hilog.warn(DOMAIN, TAG, 'write %{public}s failed: %{public}s', key, (error as Error).message);
     }
   }
+
+  /**
+   * 记下这一发 `send_login_request` 的**请求体脱敏副本**（见 `CaaLogin.lastRequestDump`）。
+   *
+   * 和「最近一次响应」分两个键存：响应是"IG 说了什么"，请求是"我们发了什么"，
+   * 排查 429 时两边都要能拿出来对照（桌面 JS 那条同样的链路是通的）。
+   */
+  static lastRequestText(): string {
+    return CaaSession.lastRequest;
+  }
+
+  private static rememberRequest(dump: string): void {
+    const headers: string = CaaLogin.lastRequestHeaders;
+    const combined: string = headers.length > 0 ? `${dump}\n\n--- headers ---\n${headers}` : dump;
+    const text: string = combined.length > 200000 ? combined.substring(0, 200000) : combined;
+    CaaSession.lastRequest = text;
+    CaaSession.writeText(KEY_LAST_REQUEST, text);
+  }
 }
+

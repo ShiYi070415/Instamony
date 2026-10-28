@@ -64,6 +64,9 @@ const AP_2SV_ENTRYPOINT: string = 'com.bloks.www.ap.two_step_verification.entryp
 const AP_2SV_CODE_ENTRY: string = 'com.bloks.www.ap.two_step_verification.code_entry';
 const AP_2SV_CODE_ENTRY_ASYNC: string = 'com.bloks.www.ap.two_step_verification.code_entry_async';
 
+/** 提交密码那一发的 action（要用它单独留请求头副本，见 bloks / headersDump）。 */
+const SEND_LOGIN_ACTION: string = 'com.bloks.www.bloks.caa.login.async.send_login_request';
+
 /** Bloks 布局里那一段 lispy：`(f4i (dkc "k1" …) (dkc "v1" …))`。 */
 const LISPY_MAP_HEAD: string = '(f4i';
 
@@ -484,6 +487,16 @@ export class CaaLogin {
 
   /** 等验证码时留住的现场（见 `CaaPending`）。 */
   private static pending: CaaPending | null = null;
+
+  /**
+   * 最近一次 `send_login_request` 的**请求体脱敏副本**（`password` / `aac` 换成占位符）。
+   *
+   * 用来和桌面 JS 那条链路（同一份参数结构、回 200）逐键比对 —— 两边都按同样规则脱敏，
+   * 才能区分"某个字段值不对"与"传输层/HTTP 栈的问题"（见 login 里生成它的那段说明）。
+   */
+  static lastRequestDump: string = '';
+  /** 最近一次 `send_login_request` **实际发出去的请求头**（脱敏，见 headersDump）。 */
+  static lastRequestHeaders: string = '';
 
   /**
    * **CAA 链路的 Cookie 罐**（进程内，一次登录的一串请求共用）。
@@ -1205,6 +1218,31 @@ export class CaaLogin {
     const send: Record<string, ESObject> = {};
     send['client_input_params'] = sendClient;
     send['server_params'] = sendServer;
+    /*
+     * **留一份"这一发请求体"的脱敏副本**（`password` / `aac` 换成占位符）。
+     *
+     * 为什么：桌面那条链路（同一份参数结构、同一个 IP、同一份设备身份）回 200，而 App 里
+     * 同一发回 429 —— 剩下的差别只可能在"发出去的那串字节"或 HTTP 栈上。把两边都按同样的
+     * 规则脱敏后逐字节/逐键比对，能一次定位是"某个字段值不对"还是"传输层的问题"。
+     * 只含字段名与结构，不含密码与会话。
+     */
+    try {
+      const redactedClient: Record<string, ESObject> = {};
+      for (const key of Object.keys(sendClient)) {
+        const value: ESObject = sendClient[key];
+        if (key === 'aac') {
+          redactedClient[key] = '<AAC>';
+        } else {
+          redactedClient[key] = value;
+        }
+      }
+      const redactedSend: Record<string, ESObject> = {};
+      redactedSend['client_input_params'] = redactedClient;
+      redactedSend['server_params'] = sendServer;
+      CaaLogin.lastRequestDump = CaaLogin.bloksBody(identity, redactedSend);
+    } catch (dumpError) {
+      CaaLogin.lastRequestDump = '';
+    }
     const sendExtra: Record<string, string> = {};
     for (const key of Object.keys(extra)) {
       sendExtra[key] = extra[key];
@@ -1807,7 +1845,36 @@ export class CaaLogin {
     const body: string = CaaLogin.bloksBody(identity, params);
     const headers: Record<string, string> = CaaLogin.headers(identity, extra);
     headers['X-FB-Friendly-Name'] = `IgApi: bloks/async_action/${action}/`;
+    // 提交密码那一发把**实际发出去的头**也留一份（脱敏）：桌面同一条链路是通的，
+    // 逐条比对头是最后能定位"为什么同一发在 App 里被挡"的手段。
+    if (action === SEND_LOGIN_ACTION) {
+      CaaLogin.lastRequestHeaders = CaaLogin.headersDump(headers);
+    }
     return await CaaLogin.post(host, `/api/v1/bloks/async_action/${action}/`, body, headers);
+  }
+
+  /**
+   * 请求头脱敏副本（给"逐条比对"用）。
+   *
+   * `X-Meta-Usdid` 是设备签名（虽然短时有效）—— 只留长度；`Cookie` 同理由只留名字。
+   * 其余原样保留：它们都是"客户端宣称自己是什么"的字段，不含任何凭据。
+   */
+  private static headersDump(headers: Record<string, string>): string {
+    const lines: Array<string> = [];
+    const keys: Array<string> = Object.keys(headers).sort();
+    for (let index: number = 0; index < keys.length; index++) {
+      const key: string = keys[index];
+      const lower: string = key.toLowerCase();
+      const value: string = headers[key];
+      if (lower === 'x-meta-usdid') {
+        lines.push(`${key}: <usdid ${value.length} chars>`);
+      } else if (lower === 'cookie' || lower.indexOf('authorization') >= 0) {
+        lines.push(`${key}: <redacted ${value.length} chars>`);
+      } else {
+        lines.push(`${key}: ${value}`);
+      }
+    }
+    return lines.join('\n');
   }
 
   /** 打 `bloks/apps/`（`host` 同上）。 */
