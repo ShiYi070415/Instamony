@@ -1009,6 +1009,14 @@ async function runCaaLogin(argv) {
     }
   }
   const cookie = cookieParts.join('; ');
+  /*
+   * **`mid` 优先用登录响应带回来的那一份**（`ig-set-x-mid`）。
+   *
+   * 为什么不能只用设备档案里的：全新机器上档案是本地生成的、`mid` 可能是空；而 IG 在登录
+   * 响应里会把真正的机器 id 下发给客户端（instagrapi 也是在 `_send_private_request` 里捡它）。
+   * 之后每个移动 API 请求都带 `X-MID`，缺了等于"没有机器 id 的客户端"。
+   */
+  const sessionMid = String(result.mid || '').length > 0 ? String(result.mid) : profile.mid;
   const session = {
     source: 'caa-login',
     userId: cookieValueOf(cookie, 'ds_user_id'),
@@ -1018,7 +1026,9 @@ async function runCaaLogin(argv) {
     authorization: result.authorization || '',
     appVersion: profile.appVersion,
     userAgent: profile.userAgent,
-    mid: profile.mid,
+    mid: sessionMid,
+    rur: String(result.rur || ''),
+    claim: String(result.claim || ''),
     savedAt: Date.now()
   };
   fs.writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2), 'utf8');

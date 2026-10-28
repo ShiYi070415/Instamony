@@ -264,6 +264,29 @@ check('settingsShapeOf：authorization 被正确解码成 authorization_data', (
   assertEqual(shape.mid, profile.mid, 'mid 丢了');
 });
 
+check('登录响应头：捡回 mid / rur / claim（大小写混着也能认）', () => {
+  const captured = caa.sessionHeadersOf({
+    'IG-Set-Authorization': 'Bearer IGT:2:AAA',
+    'ig-set-x-mid': 'MID-ABC',
+    'IG-Set-IG-U-RUR': 'RUR-XYZ',
+    'x-ig-set-www-claim': '29'
+  });
+  assertEqual(captured.mid, 'MID-ABC', 'mid 没捡到');
+  assertEqual(captured.rur, 'RUR-XYZ', 'rur 没捡到');
+  assertEqual(captured.claim, '29', 'claim 没捡到');
+  const empty = caa.sessionHeadersOf({ 'IG-Set-Authorization': 'Bearer IGT:2:AAA' });
+  assertEqual(empty.mid + empty.rur + empty.claim, '', '没有的头不该编出值');
+});
+
+check('settingsShapeOf：mid 优先用登录响应带回的那份（全新设备才退回档案）', () => {
+  const fromLogin = format.settingsShapeOf({
+    cookies: caaResult.cookies, authorization, mid: 'MID-FROM-LOGIN'
+  }, profile);
+  assertEqual(fromLogin.mid, 'MID-FROM-LOGIN', 'mid 没优先用响应里那份');
+  const fromProfile = format.settingsShapeOf({ cookies: caaResult.cookies, authorization }, profile);
+  assertEqual(fromProfile.mid, profile.mid, '没有响应 mid 时没退回设备档案');
+});
+
 check('往返：settings.json → session 与原会话逐字段一致（这就是"等价"）', () => {
   const shape = format.settingsShapeOf(caaResult, profile);
   const parsed = format.sessionFromSettings(shape);

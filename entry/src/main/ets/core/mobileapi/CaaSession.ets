@@ -161,7 +161,8 @@ export class CaaSession {
       }
       return CaaSession.outcome(false, result.reason, CaaSession.stepsText());
     }
-    return await CaaSession.applySession(result.cookie, result.authorization, '登录');
+    return await CaaSession.applySession(result.cookie, result.authorization, '登录',
+      result.mid, result.rur, result.claim);
   }
 
   /**
@@ -195,7 +196,16 @@ export class CaaSession {
         + '要么是 instagrapi 的 settings.json）');
     }
     const authorization: string = CaaSession.authorizationOf(parsed);
-    return await CaaSession.applySession(cookie, authorization, '导入');
+    // 粘贴的两种形状都带 `mid`（instagrapi 的 settings.json 里是 `mid` 字段），有就一起用上。
+    return await CaaSession.applySession(cookie, authorization, '导入',
+      CaaSession.textFieldOf(parsed, 'mid'), CaaSession.textFieldOf(parsed, 'rur'),
+      CaaSession.textFieldOf(parsed, 'claim'));
+  }
+
+  /** 取一个字符串字段（不是字符串就当没有）。 */
+  private static textFieldOf(parsed: Record<string, ESObject>, name: string): string {
+    const value: ESObject = parsed[name];
+    return typeof value === 'string' ? (value as string).trim() : '';
   }
 
   /** 从两种形状里取出 Cookie 串（`name=value; …`）。 */
@@ -243,9 +253,13 @@ export class CaaSession {
    * @param cookieText    `name=value; …`
    * @param authorization `Bearer IGT:2:…`（可为空：那就用本地按 userId/sessionid 拼的那份）
    * @param what          用在提示文案里（"登录"/"导入"）
+   * @param mid           登录响应头带回来的机器 id（空 = 用现有身份里的）
+   * @param rur           登录响应头带回来的 `IG-U-RUR`
+   * @param claim         登录响应头带回来的 `X-IG-WWW-Claim`
    */
-  private static async applySession(cookieText: string, authorization: string,
-                                    what: string): Promise<CaaOutcome> {
+  private static async applySession(cookieText: string, authorization: string, what: string,
+                                    mid: string = '', rur: string = '',
+                                    claim: string = ''): Promise<CaaOutcome> {
     const sessionId: string = CaaSession.cookieValue(cookieText, 'sessionid');
     if (sessionId.length === 0) {
       return CaaSession.outcome(false, `${what}的会话里没有 sessionid（内容不完整）`,
@@ -278,8 +292,25 @@ export class CaaSession {
         if (authorization.length > 0) {
           identity.authorization = authorization;
         }
+        /*
+         * **把响应头里的会话材料也吸收进身份**。
+         *
+         * 全新安装时 `mid` 是空的；IG 在登录响应里会下发真正的机器 id（`ig-set-x-mid`），
+         * 之后每个移动 API 都带 `X-MID`。只留 authorization、把 mid 丢掉，等于登录成功之后
+         * 仍是个"没有机器 id 的客户端"。
+         */
+        if (mid.length > 0) {
+          identity.mid = mid;
+        }
+        if (rur.length > 0) {
+          identity.igURur = rur;
+        }
+        if (claim.length > 0) {
+          identity.wwwClaim = claim;
+        }
         session.persist();
-        hilog.info(DOMAIN, TAG, 'session adopted uid=%{public}s', identity.userId);
+        hilog.info(DOMAIN, TAG, 'session adopted uid=%{public}s mid=%{public}s rur=%{public}d',
+          identity.userId, identity.mid.length > 0 ? 'y' : 'n', identity.igURur.length);
         return CaaSession.outcome(true, `${what}成功 · uid=${identity.userId}`,
           CaaSession.stepsText());
       }

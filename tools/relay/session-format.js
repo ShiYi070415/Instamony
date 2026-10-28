@@ -77,6 +77,8 @@ function settingsShapeOf(result, profile) {
     android_device_id: 'android-' + String(profile.androidId || '').replace(/^android-/, ''),
     client_session_id: profile.uuid
   };
+  // `mid` 用登录响应带回来的那份（没有才退回设备档案）——见 instamony.js 里同名字段的说明。
+  const mid = String((result && result.mid) || profile.mid || '');
   return {
     cookies: (result && result.cookies) || {},
     uuids,
@@ -86,7 +88,7 @@ function settingsShapeOf(result, profile) {
       version_code: profile.versionCode
     },
     user_agent: profile.userAgent,
-    mid: profile.mid,
+    mid,
     last_login: new Date().toISOString()
   };
 }

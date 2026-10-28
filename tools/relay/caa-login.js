@@ -566,6 +566,33 @@ function parseCookieHeader(text) {
 }
 
 /**
+ * 从登录响应头里捡**会话材料**（不只是 authorization）。
+ *
+ * instagrapi 在 `_send_private_request` 里就会捡这几条（`ig-set-x-mid` 等），我们也要捡：
+ * 全新安装时本机 `mid` 是空的，而 `X-MID` 是移动 API 的身份头之一；不把它从登录响应里
+ * 带回来的话，登录成功之后的请求等于"没有机器 id 的客户端"。
+ *
+ * @returns `{ mid, rur, claim }`（没有的项是空串）
+ */
+function sessionHeadersOf(headers) {
+  const out = { mid: '', rur: '', claim: '' };
+  const map = headers || {};
+  for (const key of Object.keys(map)) {
+    const lower = key.toLowerCase();
+    const value = String(map[key] === undefined || map[key] === null ? '' : map[key])
+      .replace(/^[A-Za-z-]+:\s*/, '').trim();
+    if (lower === 'ig-set-x-mid' && value.length > 0) {
+      out.mid = value;
+    } else if (lower === 'ig-set-ig-u-rur' && value.length > 0) {
+      out.rur = value;
+    } else if (lower === 'x-ig-set-www-claim' && value.length > 0) {
+      out.claim = value;
+    }
+  }
+  return out;
+}
+
+/**
  * 从 Bloks 响应里抠出登录结果（cookie + authorization）。
  *
  * 成功时响应 `layout.bloks_payload.action` 里嵌着一段 JSON 字符串，含
@@ -1092,11 +1119,15 @@ async function caaLogin(profile, username, password, log, options) {
   if (parsed !== null) {
     const authorization = String(parsed.headers['IG-Set-Authorization']
       || parsed.headers['ig-set-authorization'] || '');
+    const sessionHeaders = sessionHeadersOf(parsed.headers);
     return {
       loggedIn: true,
       aac,
       cookies: parsed.cookies,
       authorization: authorization.replace(/^IG-Set-Authorization:\s*/i, ''),
+      mid: sessionHeaders.mid,
+      rur: sessionHeaders.rur,
+      claim: sessionHeaders.claim,
       twoStepContext: '',
       steps
     };
@@ -1116,11 +1147,15 @@ async function caaLogin(profile, username, password, log, options) {
       if (resolved.loggedIn === true) {
         const headers = resolved.parsed.headers || {};
         const authorization = String(headers['IG-Set-Authorization'] || headers['ig-set-authorization'] || '');
+        const sessionHeaders = sessionHeadersOf(headers);
         return {
           loggedIn: true,
           aac,
           cookies: resolved.parsed.cookies || {},
           authorization: authorization.replace(/^IG-Set-Authorization:\s*/i, ''),
+          mid: sessionHeaders.mid,
+          rur: sessionHeaders.rur,
+          claim: sessionHeaders.claim,
           twoStepContext: '',
           steps
         };
@@ -1192,6 +1227,7 @@ module.exports = {
   extractTwoStepContext,
   extractLoginPayload,
   parseCookieHeader,
+  sessionHeadersOf,
   bloksExtractContextValue,
   bloksNeedsTwoStep,
   bloksErrorMessage

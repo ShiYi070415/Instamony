@@ -67,6 +67,16 @@ export class CaaResult {
   authorization: string = '';
   /** 是否卡在两步验证（此时需要用户输入验证码再调 continueTwoStep）。 */
   needsCode: boolean = false;
+  /*
+   * **登录响应头里带回来的会话材料**（instagrapi 在 `_send_private_request` 里也会捡）。
+   *
+   * 为什么必须有：全新安装时本机 `mid` 是空的，而 `X-MID` 是移动 API 的身份头之一。
+   * 只留 `authorization`、把 `ig-set-x-mid` 丢掉的话，登录成功之后的每个请求都等于
+   * "没有机器 id 的客户端" —— 前面几轮的 400 已证明这类头是有判据作用的。
+   */
+  mid: string = '';
+  rur: string = '';
+  claim: string = '';
 
   constructor(ok: boolean, reason: string) {
     this.ok = ok;
@@ -842,6 +852,9 @@ export class CaaLogin {
       result.aac = aac;
       result.cookie = login.cookie;
       result.authorization = login.authorization;
+      result.mid = login.mid;
+      result.rur = login.rur;
+      result.claim = login.claim;
       return result;
     }
 
@@ -942,6 +955,9 @@ export class CaaLogin {
     result.aac = aac;
     result.cookie = login.cookie;
     result.authorization = login.authorization;
+    result.mid = login.mid;
+    result.rur = login.rur;
+    result.claim = login.claim;
     return result;
   }
 
@@ -1160,7 +1176,22 @@ export class CaaLogin {
         }
         const cookieRaw: string = typeof raw['cookies'] === 'string' ? raw['cookies'] as string : '';
         const cookie: string = CaaLogin.parseCookieHeader(cookieRaw);
-        return new CaaLoginPayload(cookie, authorization);
+        // 会话材料（mid / rur / claim）也要带回去，别只留 authorization。
+        let mid: string = '';
+        let rur: string = '';
+        let claim: string = '';
+        for (const key of Object.keys(headers)) {
+          const lower: string = key.toLowerCase();
+          const value: string = `${headers[key]}`.replace(/^[A-Za-z-]+:\s*/, '').trim();
+          if (lower === 'ig-set-x-mid' && value.length > 0) {
+            mid = value;
+          } else if (lower === 'ig-set-ig-u-rur' && value.length > 0) {
+            rur = value;
+          } else if (lower === 'x-ig-set-www-claim' && value.length > 0) {
+            claim = value;
+          }
+        }
+        return new CaaLoginPayload(cookie, authorization, mid, rur, claim);
       } catch (error) {
         continue;
       }
@@ -1355,9 +1386,17 @@ class CaaHttpReply {
 class CaaLoginPayload {
   readonly cookie: string;
   readonly authorization: string;
+  /** 响应头里的会话材料（见 CaaResult 里同名字段的说明）。 */
+  readonly mid: string;
+  readonly rur: string;
+  readonly claim: string;
 
-  constructor(cookie: string, authorization: string) {
+  constructor(cookie: string, authorization: string, mid: string = '', rur: string = '',
+              claim: string = '') {
     this.cookie = cookie;
     this.authorization = authorization;
+    this.mid = mid;
+    this.rur = rur;
+    this.claim = claim;
   }
 }

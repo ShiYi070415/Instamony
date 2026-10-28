@@ -36,6 +36,23 @@ TOTP/SMS 选法 + `verify_code.async`），**CAA 登录这条路不走它** —�
 `ap.two_step_verification` 的"profile-code"链（entrypoint → code_entry → code_entry_async），
 用布局里的 `context_data` 串起来。两条链别混。
 
+### 成功响应里的 `headers` 不止 authorization
+
+登录响应的 `headers` 里还有三条**会话材料**，instagrapi 在 `_send_private_request` 里会捡：
+`ig-set-x-mid`（机器 id）、`ig-set-ig-u-rur`、`x-ig-set-www-claim`。
+
+以前我们只留 `IG-Set-Authorization`、把另外三条丢了 —— 全新安装时本机 `mid` 是空的，
+而 `X-MID` 是移动 API 的身份头之一，于是"登录成功之后每个请求都像没有机器 id 的客户端"。
+现在两条路都会把它们带回来：
+
+- relay：`sessionHeadersOf()` 捡，`session.json` 里多存 `mid` / `rur` / `claim`，
+  `settings.caa.json` 的 `mid` 也优先用响应里那份；
+- App：`CaaResult.mid/rur/claim` → `CaaSession.applySession()` 写进 `MobileIdentity`
+  （`mid` / `igURur` / `wwwClaim`）后落盘 —— 和 `MobileSession.absorbResponseHeaders`
+  对普通响应的做法一致。
+
+离线测试里有两条断言专门盯它（小写、大写混着都能认）。
+
 ### 离线自检抓出的两个真 bug（解析成功响应这条路径）
 
 成功响应那条路在真账号登录之前**一次都没被执行过**，所以写了 `test-caa-parse.js`
