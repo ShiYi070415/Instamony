@@ -9346,6 +9346,12 @@ struct Index {
    */
   @Builder
   directThreadTitleStack() {
+    /*
+     * 注意两点（都是真机反馈"向左偏移"的直接原因）：
+     *   · **不要给 `width('100%')` + `layoutWeight(1)`**：`stackBuilder` 拿到的是标题栏中间的
+     *     一段区域，撑满会把内容顶到最左边、和返回键叠在一起（看起来就是"整体左移"）；
+     *   · 文字列只给 `constraintSize(maxWidth)`，让它按内容收住、超长省略。
+     */
     Row({ space: 8 }) {
       if (this.directThreadVm.avatarNow().length > 0) {
         Image(this.directThreadVm.avatarNow())
@@ -9379,9 +9385,8 @@ struct Index {
         }
       }
       .alignItems(HorizontalAlign.Start)
-      .layoutWeight(1)
+      .constraintSize({ maxWidth: 200 })
     }
-    .width('100%')
     .alignItems(VerticalAlign.Center)
   }
 
