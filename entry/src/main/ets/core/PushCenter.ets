@@ -450,8 +450,10 @@ export class PushCenter {
     try {
       notificationManager.publish(request)
         .then((): void => {
-          hilog.info(DOMAIN, TAG, 'notification published id=%{public}d slot=%{public}d',
-            id, request.notificationSlotType === undefined ? -1 : request.notificationSlotType);
+          hilog.info(DOMAIN, TAG,
+            'notification published id=%{public}d slot=%{public}d agent=%{public}s',
+            id, request.notificationSlotType === undefined ? -1 : request.notificationSlotType,
+            request.wantAgent === undefined ? 'no' : 'yes');
         })
         .catch((error: BusinessError): void => {
           /*

@@ -5947,6 +5947,17 @@ struct Index {
     const top: string = this.topDestinationName();
     const onThreadPage: boolean = top === DIRECT_THREAD_PAGE
       && this.directThreadVm.threadIdNow() === threadId;
+    /*
+     * 每次尝试都留一行（前 8 次）：用户报"第一次点通知没反应"时，这行能直接分辨是
+     * **want 没到**（日志里连 want in 都没有）、**登录态没落定**（signedIn=0），
+     * 还是**导航被判成"已经在里面了"**（top=directThread 但 inTab=0 / id 不同）。
+     */
+    if (this.notifyTries <= 8) {
+      hilog.info(DOMAIN, TAG,
+        'notify route try=%{public}d signedIn=%{public}s top=%{public}s inTab=%{public}s onPage=%{public}s',
+        this.notifyTries, this.signedIn ? '1' : '0', top, inDirectTab ? '1' : '0',
+        onThreadPage ? '1' : '0');
+    }
     if (onThreadPage) {
       if (!inDirectTab) {
         /*
