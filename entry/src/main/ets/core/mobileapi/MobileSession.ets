@@ -67,6 +67,15 @@ class StoredIdentity {
   wwwClaim: string = '';
   igURur: string = '';
   authorization: string = '';
+  /**
+   * 这份 `authorization` 属于哪个账号（设备级会话没有 sessionid，只能靠它判断
+   * "落盘那份是不是当前账号的"）。
+   *
+   * 为什么要单独存：从 `Bearer IGT:2:<base64>` 里解 ds_user_id 依赖 base64 变体
+   * （标准/url-safe/无填充），真机上解不出来的后果是**导入成功却用不了**
+   * （ensure 判"authorization 不属于这个账号"）。写的时候就知道账号，何必回头猜。
+   */
+  authorizationOwner: string = '';
   appVersion: string = '';
   savedAt: number = 0;
 }
@@ -106,6 +115,8 @@ export class MobileIdentity {
   igURur: string;
   /** `Authorization: Bearer IGT:2:<base64url>`。 */
   authorization: string;
+  /** 这份 authorization 属于哪个账号（见 `StoredIdentity.authorizationOwner`）。 */
+  authorizationOwner: string;
   readonly device: DeviceProfile;
   readonly app: AppProfile;
   readonly locale: string;
@@ -147,15 +158,31 @@ export class MobileIdentity {
      * 但必须确认它属于**当前**这个账号，否则就回到上面那个"两个身份"的坑里。
      */
     const derived: string = MobileIdentity.buildAuthorization(userId, sessionId);
-    if (derived.length === 0 && MobileIdentity.authorizationUserId(seed.authorization) === userId
-      && userId.length > 0) {
-      this.authorization = seed.authorization;
-    } else {
+    /*
+     * 落盘那份 authorization 属于谁：**优先用显式记下的 owner**（写的时候就知道账号），
+     * 老数据才回退到"从 base64 里解 ds_user_id"——解码依赖 base64 变体，真机上解不出来
+     * 会让"导入成功却用不了"（ensure 判成"不是这个账号"），所以不再把它当唯一依据。
+     */
+    const owner: string = seed.authorizationOwner.length > 0 ? seed.authorizationOwner
+      : MobileIdentity.authorizationUserId(seed.authorization);
+    this.authorizationOwner = '';
+    if (derived.length > 0) {
       if (seed.authorization.length > 0 && seed.authorization !== derived) {
         hilog.info(DOMAIN, TAG, 'authorization rebuilt for current session (stored=%{public}db)',
           seed.authorization.length);
       }
       this.authorization = derived;
+      this.authorizationOwner = userId;
+    } else if (seed.authorization.length > 0 && userId.length > 0
+      && (owner.length === 0 || owner === userId)) {
+      // 设备级会话：Cookie 里没有 sessionid，凭据只能沿用落盘这份（已核对归属）。
+      this.authorization = seed.authorization;
+      this.authorizationOwner = userId;
+      if (owner.length === 0) {
+        hilog.warn(DOMAIN, TAG, 'authorization owner unknown → assumed current user');
+      }
+    } else {
+      this.authorization = '';
     }
     // 设备档案：用**这台机器自己的**品牌/型号/分辨率/DPI（见 DeviceTruth）。
     // 只生成一次、终身不变 —— 轮换等于"同一账号天天换手机"，比不换更可疑。
@@ -191,16 +218,34 @@ export class MobileIdentity {
     if (!text.startsWith(marker)) {
       return '';
     }
-    try {
-      const bytes: Uint8Array =
-        new util.Base64Helper().decodeSync(text.substring(marker.length));
-      const decoded: string = new util.TextDecoder().decodeToString(bytes);
-      const record: Record<string, ESObject> = JSON.parse(decoded) as Record<string, ESObject>;
-      const value: ESObject = record['ds_user_id'];
-      return value === undefined || value === null ? '' : `${value}`;
-    } catch (error) {
-      return '';
+    const body: string = text.substring(marker.length).trim();
+    /*
+     * base64 有几种变体：标准（带 `=`）、无填充、url-safe（`-` `_`）。IG 与 instagrapi
+     * 两边用的不一定同一个 —— 早先只试标准那种，真机上解不出来就把"导入成功"变成了"用不了"。
+     * 所以逐个试，都失败再返回空串（调用方会退回"当作当前账号"）。
+     */
+    const variants: Array<string> = [
+      body,
+      body.replace(/-/g, '+').replace(/_/g, '/'),
+      (body.replace(/-/g, '+').replace(/_/g, '/') + '====').substring(0,
+        body.length + ((4 - (body.length % 4)) % 4))
+    ];
+    for (let index: number = 0; index < variants.length; index++) {
+      try {
+        const bytes: Uint8Array = new util.Base64Helper().decodeSync(variants[index]);
+        const decoded: string = new util.TextDecoder().decodeToString(bytes);
+        const record: Record<string, ESObject> = JSON.parse(decoded) as Record<string, ESObject>;
+        const value: ESObject = record['ds_user_id'];
+        const uid: string = value === undefined || value === null ? '' : `${value}`;
+        if (uid.length > 0) {
+          return uid;
+        }
+      } catch (error) {
+        // 换下一个变体
+      }
     }
+    hilog.warn(DOMAIN, TAG, 'authorization decode failed (%{public}db)', body.length);
+    return '';
   }
 
   /**
@@ -252,6 +297,7 @@ export class MobileIdentity {
     out.wwwClaim = this.wwwClaim;
     out.igURur = this.igURur;
     out.authorization = this.authorization;
+    out.authorizationOwner = this.authorizationOwner;
     out.appVersion = this.app.appVersion;
     out.savedAt = Date.now();
     return out;
@@ -344,12 +390,23 @@ export class MobileSession {
         sessionId.length, userId.length);
       return null;
     }
-    if (sessionId.length === 0
-      && MobileIdentity.authorizationUserId(seed.authorization) !== userId) {
-      hilog.warn(DOMAIN, TAG,
-        'ensure: no sessionid and stored authorization is not this account (sid=0 uid=%{public}d)',
-        userId.length);
-      return null;
+    if (sessionId.length === 0) {
+      if (seed.authorization.length === 0) {
+        hilog.warn(DOMAIN, TAG, 'ensure: no sessionid and no stored authorization');
+        return null;
+      }
+      const owner: string = seed.authorizationOwner.length > 0 ? seed.authorizationOwner
+        : MobileIdentity.authorizationUserId(seed.authorization);
+      if (owner.length > 0 && owner !== userId) {
+        hilog.warn(DOMAIN, TAG,
+          'ensure: stored authorization belongs to other account (owner=%{public}d uid=%{public}d)',
+          owner.length, userId.length);
+        return null;
+      }
+      if (owner.length === 0) {
+        // 解不出来（base64 变体/老数据）就当它是当前账号的 —— 否则用户会卡在"导入成功但用不了"。
+        hilog.warn(DOMAIN, TAG, 'ensure: authorization owner unknown, assuming current user');
+      }
     }
     const csrf: string = MobileSession.cookieOf(jar.cookie, COOKIE_CSRF);
     const midCookie: string = MobileSession.cookieOf(jar.cookie, COOKIE_MID);
@@ -366,16 +423,22 @@ export class MobileSession {
    *
    * 用途：设备级会话（没有 sessionid）的唯一凭据就是它，而 `ensure()` 只从落盘 seed 里认这份
    * 凭据（cookie 罐里没有 sessionid 可解析）。不先落盘的话，`ensure()` 会判"会话不完整"。
+   *
+   * @param authorization `Bearer IGT:2:…`
+   * @param userId        这份 authorization 属于哪个账号（写的时候就知道，别回头猜）
    */
-  static adoptAuthorization(authorization: string): void {
+  static adoptAuthorization(authorization: string, userId: string = ''): void {
     const text: string = String(authorization || '');
     if (text.length === 0) {
       return;
     }
     const seed: StoredIdentity = MobileSession.loadSeed();
     seed.authorization = text;
+    seed.authorizationOwner = String(userId || '');
     MobileSession.seed = seed;
     MobileSession.writeSeed(seed);
+    hilog.info(DOMAIN, TAG, 'authorization adopted (owner=%{public}s, %{public}db)',
+      seed.authorizationOwner.length > 0 ? seed.authorizationOwner : 'unknown', text.length);
   }
 
   /**
@@ -450,6 +513,7 @@ export class MobileSession {
     identity.wwwClaim = '0';
     identity.igURur = '';
     identity.authorization = '';
+    identity.authorizationOwner = '';
     // 先按"清空会话材料、保留设备身份"的形状写盘，再丢掉内存里的身份。
     const kept: StoredIdentity = identity.toStored();
     MobileSession.seed = kept;
