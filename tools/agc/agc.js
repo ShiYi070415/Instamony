@@ -8,18 +8,33 @@
  * 光看手机日志分不出来，得从 AGC 侧查。
  *
  * 用法（凭据放在同目录的 credentials.json，不进 git，见 .gitignore）：
- *   node agc.js --token            # 验证 OAuth 凭据能不能换到 token（只打长度）
- *   node agc.js --app             # 查这个应用在 AGC 里登记的信息（含证书指纹）
- *   node agc.js --certs           # 查证书列表（看有哪些 SHA-256）
- *   node agc.js --push "测试内容"  # 用 Push Kit 给手机发一条测试推送（需要 pushToken）
+ *   node agc.js --whoami           # 只打印服务账号里的 project_id / key_id / sub_account 有没有值
+ *   node agc.js --push "测试内容"   # 用服务账号 JWT 给手机发一条测试推送
+ *   node agc.js --token            # （旧）验证 OAuth 凭据能不能换到 token
+ *   node agc.js --app / --certs    # （旧）查应用信息 / 证书列表
  *
  * credentials.json 长这样：
  *   {
- *     "appId": "AGC 里的 App ID（数字）",
- *     "clientId": "OAuth Client ID",
- *     "clientSecret": "OAuth Client Secret",
- *     "pushToken": "手机里「复制中转材料」得到的 pushToken（只有 --push 需要）"
+ *     "pushToken": "手机里「复制中转材料」得到的 pushToken（--push 必需）",
+ *     "serviceAccountFile": "private.json",
+ *     "category": "IM",
+ *     "testMessage": true,
+ *     "appId": "（只有旧的 --app/--certs/--token 才需要）",
+ *     "clientId": "旧 OAuth 客户端（Push 用不上，别浪费时间）",
+ *     "clientSecret": "..."
  *   }
+ *
+ * private.json 是官方「服务账号密钥」文件，从
+ *   https://developer.huawei.com/consumer/cn/console/api/myApi
+ * 选所在项目 → 创建「服务账号密钥」凭证 → 下载「推送服务 API」的密钥文件。
+ * 文件里必须含：project_id / key_id / private_key / sub_account。
+ *
+ * 为什么要这么改（这是踩过的坑，别再走回去）：
+ *   HarmonyOS 5+ 的 Push Kit **不再支持 OAuth 2.0 开放鉴权**，只认服务账号 JWT；
+ *   而且接口必须是 **v3**（v2 只给 HarmonyOS 3.x/4.x）。
+ *   见 https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/push-jwt-token
+ * 于是老代码里 v1 + client_credentials 那条路永远只会拿到 1101/20003，
+ * 跟手机、证书、应用身份都没关系 —— 纯粹是协议过时。
  */
 
 'use strict';
@@ -33,7 +48,9 @@ const CONNECT_TOKEN = 'https://connect-api.cloud.huawei.com/api/oauth2/v1/token'
 const CONNECT_APPINFO = 'https://connect-api.cloud.huawei.com/api/publish/v2/app-info';
 const CONNECT_CERTS = 'https://connect-api.cloud.huawei.com/api/publish/v2/certificates';
 const PUSH_TOKEN = 'https://oauth-login.cloud.huawei.com/oauth2/v3/token';
-const PUSH_SEND = 'https://push-api.cloud.huawei.com/v1/%s/messages:send';
+/** 官方文档：v3/{projectId}/messages:send（v2 只服务 HarmonyOS 3.x/4.x）。 */
+const PUSH_SEND = 'https://push-api.cloud.huawei.com/v3/%s/messages:send';
+const SA_SCOPE_AUD = 'https://oauth-login.cloud.huawei.com/oauth2/v3/token';
 
 function request(url, options, body) {
   return new Promise((resolve, reject) => {
@@ -63,12 +80,53 @@ function loadCredentials() {
     console.error('缺少 ' + file + '（模板见本文件头部的注释）。');
     process.exit(2);
   }
-  const cred = JSON.parse(fs.readFileSync(file, 'utf8'));
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
+
+/** 老的 OAuth 路径才需要 client_id/secret；Push 走服务账号，不查这两个。 */
+function requireOAuth(cred) {
   if (!cred.clientId || !cred.clientSecret) {
-    console.error('credentials.json 里 clientId / clientSecret 没填。');
+    console.error('这个命令要 credentials.json 里的 clientId / clientSecret。');
     process.exit(2);
   }
-  return cred;
+}
+
+/** 读服务账号密钥文件（官方下载的 private.json）。 */
+function loadServiceAccount(cred) {
+  const name = cred.serviceAccountFile || 'private.json';
+  const file = path.isAbsolute(name) ? name : path.join(__dirname, name);
+  if (!fs.existsSync(file)) {
+    console.error('缺少服务账号密钥文件 ' + file);
+    console.error('去 https://developer.huawei.com/consumer/cn/console/api/myApi');
+    console.error('选所在项目 → 创建「服务账号密钥」凭证 → 下载「推送服务 API」的密钥文件。');
+    process.exit(2);
+  }
+  const sa = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (!sa.private_key) {
+    console.error(file + ' 里找不到 private_key。');
+    process.exit(2);
+  }
+  return sa;
+}
+
+/**
+ * 服务账号 JWT —— 按官方文档第 3/4/5 步：Header(alg=PS256,kid=key_id) +
+ * Payload(aud=tokne接口,iss=sub_account,iat,exp) + 私钥 PS256 签名。
+ * 这个 JWT **本身就是** Authorization 里的 Bearer，不需要再换 access_token。
+ */
+function serviceJwt(sa) {
+  const crypto = require('crypto');
+  const now = Math.floor(Date.now() / 1000);
+  const b64 = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
+  const signingInput = b64({ kid: sa.key_id, typ: 'JWT', alg: 'PS256' })
+    + '.' + b64({ aud: SA_SCOPE_AUD, iss: sa.sub_account, iat: now, exp: now + 3600 });
+  const privateKey = String(sa.private_key).replace(/\\n/g, '\n');
+  const signature = crypto.sign('sha256', Buffer.from(signingInput), {
+    key: privateKey,
+    padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+    saltLength: crypto.constants.RSA_PSS_SALTLEN_DIGEST
+  }).toString('base64url');
+  return signingInput + '.' + signature;
 }
 
 /** Connect API 的项目级 token（查应用/证书用）。 */
@@ -124,6 +182,7 @@ async function pushToken(cred) {
 }
 
 async function cmdToken(cred) {
+  requireOAuth(cred);
   const token = await connectToken(cred);
   console.log('Connect API token OK，长度 ' + token.length + '（有效期约 1 小时）');
   try {
@@ -131,11 +190,13 @@ async function cmdToken(cred) {
     console.log('Push Kit token OK，长度 ' + push.length);
   } catch (error) {
     console.log('Push Kit token 失败：' + error.message);
-    console.log('→ 这说明「API 密钥/OAuth 客户端」没开通 Push 服务，或凭据不是这个项目的。');
+    console.log('→ 正常。HarmonyOS 5+ 不再支持 OAuth 2.0 开放鉴权，这条只是历史探针，');
+    console.log('  真正的推送请用 --push（服务账号 JWT）。');
   }
 }
 
 async function cmdApp(cred) {
+  requireOAuth(cred);
   if (!cred.appId) {
     console.error('credentials.json 里缺 appId。');
     process.exit(2);
@@ -172,6 +233,7 @@ async function cmdApp(cred) {
 }
 
 async function cmdCerts(cred) {
+  requireOAuth(cred);
   const token = await connectToken(cred);
   const res = await request(CONNECT_CERTS, {
     headers: {
@@ -191,104 +253,97 @@ async function cmdCerts(cred) {
   }
 }
 
-async function cmdPush(cred, text) {
-  if (!cred.appId || !cred.pushToken) {
-    console.error('发测试推送需要 credentials.json 里的 appId 与 pushToken。');
-    process.exit(2);
+/** 只核对密钥文件填得对不对，不发网络请求（避免拿 400 猜原因）。 */
+async function cmdWhoami(cred) {
+  const sa = loadServiceAccount(cred);
+  const mask = (v) => {
+    const s = String(v || '');
+    if (!s) return '（缺失！）';
+    return s.length <= 8 ? s : s.slice(0, 4) + '***' + s.slice(-4) + '（长度 ' + s.length + '）';
+  };
+  console.log('密钥文件      = ' + (cred.serviceAccountFile || 'private.json'));
+  console.log('project_id    = ' + mask(sa.project_id));
+  console.log('key_id        = ' + mask(sa.key_id));
+  console.log('sub_account   = ' + mask(sa.sub_account));
+  console.log('private_key   = ' + (sa.private_key ? '有（' + String(sa.private_key).length + ' 字符）' : '（缺失！）'));
+  console.log('pushToken     = ' + mask(cred.pushToken));
+  console.log('category      = ' + (cred.category || 'IM'));
+  console.log('testMessage   = ' + (cred.testMessage !== false));
+  const jwt = serviceJwt(sa);
+  console.log('JWT           = 已生成，长度 ' + jwt.length + '（' + jwt.split('.').length + ' 段）');
+  console.log('推送地址       = ' + PUSH_SEND.replace('%s', sa.project_id || '（缺 project_id！）'));
+  if (!sa.key_id || !sa.sub_account) {
+    console.log('缺 key_id / sub_account —— 这个文件不是「服务账号密钥」，换一个。');
   }
-  const token = await pushToken(cred);
-  const payload = JSON.stringify({
-    validate_only: false,
-    message: {
-      data: JSON.stringify({ kind: 'probe' }),
-      notification: { title: 'Instamony 自检', body: text || '这是一条测试推送' },
-      token: [cred.pushToken]
-    }
-  });
-  const res = await request(PUSH_SEND.replace('%s', cred.appId), {
-    method: 'POST',
-    headers: {
-      Authorization: 'Bearer ' + token,
-      'Content-Type': 'application/json; charset=UTF-8',
-      'Content-Length': Buffer.byteLength(payload)
-    }
-  }, payload);
-  console.log('HTTP ' + res.status);
-  console.log(res.body.slice(0, 600));
 }
 
 /**
- * **服务账号（Service Account）实验路径**：用 key 文件里的私钥签一个 RS256 JWT，
- * 走 client_assertion 换 token。华为各产品线的服务账号流程不完全一样，所以这里
- * **把原始响应原样打出来**（成功就记下、失败也不猜）—— 这是"能不能用服务账号替代
- * OAuth 客户端"这条问题的探针。
- *
- * credentials.json 里加一行即可启用：
- *   "serviceAccountFile": "sa.json"
- * sa.json 就是 AGC 下载的密钥文件（通常含 project_id / key_id / private_key）。
+ * 按官方文档发一条通知消息（push-type: 0）。
+ * 结构：payload.notification + target.token + 可选 pushOptions。
  */
-async function cmdServiceAccount(cred) {
-  const crypto = require('crypto');
-  const file = path.join(__dirname, cred.serviceAccountFile || 'sa.json');
-  if (!fs.existsSync(file)) {
-    console.error('缺少服务账号密钥文件 ' + file);
+async function cmdPush(cred, text, categoryArg) {
+  const sa = loadServiceAccount(cred);
+  if (!cred.pushToken) {
+    console.error('发测试推送需要 credentials.json 里的 pushToken（App 里「复制中转材料」能拿到）。');
     process.exit(2);
   }
-  const sa = JSON.parse(fs.readFileSync(file, 'utf8'));
-  const projectId = sa.project_id || sa.projectId || cred.appId || '';
-  const keyId = sa.key_id || sa.keyId || '';
-  const privateKey = sa.private_key || sa.privateKey || '';
-  if (!privateKey) {
-    console.error('sa.json 里找不到 private_key。');
+  const projectId = sa.project_id || cred.projectId;
+  if (!projectId) {
+    console.error('密钥文件里没有 project_id，无法拼 v3 地址。');
     process.exit(2);
   }
-  const now = Math.floor(Date.now() / 1000);
-  const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT', kid: keyId }))
-    .toString('base64url');
-  const body = Buffer.from(JSON.stringify({
-    iss: projectId,
-    sub: projectId,
-    aud: 'https://oauth-login.cloud.huawei.com/oauth2/v3/token',
-    iat: now,
-    exp: now + 3600
-  })).toString('base64url');
-  const signing = header + '.' + body;
-  const signer = crypto.createSign('RSA-SHA256');
-  signer.update(signing);
-  const assertion = signing + '.' + signer.sign(privateKey, 'base64url');
-
-  const payload = querystring.stringify({
-    grant_type: 'client_credentials',
-    client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
-    client_assertion: assertion,
-    project_id: projectId
+  const category = categoryArg || cred.category || 'IM';
+  const jwt = serviceJwt(sa);
+  const body = JSON.stringify({
+    payload: {
+      notification: {
+        category: category,
+        title: 'Instamony',
+        body: text || '这是一条测试推送',
+        clickAction: { actionType: 0 },
+        style: 0
+      }
+    },
+    target: { token: [cred.pushToken] },
+    pushOptions: { testMessage: cred.testMessage !== false, ttl: 3600 }
   });
-  const res = await request('https://oauth-login.cloud.huawei.com/oauth2/v3/token', {
+  const res = await request(PUSH_SEND.replace('%s', projectId), {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Content-Length': Buffer.byteLength(payload)
+      Authorization: 'Bearer ' + jwt,
+      'Content-Type': 'application/json; charset=UTF-8',
+      'Content-Length': Buffer.byteLength(body),
+      'push-type': '0'
     }
-  }, payload);
+  }, body);
+  console.log('POST ' + PUSH_SEND.replace('%s', projectId) + '（push-type: 0, category=' + category + '）');
   console.log('HTTP ' + res.status);
-  console.log(res.body.slice(0, 600));
-  console.log('（若这里回 error=invalid_client，说明服务账号换不了消费级 token；'
-    + '那就以「API 客户端」的 client_id/secret 为准，用 --token 那条。）');
+  console.log(res.body.slice(0, 800));
+  if (res.status === 200 && res.body.indexOf('"code":"80000000"') >= 0) {
+    console.log('→ 成功。手机应该已经弹通知了。');
+  }
 }
 
 async function main() {
   const argv = process.argv.slice(2);
   const cred = loadCredentials();
+  if (argv.indexOf('--whoami') >= 0) return cmdWhoami(cred);
+  const at = argv.indexOf('--push');
+  if (at >= 0) return cmdPush(cred, argv[at + 1], argv[at + 2]);
   if (argv.indexOf('--token') >= 0) return cmdToken(cred);
   if (argv.indexOf('--app') >= 0) return cmdApp(cred);
   if (argv.indexOf('--certs') >= 0) return cmdCerts(cred);
-  if (argv.indexOf('--sa-token') >= 0) return cmdServiceAccount(cred);
-  const at = argv.indexOf('--push');
-  if (at >= 0) return cmdPush(cred, argv[at + 1]);
-  console.log('用法：node agc.js --token | --app | --certs | --sa-token | --push 文本');
+  console.log('用法：');
+  console.log('  node agc.js --whoami                       # 核对服务账号密钥文件');
+  console.log('  node agc.js --push "测试内容" [category]    # 发一条推送（category 默认 IM）');
+  console.log('  node agc.js --token | --app | --certs      # 旧的 OAuth 探针（Push 用不上）');
 }
 
-main().catch((error) => {
-  console.error('失败：' + (error && error.message ? error.message : error));
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error('失败：' + (error && error.message ? error.message : error));
+    process.exit(1);
+  });
+}
+
+module.exports = { serviceJwt, loadServiceAccount, cmdPush, PUSH_SEND };

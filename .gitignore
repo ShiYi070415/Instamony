@@ -30,6 +30,10 @@
 !/release/**/*.app.zip
 # AGC creds and local state (secrets must never be committed)
 tools/agc/credentials.json
+# 服务账号密钥文件（含私钥，绝不能进仓库）
+tools/agc/private.json
+tools/agc/sa.json
+tools/agc/*private*.json
 tools/relay/config.json
 tools/relay/state.json
 tools/relay/.relay.lock
