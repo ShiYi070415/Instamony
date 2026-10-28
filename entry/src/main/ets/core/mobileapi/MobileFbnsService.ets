@@ -19,6 +19,7 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { common, Want, WantAgent, wantAgent } from '@kit.AbilityKit';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
+import { preferences } from '@kit.ArkData';
 import { PushCenter } from '../PushCenter';
 import { DirectRealtime } from '../DirectRealtime';
 import { MobileIdentity, MobileSession } from './MobileSession';
@@ -61,6 +62,22 @@ export class MobileFbnsService {
    */
   private static pendingNames: Map<string, Promise<string>> =
     new Map<string, Promise<string>>();
+  /**
+   * 落盘的发信人名字缓存（`instarmony_fbns_names`）。
+   *
+   * 为什么要落盘：内存缓存重启就没了，而第一次收到某个人的私信时若查不到名字，
+   * 通知标题就会退成「私信」（用户看到的就是"有时候标题是私信"）。落盘之后，
+   * 同一个人第二次起一定有名字，且不受"查名超时"影响。
+   */
+  private static nameStore: preferences.Preferences | null = null;
+  private static namesLoaded: boolean = false;
+  /**
+   * 会话 id → 显示名的**同步查询**（由私信列表注册，见 Index.onPageShow）。
+   *
+   * 为什么需要：私信列表已经把"这条会话叫什么"拿到了（收件箱里就有），推送到达时直接问它
+   * 就能**同步**拿到名字，不用发请求、也不会超时退回「私信」。
+   */
+  private static titleLookup: ((threadId: string) => string) | null = null;
   /** 正在合并的通知（会话 id → 待发）。 */
   private static pendingNotifies: Map<string, FbnsPendingNotify> =
     new Map<string, FbnsPendingNotify>();
@@ -86,6 +103,89 @@ export class MobileFbnsService {
   /** 绑定 ability 上下文（EntryAbility.onCreate 里调一次；长期任务需要它）。 */
   static bindContext(context: common.UIAbilityContext): void {
     MobileFbnsService.taskContext = context;
+    MobileFbnsService.openNameStore(context);
+  }
+
+  /** 私信列表注册"会话 id → 显示名"的同步查询（见 titleLookup 的说明）。 */
+  static setTitleLookup(lookup: (threadId: string) => string): void {
+    MobileFbnsService.titleLookup = lookup;
+  }
+
+  /** 打开名字缓存（幂等；失败就当没有，不影响通知）。 */
+  private static openNameStore(context: common.Context): void {
+    if (MobileFbnsService.nameStore !== null) {
+      return;
+    }
+    try {
+      MobileFbnsService.nameStore = preferences.getPreferencesSync(context,
+        { name: 'instarmony_fbns_names' });
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'open name store failed: %{public}s',
+        (error as Error).message ?? 'unknown');
+    }
+  }
+
+  /** 首次用到时把落盘的名字读进内存（只读一次）。 */
+  private static loadNames(): void {
+    if (MobileFbnsService.namesLoaded) {
+      return;
+    }
+    MobileFbnsService.namesLoaded = true;
+    const store: preferences.Preferences | null = MobileFbnsService.nameStore;
+    if (store === null) {
+      return;
+    }
+    try {
+      const text: string = String(store.getSync('names_v1', '') as string);
+      if (text.length === 0) {
+        return;
+      }
+      const record: Record<string, ESObject> = JSON.parse(text) as Record<string, ESObject>;
+      for (const key of Object.keys(record)) {
+        const value: ESObject = record[key];
+        if (value !== undefined && value !== null && `${value}`.length > 0) {
+          MobileFbnsService.senderNames.set(key, `${value}`);
+        }
+      }
+      hilog.info(DOMAIN, TAG, 'name cache loaded (%{public}d)', MobileFbnsService.senderNames.size);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'load name cache failed: %{public}s',
+        (error as Error).message ?? 'unknown');
+    }
+  }
+
+  /** 名字进缓存并落盘（幂等；失败不影响通知）。 */
+  private static rememberName(uid: string, name: string): void {
+    const id: string = uid.trim();
+    const label: string = name.trim();
+    if (id.length === 0 || label.length === 0) {
+      return;
+    }
+    MobileFbnsService.senderNames.set(id, label);
+    const store: preferences.Preferences | null = MobileFbnsService.nameStore;
+    if (store === null) {
+      return;
+    }
+    try {
+      const record: Record<string, string> = {};
+      // 只留最近 200 个，避免无限长
+      let count: number = 0;
+      for (const key of MobileFbnsService.senderNames.keys()) {
+        if (count >= 200) {
+          break;
+        }
+        const value: string | undefined = MobileFbnsService.senderNames.get(key);
+        if (value !== undefined) {
+          record[key] = value;
+          count++;
+        }
+      }
+      store.putSync('names_v1', JSON.stringify(record));
+      store.flush();
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'save name cache failed: %{public}s',
+        (error as Error).message ?? 'unknown');
+    }
   }
 
   /**
@@ -284,7 +384,7 @@ export class MobileFbnsService {
       // 与界面同一判据：full_name 优先，没有才用 username。
       const label: string = fullName.length > 0 ? fullName : username;
       if (label.length > 0) {
-        MobileFbnsService.senderNames.set(id, label);
+        MobileFbnsService.rememberName(id, label);
         hilog.info(DOMAIN, TAG, 'sender name resolved uid=%{public}s name=%{public}s',
           id, label);
       }
@@ -302,22 +402,40 @@ export class MobileFbnsService {
    * 为什么要设上限：`users/{id}/info/` 是一发网络请求，第一次遇到某个发信人时可能被节流排队。
    * 通知不该等它 —— 等不到就用兜底标题先弹，查回来的名字会进缓存，下一条就是准的。
    */
-  private static async nameWithin(userId: string, ms: number): Promise<string> {
+  private static async nameWithin(userId: string, threadId: string,
+                                  ms: number): Promise<string> {
     const id: string = userId.trim();
     if (id.length === 0) {
       return '';
     }
+    MobileFbnsService.loadNames();
+    // ① 内存/落盘缓存（同一个发信人第二次起一定命中）
     const cached: string | undefined = MobileFbnsService.senderNames.get(id);
     if (cached !== undefined) {
       return cached;
     }
-    const lookup: Promise<string> = MobileFbnsService.nameOf(id);
+    // ② 问私信列表：这条会话叫什么（同步、不发请求）
+    const lookup: ((threadId: string) => string) | null = MobileFbnsService.titleLookup;
+    if (lookup !== null && threadId.length > 0) {
+      try {
+        const title: string = lookup(threadId).trim();
+        if (title.length > 0) {
+          MobileFbnsService.rememberName(id, title);
+          hilog.info(DOMAIN, TAG, 'sender name from thread list uid=%{public}s', id);
+          return title;
+        }
+      } catch (error) {
+        // 列表还没准备好：继续走网络
+      }
+    }
+    // ③ 现查一次资料（最多等 ms）
+    const pending: Promise<string> = MobileFbnsService.nameOf(id);
     const timeout: Promise<string> = new Promise<string>((resolve: (value: string) => void): void => {
       setTimeout((): void => {
         resolve('');
       }, ms);
     });
-    return Promise.race([lookup, timeout]);
+    return Promise.race([pending, timeout]);
   }
 
   /**
@@ -413,7 +531,7 @@ export class MobileFbnsService {
         MobileFbnsService.seenItems.add(itemId);
       }
     }
-    const name: string = await MobileFbnsService.nameWithin(sender, 500);
+    const name: string = await MobileFbnsService.nameWithin(sender, threadId, 500);
     const preview: string = text.trim().slice(0, 120);
     PushCenter.notifyDirectEach(name, preview, threadId, itemId);
   }

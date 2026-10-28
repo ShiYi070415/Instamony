@@ -5865,6 +5865,24 @@ struct Index {
     // 点私信通知进 App：直接进那条会话（见 core/NotifyRoute / consumeNotifyRoute）。
     this.consumeNotifyRoute();
     /*
+     * **把"会话 id → 显示名"交给 FBNS 通知用一次**（只绑一次）。
+     *
+     * 推送到达时只知道发信人的数字 id；现查资料可能超时（通知标题就退成「私信」）。
+     * 私信列表里已经有每条会话的名字，直接同步查这里就行（见 MobileFbnsService.titleLookup）。
+     */
+    if (!this.notifyTitleLookupBound) {
+      this.notifyTitleLookupBound = true;
+      MobileFbnsService.setTitleLookup((threadId: string): string => {
+        const list: Array<DirectThread> = this.directVm.list();
+        for (let index: number = 0; index < list.length; index++) {
+          if (list[index].id === threadId) {
+            return list[index].title;
+          }
+        }
+        return '';
+      });
+    }
+    /*
      * **把"后台看一眼收件箱"绑到私信视图模型上**（见 core/BackgroundKeep 的 BackgroundInbox）。
      *
      * 退到后台那几分钟里没有页面在跑，由它每 45 秒替私信页轮询一次；未读变多就由
@@ -5876,8 +5894,7 @@ struct Index {
         return;
       }
       this.directVm.refreshQuietly().catch((): void => {
-      });
-    });
+      });    });
   }
 
   // ==========================================================================
@@ -5886,6 +5903,14 @@ struct Index {
 
   /** 正在执行"点通知进会话"（防重入：会切 tab + push 页面）。 */
   private notifyRouteRunning: boolean = false;
+  /**
+   * 有没有给 FBNS 通知注册过"会话 id → 显示名"的同步查询（只注册一次）。
+   *
+   * 为什么要注册：推送到达时只有发信人的数字 id，若现查资料超时，通知标题就会退成「私信」。
+   * 私信列表里本来就有每条会话的名字，把这份映射交给 `MobileFbnsService` 之后，
+   * 标题可以**同步**取到，不需要任何请求。
+   */
+  private notifyTitleLookupBound: boolean = false;
   /** 还没送到的目标会话 id（一直留到真的进去了，见 consumeNotifyRoute）。 */
   private notifyThread: string = '';
   /** 已经试了几次（冷启动早期 nav 栈会被清，需要重试，见下）。 */
