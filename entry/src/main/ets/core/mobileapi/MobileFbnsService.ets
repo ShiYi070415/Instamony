@@ -109,7 +109,10 @@ export class MobileFbnsService {
       'X-FB-Friendly-Name': 'IgApi: push/register/',
       'Content-Type': 'application/x-www-form-urlencoded'
     };
-    const result: MobileResult = await MobileRequest.send('/api/v1/push/register/', form, '',
+    // 注意路径前缀：`MobileRequest.absoluteUrl` 会自己拼 `https://i.instagram.com/api`，
+    // 所以这里只能给 `/v1/push/register/`。写成 `/api/v1/...` 会变成
+    // `.../api/api/v1/push/register/` → 404（真机就是这么拿了张 HTML 登录页回来）。
+    const result: MobileResult = await MobileRequest.send('/v1/push/register/', form, '',
       false, extra);
     const ok: boolean = result.ok && result.body.indexOf('"ok"') >= 0;
     hilog.info(DOMAIN, TAG, 'push/register http=%{public}d ok=%{public}s',

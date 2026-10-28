@@ -228,15 +228,30 @@ export class MobileFbnsClient {
             timeout: 15000
           });
           ref.on('message', (info: socket.SocketMessageInfo): void => {
+            if (this.sock !== ref) {
+              return;
+            }
             this.onBytes(new Uint8Array(info.message));
           });
           ref.on('close', (): void => {
+            // **只有当前这条连接**的关闭才影响状态：引导阶段那条 socket 用完就关，
+            // 它的 close 事件晚到时如果直接 `up = false`，会把手上的正式连接判成"掉线"，
+            // 于是心跳不再发、服务端 60 秒后把我们踢掉（真机就是这么丢的）。
+            if (this.sock !== ref) {
+              return;
+            }
             this.up = false;
             hilog.info(DOMAIN, TAG, 'fbns closed');
           });
           ref.on('error', (err: BusinessError): void => {
+            const detail: string = `${err === undefined || err === null ? 'unknown' : err.code}`
+              + '/' + `${err === undefined || err === null || err.message === undefined
+                ? 'no-message' : err.message}`;
+            hilog.warn(DOMAIN, TAG, 'fbns socket error: %{public}s', detail);
+            if (this.sock !== ref) {
+              return;
+            }
             this.up = false;
-            hilog.warn(DOMAIN, TAG, 'fbns socket error: %{public}s', err.message);
             finish(new FbnsConnack(-1, new Uint8Array(0)));
           });
           const packet: Uint8Array = MobileFbns.buildConnect(auth, FBNS_KEEPALIVE_S, Date.now());
