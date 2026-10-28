@@ -50,6 +50,12 @@ const AVATAR_SIZE: number = 28;
 const BUBBLE_MAX_RATIO: number = 0.72;
 const BUBBLE_GAP_VP: number = 2;
 const GROUP_GAP_VP: number = 12;
+/** 群聊里"发送人名字"那一行的字号（需求：比正文小一点但要看得清，之前 11 太小）。 */
+const SENDER_NAME_SIZE: number = 13;
+/** 那一行相对头像左侧再多留的空白（需求：padding left 需要增加）。 */
+const SENDER_NAME_LEFT_PAD: number = 16;
+/** 有发送人名字的组，和上一段之间额外加的距离（需求：顶部 margin 要和其他消息段拉开）。 */
+const SENDER_NAME_TOP_GAP: number = 14;
 const GROUP_GAP_MS: number = 2 * 60 * 1000;
 /**
  * 顶部那行"加载中"动画的高度（vp）—— **始终占位**，不加载时高度为 0。
@@ -748,6 +754,12 @@ export struct DirectThreadPage {
     return !this.sameGroupAsPrev(index, message);
   }
 
+  /** 这一条相对上一段要留多少顶部间距（带发送人名字的组再 +SENDER_NAME_TOP_GAP）。 */
+  private topGapOf(index: number, message: DirectMessage): number {
+    const base: number = this.sameGroupAsPrev(index, message) ? BUBBLE_GAP_VP : GROUP_GAP_VP;
+    return this.showsSenderName(index, message) ? base + SENDER_NAME_TOP_GAP : base;
+  }
+
   /** 这条消息的发送人在界面上的名字（拿不到就给空串，界面上就不画那一行）。 */
   private senderLabel(message: DirectMessage): string {
     if (message.senderName.length > 0) {
@@ -837,12 +849,13 @@ export struct DirectThreadPage {
           // 群聊：这一组顶部写发送人（带文字阴影，压在深色背景上不糊）。
           if (this.showsSenderName(index, message) && this.senderLabel(message).length > 0) {
             Text(this.senderLabel(message))
-              .fontSize(11)
-              .fontColor($r('app.color.secondary_text'))
+              // 需求：白色文本、字号大一点、左侧留白加宽（对齐气泡文字而不是头像边缘）。
+              .fontSize(SENDER_NAME_SIZE)
+              .fontColor($r('app.color.primary_text'))
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
               .textShadow({ radius: 4, color: '#A0000000', offsetX: 0, offsetY: 1 })
-              .padding({ left: AVATAR_SIZE + 8 })
+              .padding({ left: AVATAR_SIZE + SENDER_NAME_LEFT_PAD })
               .width('100%')
               .textAlign(TextAlign.Start)
           }
@@ -876,7 +889,8 @@ export struct DirectThreadPage {
     .padding({
       left: SIDE_PADDING,
       right: SIDE_PADDING,
-      top: this.isNewGroup(index, message) ? GROUP_GAP_VP : BUBBLE_GAP_VP,
+      // 需求：带发送人名字的那一组，和上一段之间留出更明显的距离（见 topGapOf）。
+      top: this.topGapOf(index, message),
       bottom: 0
     })
   }

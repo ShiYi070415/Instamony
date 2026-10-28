@@ -1,1 +1,0 @@
-fix(direct): 群聊里区分消息发起人 + 分组样式按需求调整 —— ①DirectMessage 新增 senderName/senderAvatar，解析时按 user_id 查会话 users[] 落到每条消息上（threadFromJson 与 threadFromGraphql 都改；原来循环里挑到"第一个有头像的人"就 break，后面的人根本没进表，且界面统一用 view.withAvatar 画所有气泡，于是群聊全部长成同一个人）；②头像改画在"这一组最新那条"的左侧（换人/换方向/超过 2 分钟即换组）；③群聊里每组顶部显示发送人用户名，带文字阴影；④版本号 1.3.6（versionCode 1003006）

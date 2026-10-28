@@ -422,7 +422,8 @@ export class DirectMapper {
       // 参与者表：**不 break**，整份收下来（群聊靠它给每条消息对发送人）。
       const person: DirectPerson = new DirectPerson();
       person.pk = pk;
-      person.name = name.length > 0 ? name : JsonRead.strOf(user, 'full_name');
+      // 只认 username（账号）：需求要的是「用户名」而不是「用户名称」（full_name）。
+      person.name = name;
       person.avatar = pic;
       people.push(person);
       if (withUsername.length === 0 && name.length > 0) {
@@ -998,7 +999,8 @@ export class DirectMapper {
       // 参与者表：**不 break**，整份收下来（群聊靠它给每条消息对发送人）。
       const person: DirectPerson = new DirectPerson();
       person.pk = pk;
-      person.name = name.length > 0 ? name : JsonRead.strOf(user, 'full_name');
+      // 只认 username（账号）：需求要的是「用户名」而不是「用户名称」（full_name）。
+      person.name = name;
       person.avatar = pic;
       people.push(person);
       /*
