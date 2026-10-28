@@ -52,6 +52,8 @@ import { DeepLink, DeepLinkIntent } from '../core/DeepLink';
 import { Translator } from '../core/Translator';
 // 通知（Push Kit 注册 + 本地通知），见 core/PushCenter。
 import { PushCenter } from '../core/PushCenter';
+// FBNS 设备凭据的落盘（设备级会话的实时通道，见 core/mobileapi/MobileFbnsClient）
+import { FbnsAuthStore } from '../core/mobileapi/MobileFbnsClient';
 
 const DOMAIN = 0x0000;
 /**
@@ -204,6 +206,12 @@ export default class EntryAbility extends UIAbility {
        * 不生成密钥也不发请求 —— 第一次真正登录时才造 USDID（生成密钥要动 crypto，别拖慢冷启动）。
        */
       CaaSession.init(this.context);
+      /*
+       * **FBNS 设备凭据**（见 core/mobileapi/MobileFbnsClient）：只开落盘文件。
+       * 这份凭据是两段式握手换来的设备身份，IG 按它认人 —— 必须跨重启稳定，
+       * 否则每次启动都像"新设备"，push token 一直变、推送也就一直建立不起来。
+       */
+      FbnsAuthStore.init(this.context);
       /*
        * **首屏是探索流时，启动不要先用"关注流预热"占住节流闸**。
        *

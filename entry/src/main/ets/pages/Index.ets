@@ -186,6 +186,8 @@ import { MqttProbe } from '../core/mobileapi/MqttProbe';
 import { NetProbe } from '../core/mobileapi/NetProbe';
 // 实时通道（iris / MQTToT）：原生 TLS 直连，见 core/mobileapi/MobileRealtime 的文件头。
 import { IrisState, MobileRealtime, RealtimeEvent } from '../core/mobileapi/MobileRealtime';
+// 设备级会话的实时通道（FBNS；网页会话仍走上面的 MobileRealtime）
+import { MobileFbnsService } from '../core/mobileapi/MobileFbnsService';
 // 实时私信补丁 → 「某条会话多了条消息」（见 onRealtimeMessage）。
 import { DirectRealtime, RealtimeMessage } from '../core/DirectRealtime';
 import { MobileDirect } from '../core/mobileapi/MobileDirect';
@@ -3085,6 +3087,19 @@ struct Index {
    */
   private async startRealtime(): Promise<void> {
     if (this.realtimeStarted) {
+      return;
+    }
+    /*
+     * **设备级会话走 FBNS，网页会话走 iris**（见 core/mobileapi/MobileFbnsService）。
+     *
+     * 设备级会话没有 sessionid，iris 的 `cookie_auth` 连接会 `CONNACK rc=5`（真机日志实测），
+     * 所以这里先问 FBNS 要不要接管；接管了就不去连 iris（两条同时连会各收一份，通知会重复）。
+     */
+    const fbnsOwnsRealtime: boolean = await MobileFbnsService.startFromSession().catch(
+      (): boolean => false);
+    if (fbnsOwnsRealtime) {
+      this.realtimeStarted = true;
+      hilog.info(DOMAIN, TAG, 'realtime via fbns (device-level session)');
       return;
     }
     /*
