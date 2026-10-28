@@ -320,11 +320,15 @@ check('sessionFromSettings：缺 sessionid / uuids 时要抛（而不是产出�
 
 check('sessionProblemOf：不完整的会话要被拦住（宁可什么都不写，也别覆盖好会话）', () => {
   assertEqual(format.sessionProblemOf(null), '会话不是对象', 'null 没被拦');
-  assertEqual(format.sessionProblemOf({ cookie: 'sessionid=x' }), '没有 sessionid', '缺 sessionid 没被拦');
+  assertEqual(format.sessionProblemOf({ cookie: 'sessionid=x' }),
+    '既没有 sessionid 也没有 authorization', '两样凭据都缺没被拦');
   assertEqual(format.sessionProblemOf({ sessionid: '777%3Asecret' }),
     '没有 ds_user_id（账号 id）', '缺 userId 没被拦');
   assertEqual(format.sessionProblemOf({ sessionid: '777%3Asecret', userId: '777' }), '',
     '完整会话不该被判成有问题');
+  // 设备级会话（IG 2026-10 起会下发这种）：没有 sessionid，但 authorization 在。
+  assertEqual(format.sessionProblemOf({ authorization: 'Bearer IGT:2:abc', userId: '777' }), '',
+    '有 authorization 的设备级会话不该被判成有问题');
 });
 
 check('authorizationDataOf：非法串回空对象（不炸）', () => {
@@ -612,6 +616,100 @@ check('自检⑥：从布局读出 2FA 规范（长票据 + client 参数）', (
   const spec = caa.pickCallSpec(caa.nextCallSpecs(payload), ['two_step']);
   assert(spec !== null, '没读到规范');
   assertEqual(spec.clientParams.machine_id, 'MID-1', 'client 参数没解出来');
+});
+
+/* ---------------------------------- 真机 2026-10：cookie 全在头里、没有 sessionid */
+
+/*
+ * 这一组是**真机踩过的形状**（`_yijin.__` 那次登录）：
+ *   `login_response.status = "ok"`、`logged_in_user` 齐全、`cookies` 是**空对象**，
+ *   会话材料全在 `headers` 里（`IG-Set-Authorization` / `ig-set-ig-u-ds-user-id` / …）。
+ * 旧解析器只认字符串 `cookies`，于是把"登录成功"判成"没有 sessionid" —— 卡了两轮。
+ */
+
+function realDevicePayload(cookiesValue, headersObject) {
+  const inner = {
+    login_response: JSON.stringify({
+      logged_in_user: { pk: 46473815227, username: '_yijin.__' },
+      status: 'ok',
+      credential_type: 'password'
+    }),
+    headers: JSON.stringify(headersObject),
+    cookies: cookiesValue
+  };
+  const action = '(dsg (fom 15942 35 ' + JSON.stringify(JSON.stringify(inner)) + '))';
+  return { layout: { bloks_payload: { action } } };
+}
+
+const realHeaders = {
+  'IG-Set-Authorization': 'Bearer IGT:2:eyJkc191c2VyX2lkIjoiNDY0In0=',
+  'ig-set-ig-u-ds-user-id': '46473815227',
+  'ig-set-ig-u-rur': 'KND',
+  'x-ig-set-www-claim': 'hmac.AAAA'
+};
+
+check('真机形状：cookies 是空对象、材料全在 ig-set-* 头里 → 仍算登录成功', () => {
+  const parsed = caa.extractLoginPayloadDeep(realDevicePayload({}, realHeaders));
+  assert(parsed !== null, '又判成"没有登录结果"了');
+  assertEqual(parsed.cookies.ds_user_id, '46473815227', 'ds_user_id 没从头里还原');
+  assertEqual(parsed.cookies.rur, 'KND', 'rur 没从头里还原');
+  assertEqual(parsed.userId, '46473815227', 'logged_in_user.pk 没带出来');
+  assertEqual(parsed.loginResponse.status, 'ok', 'status 丢了');
+  assert(parsed.cookies.sessionid === undefined, '不该凭空造出 sessionid');
+});
+
+check('cookies 是对象（非空）时也能取（R12 之后的形状）', () => {
+  const parsed = caa.extractLoginPayloadDeep(realDevicePayload({ sessionid: '777%3Aabc', ds_user_id: '777' }, {}));
+  assert(parsed !== null, '对象形状的 cookies 没认');
+  assertEqual(parsed.cookies.sessionid, '777%3Aabc', 'sessionid 没取到');
+});
+
+check('cookies 是数组时也能取（[{name,value}] 与 "a=b" 两种元素）', () => {
+  const parsed = caa.extractLoginPayloadDeep(realDevicePayload([
+    { name: 'ds_user_id', value: '777' }, 'csrftoken=xyz'
+  ], {}));
+  assert(parsed !== null, '数组形状的 cookies 没认');
+  assertEqual(parsed.cookies.ds_user_id, '777', '对象元素没认');
+  assertEqual(parsed.cookies.csrftoken, 'xyz', '字符串元素没认');
+});
+
+check('设备级会话：没有 sessionid 但有 authorization 也能过 sessionProblemOf', () => {
+  assertEqual(format.sessionProblemOf({
+    userId: '46473815227', sessionid: '', authorization: 'Bearer IGT:2:abc'
+  }), '', '有 authorization 却不认');
+  assert(format.sessionProblemOf({ userId: '1', sessionid: '', authorization: '' }).length > 0,
+    '两者都没有也没拦');
+  assert(format.sessionProblemOf({ userId: '', sessionid: 'x', authorization: 'y' }).length > 0,
+    '没有账号 id 也没拦');
+});
+
+check('设备级 settings：没有 sessionid 但有 authorization_data → 能导入，账号从 auth_data 补', () => {
+  const settings = {
+    cookies: { 'ig-u-ds-user-id': '46473815227', rur: 'KND' },
+    uuids: { phone_id: 'p', uuid: 'u', android_device_id: 'android-a' },
+    authorization_data: { ds_user_id: '46473815227', sessionid: '', should_use_header_over_cookies: true },
+    device_settings: { app_version: '449.0.0.52.84' },
+    user_agent: 'UA',
+    mid: 'MID'
+  };
+  const { session } = format.sessionFromSettings(settings);
+  assertEqual(session.userId, '46473815227', '账号 id 没从 authorization_data 补上');
+  assertEqual(session.sessionid, '', '不该凭空有 sessionid');
+  assert(session.authorization.indexOf('Bearer IGT:2:') === 0, 'authorization 没重建');
+});
+
+check('真机转储（若还在）：能从这份响应里抠出设备级会话', () => {
+  const fs = require('fs');
+  const dumpFile = path.join(__dirname, '.tmp', 'caa-last-response.json');
+  if (!fs.existsSync(dumpFile)) {
+    return '（转储不在，跳过）';
+  }
+  const dump = JSON.parse(fs.readFileSync(dumpFile, 'utf8').replace(/^\uFEFF/, ''));
+  const raw = dump.raw === undefined || dump.raw === null ? dump : dump.raw;
+  const parsed = caa.extractLoginPayloadDeep(raw);
+  assert(parsed !== null, '真实转储里没抠出载荷');
+  assert(String(parsed.headers['IG-Set-Authorization'] || '').length > 0, '缺 authorization');
+  assertEqual(parsed.cookies.ds_user_id, parsed.userId, 'ds_user_id 与 logged_in_user.pk 不一致');
 });
 
 /* ------------------------------------------------ 汇总 */

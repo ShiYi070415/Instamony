@@ -98,6 +98,11 @@ function settingsShapeOf(result, profile) {
  *
  * **失败就抛**（不 die、不落盘）—— 调用方自己决定是退出（CLI）还是当自检结论（dry-run）。
  *
+ * 关于 `sessionid`：老会话一定有它；但 IG 现在也会下发**设备级会话** —— 只有
+ * `authorization_data`（`Bearer IGT:2:…`）+ `ig-u-*` cookie，没有 `sessionid`。
+ * 这种会话照样能调移动 API，所以这里允许"没有 sessionid 但有 authorization_data"，
+ * 账号 id 从 `authorization_data.ds_user_id` 补。
+ *
  * @returns `{ session, device }`
  */
 function sessionFromSettings(settings) {
@@ -106,8 +111,11 @@ function sessionFromSettings(settings) {
   }
   const cookie = cookieStringOf(settings.cookies || {});
   const sessionid = cookieValueOf(cookie, 'sessionid');
-  if (sessionid.length === 0) {
-    throw new Error('settings 里没有 sessionid —— 这份会话不算登录成功');
+  const authData = settings.authorization_data || {};
+  const authorization = Object.keys(authData).length === 0
+    ? '' : IGT_MARKER + Buffer.from(JSON.stringify(authData)).toString('base64');
+  if (sessionid.length === 0 && authorization.length === 0) {
+    throw new Error('settings 里既没有 sessionid 也没有 authorization_data —— 这份会话不算登录成功');
   }
   const uuids = settings.uuids || {};
   const phoneId = String(uuids.phone_id || '');
@@ -116,12 +124,11 @@ function sessionFromSettings(settings) {
   if (phoneId.length === 0 || uuid.length === 0 || androidId.length === 0) {
     throw new Error('settings 的 uuids 不全（需要 phone_id / uuid / android_device_id）');
   }
-  const authData = settings.authorization_data || {};
-  const authorization = Object.keys(authData).length === 0
-    ? '' : IGT_MARKER + Buffer.from(JSON.stringify(authData)).toString('base64');
+  const userId = cookieValueOf(cookie, 'ds_user_id')
+    || String(authData.ds_user_id || '');
   const session = {
     source: 'instagrapi',
-    userId: cookieValueOf(cookie, 'ds_user_id'),
+    userId,
     cookie,
     sessionid,
     csrf: cookieValueOf(cookie, 'csrftoken'),
@@ -137,8 +144,11 @@ function sessionFromSettings(settings) {
 /**
  * **落盘前的可用性检查**：这份会话值不值得写下去。
  *
- * 为什么单独一条：解析出"登录成功"不等于拿到可用会话。把缺 `sessionid` 的会话写下去，
+ * 为什么单独一条：解析出"登录成功"不等于拿到可用会话。把缺凭据的会话写下去，
  * 只会**覆盖掉上一份好会话**，之后 `--check` / 常驻全报"缺少有效会话"，而人还以为成功了。
+ *
+ * 判据：`sessionid` **或** `authorization`（设备级会话没有 sessionid，但有 Bearer IGT:2），
+ * 且必须知道账号 id。
  *
  * @returns 空串 = 可用；否则是给人看的问题描述
  */
@@ -146,8 +156,10 @@ function sessionProblemOf(session) {
   if (session === null || session === undefined || typeof session !== 'object') {
     return '会话不是对象';
   }
-  if (String(session.sessionid || '').length === 0) {
-    return '没有 sessionid';
+  const hasSession = String(session.sessionid || '').length > 0;
+  const hasAuthorization = String(session.authorization || '').length > 0;
+  if (!hasSession && !hasAuthorization) {
+    return '既没有 sessionid 也没有 authorization';
   }
   if (String(session.userId || '').length === 0) {
     return '没有 ds_user_id（账号 id）';

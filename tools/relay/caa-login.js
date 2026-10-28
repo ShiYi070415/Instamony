@@ -612,6 +612,86 @@ function parseCookieHeader(text) {
 }
 
 /**
+ * `ig-set-*` 响应头 → cookie。
+ *
+ * 为什么要这条：IG 有些响应**不下发 `Set-Cookie`**，而是把 cookie 的值放在 `ig-set-*` 头里
+ * 让客户端自己拼（真机 2026-10 的密码登录就是这种：`cookies` 是空对象，但
+ * `ig-set-ig-u-ds-user-id` / `ig-set-ig-u-rur` / `x-ig-set-www-claim` 都在）。
+ * 只认 `cookies` 字段的话，会话就会"看起来没登录成功"。
+ *
+ * 映射（与实测响应对齐，别凭感觉改）：
+ *   ig-set-ig-u-ds-user-id → ds_user_id + ig-u-ds-user-id
+ *   ig-set-ig-u-rur        → rur + ig-u-rur
+ *   ig-set-ig-u-sessionid   → sessionid + ig-u-sessionid（老形状还能遇到）
+ *   x-ig-set-www-claim      → ig-u-www-claim
+ *   ig-set-x-mid            → mid
+ */
+function cookiesFromSessionHeaders(headers) {
+  const map = headers || {};
+  const out = {};
+  const pick = (name, into) => {
+    for (const key of Object.keys(map)) {
+      if (key.toLowerCase() !== name) continue;
+      const value = String(map[key] === undefined || map[key] === null ? '' : map[key])
+        .replace(/^[A-Za-z-]+:\s*/, '').trim();
+      if (value.length === 0) continue;
+      for (const target of into) {
+        if (out[target] === undefined) out[target] = value;
+      }
+    }
+  };
+  pick('ig-set-ig-u-ds-user-id', ['ds_user_id', 'ig-u-ds-user-id']);
+  pick('ig-set-ig-u-rur', ['rur', 'ig-u-rur']);
+  pick('ig-set-ig-u-sessionid', ['sessionid', 'ig-u-sessionid']);
+  pick('x-ig-set-www-claim', ['ig-u-www-claim']);
+  pick('ig-set-x-mid', ['mid']);
+  return out;
+}
+
+/**
+ * 载荷里的 `cookies` 字段有三种形状，IG 三种都下发过：
+ *   · 字符串 `"sessionid=…; ds_user_id=…"`（老形状）
+ *   · 对象 `{sessionid: '…', …}`（R12 之后的形状）
+ *   · **空对象 `{}` + 值全在 `headers` 里**（真机 2026-10 的密码登录 —— 只看这一项会误判成失败）
+ */
+function cookiesFromRaw(rawCookies) {
+  if (rawCookies === null || rawCookies === undefined) {
+    return {};
+  }
+  if (typeof rawCookies === 'string') {
+    return parseCookieHeader(rawCookies);
+  }
+  const out = {};
+  if (Array.isArray(rawCookies)) {
+    for (const item of rawCookies) {
+      if (typeof item === 'string') {
+        const one = parseCookieHeader(item);
+        for (const name of Object.keys(one)) {
+          if (out[name] === undefined) out[name] = one[name];
+        }
+      } else if (item !== null && typeof item === 'object') {
+        const name = String(item.name || item.key || '');
+        const value = String(item.value === undefined || item.value === null ? '' : item.value);
+        if (name.length > 0 && value.length > 0 && out[name] === undefined) {
+          out[name] = value;
+        }
+      }
+    }
+    return out;
+  }
+  if (typeof rawCookies === 'object') {
+    for (const name of Object.keys(rawCookies)) {
+      const value = rawCookies[name];
+      const text = value === undefined || value === null ? '' : String(value);
+      if (name.length > 0 && text.length > 0) {
+        out[name] = text;
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * 从登录响应头里捡**会话材料**（不只是 authorization）。
  *
  * instagrapi 在 `_send_private_request` 里就会捡这几条（`ig-set-x-mid` 等），我们也要捡：
@@ -677,27 +757,19 @@ function loginPayloadFromText(text) {
       continue;
     }
     if (typeof decoded !== 'string' || decoded.indexOf('login_response') < 0) continue;
+    let raw = null;
     try {
-      const raw = JSON.parse(decoded);
-      if (raw === null || typeof raw !== 'object') continue;
-      // 必须是"登录结果那种对象"（有 login_response / cookies / headers 之一）
-      if (!('login_response' in raw) && !('cookies' in raw) && !('headers' in raw)) continue;
-      const loginResponse = JSON.parse(raw.login_response || '{}');
-      const headers = JSON.parse(raw.headers || '{}');
-      const cookieHeader = String(raw.cookies || '');
-      const cookies = parseCookieHeader(cookieHeader);
-      // 同时给一份 `cookie` 串：ArkTS 那份（CaaLoginPayload）就是这个字段名，
-      // 两边同名同形，读代码/写测试时才不会拿错（这里踩过一次）。
-      const cookie = Object.keys(cookies).map((name) => `${name}=${cookies[name]}`).join('; ');
-      const found = { loginResponse, headers, cookies, cookie, cookieHeader, raw };
-      if (Object.keys(cookies).length > 0) {
-        return found;
-      }
-      if (fallback === null) {
-        fallback = found;
-      }
+      raw = JSON.parse(decoded);
     } catch (error) {
-      // 换下一个字面量
+      continue;
+    }
+    const found = buildLoginPayload(raw);
+    if (found === null) continue;
+    if (Object.keys(found.cookies).length > 0) {
+      return found;
+    }
+    if (fallback === null) {
+      fallback = found;
     }
   }
   return fallback;
@@ -729,8 +801,7 @@ function findLoginObjectDeep(value, depth = 0) {
   }
   if (typeof value === 'object') {
     const record = value;
-    if (typeof record.login_response === 'string'
-      || typeof record.headers === 'string' || typeof record.cookies === 'string') {
+    if ('login_response' in record || 'headers' in record || 'cookies' in record) {
       const parsed = loginPayloadFromObject(record);
       if (parsed !== null) return parsed;
     }
@@ -750,23 +821,86 @@ function findLoginObjectDeep(value, depth = 0) {
   return null;
 }
 
-/** 把一个已是对象的 `{login_response, headers, cookies}` 解析成登录结果。 */
-function loginPayloadFromObject(raw) {
-  try {
-    const loginResponse = typeof raw.login_response === 'string'
-      ? JSON.parse(raw.login_response) : (raw.login_response || {});
-    const headers = typeof raw.headers === 'string' ? JSON.parse(raw.headers) : (raw.headers || {});
-    const cookieHeader = typeof raw.cookies === 'string'
-      ? raw.cookies : Object.keys(raw.cookies || {}).map((name) => `${name}=${raw.cookies[name]}`).join('; ');
-    const cookies = parseCookieHeader(cookieHeader);
-    if (Object.keys(headers).length === 0 && Object.keys(cookies).length === 0) {
-      return null;
+/** 把 `login_response` / `headers` 这种"可能是字符串、也可能已是对象"的字段解成对象。 */
+function asJsonObject(value) {
+  if (value === null || value === undefined) {
+    return {};
+  }
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (text.length === 0) {
+      return {};
     }
-    const cookie = Object.keys(cookies).map((name) => `${name}=${cookies[name]}`).join('; ');
-    return { loginResponse, headers, cookies, cookie, cookieHeader, raw };
-  } catch (error) {
+    try {
+      const parsed = JSON.parse(text);
+      return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch (error) {
+      return {};
+    }
+  }
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    return value;
+  }
+  return {};
+}
+
+/** 两份 cookie 表合并（同名以 `base` 为准）。 */
+function mergeCookieMaps(base, extra) {
+  const out = {};
+  for (const name of Object.keys(base || {})) {
+    out[name] = base[name];
+  }
+  for (const name of Object.keys(extra || {})) {
+    if (out[name] === undefined) {
+      out[name] = extra[name];
+    }
+  }
+  return out;
+}
+
+/**
+ * **登录结果的统一构造**：一份 `{login_response, headers, cookies}` → `{loginResponse, headers, cookies, cookie, cookieHeader, raw}`。
+ *
+ * 三个来源都要吃：
+ *   1. `cookies` 字段（字符串 / 对象 / 数组，见 `cookiesFromRaw`）；
+ *   2. **`ig-set-*` 头里夹带的 cookie**（真机 2026-10：`cookies` 是空对象，值全在头里）；
+ *   3. `login_response` 里若带 `logged_in_user.pk`，也记下账号 id（`userId`）。
+ *
+ * 以前这里只认字符串 `cookies`，于是"登录其实成功、cookie 全在头里"会被判成失败。
+ */
+function buildLoginPayload(raw) {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     return null;
   }
+  if (!('login_response' in raw) && !('cookies' in raw) && !('headers' in raw)) {
+    return null;
+  }
+  const loginResponse = asJsonObject(raw.login_response);
+  const headers = asJsonObject(raw.headers);
+  const cookies = mergeCookieMaps(cookiesFromRaw(raw.cookies), cookiesFromSessionHeaders(headers));
+  if (Object.keys(headers).length === 0 && Object.keys(cookies).length === 0) {
+    return null;
+  }
+  const cookieHeader = Object.keys(cookies).map((name) => `${name}=${cookies[name]}`).join('; ');
+  const user = loginResponse.logged_in_user;
+  const userId = user !== null && typeof user === 'object' && user.pk !== undefined
+    ? String(user.pk) : '';
+  return {
+    loginResponse,
+    headers,
+    // 同时给一份 `cookie` 串：ArkTS 那份（CaaLoginPayload）就是这个字段名，
+    // 两边同名同形，读代码/写测试时才不会拿错（这里踩过一次）。
+    cookies,
+    cookie: cookieHeader,
+    cookieHeader,
+    userId,
+    raw
+  };
+}
+
+/** 把一个已是对象的 `{login_response, headers, cookies}` 解析成登录结果。 */
+function loginPayloadFromObject(raw) {
+  return buildLoginPayload(raw);
 }
 
 /**
@@ -1786,7 +1920,10 @@ async function caaLogin(profile, username, password, log, options) {
    */
   const parsedCookies = parsed === null ? {} : parsed.cookies;
   const parsedHasCookies = Object.keys(parsedCookies).length > 0;
-  const pendingTwoStep = parsed !== null && !parsedHasCookies ? twoStepContextOf(send.data) : '';
+  const parsedAuthorization = parsed === null ? '' : String(parsed.headers['IG-Set-Authorization']
+    || parsed.headers['ig-set-authorization'] || '');
+  const pendingTwoStep = parsed !== null && !parsedHasCookies && parsedAuthorization.length === 0
+    ? twoStepContextOf(send.data) : '';
   if (parsed !== null && (parsedHasCookies || pendingTwoStep.length === 0)) {
     const authorization = String(parsed.headers['IG-Set-Authorization']
       || parsed.headers['ig-set-authorization'] || '');
@@ -1799,6 +1936,8 @@ async function caaLogin(profile, username, password, log, options) {
       mid: sessionHeaders.mid,
       rur: sessionHeaders.rur,
       claim: sessionHeaders.claim,
+      // 载荷里 `logged_in_user.pk` 也是账号 id 的可靠来源（真机：cookie 里未必有 ds_user_id）
+      userId: String(parsed.userId || ''),
       // 只给"名字"用于诊断（值里是会话材料，不能打到日志里）
       cookieNames: Object.keys(parsed.cookies),
       headerNames: Object.keys(parsed.headers),

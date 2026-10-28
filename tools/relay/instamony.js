@@ -707,11 +707,13 @@ async function runVerifySession() {
   const auth = igAuthorization(session);
 
   log('① 会话形状');
-  log('   sessionid     ' + (sid.length > 0 ? '有（' + sid.length + ' 字符）' : '缺'));
+  log('   sessionid     ' + (sid.length > 0 ? '有（' + sid.length + ' 字符）' : '无（设备级会话）'));
   log('   ds_user_id    ' + (uid.length > 0 ? uid : '缺'));
   log('   authorization ' + (auth.length > 0 ? '有（' + auth.length + ' 字符）'
     : '缺（会退回用 cookie 里的 sessionid 拼）'));
-  if (sid.length === 0 || uid.length === 0) {
+  // 判据：只要有 sessionid 或 authorization 之一就行 —— IG 现在会下发"没有 sessionid、
+  // 只有 Authorization + ig-u-* cookie"的设备级会话（真机 2026-10 实测能用）。
+  if ((sid.length === 0 && auth.length === 0) || uid.length === 0) {
     warn('会话不完整：先跑 node instamony.js --caa-login');
     process.exitCode = 1;
     return;
@@ -1157,27 +1159,33 @@ async function runCaaReplay(argv) {
   const { sessionHeadersOf } = require('./caa-login.js');
   const sessionHeaders = sessionHeadersOf(headers);
   const profile = resolveDeviceProfile(argv);
-  const cookie = Object.keys(parsed.cookies || {})
-    .map((name) => `${name}=${parsed.cookies[name]}`).join('; ');
-  const session = {
-    source: 'caa-replay',
-    userId: cookieValueOf(cookie, 'ds_user_id'),
-    cookie,
-    sessionid: cookieValueOf(cookie, 'sessionid'),
-    csrf: cookieValueOf(cookie, 'csrftoken'),
+  const session = sessionFromLoginResult({
+    cookies: parsed.cookies || {},
     authorization,
-    appVersion: profile.appVersion,
-    userAgent: profile.userAgent,
-    mid: sessionHeaders.mid || profile.mid,
-    rur: sessionHeaders.rur || '',
-    claim: sessionHeaders.claim || '',
-    savedAt: Date.now()
-  };
+    mid: sessionHeaders.mid,
+    rur: sessionHeaders.rur,
+    claim: sessionHeaders.claim,
+    userId: parsed.userId || ''
+  }, profile, 'caa-replay');
   const problem = sessionProblemOf(session);
   if (problem.length > 0) {
     warn('响应里的会话不完整（' + problem + '）—— **不覆盖现有会话**');
     process.exitCode = 3;
     return;
+  }
+  // 没有 sessionid 的设备级会话：先探活，能用了才写盘（同 --caa-login）。
+  if (session.sessionid.length === 0) {
+    const alive = await sessionAlive(session, {
+      phoneId: profile.phoneId,
+      uuid: profile.uuid,
+      androidId: profile.androidId
+    });
+    if (!alive) {
+      warn('设备级会话探活没过（accounts/current_user 非 200）—— **不写盘**');
+      process.exitCode = 3;
+      return;
+    }
+    log('设备级会话：没有 sessionid，但探活 200');
   }
   fs.writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2), 'utf8');
   // settingsShapeOf 要的是 `{cookies, authorization, mid}` 这种"登录结果"形状（不是原始响应），
@@ -1214,6 +1222,49 @@ async function runCaaReplay(argv) {
 /**
  * `--caa-login`：用**账号密码**登录（CAA/Bloks 流程，Node 版，不需要 Python）。
  */
+/* ------------------------------------------------------- 登录结果 → 会话 */
+
+/**
+ * **登录结果 → 运行时会话**（`--caa-login` 与 `--caa-replay` 共用同一份实现）。
+ *
+ * 两件事在这里做，别再各写一遍（以前就分叉过）：
+ *   1. cookie 串：把 `result.cookies` 拼成 `name=value; …`，缺 `ig_did` 时用本机设备 uuid 补
+ *      —— 之后 `push/register/` 的 guid/uuid 和 `X-MID` 都靠它；
+ *   2. `mid`：优先用登录响应带回的 `ig-set-x-mid`，没有才退回设备档案。
+ *
+ * 注意 **允许没有 `sessionid`**：IG 现在会下发设备级会话（`Authorization: Bearer IGT:2:…`
+ * + `ig-u-*` cookie，没有 sessionid），真机 2026-10 实测探活 200、`push/register/` 也 ok。
+ */
+function sessionFromLoginResult(result, profile, source) {
+  const cookieParts = [];
+  const cookieMap = {};
+  for (const name of Object.keys(result.cookies || {})) {
+    if (String(result.cookies[name]).length > 0) {
+      cookieParts.push(`${name}=${result.cookies[name]}`);
+      cookieMap[name] = String(result.cookies[name]);
+    }
+  }
+  if (cookieMap['ig_did'] === undefined && String(profile.uuid || '').length > 0) {
+    cookieParts.push(`ig_did=${profile.uuid}`);
+  }
+  const cookie = cookieParts.join('; ');
+  const sessionMid = String(result.mid || '').length > 0 ? String(result.mid) : profile.mid;
+  return {
+    source: source || 'caa-login',
+    userId: cookieValueOf(cookie, 'ds_user_id') || String(result.userId || ''),
+    cookie,
+    sessionid: cookieValueOf(cookie, 'sessionid'),
+    csrf: cookieValueOf(cookie, 'csrftoken'),
+    authorization: String(result.authorization || ''),
+    appVersion: profile.appVersion,
+    userAgent: profile.userAgent,
+    mid: sessionMid,
+    rur: String(result.rur || ''),
+    claim: String(result.claim || ''),
+    savedAt: Date.now()
+  };
+}
+
 /*
  * **429 冷却**：IG 的限流是按"尝试次数"记的，被拒之后继续点只会把窗口推远。
  * 本地记一个时间戳，10 分钟内不再发起登录（App 侧 `CaaSession.rateLimitWaitMinutes()` 同一套逻辑）。
@@ -1339,35 +1390,7 @@ async function runCaaLogin(argv) {
   }
 
   // 成功：写会话 + 设备身份（格式与 --import-session 一致，后续命令可直接跑）
-  const cookieParts = [];
-  for (const name of Object.keys(result.cookies || {})) {
-    if (String(result.cookies[name]).length > 0) {
-      cookieParts.push(`${name}=${result.cookies[name]}`);
-    }
-  }
-  const cookie = cookieParts.join('; ');
-  /*
-   * **`mid` 优先用登录响应带回来的那一份**（`ig-set-x-mid`）。
-   *
-   * 为什么不能只用设备档案里的：全新机器上档案是本地生成的、`mid` 可能是空；而 IG 在登录
-   * 响应里会把真正的机器 id 下发给客户端（instagrapi 也是在 `_send_private_request` 里捡它）。
-   * 之后每个移动 API 请求都带 `X-MID`，缺了等于"没有机器 id 的客户端"。
-   */
-  const sessionMid = String(result.mid || '').length > 0 ? String(result.mid) : profile.mid;
-  const session = {
-    source: 'caa-login',
-    userId: cookieValueOf(cookie, 'ds_user_id'),
-    cookie,
-    sessionid: cookieValueOf(cookie, 'sessionid'),
-    csrf: cookieValueOf(cookie, 'csrftoken'),
-    authorization: result.authorization || '',
-    appVersion: profile.appVersion,
-    userAgent: profile.userAgent,
-    mid: sessionMid,
-    rur: String(result.rur || ''),
-    claim: String(result.claim || ''),
-    savedAt: Date.now()
-  };
+  const session = sessionFromLoginResult(result, profile, 'caa-login');
   /*
    * **落盘前先验一遍**：解析出"登录成功"不等于拿到了可用会话。
    *
@@ -1375,7 +1398,7 @@ async function runCaaLogin(argv) {
    * 报"缺少有效会话"，而人还以为登录成功了。这里宁可什么都不写、把现场打出来（含原始
    * 响应片段），让人知道是"布局形状变了"而不是"我密码错了"。
    */
-  if (session.sessionid.length === 0 || session.userId.length === 0) {
+  if (sessionProblemOf(session).length > 0) {
     warn('响应里解析出了登录结果，但会话不完整（' + sessionProblemOf(session)
       + '）—— **不覆盖现有会话**');
     // 只打名字（值里是会话材料）；这几行足够判断"布局变了"还是"cookie 少了"。
@@ -1415,6 +1438,29 @@ async function runCaaLogin(argv) {
       log('没有拿到原始响应（解析层没把它带回来）—— 需要先修 caa-login.js 才能离线对齐');
     }
     process.exit(4);
+  }
+  /*
+   * **设备级会话没有 sessionid，只能靠"真发一个请求"来判断它能不能用**。
+   *
+   * 这一步很重要：`sessionid` 缺不缺已经不是判据了（IG 现在会下发只有
+   * `Authorization: Bearer IGT:2:…` + `ig-u-*` cookie 的会话）。但"能不能用"必须验 ——
+   * 验不过就不写盘，免得把一份用不了的会话当成登录成功。
+   */
+  if (session.sessionid.length === 0) {
+    const probeDevice = {
+      phoneId: profile.phoneId,
+      uuid: profile.uuid,
+      androidId: profile.androidId
+    };
+    const alive = await sessionAlive(session, probeDevice);
+    if (!alive) {
+      warn('设备级会话（没有 sessionid）探活没过（accounts/current_user 非 200）—— **不写盘**');
+      log('响应里的 header 名：' + JSON.stringify(result.headerNames || []));
+      log('login_response.status：' + (result.loginStatus || '(无)')
+        + '，message：' + (result.loginMessage || '(无)'));
+      process.exit(4);
+    }
+    log('设备级会话：没有 sessionid，但探活 200（走 Authorization + ig-u-* cookie）');
   }
   fs.writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2), 'utf8');
   fs.writeFileSync(DEVICE_FILE, JSON.stringify({
