@@ -28,6 +28,9 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { notificationManager } from '@kit.NotificationKit';
 import { pushService } from '@kit.PushKit';
+// 在 taskpool 线程里发通知（见 workers/NotifyPublishTask：主线程再忙也不拖住通知）
+import { taskpool } from '@kit.ArkTS';
+import { publishNotificationTask } from '../workers/NotifyPublishTask';
 // 点通知要进哪条会话：参数名只留一份真源（放在 core/NotifyRoute）。
 import { NOTIFY_THREAD_KEY } from './NotifyRoute';
 // 会话 id 除了放进 parameters，也编码进 uri 兜底（见 wantAgentFor）。
@@ -369,19 +372,27 @@ export class PushCenter {
       PushCenter.ensureSlots();
       PushCenter.logEnabledOnce();
       /*
-       * 点通知拉起 app：**没有 wantAgent 的通知点了没反应**，所以这一项要尽量给上；
-       * 但它是"加分项"，拿不到也必须把通知发出去（见上面 400ms 的说法）。
+       * **先发出去、再补 wantAgent**（顺序很重要）。
+       *
+       * 以前是"先等 agent（最多 400ms）再发"—— 那 400ms 直接加到通知延迟上。
+       * 现在：① 立刻在 taskpool 发一条（不带 agent，点开只回首页）；
+       *       ② 之后取到 agent 再按**同一个 id** 补发一次（覆盖，不重复提醒），点开就能直达会话。
+       * 通知的"出现时间"和"点开能跳到哪"本来就是两件事，不该互相等。
        */
+      PushCenter.send(request, id);
+      if (threadId.length === 0) {
+        return;
+      }
       PushCenter.agentWithin(threadId, NOTIFY_AGENT_WAIT_MS)
         .then((agent: WantAgent | undefined): void => {
-          const finalRequest: notificationManager.NotificationRequest = request;
-          if (agent !== undefined) {
-            finalRequest.wantAgent = agent;
+          if (agent === undefined) {
+            return;
           }
-          PushCenter.send(finalRequest, id);
+          request.wantAgent = agent;
+          PushCenter.sendOnMainThread(request, id);
+          hilog.info(DOMAIN, TAG, 'notification deep link attached id=%{public}d', id);
         })
         .catch((): void => {
-          PushCenter.send(request, id);
         });
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'notification publish threw: %{public}s',
@@ -390,6 +401,31 @@ export class PushCenter {
   }
 
   private static send(request: notificationManager.NotificationRequest, id: number): void {
+    const slot: number = request.notificationSlotType === undefined
+      ? notificationManager.SlotType.SOCIAL_COMMUNICATION : request.notificationSlotType;
+    const title: string = request.content.normal === undefined
+      ? '' : request.content.normal.title;
+    const text: string = request.content.normal === undefined
+      ? '' : request.content.normal.text;
+    /*
+     * **先在 taskpool 线程里发出去**（`@Concurrent`，主线程再忙也不影响这一拍）。
+     * 失败就退回主线程直发 —— 通知是"必须出现"的东西，不能因为一次线程调度失败就没有。
+     */
+    taskpool.execute(publishNotificationTask, id, title, text, slot as number)
+      .then((): void => {
+        hilog.info(DOMAIN, TAG, 'notification published (taskpool) id=%{public}d slot=%{public}d',
+          id, slot as number);
+      })
+      .catch((error: Error): void => {
+        hilog.warn(DOMAIN, TAG, 'taskpool publish failed: %{public}s (fallback: main thread)',
+          error.message ?? '-');
+        PushCenter.sendOnMainThread(request, id);
+      });
+  }
+
+  /** 主线程直发（taskpool 失败时的兜底，行为与原来一致）。 */
+  private static sendOnMainThread(request: notificationManager.NotificationRequest,
+                                  id: number): void {
     try {
       notificationManager.publish(request)
         .then((): void => {

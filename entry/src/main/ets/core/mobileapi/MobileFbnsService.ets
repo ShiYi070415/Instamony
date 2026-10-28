@@ -221,6 +221,30 @@ export class MobileFbnsService {
   }
 
   /**
+   * 取名字，但**最多等 `ms` 毫秒**（超时先弹通知，名字留给下一次）。
+   *
+   * 为什么要设上限：`users/{id}/info/` 是一发网络请求，第一次遇到某个发信人时可能被节流排队。
+   * 通知不该等它 —— 等不到就用兜底标题先弹，查回来的名字会进缓存，下一条就是准的。
+   */
+  private static async nameWithin(userId: string, ms: number): Promise<string> {
+    const id: string = userId.trim();
+    if (id.length === 0) {
+      return '';
+    }
+    const cached: string | undefined = MobileFbnsService.senderNames.get(id);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const lookup: Promise<string> = MobileFbnsService.nameOf(id);
+    const timeout: Promise<string> = new Promise<string>((resolve: (value: string) => void): void => {
+      setTimeout((): void => {
+        resolve('');
+      }, ms);
+    });
+    return Promise.race([lookup, timeout]);
+  }
+
+  /**
    * 处理一条 FBNS 推送（topic 76 的 `fbpushnotif`）。
    *
    * 字段见 relay 的注释：`m` 正文 / `t_id` 会话 / `s` 发信人 / `n` 消息 id / `c` 类型。
@@ -313,7 +337,7 @@ export class MobileFbnsService {
         MobileFbnsService.seenItems.add(itemId);
       }
     }
-    const name: string = await MobileFbnsService.nameOf(sender);
+    const name: string = await MobileFbnsService.nameWithin(sender, 500);
     const preview: string = text.trim().slice(0, 120);
     PushCenter.notifyDirectEach(name, preview, threadId, itemId);
   }
