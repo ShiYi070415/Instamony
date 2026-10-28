@@ -17,6 +17,8 @@
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { common, Want, WantAgent, wantAgent } from '@kit.AbilityKit';
+import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { PushCenter } from '../PushCenter';
 import { DirectRealtime } from '../DirectRealtime';
 import { MobileIdentity, MobileSession } from './MobileSession';
@@ -71,6 +73,74 @@ export class MobileFbnsService {
   private static seenItems: Set<string> = new Set<string>();
   /** 自己的账号 id（用来跳过自己发的消息，与中转那条 `s === session.userId` 一致）。 */
   private static ownUserId: string = '';
+  /**
+   * 长期任务（continuous task）的上下文与状态。
+   *
+   * 为什么要长期任务：退到后台后系统很快冻结进程 → FBNS socket 断开 → 一条推送都收不到
+   * （真机日志：后台两分钟里 `fbns push` 一行都没有，回到前台才把积压的推过来）。
+   * 短时任务（core/BackgroundKeep）只有分钟级额度，撑不住"后台常驻"。
+   */
+  private static taskContext: common.UIAbilityContext | null = null;
+  private static taskRunning: boolean = false;
+
+  /** 绑定 ability 上下文（EntryAbility.onCreate 里调一次；长期任务需要它）。 */
+  static bindContext(context: common.UIAbilityContext): void {
+    MobileFbnsService.taskContext = context;
+  }
+
+  /**
+   * 申请长期任务：让进程在后台保持运行，FBNS 长连接才不会被系统掐断。
+   *
+   * 前提（module.json5 已声明）：`ohos.permission.KEEP_BACKGROUND_RUNNING` + ability 的
+   * `backgroundModes: ["dataTransfer"]`。系统会在通知栏展示一条"正在运行"的常驻通知，
+   * 这是长期任务的规矩，不是我们的广告。
+   */
+  private static async startContinuousTask(): Promise<void> {
+    if (MobileFbnsService.taskRunning) {
+      return;
+    }
+    const context: common.UIAbilityContext | null = MobileFbnsService.taskContext;
+    if (context === null) {
+      hilog.warn(DOMAIN, TAG, 'no ability context → skip continuous task');
+      return;
+    }
+    try {
+      // 常驻通知点一下回到 App（用 home want，不需要会话参数）
+      const want: Want = {
+        bundleName: context.abilityInfo.bundleName,
+        abilityName: context.abilityInfo.name
+      };
+      const info: wantAgent.WantAgentInfo = {
+        wants: [want],
+        actionType: wantAgent.OperationType.START_ABILITY,
+        requestCode: 0,
+        actionFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG]
+      };
+      const agent: WantAgent = await wantAgent.getWantAgent(info);
+      await backgroundTaskManager.startBackgroundRunning(context,
+        backgroundTaskManager.BackgroundMode.DATA_TRANSFER, agent);
+      MobileFbnsService.taskRunning = true;
+      hilog.info(DOMAIN, TAG, 'continuous task started (dataTransfer)');
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'continuous task failed: %{public}s',
+        (error as Error).message ?? 'unknown');
+    }
+  }
+
+  /** 交还长期任务（退出登录 / 停实时时调）。 */
+  private static async stopContinuousTask(): Promise<void> {
+    if (!MobileFbnsService.taskRunning) {
+      return;
+    }
+    MobileFbnsService.taskRunning = false;
+    try {
+      await backgroundTaskManager.stopBackgroundRunning(MobileFbnsService.taskContext);
+      hilog.info(DOMAIN, TAG, 'continuous task stopped');
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'stop continuous task failed: %{public}s',
+        (error as Error).message ?? 'unknown');
+    }
+  }
 
   /** 当前是不是设备级会话（没有 sessionid）。 */
   static isDeviceLevel(identity: MobileIdentity): boolean {
@@ -111,6 +181,10 @@ export class MobileFbnsService {
       });
     MobileFbnsService.started = ok;
     hilog.info(DOMAIN, TAG, 'fbns start result=%{public}s', ok ? 'up' : 'failed');
+    if (ok) {
+      // 长连接活着不代表后台也活着：申请长期任务，进程不被冻结才收得到推送
+      await MobileFbnsService.startContinuousTask();
+    }
     return ok;
   }
 
@@ -121,6 +195,8 @@ export class MobileFbnsService {
     }
     MobileFbnsService.client = null;
     MobileFbnsService.started = false;
+    MobileFbnsService.stopContinuousTask().catch((): void => {
+    });
   }
 
   /** 一行诊断（给「导出诊断」用）。 */

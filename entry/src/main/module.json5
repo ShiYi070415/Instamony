@@ -25,6 +25,24 @@
       // 个别设备没有马达时 startVibration 会失败 —— Haptics 里静默兜住，不影响手势。
       {
         "name": "ohos.permission.VIBRATE"
+      },
+      /*
+       * **常驻后台收推送**（设备级会话的 FBNS 长连接）。
+       *
+       * 用户需求："退到后台也要弹通知"。本地通知必须由 App 进程自己发，而系统在退后台后
+       * 很快就冻结进程 —— 冻结 = FBNS socket 断开 = 一条推送都收不到（真机日志：退后台
+       * 两分钟里 `fbns push` 一行都没有，回到前台的瞬间才把积压的推过来）。
+       *
+       * 短时任务（core/BackgroundKeep）只能撑分钟级、单日还有配额，撑不住"后台常驻"。
+       * 所以这里申请长期任务（continuous task）：
+       *   · 需要 KEEP_BACKGROUND_RUNNING 权限（normal 级、系统授权，装上即生效）；
+       *   · 需要 ability 上声明 `backgroundModes`（见下面的 dataTransfer）；
+       *   · 代价是通知栏会有一条"正在运行"的常驻通知 —— 这是系统要求，不是我们加的广告。
+       *
+       * 只在**设备级会话**（FBNS）时启用；网页会话仍走原来的短时任务 + 后台轮询。
+       */
+      {
+        "name": "ohos.permission.KEEP_BACKGROUND_RUNNING"
       }
     ],
     // 应用级开启沉浸光感（官方文档「开启沉浸光感」）：
@@ -61,6 +79,18 @@
         "startWindowIcon": "$media:splash_icon",
         "startWindowBackground": "$color:start_window_background",
         "exported": true,
+        /*
+         * **长期任务类型**（配合上面的 KEEP_BACKGROUND_RUNNING）。
+         *
+         * `dataTransfer` = "数据传输"：本项目用它来维持一条**推送长连接**（FBNS）在后台不断开，
+         * 系统会允许进程继续运行，并在通知栏挂一条"正在运行"的常驻通知（见 core/mobileapi/MobileFbnsService）。
+         *
+         * 为什么不是别的类型：audioPlayback / location / taskKeeping 等都不合适（没有音频、
+         * 不做定位）。私信推送属于"数据传输"这一类里最贴近的，且只在设备级会话下才启用。
+         */
+        "backgroundModes": [
+          "dataTransfer"
+        ],
         "skills": [
           {
             "entities": [

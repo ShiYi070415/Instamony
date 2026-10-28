@@ -54,6 +54,8 @@ import { Translator } from '../core/Translator';
 import { PushCenter } from '../core/PushCenter';
 // FBNS 设备凭据的落盘（设备级会话的实时通道，见 core/mobileapi/MobileFbnsClient）
 import { FbnsAuthStore } from '../core/mobileapi/MobileFbnsClient';
+// 设备级会话的实时通道（FBNS）+ 后台长期任务
+import { MobileFbnsService } from '../core/mobileapi/MobileFbnsService';
 
 const DOMAIN = 0x0000;
 /**
@@ -255,6 +257,11 @@ export default class EntryAbility extends UIAbility {
      * 远端推送还要 AGC 后台发；本地那一条我们自己在拉到新未读时发）。
      */
     PushCenter.start(this, this.context);
+    /*
+     * FBNS 实时通道要用**长期任务**才能在后台继续收推送（见 core/mobileapi/MobileFbnsService
+     * 的 startContinuousTask）：长期任务需要 UIAbilityContext，这里先把它交过去。
+     */
+    MobileFbnsService.bindContext(this.context);
     // ---- 翻译自检（诊断用，见 core/Translator 的 SELF_TEST_ON_START）----
     // 用户报"全部文本点翻译都失败"：界面里点不出结论，这里启动后翻一句固定英文并落盘
     // `filesDir/Instamony_translate.txt`（原因码 / 端点 / 耗时），取回来就能分清是网络不通
