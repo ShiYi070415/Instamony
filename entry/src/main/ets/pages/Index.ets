@@ -3226,6 +3226,31 @@ struct Index {
    * 两次尝试的原因：极早期 `MobileSession` 可能还没恢复出可用的 cookie，
    * 那时 `start()` 会返回 false；2.5 秒后再补一发，之后交给它自己的退避重连。
    */
+  /**
+   * **会话换了之后重启实时通道**（App 内密码登录成功后调，见 components/CaaLoginCard）。
+   *
+   * 为什么不复用"换号"那条路：换号会走 `applySession` 的账号分区复位，把实时通道停掉再排重启；
+   * 而"同一个账号、换了一种会话来源"（网页会话 → 设备级会话）**登录态没变**，`applySession`
+   * 认为"没变化"，实时通道就还挂着**旧会话**的连接与 iris 订阅 —— 那台机器上的推送不会因为
+   * 这里换了 cookie 就自动改道。所以这里显式停掉再按新会话重连（连上后 `startRealtime` 会重做订阅）。
+   */
+  private restartRealtimeForNewSession(): void {
+    hilog.info(DOMAIN, TAG, 'session swapped → restart realtime');
+    try {
+      RealtimeWorkerClient.getInstance().stop();
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'worker realtime stop failed: %{public}s', (error as Error).message);
+    }
+    MobileRealtime.stop().catch((): void => {
+    });
+    this.realtimeStarted = false;
+    this.realtimeStartPending = false;
+    // 晚一拍再排：让旧 socket 的 close 先走完，否则新连接可能撞上"同一账号两条连接"。
+    setTimeout((): void => {
+      this.scheduleRealtimeStart();
+    }, 500);
+  }
+
   private scheduleRealtimeStart(): void {
     /*
      * **已经有排队的启动就别再排**（真机日志：冷启动会连着发两次 iris 订阅）：
@@ -10549,9 +10574,14 @@ struct Index {
            * 会话已经被种进 Cookie 罐，这里重读一次罐让壳从登录页切成已登录。
            * 收尾走的就是网页登录成功那条路（`refreshSessionFromJar → applySession`），
            * 不另开一套"会话生效"逻辑。
+           *
+           * 另外**必须重启实时通道**：这条入口多半是在"已经登录"的状态下换会话（网页会话 →
+           * 设备级会话），登录态没变，`applySession` 会认为没变化，实时连接还挂在旧会话上。
            */
           onSignedIn: (): void => {
-            this.refreshSessionFromJar().catch((): void => {
+            this.refreshSessionFromJar().then((): void => {
+              this.restartRealtimeForNewSession();
+            }).catch((): void => {
             });
           },
           /*
