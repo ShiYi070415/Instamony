@@ -4065,33 +4065,6 @@ struct Index {
     this.webHostMounted = true;
   }
 
-  /**
-   * **提前**把隐藏网页宿主挂好（登录页一出现就挂），这样点「登录」时引擎已经就绪。
-   *
-   * 为什么不在点击时挂：挂载会在根 Stack 里插一个新节点，`LoginPage` 会跟着重建一次
-   * （实测：输好的账号密码被清空）。提前挂 + 保持 `webVisible = false`，
-   * 用户全程看不到网页，点击那一刻也不会引起任何布局变化。
-   */
-  private prepareHiddenWebForLogin(): void {
-    if (this.webHostMounted) {
-      return;
-    }
-    hilog.info(DOMAIN, TAG, 'prepare hidden web host for headless login');
-    // 直接给登录页地址：这条地址本身永远被闸门放行，不必再过 noteStartUrl（它可能落成首页）。
-    this.webStartUrl = AppConfig.INSTAGRAM_LOGIN_URL;
-    this.webVisible = false;
-    /*
-     * **登录页一出现就开"最低可见度"模式**（需求："把 webview 能见度调到最低，像以前那样"）。
-     *
-     * 为什么不等到点登录那一刻：宿主是登录页出现时才挂的，挂上这一下引擎就开始加载页面；
-     * 若这时还是 `Visibility.Hidden`，chromium 会按 INVISIBLE 节流 ——
-     * 实测就卡在这里（界面报「登录页没能加载出来」）。
-     * 现在从挂载的第一帧起就是"可见但 0.01 透明"：用户看不到它，页面却能正常跑；
-     * 登录成功（或不登录了）时 `unmountWebHost` 立刻把它收掉，热与耗电只发生在登录页这一屏。
-     */
-    this.webHeadless = true;
-    this.mountWebHost();
-  }
 
   /**
    * **登录页那颗「登录」= App 协议登录（CAA）**（见 core/mobileapi/CaaSession）。
