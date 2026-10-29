@@ -1933,13 +1933,16 @@ struct Index {
    * 登录页和「新增账号」那一页共用这一颗：两处都是"还没登录"的状态，能做的事情也一样
    * （看网络 / 代理、清设备认证做 2FA 测试）。设置页里"退出登录"那一项会在未登录时
    * 自动不显示（见 components/SettingsPanel 的 signedIn）。
+   *
+   * 图标用 `sys.symbol.more`：和「我的」页标题栏那颗**完全一样**（需求："登录页的设置图标
+   * 用我的页面一样的"）。早先这里用的是齿轮，两处观感不一致。
    */
   private loginSettingsMenu(): HdsNavigationMenuContentOptions {
     return {
       value: [
         {
           content: {
-            icon: $r('sys.symbol.gearshape'),
+            icon: $r('sys.symbol.more'),
             label: $r('app.string.action_settings'),
             action: (): void => {
               this.openSettings();

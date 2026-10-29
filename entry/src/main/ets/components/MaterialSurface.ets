@@ -717,6 +717,14 @@ export struct MaterialLabelButton {
    * 视频页要恢复成"作者行那颗关注按钮就只是个按钮"：手指落在它上面照样能上下翻视频。
    */
   @Prop lockMaterial: boolean = true;
+  /**
+   * 要不要**光感交互反馈**（按下/触摸时表面那道光）。
+   *
+   * 默认 true = 全 app 一直以来的观感。**两步验证那半模态面板里这颗「取消」传 false**
+   * （需求："2FA 面板禁用触摸发光"）：面板本身就是系统材质，里面再有点按闪光会很吵，
+   * 而且那颗按钮在这一档只是"退出面板"，不需要吸引注意。
+   */
+  @Prop lightEffect: boolean = true;
   @StorageProp(SETTING_MATERIAL_THICKNESS) thickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
   onTap: () => void = (): void => {
   };
@@ -775,7 +783,9 @@ export struct MaterialLabelButton {
     // 选中态透明（同 MaterialIconButton：否则点一下整颗变蓝）。
     .selectedColor(Color.Transparent)
     // 沉浸光感材质；低版本设备自动退化成纯色底（见 SurfaceModifier）。
-    .attributeModifier(new SurfaceModifier(this.thickness, this.autoInvert))
+    // 第 5 个参数是光感交互反馈（见 lightEffect 字段的说明）。
+    .attributeModifier(new SurfaceModifier(this.thickness, this.autoInvert, true, false,
+      this.lightEffect))
     // 开启时吞掉长按（见 swallowLongPress 的说明）。
     .gesture(this.swallowLongPress ? LongPressGesture({ repeat: false, duration: 300 }) : null)
     .onChange((): void => {

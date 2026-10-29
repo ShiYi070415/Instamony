@@ -205,25 +205,27 @@ export struct LoginPage {
   /**
    * **半模态两步验证面板**（需求：点登录若要求 2FA，就弹系统沉浸光感半模态面板收验证码）。
    *
-   * 组成：标题 + 一句说明 + 胶囊验证码输入框 + 错误 + 「验证并登录」主按钮（沉浸光感材质）
-   * + 「取消」。面板背景由 `SheetOptions.systemMaterial` 交给系统画（见 build 里的 bindSheet），
+   * 组成：说明 + 胶囊验证码输入框 + 错误 + 「验证并登录」主按钮（沉浸光感材质）+「取消」。
+   * 面板背景由 `SheetOptions.systemMaterial` 交给系统画（见 build 里的 bindSheet），
    * 所以这里**不再铺自己的底色**；只有在不支持沉浸材质的机器上才退回"玻璃底 + 模糊"。
+   *
+   * **标题不在这里画**：走半模态自带的 `SheetOptions.title`（需求："2FA 面板的标题接入
+   * hds title"），由系统按 HDS 标题样式画在面板顶部 —— 和设置页那两个代理面板同一套做法
+   * （见 SettingsPanel.proxySheetOptions）。自绘 Text 既对不齐规范，也会和系统标题重复。
+   *
+   * **面板里所有材质控件都不发光**（需求："2FA 面板禁用触摸发光"）：见下面
+   * `SurfaceModifier(..., lightEffect = false)` 与「取消」那颗的 `lightEffect: false`。
    */
   @Builder
   verifySheet() {
     Column({ space: 14 }) {
-      Text($r('app.string.login_verify_title'))
-        .fontSize(20)
-        .fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.primary_text'))
-        .width('100%')
       Text($r('app.string.login_verify_hint'))
         .fontSize(13)
         .lineHeight(19)
         .fontColor($r('app.color.secondary_text'))
         .width('100%')
       Stack({ alignContent: Alignment.Center }) {
-        // 材质底板（和登录页其它输入框同一套：胶囊 + 沉浸光感）
+        // 材质底板（和登录页其它输入框同一套：胶囊 + 沉浸光感），但**不发光**（见上）。
         Toggle({ type: ToggleType.Button, isOn: false }) {
           Text('')
         }
@@ -233,7 +235,7 @@ export struct LoginPage {
         .borderRadius(FIELD_H / 2)
         .backgroundColor(Color.Transparent)
         .selectedColor(Color.Transparent)
-        .attributeModifier(new SurfaceModifier(this.materialThickness, false))
+        .attributeModifier(new SurfaceModifier(this.materialThickness, false, true, false, false))
         .hitTestBehavior(HitTestMode.None)
         TextInput({ placeholder: $r('app.string.login_code_hint'), text: this.verifyCode })
           .type(InputType.Number)
@@ -285,17 +287,19 @@ export struct LoginPage {
       .height(BUTTON_H)
       .padding(0)
       .borderRadius(BUTTON_H / 2)
-      .attributeModifier(new SurfaceModifier(this.materialThickness, true))
+      .attributeModifier(new SurfaceModifier(this.materialThickness, true, true, false, false))
       .backgroundColor($r('app.color.accent'))
       .enabled(!this.verifyBusy)
       .onChange((): void => {
         this.submitVerifyCode();
       })
 
+      // 「取消」也不发光（需求："2FA 面板禁用触摸发光"，见 MaterialLabelButton.lightEffect）。
       MaterialLabelButton({
         labelRes: $r('app.string.login_verify_cancel'),
         fullWidth: true,
         fontSize: 15,
+        lightEffect: false,
         onTap: (): void => {
           this.verifyOpen = false;
           this.verifyError = '';
@@ -317,6 +321,11 @@ export struct LoginPage {
    *     全交给系统按 `ImmersiveMaterial` 画，这时 `backgroundColor` 必须透明
    *     （官方文档：不要和 backgroundColor/borderWidth/shadow 一起用）；
    *   · 老机器：退回"玻璃底 + 背景模糊"那一档，观感和 app 其它卡片一致。
+   *
+   * 两处按需求定：
+   *   · **标题走半模态自带的 `title`**（HDS 标题样式，和代理面板一致），不再自绘；
+   *   · **面板材质不发光**：`immersiveMaterial(..., lightEffect = false)` —— 手指按在面板上
+   *     不会出现那道光（需求："2FA 面板禁用触摸发光"）。
    */
   private verifySheetOptions(): SheetOptions {
     const options: SheetOptions = {
@@ -324,12 +333,25 @@ export struct LoginPage {
       dragBar: false,
       showClose: false,
       preferType: SheetType.BOTTOM,
+      // 标题交给系统画（HDS 标题样式），见上面那段说明。
+      title: { title: $r('app.string.login_verify_title') },
       onDisappear: (): void => {
         this.verifyError = '';
+        /*
+         * **面板关掉就把登录按钮的转圈收掉**（需求：弹面板期间登录按钮一直转）。
+         *
+         * 弹面板时 `busy` 是**故意不收**的（见 submit）：用户从面板上看得出"这一发还在走"。
+         * 但面板一旦被关掉（取消 / 下滑 / 返回键）那一发就结束了，按钮必须回到"登录"，
+         * 否则登录页会一直停在转圈上、点也点不动。
+         */
+        if (this.busy) {
+          this.busy = false;
+        }
       }
     };
     if (this.sheetMaterialOn()) {
-      options.systemMaterial = immersiveMaterial(this.materialThickness);
+      // 第 4 个参数 = 光感交互反馈，第 5 个 = 交互形变；这里只关光感（需求），形变保留。
+      options.systemMaterial = immersiveMaterial(this.materialThickness, true, true, false);
       options.backgroundColor = Color.Transparent;
     } else {
       options.backgroundColor = FALLBACK_SURFACE;
@@ -353,8 +375,11 @@ export struct LoginPage {
       .then((message: string): void => {
         this.verifyBusy = false;
         if (message.length === 0) {
+          // 验证码过了、会话也进罐了：收面板 + **把登录按钮那圈 Loading 停掉**
+          // （这一发到此结束，页面马上会被宿主换成主界面）。
           this.verifyOpen = false;
           this.verifyCode = '';
+          this.busy = false;
           this.onSignedIn();
           return;
         }
@@ -553,25 +578,32 @@ export struct LoginPage {
     this.error = '';
     this.busy = true;
     /*
-     * **点下去就清密码、账号留着**（需求：只清密码框里的内容）。
+     * **密码不清**（需求："登录页点击登录时密码不清除"）。
      *
-     * 注意：输入框必须直连状态（见 username 那段注释），否则 `password = ''`
-     * 引起的那次刷新会把两个框的文本一起覆盖成空快照 —— "账号也被清掉"的老毛病。
+     * 上一版是"点下去就清空密码框"，账密对了但要走两步验证时，用户从面板退回来想重登一次
+     * 就得重新敲密码 —— 而这恰恰是最常见的一步（2FA 输错、验证码过期）。
+     * 密码本来就只在内存里（`@State`，不落盘），留在框里不会多存任何东西。
      */
     const typed: string = this.password;
     hilog.info(DOMAIN, TAG, 'submit: user len=%{public}d pass len=%{public}d',
       this.username.length, this.password.length);
-    this.password = '';
     this.onCaaLogin(this.username.trim(), typed)
       .then((message: string): void => {
-        this.busy = false;
         if (message === LOGIN_NEEDS_CODE) {
-          // 账号密码过了，但 IG 要两步验证：弹半模态面板收验证码。
+          /*
+           * 账号密码过了，但 IG 要两步验证：弹半模态面板收验证码。
+           *
+           * **`busy` 故意不收**（需求："弹出 2FA 面板登录页的登录按钮保持转圈"）：
+           * 这一发还没走完（验证码没提交），登录按钮停在那圈 Loading 上才说明"在等验证码"，
+           * 而不是"点完了什么都没发生"。面板一关就由 verifySheetOptions().onDisappear
+           * 把它收回来。
+           */
           this.verifyCode = '';
           this.verifyError = '';
           this.verifyOpen = true;
           return;
         }
+        this.busy = false;
         if (message.length === 0) {
           // 真的登录成功了：会话已进 Cookie 罐，宿主那边会重读登录态。
           this.onSignedIn();
