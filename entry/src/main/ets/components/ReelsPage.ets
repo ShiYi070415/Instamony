@@ -375,9 +375,9 @@ const OVERLAY_GUARD_EXTRA_VP: number = 96;
  * 这里就地重绘、把播放器挂上。写在外面的话 ForEach 对"键没变"的项不重跑 item builder，
  * 那一页就永远只有封面。
  *
- * 播放器只在"当前这条 / 下一条"上挂（预加载下一条，切过去基本立刻出画面）：
+ * 播放器只在"当前这条 / 后两条"上挂（提前 prepare，切过去基本立刻出画面）：
  *   - `playing` 当前页：真的播；
- *   - `preload` 下一条：提前 prepare，首帧到了先压在封面上；
+ *   - `preload` 后两条：提前 prepare，首帧到了先压在封面上；
  *   - 其余页只画封面，省内存也让"滑到哪播哪"立刻生效。
  */
 @Component
@@ -3156,9 +3156,16 @@ export struct ReelsPage {
           hostPaused: this.pagePaused,
           hostHold: this.pageHold,
           hostSpeed: this.pageSpeed,
-          // 预加载下一条：一直开着（原先按网络开关过，实测会影响切换观感；
-          // 播放器的预下载缓冲已经收到 2 秒，这一项的开销有界）。
-          preload: index === this.activeIndex + 1,
+          /*
+           * **提前备好"下两条"**（用户报的"第三条视频要等很久才刷新"）。
+           *
+           * 原来只 preload `activeIndex + 1`：看到第 1 条时第 2 条已经 prepare 好了，但第 3 条
+           * 连播放器都没建 —— 1→2→3 连翻过去时，第 3 条要现建 XComponent 表面、现 prepare、
+           * 现等首帧，那几秒就是用户看到的"卡在封面"。
+           * Swiper 的 `cachedCount(2)` 已经把 ±2 页都建出来了（XComponent 有布局才有 surface），
+           * 所以这里多挂一条的代价只是"多准备一个播放器"，比翻过去再等划算得多。
+           */
+          preload: index === this.activeIndex + 1 || index === this.activeIndex + 2,
           // 静音开关是全局的（媒体区那颗喇叭键），见 AppSettings.SETTING_VIDEO_MUTED。
           muted: this.videoMuted,
           /*
