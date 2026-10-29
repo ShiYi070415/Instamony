@@ -255,6 +255,30 @@ export class CaaSession {
   }
 
   /**
+   * **换一套设备身份，然后用假账号探一次**（都不消耗真账号的登录次数）。
+   *
+   * 见 `MobileSession.rotateIdentity`：这是"IG 的 429 到底绑在身份上还是绑在客户端/指纹上"
+   * 唯一能在 App 内自证的实验。换上新的 usdid + uuid/phoneId/androidId/mid 之后立刻跑探针：
+   *   · 探针 200 → 分数绑身份，App 内换身份即可登录（把这条做成正常登录流程的一部分）；
+   *   · 探针仍 429 → 分数绑客户端/指纹/IP，App 内改不动（要走上电脑中转或等）。
+   */
+  static async rotateAndProbe(): Promise<CaaOutcome> {
+    const oldMid: string = MobileSession.seedIdentity().mid;
+    const midLength: number = MobileSession.rotateIdentity();
+    // usdid 也要一起换：它是设备签名密钥，和 uuid/mid 是同一套"设备"。
+    CaaSession.forgetDevice();
+    CaaSession.clearRateLimit();
+    CaaLogin.resetCookies();
+    hilog.info(DOMAIN, TAG, 'rotated identity then probing (old mid=%{public}d, new=%{public}d)',
+      oldMid.length, midLength);
+    const probe: CaaOutcome = await CaaSession.probe();
+    const text: string = `已换设备身份（新 mid ${midLength} 位、新 usdid）→ ${probe.reason}`;
+    const outcome: CaaOutcome = CaaSession.outcome(false, text, probe.steps);
+    CaaSession.rememberDiag('换身份探针', outcome.reason, outcome.steps);
+    return outcome;
+  }
+
+  /**
    * **换传输重发**：把刚刚那一发 `send_login_request` 用**另一套 HTTP 栈**（rcp）原样再发一次。
    *
    * 为什么需要：到这一步已经把"请求体逐键一致、头取值一致、设备身份一致、IP 一致、HTTP 形态

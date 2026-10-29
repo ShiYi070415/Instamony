@@ -606,6 +606,34 @@ export class MobileSession {
   }
 
   /**
+   * **换一套设备身份**（新 uuid / phoneId / androidId / mid），**保留**已有的会话材料。
+   *
+   * 为什么要这个入口：真机上 App 的密码登录一直被 IG 的 edge 回 429，而同一份请求从电脑发
+   * 是 200（见 `tools/relay/LOGIN-429.md`）—— 剩下的嫌疑是"这台设备这个客户端"在 IG 那边
+   * 已经挂了风险分。换一套身份是**在 App 内就能做**的唯一自证手段：
+   *   · 换了之后能登进去 ⇒ 分数是绑身份的，App 内可以自助解决（再提供个按钮就行）；
+   *   · 换了一样 429 ⇒ 分数绑的是客户端/指纹或 IP，那 App 内改不动，得走中转或等。
+   *
+   * 保留 `authorization`/`authorizationOwner`/`appVersion`：只换"这台手机是谁"，
+   * 不把已经导入的会话顺手弄丢（换身份本身可能让 IG 觉得会话来自另一台设备，但不至于丢数据）。
+   *
+   * @returns 新 mid 的长度（0 = 没成功）
+   */
+  static rotateIdentity(): number {
+    const old: StoredIdentity = MobileSession.loadSeed();
+    const fresh: StoredIdentity = MobileSession.mint();
+    fresh.authorization = old.authorization;
+    fresh.authorizationOwner = old.authorizationOwner;
+    if (old.appVersion.length > 0) {
+      fresh.appVersion = old.appVersion;
+    }
+    MobileSession.seed = fresh;
+    MobileSession.writeSeed(fresh);
+    hilog.info(DOMAIN, TAG, 'identity rotated (mid=%{public}d chars)', fresh.mid.length);
+    return fresh.mid.length;
+  }
+
+  /**
    * 用**给定的 sessionid** 造一份身份（登录前先验证它是否还有效用）。
    *
    * 对应 instagrapi 的 `login_by_sessionid(sessionid)`：那一路**不做密码登录**，

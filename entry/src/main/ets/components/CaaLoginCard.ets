@@ -222,6 +222,31 @@ export struct CaaLoginCard {
         })
 
       /*
+       * **换设备身份并探一次**：用来判定 IG 的 429 是绑"身份"还是绑"客户端/指纹"。
+       * 换了身份 + usdid，再跑假账号探针（都不消耗你的登录次数）。
+       */
+      Text('换设备身份并探一次（新 mid/usdid，不消耗登录次数）')
+        .fontSize(12)
+        .fontColor($r('app.color.accent'))
+        .width('100%')
+        .onClick((): void => {
+          if (this.busy) {
+            return;
+          }
+          this.busy = true;
+          this.status = '正在换设备身份并用假账号探一次…';
+          this.steps = '';
+          CaaSession.rotateAndProbe().then((outcome: CaaOutcome): void => {
+            this.busy = false;
+            this.status = outcome.reason;
+            this.steps = outcome.steps;
+          }).catch((error: Error): void => {
+            this.busy = false;
+            this.status = `换身份探针失败：${error.message}`;
+          });
+        })
+
+      /*
        * **换传输重发**（rcp）：把刚才那一发登录请求用系统里**另一套 HTTP 栈**原样再发一次。
        * 两套栈同一份字节、结果不同 ⇒ 差异在传输层；结果相同 ⇒ 与 HTTP 实现无关。
        */
