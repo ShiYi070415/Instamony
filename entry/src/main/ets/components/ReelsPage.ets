@@ -29,6 +29,8 @@ import { Haptics } from '../core/Haptics';
 import {
   MaterialIconButton, MaterialLabelButton, SurfaceModifier
 } from './MaterialSurface';
+// 下拉刷新 / 倍速共用的那颗沉浸光感状态胶囊（见 statusPill）。
+import { MaterialPill } from './MaterialPill';
 import { FollowState, FOLLOW_VERSION_KEY } from '../core/FollowState';
 import { SaveState } from '../core/SaveState';
 import { NativeFollow } from '../core/NativeFollow';
@@ -64,14 +66,15 @@ const PULL_CANCEL_VP: number = 24;
  *
  * **必须让开 HDS 标题栏**：这一页的内容层是从屏幕最顶上铺的（视频要能穿到标题栏底下），
  * 所以 y=0 是屏幕顶边。标题栏那一段 = 状态栏 + 56vp 标题栏 ≈ 94vp（与信息流那个
- * `FEED_START_OFFSET = 94` 同源），早先写 84 就被盖住了（用户报的"被遮挡"）。
- * 104 = 94 + 10 的呼吸间距。
+ * `FEED_START_OFFSET = 94` 同源）。116 = 94 + 22（用户要求"位置再往下一点点"，
+ * 原来是 104）。
  */
-const PULL_PILL_TOP_VP: number = 104;
+const PULL_PILL_TOP_VP: number = 116;
 /** 指示器胶囊的长宽（vp）：定宽而不是自适应 —— 文案在"下拉/松开/正在刷新"之间切换，
- *  自适应会让胶囊在刷新那一瞬间抖一下。124 够放下最长那句（图标 16 + 间隔 6 + 5 个字）。 */
-const PULL_PILL_W: number = 124;
-const PULL_PILL_H: number = 34;
+ *  自适应会让胶囊在刷新那一瞬间抖一下。96 = 用户要求"左右留白缩小"之后的一档
+ *  （图标 15 + 间隔 6 + 5 个字 ≈ 90，再留 3 的余量）。 */
+const PULL_PILL_W: number = 96;
+const PULL_PILL_H: number = 30;
 /** 作者行的左右留白（vp）。 */
 const SIDE_PADDING: number = 16;
 /**
@@ -468,7 +471,16 @@ struct ReelSlide {
   /** 用户单击画面把这一条暂停了（再点一下继续）。 */
   @State private userPaused: boolean = false;
   /** 长按左右两侧：临时 2 倍速（松手回 1 倍速）。 */
-  @State private speedBoost: boolean = false;
+  @State @Watch('onSpeedBoostChanged') private speedBoost: boolean = false;
+  /**
+   * **倍速胶囊由页面画**（用户要求："倍速提示共用那个组件，不用显示在卡片里"）。
+   *
+   * 状态仍在画面里（它跟着手指、跟着这一条走），但 `2.0x` 那颗胶囊现在和下拉刷新提示共用
+   * 同一个沉浸光感组件、同一处位置（见 ReelsPage.build 的 statusPill），所以每次变化都要
+   * 上报给宿主一次。
+   */
+  onSpeedBoost: (on: boolean) => void = (on: boolean): void => {
+  };
   /** 长按中间：临时暂停（松手恢复原状态），同时全局控件被藏起来。 */
   @State private holdPaused: boolean = false;
   /** 拖动开始那一刻的进度（seek 的基线，见 onSeekMove）。 */
@@ -576,8 +588,12 @@ struct ReelSlide {
   }
 
   /** 换条 / 变成当前页：进度归零、临时态清干净（需求："切到下一条视频时进度归零"）。 */
-  private onPlayingChanged(): void {
-    /*
+  /** `speedBoost` 变了：报给宿主，由它画 / 收页面级那颗 `2.0x` 胶囊（见 onSpeedBoost）。 */
+  private onSpeedBoostChanged(): void {
+    this.onSpeedBoost(this.speedBoost);
+  }
+
+  private onPlayingChanged(): void {    /*
      * **暂停只属于某一条**（需求）：一旦这一条不再是"该播的那条"，本地暂停立刻清掉，
      * 中心按钮的显示条件（见 build 里那一处）也就同时不成立了 —— 划到下一条时
      * 下一条是全新状态、直接播放，不会残留上一的暂停。
@@ -1019,32 +1035,6 @@ struct ReelSlide {
   }
 
   /**
-   * 2 倍速胶囊（需求："播放期间在卡片顶部（进度条下方适当距离）显示胶囊「2.0x」"）。
-   *
-   * 复用全 app 的材质文字按钮（MaterialLabelButton），所以材质厚度跟着设定页走、和作者行/
-   * 关注按钮是同一层玻璃；`lockMaterial: false` 让它不参与 4-way lock（手指落在它上面照样能
-   * 上下翻页 —— 它只是个指示器）。点击照样落到外层画面（整颗挂 HitTestMode.None）。
-   */
-  @Builder
-  speedPill() {
-    MaterialLabelButton({
-      labelText: SPEED_PILL_TEXT,
-      fontSize: SPEED_PILL_FONT,
-      pillWidth: SPEED_PILL_WIDTH,
-      pillHeight: SPEED_PILL_HEIGHT,
-      // 视频上一律不反色（和作者行、动作区那几颗一致，见它们的 autoInvert: false）。
-      autoInvert: false,
-      tint: '#FFFFFF',
-      lockMaterial: false,
-      onTap: (): void => {
-      }
-    })
-      .hitTestBehavior(HitTestMode.None)
-      // 出现/消失淡一下（和暂停按钮同一档观感；需求的"松手消失"不要求动画，这里只是别太生硬）。
-      .transition(TransitionEffect.OPACITY.animation({ duration: PAUSE_FADE_MS, curve: Curve.EaseOut }))
-  }
-
-  /**
    * 置中的"继续播放"按钮（需求："暂停时置中显示沉浸光感暂停按钮…点击它 = 继续播放"）。
    *
    * **它自己不吃触摸**（`HitTestMode.None`）：点它和点画面走的是同一条路（外层画面的单击 →
@@ -1220,14 +1210,16 @@ struct ReelSlide {
       .clip(true)
 
       /*
-       * **卡片顶部：进度条 + 2 倍速胶囊**（需求第 2、6 条）。
+       * **卡片顶部：进度条**（需求第 2 条）。
        *
        * 放这一层（画面之后、也就是画在画面上方）而不是放进 ReelOverlay 的原因：
-       *   · 需求明确"画在视频卡片内部顶部" —— 卡片就是本组件所在的这个盒子，跟着卡片一起
-       *     被圆角裁、跟着卡片一起随翻页移动；
+       *   · 进度条是"播放状态的指示"，要跟着卡片一起被圆角裁、跟着卡片一起随翻页移动；
        *   · ReelOverlay 会在"隐藏全局控件"时整层淡出，而进度条**不该**跟着消失
-       *     （它不是控件，是播放状态的指示，和 IG 一致）。
+       *     （它不是控件，和 IG 一致）。
        * 整层 `HitTestMode.None`：它只显示，不能吃掉"点画面暂停"和"横滑 seek"。
+       *
+       * 注：`2.0x` 那颗胶囊**已经挪出去了**（用户要求"倍速提示共用那个组件，不用显示在卡片里"）——
+       * 现在是页面级那颗沉浸光感胶囊，见 ReelsPage.build 里的 statusPill 与 onSpeedBoost。
        */
       Column({ space: SPEED_PILL_GAP }) {
         // 进度条：**回到卡片顶部**（需求），满宽、贴边。
@@ -1236,11 +1228,6 @@ struct ReelSlide {
         }
         .width('100%')
         .padding({ left: PROGRESS_SIDE_PAD, right: PROGRESS_SIDE_PAD })
-
-        // 2 倍速胶囊：长按左右侧期间出现，紧跟在进度条下方（顶部适当距离）。
-        if (this.speedBoost || this.hostSpeed) {
-          this.speedPill()
-        }
         Blank()
       }
       .width('100%')
@@ -2327,6 +2314,15 @@ export struct ReelsPage {
   @State private pullOffset: number = 0;
   /** 正在刷新（下拉触发的那一轮取数没回来之前一直是 true）。 */
   @State private refreshing: boolean = false;
+  /**
+   * 当前条**在倍速**（长按左右两侧时由画面报上来，见 ReelSlide.onSpeedBoost）。
+   *
+   * 页面自己那两种长按（`pageSpeed` / `pageHold`）也参与——三者任一成立，页面级那颗
+   * `2.0x` 胶囊就画出来。胶囊不再画在卡片里（用户要求）：
+   *   · 卡片顶部只留进度条；
+   *   · `2.0x` 和下拉刷新提示共用同一个沉浸光感组件、同一处位置（见 statusPill）。
+   */
+  @State private reelSpeed: boolean = false;
   /** 这一次触摸里，下拉的起点 y（vp；-1 = 这次触摸不判下拉）。 */
   private pullStartY: number = -1;
   /**
@@ -2626,6 +2622,21 @@ export struct ReelsPage {
             this.swiperController.changeIndex(0, false);
           } catch (error) {
           }
+          /*
+           * **再摆一次**（下一帧）。
+           *
+           * 下拉那一下本身就是一次竖向拖拽 —— Swiper 有可能已经把它当成"翻到下一条"并起了
+           * 切换动画（真机日志里见过 `switch -> 1/N` 紧跟着 `-> 0/N`）。第一次 `changeIndex(0)`
+           * 撞上正在跑的动画不一定生效，于是刷新完之后用户看到的"第一条"有时是列表里第二条，
+           * 下次刷新又变回来 —— 这就是用户报的"前两条轮着换排序位置"。
+           * 隔一帧补一次最稳（不弹动画，纯定位）。
+           */
+          setTimeout((): void => {
+            try {
+              this.swiperController.changeIndex(0, false);
+            } catch (error) {
+            }
+          }, 80);
           this.status = '';
         })
         .catch((): void => {
@@ -3106,6 +3117,10 @@ export struct ReelsPage {
             // 地址是后来补上的（见 ProfileReelsViewModel / NativeMediaInfo）—— 补上之前 publish
             // 只能报 visible=false，补上之后若没人再报一次，标题栏那两颗按钮就永远不出现。
             this.publishAction();
+          },
+          // 倍速提示由页面画（见 statusPill）：画面里只管上报状态。
+          onSpeedBoost: (on: boolean): void => {
+            this.reelSpeed = on;
           }
         })
       }
@@ -3177,56 +3192,39 @@ export struct ReelsPage {
   }
 
   /**
-   * 下拉刷新那颗指示器（**沉浸光感**胶囊）：下拉刷新 →（过阈值）松开刷新 → 正在刷新…。
+   * **页面级状态胶囊**（用户要求："倍速提示共用该组件，不用显示在卡片里"）。
    *
-   * 材质和 app 其它控件同一套（见 MaterialSurface）：底层 `Toggle` 只承载材质、不吃触摸
-   * （`hitTestBehavior(None)`），图标与文案透明地压在它上面 —— `Text` 自己不能挂沉浸光感，
-   * 只能这样叠。颜色用 `primary_text`：材质会自动反色，深浅两种主题下都读得清。
+   * 两种状态共用同一个 `MaterialPill`（沉浸光感），不会同时出现：
+   *   · 在倍速（长按左右两侧 / 宿主长按）→ `2.0x`；
+   *   · 下拉刷新 → 下拉刷新 →（过阈值）松开刷新 → 正在刷新…。
    *
    * 位置由外层那个对齐到顶部的 `Column` 给（见 PULL_PILL_TOP_VP：要让开 HDS 标题栏）。
    */
   @Builder
-  pullIndicator() {
-    Stack({ alignContent: Alignment.Center }) {
-      // 底层：材质底板（胶囊）
-      Toggle({ type: ToggleType.Button, isOn: false }) {
-        Text('')
-      }
-      .width(PULL_PILL_W)
-      .height(PULL_PILL_H)
-      .padding(0)
-      .borderRadius(PULL_PILL_H / 2)
-      .backgroundColor(Color.Transparent)
-      // 选中态透明：Toggle 默认选中色是主题强调色，不清掉整条会变蓝。
-      .selectedColor(Color.Transparent)
-      .attributeModifier(new SurfaceModifier(this.materialThickness, false))
-      .hitTestBehavior(HitTestMode.None)
-
-      // 上层：图标 + 文案
-      Row({ space: 6 }) {
-        if (this.refreshing) {
-          LoadingProgress()
-            .width(16)
-            .height(16)
-            .color($r('app.color.primary_text'))
-        } else {
-          SymbolGlyph($r('sys.symbol.arrow_clockwise'))
-            .fontSize(15)
-            .fontColor([$r('app.color.primary_text')])
-            .opacity(this.pullOffset >= PULL_TRIGGER_VP ? 0.4 : 1)
-        }
-        Text(this.refreshing ? '正在刷新…'
-          : (this.pullOffset >= PULL_TRIGGER_VP ? '松开刷新' : '下拉刷新'))
-          .fontSize(12)
-          .fontColor($r('app.color.primary_text'))
-          .maxLines(1)
-      }
-      .height(PULL_PILL_H)
-      .justifyContent(FlexAlign.Center)
+  statusPill() {
+    if (this.reelSpeed || this.pageSpeed) {
+      MaterialPill({
+        text: SPEED_PILL_TEXT,
+        pillWidth: SPEED_PILL_WIDTH,
+        pillHeight: SPEED_PILL_HEIGHT,
+        fontSize: SPEED_PILL_FONT
+      })
+    } else {
+      MaterialPill({
+        text: this.refreshing ? '正在刷新…'
+          : (this.pullOffset >= PULL_TRIGGER_VP ? '松开刷新' : '下拉刷新'),
+        iconKind: 'refresh',
+        busy: this.refreshing,
+        dimIcon: this.pullOffset >= PULL_TRIGGER_VP,
+        pillWidth: PULL_PILL_W,
+        pillHeight: PULL_PILL_H
+      })
     }
-    .width(PULL_PILL_W)
-    .height(PULL_PILL_H)
-    .borderRadius(PULL_PILL_H / 2)
+  }
+
+  /** 现在要不要画那颗胶囊（见 statusPill）。 */
+  private statusPillShown(): boolean {
+    return this.reelSpeed || this.pageSpeed || this.pullOffset > 0 || this.refreshing;
   }
 
   build() {
@@ -3355,9 +3353,9 @@ export struct ReelsPage {
        * 所以它既不会挡住 Swiper 的手势，也不会挡住双击点赞。位置固定写在页面顶端那一块，
        * 而不是跟着手指走满屏 —— 竖向 Swiper 里把画面整体下移会让视频表面跟着抖。
        */
-      if (this.pullOffset > 0 || this.refreshing) {
+      if (this.statusPillShown()) {
         Column() {
-          this.pullIndicator()
+          this.statusPill()
         }
         .width('100%')
         .height('100%')

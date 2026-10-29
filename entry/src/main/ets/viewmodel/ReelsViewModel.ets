@@ -414,7 +414,27 @@ export class ReelsViewModel implements ReelStreamVm {
     this.shownAuthors.clear();
     this.pending = [];
     this.ingestPage(page);
-    return this.drainInterleaved(page.reels.length + 1, false);
+    const added: number = this.drainInterleaved(page.reels.length + 1, false);
+    /*
+     * **记下"服务端给的顺序"与"真正上屏的顺序"前三条**。
+     *
+     * 用户报的"刷新后前两条视频轮着换位置"要分清是哪一侧的问题：
+     *   · 两条日志的 head 都不一样 ⇒ 服务端（`clips/discover/` 是探索位，本来就会轮换）；
+     *   · 服务端一样、上屏不一样 ⇒ 我们这边的打散/复位出了问题。
+     */
+    hilog.info(DOMAIN, TAG, 'reels first order page=[%{public}s] shown=[%{public}s]',
+      ReelsViewModel.headOf(page.reels), ReelsViewModel.headOf(this.reels));
+    return added;
+  }
+
+  /** 列表前三条的短码（日志用）。 */
+  private static headOf(list: Array<Reel>): string {
+    const parts: Array<string> = [];
+    const limit: number = Math.min(3, list.length);
+    for (let index: number = 0; index < limit; index++) {
+      parts.push(list[index].shortcode);
+    }
+    return parts.join(',');
   }
 
   /**
