@@ -1082,11 +1082,27 @@ function resolveDeviceProfile(argv) {
   }
   if (profile === null) {
     const cryptoMod = require('crypto');
+    /*
+     * **`mid` 必须有值**（2026-10-29 的教训，见 `tools/relay/LOGIN-429.md`）。
+     *
+     * 这里以前写的是 `mid: ''` —— 于是"没有 settings.json 也没有 device-profile.json"的机器
+     * 会以**空 machine_id** 去登录（`client_input_params.machine_id` 空串、请求头也没有 `X-MID`）。
+     * 已登录的私有 API 靠 cookie/authorization 认身份，空 mid 不追究；但**登录**这一发里
+     * `machine_id` 是"这台机器"的主要标识，空值等于"不是真客户端"。
+     * App 侧就是因为这个一直 429（`MobileSession.mint()` 里同样留了空串，已修）。
+     *
+     * 形状照真机：28 位字母数字（和 `settings.caa.json` 里那枚一致）。
+     */
+    const midChars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let mid = '';
+    while (mid.length < 28) {
+      mid += midChars[cryptoMod.randomInt(0, midChars.length)];
+    }
     profile = {
       phoneId: 'android-' + cryptoMod.randomUUID(),
       uuid: cryptoMod.randomUUID(),
       androidId: cryptoMod.randomBytes(8).toString('hex'),
-      mid: '',
+      mid,
       appVersion: FALLBACK_PROFILE.appVersion,
       versionCode: FALLBACK_PROFILE.versionCode,
       bloksVersionId: FALLBACK_PROFILE.bloksVersionId,
