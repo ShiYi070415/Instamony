@@ -1796,22 +1796,15 @@ export class CaaLogin {
          * "换一种验证方式"那一屏），替用户提前走一遍很可能把待确认的请求顶掉。
          * 现在除"看对方同意了吗"那一发之外，**不碰 2FA 状态机**。
          */
-        CaaLogin.approvalAction = TSV_APPROVE_ACTION;
         /*
-         * **把 2FA 第一屏打开一次**（见 openTwoStepScreen 的四版对照实验）：不打开，
-         * 官方客户端点同意会被告知"请求已失效"；打开之后那条请求才成立。
-         * 这一发就是真机 App 账密过了之后"渲染 2FA 屏"的那一下，不是多余请求。
+         * **这里只留"要 2FA"这个事实，不再替用户走 2FA 状态机**：
+         *   · 不打开 entrypoint（用户不需要我们"渲染"那一屏）；
+         *   · 不轮询 has_been_allowed；
+         *   · 不碰 method_picker（那是"换一种验证方式"，等于替用户取消）。
+         *
+         * 实测结论见 LoginPage 里那段表：无论做不做这些，官方客户端点同意都报"请求已失效"，
+         * 这条路在第三方客户端上走不通。
          */
-        CaaLogin.openTwoStepScreen(payload, identity, extra, context)
-          .then((hasApproval: boolean): void => {
-            CaaLogin.pendingHasApproval = hasApproval;
-            if (hasApproval) {
-              hilog.info(DOMAIN, TAG, '2fa screen opened (approval offered: %{public}s)',
-                `${hasApproval}`);
-            }
-          })
-          .catch((): void => {
-          });
         return pending;
       }
       const code: string = await codeProvider();

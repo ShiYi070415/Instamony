@@ -51,8 +51,6 @@ import {
   SETTING_MATERIAL_THICKNESS
 } from '../core/AppSettings';
 import { PlatformCap } from '../core/PlatformCap';
-// "切回前台就重登一次"的监听（见 onAppVisibility / retryAfterApproval）。
-import { AppLifecycle } from '../core/AppLifecycle';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const DOMAIN: number = 0xFF00;
@@ -63,16 +61,6 @@ const FIELD_H: number = 48;
 const BUTTON_H: number = 50;
 const BRAND_SIZE: number = 64;
 const LABEL_SIZE: number = 13;
-/**
- * "在另一台设备上同意"的三个数字（毫秒 / 次数）。
- *
- * `APPROVAL_RETRY_DELAY_MS`：切回前台后等一会儿再重登（界面还在恢复，用户也可能只是瞥一眼）；
- * `APPROVAL_RETRY_MAX`：重登最多几次（每次都是一发真登录，不能连发）；
- * `APPROVAL_RETRY_GAP_MS`：两次重登至少隔多久（防止来回切窗把登录打成连发）。
- */
-const APPROVAL_RETRY_DELAY_MS: number = 1500;
-const APPROVAL_RETRY_MAX: number = 3;
-const APPROVAL_RETRY_GAP_MS: number = 6000;
 
 /**
  * 登录结果的哨兵值：**账号密码过了，但 IG 要求两步验证**（要走验证码那一发）。
@@ -134,14 +122,6 @@ export struct LoginPage {
   @State private verifyCode: string = '';
   @State private verifyError: string = '';
   @State private verifyBusy: boolean = false;
-  /** 面板上要不要显示"也可以在已登录的客户端里同意"那句提示（见 startApprovalWatch）。 */
-  @State private approvalPossible: boolean = false;
-  /** 切回前台后那次重登的定时器 id（见 onAppVisibility）。0 = 没有。 */
-  private approvalRetryTimer: number = 0;
-  /** 这一轮已经重登过几次（见 retryAfterApproval）。 */
-  private approvalRetries: number = 0;
-  /** 上一次重登的时刻（见 APPROVAL_RETRY_GAP_MS）。 */
-  private approvalRetryAt: number = 0;
 
   /**
    * 面板要不要用**系统沉浸光感材质**（API 26 起；不支持的机器退回玻璃底）。
@@ -252,28 +232,6 @@ export struct LoginPage {
         .lineHeight(19)
         .fontColor($r('app.color.secondary_text'))
         .width('100%')
-      /*
-       * **"也可以在那台设备上同意"**（需求："2FA 过程中可以在官方客户端同意本次登录…
-       * 可以的话需要添加提示文本"）。
-       *
-       * 只在**这次登录确实提供了这条路**时才显示（`approvalPossible`，来自
-       * `CaaSession.approvalAvailable`）—— 不显示一句做不到的话。
-       * 显示的同时 startApprovalWatch 已经在轮询，那边一同意这里就会自己继续（见 finishByApproval）。
-       */
-      if (this.approvalPossible) {
-        Row({ space: 6 }) {
-          SymbolGlyph($r('sys.symbol.checkmark_shield'))
-            .fontSize(13)
-            .fontColor([$r('app.color.accent')])
-          Text($r('app.string.login_verify_approval_hint'))
-            .fontSize(12)
-            .lineHeight(18)
-            .fontColor($r('app.color.accent'))
-            .layoutWeight(1)
-        }
-        .width('100%')
-        .alignItems(VerticalAlign.Top)
-      }
       Stack({ alignContent: Alignment.Center }) {
         // 材质底板（和登录页其它输入框同一套：胶囊 + 沉浸光感），但**不发光**（见上）。
         Toggle({ type: ToggleType.Button, isOn: false }) {
@@ -391,8 +349,6 @@ export struct LoginPage {
       title: { title: $r('app.string.login_verify_title') },
       onDisappear: (): void => {
         this.verifyError = '';
-        // 面板关了：不再盯着"切回来重登"（见 stopApprovalWatch）。
-        this.stopApprovalWatch();
         /*
          * **面板关掉就把登录按钮的转圈收掉**（需求：弹面板期间登录按钮一直转）。
          *
@@ -427,8 +383,6 @@ export struct LoginPage {
     }
     this.verifyError = '';
     this.verifyBusy = true;
-    // 走"交码"这条路了：先别插"切回来重登"（见 stopApprovalWatch）。
-    this.stopApprovalWatch();
     this.onCaaVerify(this.verifyCode.trim())
       .then((message: string): void => {
         this.verifyBusy = false;
@@ -442,8 +396,6 @@ export struct LoginPage {
           return;
         }
         this.verifyError = message;
-        // 码不对：提示还在（那边同意、切回来一样能继续）。
-        this.approvalPossible = true;
       })
       .catch((error: Error): void => {
         this.verifyBusy = false;
@@ -451,124 +403,26 @@ export struct LoginPage {
       });
   }
 
-  /* ------------------------------------------- 在另一台设备上同意（login approval） */
-
-  /**
-   * **"在另一台设备上同意"**（需求："2FA 过程中可以在官方客户端同意本次登录，
-   * 有部分实现同意后自动登录吗"）。
+  /*
+   * **"在另一台设备上同意"这条路，实测在第三方客户端走不通**（2026-10-30 连做五版）：
    *
-   * ## 为什么**不轮询**（真机实测 2026-10-30）
-   * 试过照真机 App 的节奏去打 `com.bloks.www.two_step_verification.has_been_allowed.async`
-   * （每 7.5 秒一发）。那一发本身是通的 —— 响应 `status: ok`、`is_loading: false`，
-   * 说明端点和参数都对。**但用户在 Instagram 官方客户端点"同意"时，客户端直接说
-   * "这个登录请求已失效"**，挂小窗秒开也一样。也就是说：我们一直去"看对方同意了吗"，
-   * 反而把那条待确认的请求搅掉了。
+   *   | 版本 | 打开 entrypoint | 轮询 has_been_allowed | 官方客户端点同意 |
+   *   | --- | --- | --- | --- |
+   *   | A | 是 | 否 | 曾出现过"没反应"（未复现） |
+   *   | B | 是 | 是（7.5s） | 报"登录请求已失效" |
+   *   | C | 否 | 是 | 报"已失效" |
+   *   | D | 否 | 否 | 报"已失效" |
+   *   | E（清空通知后重测） | 是 | 否 | 仍报"已失效" |
    *
-   * 所以现在**一条请求都不发**：
-   *   · 面板上直接告诉用户可以"去已登录的客户端同意"（见 approvalPossible）；
-   *   · 由"切回本应用"这个动作触发**一次重新登录**（见 retryAfterApproval）——
-   *     同意之后 IG 会放行这台设备，同一份账号密码再登一次就不再要 2FA；
-   *   · 重登次数封顶（APPROVAL_RETRY_MAX），不会把登录做成连发。
+   * 那一发查询本身是通的（响应 `status: ok`、`is_loading: false`），说明端点和参数都对；
+   * 但**官方客户端那边始终指着一条"不存在/已过期"的请求** —— 最可能是 IG 只允许
+   * 官方 App 之间互相确认（请求记录绑在官方客户端自己的登录会话上），
+   * 第三方客户端拿到的通知天然批不了。
+   *
+   * 所以这条路上不做任何事：**不打开 2FA 屏、不轮询、不显示提示、不自动重登**，
+   * 面板就是"输验证码"那一件事。相关代码留在 core 里备查（CaaLogin.openTwoStepScreen /
+   * CaaLogin.pollApproval / CaaSession.startApprovalWatch），但正常流程不再调用。
    */
-  private startApprovalWatch(): void {
-    /*
-     * 这里只做界面上的事：把提示亮出来 + 记下面板是开着的。
-     * 真正的"检查"在 retryAfterApproval，而它由"切回前台"触发（见 onAppVisibility）。
-     */
-    this.approvalPossible = true;
-    this.approvalRetries = 0;
-    hilog.info(DOMAIN, TAG, 'approval: waiting for the user to approve elsewhere');
-  }
-
-  /** 面板关掉 / 切走时收尾（不再需要"切回来就重登"）。 */
-  private stopApprovalWatch(): void {
-    this.approvalPossible = false;
-    if (this.approvalRetryTimer !== 0) {
-      clearTimeout(this.approvalRetryTimer);
-      this.approvalRetryTimer = 0;
-    }
-  }
-
-  /**
-   * **切回前台了 → 重登一次看看"那边同意了吗"**。
-   *
-   * 为什么用"重登"代替轮询：见上面 startApprovalWatch 的实测结论（轮询会把请求搅失效）。
-   * 同意之后这台设备就被放行了，同一份账号密码再登一次会直接给会话。
-   *
-   * 三档收尾：
-   *   · 成功（空串）→ 关面板、停转圈、切主界面；
-   *   · 仍然要验证码 → 面板留着（提示一句"还没检测到"），用户可以直接输码，也可以再确认一次；
-   *   * 其它原因（密码错/被限流）→ 照实显示。
-   *
-   * @returns 真的发起了重登吗（false = 现在还不需要/不能重登）
-   */
-  private retryAfterApproval(): boolean {
-    if (!this.verifyOpen || this.approvalRetries >= APPROVAL_RETRY_MAX) {
-      return false;
-    }
-    if (this.verifyBusy || this.busy) {
-      // 面板里正在交码 / 登录那一发还在跑：别插一发进去。
-      return false;
-    }
-    const now: number = Date.now();
-    if (now - this.approvalRetryAt < APPROVAL_RETRY_GAP_MS) {
-      // 刚试过（用户来回切窗）：别把登录打成连发。
-      return false;
-    }
-    this.approvalRetryAt = now;
-    this.approvalRetries = this.approvalRetries + 1;
-    hilog.info(DOMAIN, TAG, 'approval: retry login after returning (%{public}d/%{public}d)',
-      this.approvalRetries, APPROVAL_RETRY_MAX);
-    this.verifyError = '';
-    this.busy = true;
-    this.onCaaLogin(this.username.trim(), this.password)
-      .then((message: string): void => {
-        if (message.length === 0) {
-          this.verifyOpen = false;
-          this.verifyCode = '';
-          this.busy = false;
-          this.approvalPossible = false;
-          this.onSignedIn();
-          return;
-        }
-        this.busy = false;
-        if (message === LOGIN_NEEDS_CODE) {
-          // 服务器还没认（或者用户还没去同意）：面板留着，提示一句，继续等下一次切回来。
-          this.verifyError = '还没检测到「已同意」。可以在 Instagram 客户端确认后再切回来，'
-            + '也可以直接在这里输验证码。';
-          return;
-        }
-        this.verifyError = message;
-      })
-      .catch((error: Error): void => {
-        this.busy = false;
-        this.verifyError = `登录出错：${error.message}`;
-      });
-    return true;
-  }
-
-  /**
-   * 应用可见性变化（`AppLifecycle` 的监听，见 aboutToAppear）。
-   *
-   * 用户去官方客户端同意时我们必然退到后台；**一回来就重登一次**是最省事也最可靠的收尾
-   * （后台的定时器真机根本靠不住：短时任务额度经常申请不到，进程随后就被冻结）。
-   */
-  private onAppVisibility: (foreground: boolean) => void = (foreground: boolean): void => {
-    if (!foreground) {
-      return;
-    }
-    if (!this.verifyOpen) {
-      return;
-    }
-    // 稍等一下再打：切回来的那一瞬间界面还在恢复，而且用户可能只是瞥一眼。
-    if (this.approvalRetryTimer !== 0) {
-      clearTimeout(this.approvalRetryTimer);
-    }
-    this.approvalRetryTimer = setTimeout((): void => {
-      this.approvalRetryTimer = 0;
-      this.retryAfterApproval();
-    }, APPROVAL_RETRY_DELAY_MS);
-  };
 
   /** 主按钮此刻该干什么：一直是"拿账号密码走 App 协议登录"（见 submit）。 */
   private primaryAction(): void {
@@ -746,15 +600,6 @@ export struct LoginPage {
    * 不收拾的话，登录成功后整页被宿主换掉，那个 `setTimeout` 还会再跳一次并调
    * `onApprovalTick` —— 白打一发请求（而且那一发已经没有待验证的登录了）。
    */
-  /** 注册"切回前台"的监听（见 onAppVisibility：回来就重登一次）。 */
-  aboutToAppear(): void {
-    AppLifecycle.addVisibilityListener(this.onAppVisibility);
-  }
-
-  aboutToDisappear(): void {
-    this.stopApprovalWatch();
-    AppLifecycle.removeVisibilityListener(this.onAppVisibility);
-  }
 
   /**
    * 提交：主按钮 = 拿账号密码走 **App 协议登录（CAA）**（见 onCaaLogin / core/mobileapi/CaaSession）。
@@ -796,11 +641,6 @@ export struct LoginPage {
           this.verifyCode = '';
           this.verifyError = '';
           this.verifyOpen = true;
-          /*
-           * **告诉用户"也可以去客户端同意"**（需求见 startApprovalWatch）：
-           * 不轮询（实测那样会把待确认请求搅失效），由"切回本应用"触发重登。
-           */
-          this.startApprovalWatch();
           return;
         }
         this.busy = false;

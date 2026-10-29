@@ -7908,7 +7908,7 @@ struct Index {
          * 有部分实现同意后自动登录吗"）：可用性由 core 判定（见 CaaLogin.approvalAvailable），
          * 
          */
-      // 「等同意」不再轮询：由登录页在切回前台时重登一次（见 LoginPage.retryAfterApproval）。
+      // 「在另一台设备上同意」实测在第三方客户端走不通（见 LoginPage 里那段对照表），这里不做任何事。
       })
     } else {
       Stack({ alignContent: Alignment.Bottom }) {
@@ -11058,8 +11058,8 @@ struct Index {
           onCaaVerify: (code: string): Promise<string> => {
             return this.caaVerify(code);
           },
-          // 和整页登录页同一套「等同意」等待（见上面那段说明）。
-        // 「等同意」不再轮询：由登录页在切回前台时重登一次（见 LoginPage.retryAfterApproval）。
+          // 同整页登录页：「在另一台设备上同意」走不通，这里不做任何事（见 LoginPage 里那段对照表）。
+        // 「在另一台设备上同意」实测在第三方客户端走不通（见 LoginPage 里那段对照表），这里不做任何事。
         })
       }
       .titleBar({
