@@ -61,6 +61,14 @@ const NATIVE_PAGE_COUNT: number = 7;
 const NATIVE_CACHE_PAGES: number = 3;
 const NATIVE_WARM_MAX_AGE_MS: number = 120000;
 /**
+ * 冷启动时最多等预热那一发多久（毫秒）。
+ *
+ * 预热是 EntryAbility 一起发出去的（`clips/discover/` 实测 4~6 秒），用户点进视频页时常常
+ * 还在飞。等它比自己再发一发快得多（那一发还要排限速闸门）；但也不能无限等 ——
+ * 6 秒还没回来就自己发。
+ */
+const WARM_WAIT_MS: number = 6000;
+/**
  * 一次翻页最多**上屏**几条（剩下的留在缓冲里，见 drainInterleaved）。
  *
  * 取 10 而不是"有多少铺多少"：缓冲里多留几条，下一次上屏才有料继续交替作者
@@ -287,20 +295,40 @@ export class ReelsViewModel implements ReelStreamVm {
         return;
       }
       // ---- 1) 启动预热那一页（app 一起来就发了，见 EntryAbility / NativeReels.warmStart）----
-      const warm: NativeReelsPage | null = forceFresh
-        ? null : NativeReels.takeWarm(this.source, NATIVE_WARM_MAX_AGE_MS);
+      /*
+       * **等它，而不是再发一发**（见 NativeReels.takeWarmOrWait 的说明）：
+       * 冷启动时那一发常常还在飞，以前拿不到就自己重发，等于同一个请求发两次、第二发还要
+       * 排进限速闸门 —— 首屏白等好几秒。
+       */
+      const warm: NativeReelsPage | null = forceFresh ? null
+        : await NativeReels.takeWarmOrWait(this.source, NATIVE_WARM_MAX_AGE_MS, WARM_WAIT_MS);
       if (warm !== null) {
         this.noteCursor(warm.nextCursor);
-        const applied: number = this.applyFirstPage(warm);
+        let applied: number = this.applyFirstPage(warm);
         hilog.info(DOMAIN, TAG, 'reels first from warm n=%{public}d applied=%{public}d ms=%{public}d',
           warm.reels.length, applied, Date.now() - startedMs);
+        if (applied === 0) {
+          /*
+           * **冷启动兜底：允许重复**。这一页全是"看过的"（IG 那几条源本身就很固定），
+           * 与其让用户对着空屏等下一批，不如先把这几条铺上 —— 刷新那条路仍然严格不给看过的。
+           */
+          applied = this.applyFirstPage(warm, true);
+          hilog.info(DOMAIN, TAG, 'reels first warm all seen → lenient n=%{public}d ms=%{public}d',
+            applied, Date.now() - startedMs);
+        }
         if (applied > 0) {
           this.prefetchNativePage();
+          // 先出画面，再在后台补几条**没看过的**（requestMore 是追加，不动正在播的那条）。
+          if (this.reels.length < REFRESH_SHOW / 2) {
+            this.requestMore().catch((): void => {
+            });
+          }
           return;
         }
-        // 整页都是看过的（冷启动常见：`clips/discover/` 永远那几条）：换一批新的。
-        if (await this.refreshBatch() > 0) {
-          hilog.info(DOMAIN, TAG, 'reels first warm all seen → fresh batch ms=%{public}d',
+        // 连"允许重复"都铺不出来（这一页一条视频都没有）：换一批新的。
+        // 冷启动只给两发（用户要的是"快点出画面"，不是"凑齐一屏"；刷新的那条路才是 4 发）。
+        if (await this.refreshBatch(2) > 0) {
+          hilog.info(DOMAIN, TAG, 'reels first warm empty → fresh batch ms=%{public}d',
             Date.now() - startedMs);
           this.prefetchNativePage();
           return;
@@ -310,15 +338,26 @@ export class ReelsViewModel implements ReelStreamVm {
       const native: NativeReelsPage | null = await NativeReels.fetchPage(this.source, NATIVE_PAGE_COUNT, '', true);
       if (native !== null) {
         this.noteCursor(native.nextCursor);
-        const applied: number = this.applyFirstPage(native);
+        let applied: number = this.applyFirstPage(native);
         hilog.info(DOMAIN, TAG, 'reels first native n=%{public}d applied=%{public}d ms=%{public}d',
           native.reels.length, applied, Date.now() - startedMs);
+        if (applied === 0) {
+          // 冷启动兜底：允许重复，先出画面（刷新那条路仍严格，见 ingestPage 的说明）。
+          applied = this.applyFirstPage(native, true);
+          hilog.info(DOMAIN, TAG, 'reels first native all seen → lenient n=%{public}d ms=%{public}d',
+            applied, Date.now() - startedMs);
+        }
         if (applied > 0) {
           this.prefetchNativePage();
+          // 同上：先出画面，后台补几条没看过的。
+          if (this.reels.length < REFRESH_SHOW / 2) {
+            this.requestMore().catch((): void => {
+            });
+          }
           return;
         }
-        // 同上：首屏那几条都看过 → 换一批。
-        if (await this.refreshBatch() > 0) {
+        // 同上：这一页一条视频都没有 → 换一批（冷启动同样只给两发，见上一条注释）。
+        if (await this.refreshBatch(2) > 0) {
           hilog.info(DOMAIN, TAG, 'reels first page all seen → fresh batch ms=%{public}d',
             Date.now() - startedMs);
           this.prefetchNativePage();
@@ -358,14 +397,18 @@ export class ReelsViewModel implements ReelStreamVm {
    *
    * @returns 真正新增了几条（0 = 整页都是见过的）。
    */
-  private ingestPage(page: NativeReelsPage): number {
+  private ingestPage(page: NativeReelsPage, allowSeen: boolean = false): number {
     let added: number = 0;
     for (let index: number = 0; index < page.reels.length; index++) {
       const reel: Reel = page.reels[index];
       if (this.shown.has(reel.shortcode)) {
         continue;
       }
-      if (ReelsSeen.has(this.source, reel.shortcode)) {
+      /*
+       * **「看过的不再给」是刷新的规则**；冷启动实在没新货时由调用方传 `allowSeen = true` ——
+       * 宁可重复几条，也不能让用户打开视频页看到一屏空白（IG 那几条源本身就很固定）。
+       */
+      if (!allowSeen && ReelsSeen.has(this.source, reel.shortcode)) {
         continue;
       }
       let dup: boolean = false;
@@ -509,7 +552,7 @@ export class ReelsViewModel implements ReelStreamVm {
    *
    * @returns 上屏了几条（0 = 没换到东西）
    */
-  private async refreshBatch(): Promise<number> {
+  private async refreshBatch(maxRounds: number = 4, allowSeen: boolean = false): Promise<number> {
     const limited: boolean = ApiThrottle.blocked(ApiThrottle.CLIPS);
     let rounds: number = 0;
     /*
@@ -517,12 +560,12 @@ export class ReelsViewModel implements ReelStreamVm {
      * 最多四发 —— 再要多就是十几秒的转圈了。
      */
     const wantAuthors: number = Math.max(2, Math.ceil(REFRESH_SHOW / 2));
-    while (rounds < 4 && this.pendingAuthors() < wantAuthors) {
+    while (rounds < maxRounds && this.pendingAuthors() < wantAuthors) {
       const page: NativeReelsPage | null = await this.nextPage(limited);
       if (page === null) {
         break;
       }
-      const fresh: number = this.ingestPage(page);
+      const fresh: number = this.ingestPage(page, allowSeen);
       rounds++;
       hilog.info(DOMAIN, TAG,
         'reels refresh fill n=%{public}d fresh=%{public}d authors=%{public}d round=%{public}d',
@@ -561,7 +604,7 @@ export class ReelsViewModel implements ReelStreamVm {
   }
 
   /** 首屏那一页：整页收进来再整页上屏（同样打散，首屏里也可能连着同一个人）。 */
-  private applyFirstPage(page: NativeReelsPage): number {
+  private applyFirstPage(page: NativeReelsPage, allowSeen: boolean = false): number {
     /*
      * **整页替换时把"看到第几条"复位**：列表被换成新的那一批之后，旧的 active 可能
      * 越过新长度 —— Swiper 停在越界索引上就是闪退的典型现场。
@@ -573,7 +616,7 @@ export class ReelsViewModel implements ReelStreamVm {
     this.shown.clear();
     this.shownAuthors.clear();
     this.pending = [];
-    this.ingestPage(page);
+    this.ingestPage(page, allowSeen);
     const added: number = this.drainInterleaved(page.reels.length + 1, false);
     /*
      * **记下"服务端给的顺序"与"真正上屏的顺序"前三条**。
@@ -827,7 +870,17 @@ export class ReelsViewModel implements ReelStreamVm {
         if (page === null) {
           break;
         }
-        const fresh: number = this.ingestPage(page);
+        let fresh: number = this.ingestPage(page);
+        if (fresh === 0) {
+          /*
+           * 这一页全看过：**允许重复**再收一遍（不额外发请求）。
+           *
+           * 为什么不干脆空着：IG 这几条源本身就很固定，台账攒到一定量之后"每页都看过"，
+           * 严格下去的结果是滑到底再也出不来新视频（用户会觉得"卡住了"）。翻页允许重复、
+           * **下拉刷新保持严格**（用户的要求是"刷新不看见看过的"）。
+           */
+          fresh = this.ingestPage(page, true);
+        }
         rounds++;
         hilog.info(DOMAIN, TAG, 'reels fill n=%{public}d fresh=%{public}d authors=%{public}d round=%{public}d',
           page.reels.length, fresh, this.pendingAuthors(), rounds);

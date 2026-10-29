@@ -319,9 +319,54 @@ export class NativeReels {
     });
   }
 
-  /** 取走预热的那一页（取走即清空；太旧的不要）。 */
-  static takeWarm(source: string, maxAgeMs: number): NativeReelsPage | null {
+  /**
+   * **取预热页；如果那一发还在飞就等它**（最多 `maxWaitMs`）。
+   *
+   * 为什么必须等（真机日志）：app 一起 EntryAbility 就发了预热那一发，而用户点进视频页时它
+   * 往往还在飞（`clips/discover/` 实测 4~6 秒）。以前 `takeWarm` 拿不到就自己再发一发 ——
+   * 同一个请求发两次、第二发还要排进限速闸门（日志里那一发 `waited=3630ms`），首屏就这么白等了。
+   * 等它回来直接吃结果，通常比"再发一发"快得多；超时才自己发。
+   */
+  static async takeWarmOrWait(source: string, maxAgeMs: number,
+                              maxWaitMs: number): Promise<NativeReelsPage | null> {
     const lane: ReelsLane = NativeReels.laneOf(source);
+    const immediate: NativeReelsPage | null = NativeReels.takeWarm(source, maxAgeMs);
+    if (immediate !== null) {
+      return immediate;
+    }
+    if (!lane.warming) {
+      return null;
+    }
+    const started: number = Date.now();
+    const deadline: number = started + maxWaitMs;
+    while (Date.now() < deadline) {
+      await NativeReels.sleep(120);
+      const page: NativeReelsPage | null = NativeReels.takeWarm(source, maxAgeMs);
+      if (page !== null) {
+        hilog.info(DOMAIN, TAG, 'warm joined source=%{public}s waited=%{public}dms',
+          source, Date.now() - started);
+        return page;
+      }
+      if (!lane.warming) {
+        return null;
+      }
+    }
+    hilog.info(DOMAIN, TAG, 'warm wait timeout source=%{public}s waited=%{public}dms',
+      source, Date.now() - started);
+    return null;
+  }
+
+  /** 短睡（轮询预热用）。 */
+  private static sleep(ms: number): Promise<void> {
+    return new Promise<void>((resolve: () => void): void => {
+      setTimeout((): void => {
+        resolve();
+      }, ms);
+    });
+  }
+
+  /** 取走预热的那一页（取走即清空；太旧的不要）。 */
+  static takeWarm(source: string, maxAgeMs: number): NativeReelsPage | null {    const lane: ReelsLane = NativeReels.laneOf(source);
     const page: NativeReelsPage | null = lane.warm;
     if (page === null) {
       return null;

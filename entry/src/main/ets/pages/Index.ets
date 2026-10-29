@@ -9522,21 +9522,37 @@ struct Index {
     .scrollable(false)
     .animationDuration(REELS_SWITCH_MS)
     /*
-     * **进入页面就把两段的内容都拉起来**（需求："进入页面后要触发加载所有 content"）。
+     * **先让"可见的那一段"出内容，另一段等它好了再在后台拉**。
      *
-     * TabContent 是懒加载的：不滑过去就不会构建、也不会取数。这里在 Tabs 首次出现时
-     * 顺手把"关注"那段的数据先取一页，滑过去直接就是内容，不用等骨架屏。
+     * 原来这里两段一起 loadFirst：可见的探索段要发 `clips/discover/`，另一段（关注）要发
+     * `clips/discover/social/` + `clips/connected/` 两发 —— 三发同时挤进限速闸门，可见那一发
+     * 实测排队 `waited=3630ms`，首屏就慢在这些排队上（用户报的"reels 初次加载有点慢"）。
+     * 现在：可见段先跑，跑完（成功或失败）再把另一段拉起来 —— 用户这会儿已经在看第一条视频了。
+     *
+     * TabContent 是懒加载的，第一次切到另一段时那边自己也会 loadFirst（见 ReelsPage.aboutToAppear），
+     * 所以这里只是"提前备好"，不是唯一入口。
      */
     .onAppear((): void => {
-      hilog.info(DOMAIN, TAG, 'preload both reels segments');
-      if (this.reelsVm.list().length === 0) {
-        this.reelsVm.loadFirst().catch((): void => {
-        });
+      const explore: boolean = this.reelsSegment === 0;
+      const activeVm: ReelsViewModel = explore ? this.reelsVm : this.reelsFollowVm;
+      const otherVm: ReelsViewModel = explore ? this.reelsFollowVm : this.reelsVm;
+      const warmOther = (): void => {
+        if (otherVm.list().length === 0) {
+          otherVm.loadFirst().catch((): void => {
+          });
+        }
+      };
+      hilog.info(DOMAIN, TAG, 'preload reels segment=%{public}d first (other deferred)',
+        this.reelsSegment);
+      if (activeVm.list().length > 0) {
+        warmOther();
+        return;
       }
-      if (this.reelsFollowVm.list().length === 0) {
-        this.reelsFollowVm.loadFirst().catch((): void => {
-        });
-      }
+      activeVm.loadFirst().then((): void => {
+        warmOther();
+      }).catch((): void => {
+        warmOther();
+      });
     })
     /*
      * **边缘页不再能继续拖出背景**（需求）。
