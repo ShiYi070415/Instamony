@@ -513,6 +513,11 @@ export class CaaLogin {
   private static approvalAction: string = '';
 
   /**
+   * 2FA 第一屏里认出了"在另一台设备上同意"这条路吗（见 openTwoStepScreen；诊断/日志用）。
+   */
+  static pendingHasApproval: boolean = false;
+
+  /**
    * 同意那一发里收到的会话（见 pollApproval / takeApprovedLogin）。
    *
    * 同意之后 IG 会直接给会话 —— 收在这里，交给 CaaSession 走"交验证码成功"同一条落盘路径，
@@ -922,13 +927,60 @@ export class CaaLogin {
   }
 
   /**
+   * **把 2FA 第一屏（entrypoint）打开一次** —— "在另一台设备上同意"要靠它。
+   *
+   * 真机对照实验（2026-10-30，同一个账号连做四版）：
+   *   · A 打开第一屏、**不轮询** → 用户在官方客户端点同意**没有**再报"请求已失效"；
+   *   · B 打开第一屏 + 每 7.5 秒轮询 → 报"已失效"；
+   *   · C 不打开第一屏 + 轮询 → 报"已失效"；
+   *   · D 什么都不做 → 报"已失效"。
+   * 结论：**打开这一屏是让那条待确认请求"成立/保持活着"的动作**，而反复轮询反而会把它搅掉。
+   * 所以现在只做这一发（和真机 App 一样：账密过了就把 2FA 屏渲染出来），之后靠
+   * "切回前台重登一次"收尾（见 LoginPage.retryAfterApproval）。
+   *
+   * 只打 entrypoint 这一屏：`method_picker` 是"换一种验证方式"，替用户提前走一遍等于
+   * 把请求取消掉（B 版报"已失效"时它也在里面）。
+   */
+  static async openTwoStepScreen(payload: ESObject, identity: MobileIdentity,
+                                 extra: Record<string, string>,
+                                 context: string): Promise<boolean> {
+    try {
+      const specs: Array<CaaCallSpec> = CaaLogin.nextCallSpecs(payload);
+      const entrySpec: CaaCallSpec | null =
+        CaaLogin.pickCallSpec(specs, ['two_step', 'two_factor']);
+      const entryApp: string = entrySpec === null ? TSV_ENTRYPOINT : entrySpec.appId;
+      const entryParams: Record<string, ESObject> = {};
+      entryParams['client_input_params'] = CaaLogin.mergeParams({
+        'device_id': identity.androidDeviceId,
+        'is_whatsapp_installed': '0',
+        'machine_id': identity.mid
+      }, entrySpec === null ? {} : entrySpec.clientParams);
+      entryParams['server_params'] = CaaLogin.mergeParams({
+        'should_fallback_to_sms': '0',
+        'family_device_id': identity.phoneId,
+        'device_id': identity.androidDeviceId,
+        'two_step_verification_context': context,
+        'flow_source': TSV_FLOW_SOURCE
+      }, entrySpec === null ? {} : entrySpec.serverParams);
+      const entry: CaaHttpReply =
+        await CaaLogin.bloksAppBestHost(identity, extra, entryApp, entryParams);
+      CaaLogin.steps.push(new CaaStep('2sv_screen', entry.status, entry.host));
+      CaaLogin.appendTwoFactorRaw('entrypoint', entry.body);
+      const entryPayload: ESObject = CaaLogin.parse(entry.body);
+      const found: boolean = CaaLogin.adoptApprovalFrom(entryPayload);
+      CaaLogin.last2faDigest = CaaLogin.digestTwoStep(entryPayload);
+      return found;
+    } catch (error) {
+      CaaLogin.steps.push(new CaaStep('2sv_screen', 0, (error as Error).message));
+      return false;
+    }
+  }
+
+  /**
    * **把 2FA 那几个屏幕也各打一发，摘一份摘要出来**（诊断用，见 last2faDigest）。
    *
-   * 为什么光看 `send_login_request` 的响应不够：用户报"没出现「在另一台设备上同意」那行提示"，
-   * 而"有哪些验证方式"通常写在**后面那几个 Bloks 屏幕**（entrypoint / method_picker）里，
-   * 不在账密那一发的响应里。这里把这两屏也走一遍，把它们的摘要一起带出来。
-   *
-   * 这一步是**诊断专用的旁路**：不改 pending、不推进流程，失败也不影响用户交码。
+   * ⚠️ **不要再在正常流程里调用它**：`method_picker` 那一步会把待确认的请求取消掉
+   * （见 openTwoStepScreen 里的四版对照实验）。它只留作"要一份完整现场"时的诊断手段。
    */
   static async inspectTwoStepScreens(payload: ESObject, identity: MobileIdentity,
                                      extra: Record<string, string>,
@@ -1445,6 +1497,7 @@ export class CaaLogin {
     // 上一轮的"等同意"状态不能带过来（新登录可能是另一个账号/另一种 2FA）。
     CaaLogin.approvalAction = '';
     CaaLogin.approvedLogin = null;
+    CaaLogin.pendingHasApproval = false;
     // 这一次登录的 2FA 现场摘要（见 last2faDigest）：重新登录就从空的开始。
     CaaLogin.last2faDigest = '';
     CaaLogin.last2faRaw = '';
@@ -1744,6 +1797,21 @@ export class CaaLogin {
          * 现在除"看对方同意了吗"那一发之外，**不碰 2FA 状态机**。
          */
         CaaLogin.approvalAction = TSV_APPROVE_ACTION;
+        /*
+         * **把 2FA 第一屏打开一次**（见 openTwoStepScreen 的四版对照实验）：不打开，
+         * 官方客户端点同意会被告知"请求已失效"；打开之后那条请求才成立。
+         * 这一发就是真机 App 账密过了之后"渲染 2FA 屏"的那一下，不是多余请求。
+         */
+        CaaLogin.openTwoStepScreen(payload, identity, extra, context)
+          .then((hasApproval: boolean): void => {
+            CaaLogin.pendingHasApproval = hasApproval;
+            if (hasApproval) {
+              hilog.info(DOMAIN, TAG, '2fa screen opened (approval offered: %{public}s)',
+                `${hasApproval}`);
+            }
+          })
+          .catch((): void => {
+          });
         return pending;
       }
       const code: string = await codeProvider();
