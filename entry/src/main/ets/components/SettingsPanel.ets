@@ -62,6 +62,9 @@ import { ReelsCrashLog } from '../core/ReelsCrashLog';
 import { InstagramCookieJar, InstagramCookieSnapshot } from '../core/InstagramCookieJar';
 import { PushCenter } from '../core/PushCenter';
 import { PushTokenReporter } from '../core/PushTokenReporter';
+// 「清除设备认证」要动两处设备身份（见 clearDeviceAuth）。
+import { CaaSession } from '../core/mobileapi/CaaSession';
+import { MobileSession } from '../core/mobileapi/MobileSession';
 import { fileIo, picker } from '@kit.CoreFileKit';
 import { pasteboard, BusinessError } from '@kit.BasicServicesKit';
 import { promptAction } from '@kit.ArkUI';
@@ -252,6 +255,14 @@ export struct SettingsPanel {
   /** 点「退出登录」。 */
   onSignOut: () => void = (): void => {
   };
+  /**
+   * **当前有没有登录**（从登录页标题栏那颗齿轮进来时是 false）。
+   *
+   * 为什么要传：未登录时「退出登录」这一项不该出现（点了只是把已经空掉的会话再清一遍），
+   * 而且未登录正是"清设备认证 / 2FA 测试"唯一做得了的时候 —— 那一组只在没登录时才有意义。
+   * 需求原话："登录页 hds menu 新增设置页面入口（不显示退出登录按钮）"。
+   */
+  signedIn: boolean = true;
   /**
    * 清晰度改完之后通知宿主（pages/Index 用它顺手刷新一次信息流）。
    *
@@ -1283,6 +1294,36 @@ export struct SettingsPanel {
   }
 
   /**
+   * **清除设备认证**（2FA 测试用；需求原话见设置页那一组的说明）。
+   *
+   * 做两件事，都是"这台设备是谁"：
+   *   ① `CaaSession.forgetDevice()`：丢掉 App 协议登录（CAA）那套 USDID 设备签名身份，
+   *      下次登录会**当场生成一份新的**；
+   *   ② `MobileSession.rotateIdentity()`：换掉请求头那套 8 个 UUID / mid。
+   *
+   * 为什么两样都要清：IG 判定"这台设备可信、免两步验证"时看的到底是设备签名身份还是
+   * 请求头那套 UUID，官方没有文档；两边一起换才保证"在 IG 眼里就是一台新机器"。
+   * 代价只是下一次登录多一次设备登记（首次登录本来也要做）。
+   *
+   * **不动会话材料**（Authorization / Cookie / 已保存的账号）：这一项只用来做测试，
+   * 不该顺手把人登出或者清掉账号数据 —— 那是「退出登录」的职责。
+   */
+  private clearDeviceAuth(): void {
+    if (this.signedIn) {
+      // 已登录时换设备身份会让当前会话看起来"来自另一台机器"，是纯粹的风险动作。
+      this.toast('先退出登录，再清设备认证');
+      return;
+    }
+    CaaSession.forgetDevice();
+    const midLen: number = MobileSession.rotateIdentity();
+    hilog.info(DOMAIN, TAG, 'device auth cleared (usdid dropped, identity rotated mid=%{public}d)',
+      midLen);
+    this.toast(midLen > 0
+      ? '已清除设备认证：下次登录会当作新设备（应会要求两步验证）'
+      : '已清除设备认证（设备身份重建失败，见日志）');
+  }
+
+  /**
    * **导出诊断日志**：让用户自己挑一个位置保存（落在「文件」里），再用微信/邮件发出来。
    *
    * 用 `DocumentViewPicker.save()` 而不是直接写公共目录：**不需要任何存储权限**
@@ -2085,6 +2126,43 @@ export struct SettingsPanel {
       }
       .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
 
+      /*
+       * **登录与设备**（需求："新增一个清除设备认证的按钮，用于 2FA 测试，
+       * 不然会不用 2FA 就能登录无法测试"）。
+       *
+       * 为什么需要它：IG 的"两步验证"是**按设备**判定的 —— 这台机器的设备身份在它那边
+       * 已经"验过了"，所以再登录时账号密码一过就直接进，2FA 那条分支永远走不到，
+       * 那条面板也就没法测。把设备身份整份换新，下一次登录在 IG 眼里就是一台新机器。
+       *
+       * 清的是两样（都是"这台设备是谁"）：
+       *   · CAA 的 USDID（`core/mobileapi/CaaSession`，登录协议里那套设备签名身份）；
+       *   · MobileSession 的 8 个 UUID / mid（请求头里那套设备标识）。
+       * 会话本身（Authorization / Cookie）**不动** —— 这一项不该顺手把人登出；
+       * 真要换号走「退出登录」（已登录时它就在这一项上面）。
+       *
+       * 只在未登录时显示：已登录时换设备身份会让当前这条会话看起来"来自另一台机器"，
+       * 属于纯粹的风险动作，没有任何测试价值（那时候该先退出登录）。
+       */
+      if (!this.signedIn) {
+        ListItem() {
+          this.groupHeader('登录与设备')
+        }
+        ListItem() {
+          Column({ space: 0 }) {
+            this.actionRow('清除设备认证（2FA 测试）', (): void => {
+              this.clearDeviceAuth();
+            })
+            this.cardDivider()
+            this.groupHint('把本机的设备身份整份换新（USDID + 8 个 UUID / mid）。'
+              + '清完之后，下一次登录在 Instagram 眼里就是一台**新设备**：'
+              + '开了两步验证的账号会重新要验证码，2FA 流程才测得出来。'
+              + '这一步不会动已保存的会话，也不会清账号数据。')
+          }
+          .cardStyle()
+        }
+        .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+      }
+
       // 退出登录：设置列表的最后一项（跟着列表一起滚），宽度和上面几行对齐（左右各留 SIDE_PADDING）。
       //
       // 沉浸光感按官方「示例4（设置组件材质的光感交互反馈效果）」的写法开：
@@ -2100,6 +2178,11 @@ export struct SettingsPanel {
       // 不生效 —— 官方「生效范围」那条限制里，全页面只有弹窗类组件/接口与 Slider、Toggle、Select；
       // 所以这颗按钮改成 **Toggle 承载材质**（`ToggleType.Button` 可以带子组件），
       // 交互形变与光源效果随之在设置页也能用上，和全 app 其它按钮一致（见 MaterialSurface）。
+      /*
+       * **未登录时不显示「退出登录」**（需求："登录页 hds menu 新增设置页面入口
+       * （不显示退出登录按钮）"）。从登录页那颗齿轮进来时 signedIn 是 false。
+       */
+      if (this.signedIn) {
       ListItem() {
         Toggle({ type: ToggleType.Button, isOn: false }) {
           Text($r('app.string.sign_out'))
@@ -2122,6 +2205,7 @@ export struct SettingsPanel {
         })
       }
       .padding({ left: PAGE_PADDING, right: PAGE_PADDING, top: 28, bottom: 24 })
+      }
       }
       .width('100%')
       .layoutWeight(1)

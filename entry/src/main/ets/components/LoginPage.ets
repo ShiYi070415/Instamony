@@ -23,6 +23,13 @@
  * （见 verifySheet + build 里的 bindSheet）。面板自己不带背景色 —— 材质由
  * `SheetOptions.systemMaterial` 交给系统画（不支持沉浸材质的机器才退回玻璃底）。
  *
+ * ## 设置入口
+ * 本组件**不画**标题栏：未登录时右上角那颗「设置」由宿主画（`pages/Index` 的
+ * `loginSettingsMenu` + `shellTitleContent` 的 loginPageShown 分支）。设置页在这一档
+ * 不显示「退出登录」（见 components/SettingsPanel 的 `signedIn`），改显示
+ * 「清除设备认证（2FA 测试）」—— 不然这台设备在 IG 那边一直算"验过了"，2FA 那条分支
+ * 永远走不到，也就没法测（用户原话）。
+ *
  * ## 设计约束
  *   1. **整页**：未登录时五个 tab 的内容层与底栏都不建（见 pages/Index），换账号不残留。
  *   2. **不保存密码**：密码只在这一次请求里用，点下去就清空；落盘的只有会话 cookie。

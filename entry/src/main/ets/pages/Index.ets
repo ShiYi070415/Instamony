@@ -1928,6 +1928,29 @@ struct Index {
   }
 
   /**
+   * **登录页标题栏右上角那颗「设置」**（需求："登录页 hds menu 新增设置页面入口"）。
+   *
+   * 登录页和「新增账号」那一页共用这一颗：两处都是"还没登录"的状态，能做的事情也一样
+   * （看网络 / 代理、清设备认证做 2FA 测试）。设置页里"退出登录"那一项会在未登录时
+   * 自动不显示（见 components/SettingsPanel 的 signedIn）。
+   */
+  private loginSettingsMenu(): HdsNavigationMenuContentOptions {
+    return {
+      value: [
+        {
+          content: {
+            icon: $r('sys.symbol.gearshape'),
+            label: $r('app.string.action_settings'),
+            action: (): void => {
+              this.openSettings();
+            }
+          }
+        }
+      ]
+    };
+  }
+
+  /**
    * 关注 / 取关某位作者（信息流「关注」按钮）。
    *
    * 两条路：
@@ -8778,6 +8801,19 @@ struct Index {
 
   private shellTitleContent(): TitleBarContentOptions {
     /*
+     * **登录页：标题栏只留一颗「设置」**（需求："登录页 hds menu 新增设置页面入口"）。
+     *
+     * 为什么现在要让标题栏出现：未登录时这一页原来是**整屏、没有标题栏**的
+     * （见 nativeShell 的 hideTitleBar），于是没有任何地方能进设置页 —— 而"清设备认证 /
+     * 2FA 测试"这类事恰恰只在未登录时才做得了。现在标题栏留着、标题留空，
+     * 右上角放一颗齿轮：既不抢登录页的版面，又给了唯一的入口。
+     *
+     * 通知 / 发帖那两颗（首页那套）不能再出现：未登录时它们没有任何意义。
+     */
+    if (this.loginPageShown()) {
+      return { title: { mainTitle: '' }, menu: this.loginSettingsMenu() };
+    }
+    /*
      * Reels 标签那一页：**标题栏那一行**里塞进分段按钮 —— 需求："保留 Reels 标题，
      * 把按钮放在 hdstitle 和 menus 按钮中间"。
      *
@@ -10761,17 +10797,21 @@ struct Index {
     .hideBackButton(true)
     .titleMode(HdsNavigationTitleMode.MINI)
     /*
-     * 登录页那一档要**把标题栏收掉**（见 loginPageShown）：未登录时右上角那两颗
-     * （通知 / 发帖）没有任何意义，留着还会把"整页登录页"顶掉一截。
+     * **登录页也留着标题栏**（需求："登录页 hds menu 新增设置页面入口"）。
+     *
+     * 上一版这里把它一起收掉了：理由是"未登录时右上角那两颗（通知 / 发帖）没有意义"。
+     * 但那两颗现在不会再出现 —— 登录页的标题栏内容走另一支（见 shellTitleContent 的
+     * loginPageShown 分支），只留一颗「设置」。而没有标题栏就没有 menus，也就没有任何
+     * 入口能进设置页（清设备认证 / 2FA 测试只在未登录时做得了）。
      *
      * 已登录时**不绑** hideTitleBar：需求"不需要隐藏 hdsnavigation" —— 下沉时收走标题栏
      * 那版已撤掉，现在跟着底栏下沉的是 reels 页的动作区 / 资讯区（见 OVERLAY_SINK_DISTANCE）。
      *
-     * **例外：视频页"隐藏全局控件"**（需求第 4 条）。那一刻标题栏要和底栏、信息层一起藏
+     * **只剩视频页"隐藏全局控件"这一档**（需求第 4 条）：那一刻标题栏要和底栏、信息层一起藏
      * （见 reelsChromeHidesShell）；第二个参数 `true` 是 HDS 自带的那支显隐动画时长，
      * 传 true 才会淡出而不是"啪"地消失。
      */
-    .hideTitleBar(this.loginPageShown() || this.reelsChromeHidesShell(), true)
+    .hideTitleBar(this.reelsChromeHidesShell(), true)
     // 让标题栏铺到系统栏下方，沉浸光感才有连续的底；内容下边距由各栏自己留。
     .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
     .zIndex(10)
@@ -10940,6 +10980,13 @@ struct Index {
       // 设定页：和通知页同一套承载（标题栏 + 返回键 + 沉浸光感），内容见 SettingsPanel。
       HdsNavDestination() {
         SettingsPanel({
+          /*
+           * **有没有登录**：未登录时"退出登录"那一项没有意义（点它只会把已经空掉的会话再清一遍），
+           * 所以设置页会把它藏起来，改显示"清除设备认证"（见 components/SettingsPanel 的 signedIn）。
+           * 从登录页标题栏那颗齿轮进来时就是这一档（需求："登录页 hds menu 新增设置页面入口
+           * （不显示退出登录按钮）"）。
+           */
+          signedIn: this.signedIn,
           onSignOut: (): void => {
             this.signOut();
           },
@@ -11006,7 +11053,10 @@ struct Index {
       }
       .titleBar({
         content: {
-          title: { mainTitle: $r('app.string.account_add') }
+          title: { mainTitle: $r('app.string.account_add') },
+          // 和整页登录页同一颗「设置」（需求："登录页 hds menu 新增设置页面入口"）：
+          // 这一页也是"还没登录"的状态，清设备认证 / 2FA 测试同样在这里做。
+          menu: this.loginSettingsMenu()
         },
         style: this.destinationTitleStyle(),
         avoidLayoutSafeArea: false,
