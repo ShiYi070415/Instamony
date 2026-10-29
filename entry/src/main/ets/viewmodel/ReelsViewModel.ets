@@ -19,6 +19,8 @@ import {
 import { ApiThrottle } from '../core/ApiThrottle';
 import { CachedReelsPage, ReelsCache } from '../core/ReelsCache';
 import { ReelsCrashLog } from '../core/ReelsCrashLog';
+// 落盘的"看过的短码"台账：冷启动 / 刷新时据此跳过上一轮看过的视频（见 core/ReelsSeen）。
+import { ReelsSeen } from '../core/ReelsSeen';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'ReelsViewModel';
@@ -213,6 +215,17 @@ export class ReelsViewModel implements ReelStreamVm {
   }
 
   /**
+   * **换代**（下拉刷新开始那一刻调）：把"上一次列表还在飞"的那些结果作废。
+   *
+   * 为什么不直接 `reset()`：刷新要能"一条新的都没有时把原列表还回去"（见 refreshBatch），
+   * 也希望能吃掉已经预取好、但还没上屏的那几页（它们也是没看过的）。`reset()` 会把列表、
+   * 队列、去重表全清掉 —— 那是"换账号"要的，不是"刷新"要的。
+   */
+  bumpEpoch(): void {
+    this.epoch = this.epoch + 1;
+  }
+
+  /**
    * 首屏（或重试）拉第一页。
    *
    * @param forceFresh **下拉刷新**专用：不吃启动预热那一页。
@@ -246,7 +259,12 @@ export class ReelsViewModel implements ReelStreamVm {
           this.prefetchNativePage();
           return;
         }
-        hilog.info(DOMAIN, TAG, 'reels refresh batch empty → fall back to first page');
+        /*
+         * **一条新的都没有：保留现有列表**（别 reset 完留一个空屏），只给一句说明。
+         * 用户要的是"刷新不会看见看过的视频"，那就不该为了"看起来刷新过"把老视频再铺一遍。
+         */
+        this.onStatus('暂时没有新视频了（看过的都记着，过会儿再拉）');
+        return;
       }
       /*
        * **被限流也不能直接认输**（见 core/ApiThrottle）：
@@ -273,21 +291,39 @@ export class ReelsViewModel implements ReelStreamVm {
         ? null : NativeReels.takeWarm(this.source, NATIVE_WARM_MAX_AGE_MS);
       if (warm !== null) {
         this.noteCursor(warm.nextCursor);
-        this.applyFirstPage(warm);
-        hilog.info(DOMAIN, TAG, 'reels first from warm n=%{public}d ms=%{public}d',
-          warm.reels.length, Date.now() - startedMs);
-        this.prefetchNativePage();
-        return;
+        const applied: number = this.applyFirstPage(warm);
+        hilog.info(DOMAIN, TAG, 'reels first from warm n=%{public}d applied=%{public}d ms=%{public}d',
+          warm.reels.length, applied, Date.now() - startedMs);
+        if (applied > 0) {
+          this.prefetchNativePage();
+          return;
+        }
+        // 整页都是看过的（冷启动常见：`clips/discover/` 永远那几条）：换一批新的。
+        if (await this.refreshBatch() > 0) {
+          hilog.info(DOMAIN, TAG, 'reels first warm all seen → fresh batch ms=%{public}d',
+            Date.now() - startedMs);
+          this.prefetchNativePage();
+          return;
+        }
       }
       // ---- 2) 原生直发（有落盘模板 + 登录态时可走）----
       const native: NativeReelsPage | null = await NativeReels.fetchPage(this.source, NATIVE_PAGE_COUNT, '', true);
       if (native !== null) {
         this.noteCursor(native.nextCursor);
-        this.applyFirstPage(native);
-        hilog.info(DOMAIN, TAG, 'reels first native n=%{public}d ms=%{public}d ms=%{public}d',
-          native.reels.length, native.ms, Date.now() - startedMs);
-        this.prefetchNativePage();
-        return;
+        const applied: number = this.applyFirstPage(native);
+        hilog.info(DOMAIN, TAG, 'reels first native n=%{public}d applied=%{public}d ms=%{public}d',
+          native.reels.length, applied, Date.now() - startedMs);
+        if (applied > 0) {
+          this.prefetchNativePage();
+          return;
+        }
+        // 同上：首屏那几条都看过 → 换一批。
+        if (await this.refreshBatch() > 0) {
+          hilog.info(DOMAIN, TAG, 'reels first page all seen → fresh batch ms=%{public}d',
+            Date.now() - startedMs);
+          this.prefetchNativePage();
+          return;
+        }
       }
       // ---- 3) 原生也没拿到：铺落盘缓存或如实说明（网页模板回放那条路已删除）----
       this.fromCacheOrSay(ApiThrottle.blocked(ApiThrottle.CLIPS)
@@ -313,7 +349,12 @@ export class ReelsViewModel implements ReelStreamVm {
   /**
    * 把原生取到的一页**收进待上屏缓冲**（不直接上屏，见 drainInterleaved）。
    *
-   * 去重只有这一份真相：`shown`（已经上屏的短码）+ `pending` 里已有的短码。
+   * 去重有三层真相：
+   *   · `shown`：**这一次**已经上过屏的短码；
+   *   · `pending`：取到手、还没上屏的；
+   *   · **`ReelsSeen`（落盘）**：以前（冷启动前 / 上一次刷新前）看过的 —— 用户要的是
+   *     "每次打开 app 不会再获取上一轮一样的视频、刷新不会看见看过的视频"，
+   *     光靠进程内那张表做不到（杀进程就忘了，见 core/ReelsSeen）。
    *
    * @returns 真正新增了几条（0 = 整页都是见过的）。
    */
@@ -322,6 +363,9 @@ export class ReelsViewModel implements ReelStreamVm {
     for (let index: number = 0; index < page.reels.length; index++) {
       const reel: Reel = page.reels[index];
       if (this.shown.has(reel.shortcode)) {
+        continue;
+      }
+      if (ReelsSeen.has(this.source, reel.shortcode)) {
         continue;
       }
       let dup: boolean = false;
@@ -412,9 +456,16 @@ export class ReelsViewModel implements ReelStreamVm {
           }
         }
       }
-      // ③ 缓冲里只剩同一个作者了（补货还没回来）：认了，先铺
+      /*
+       * ③ 缓冲里只剩同一个作者了：**不取**（用户要求"避免出现同一个用户的多条视频"）。
+       *
+       * 以前这里 `pick = 0` 直接把同一个人接着铺 —— 一页 12 条都来自同一个作者，
+       * 于是列表里就是连续十几条同一个人（用户报的现象）。现在收手：
+       * 那些条目留在缓冲里，下一次 drain 时因为作者已经进 `shownAuthors` 会被整批剔掉，
+       * 补货那条路自然会去要别的作者。
+       */
       if (pick < 0) {
-        pick = 0;
+        break;
       }
       const one: Reel = this.pending[pick];
       this.pending.splice(pick, 1);
@@ -433,6 +484,8 @@ export class ReelsViewModel implements ReelStreamVm {
       return 0;
     }
     this.reels = this.reels.concat(out);
+    // 上过屏的记进落盘台账：下次冷启动 / 下拉刷新不会再拿这一条（见 core/ReelsSeen）。
+    ReelsSeen.remember(this.source, out.map((reel: Reel): string => reel.shortcode));
     this.onReels(this.reels, this.more);
     this.onStatus('已加载 ' + this.reels.length + ' 条' + (this.more ? '' : '（到底了）'));
     // 落盘一份：**首屏和翻页都存**（首页那条查询首屏有时只回 2~4 条，光存第一页太少）。
@@ -442,21 +495,29 @@ export class ReelsViewModel implements ReelStreamVm {
   }
 
   /**
-   * **下拉刷新：换一批、并且按作者打散**（用户报的"刷新后连续 12 条都是同一个人"）。
+   * **下拉刷新 / 冷启动换新：收集一批"没看过、且一人一条"的视频**。
    *
-   * 为什么不能只吃"下一页"那一发：翻页的主力是 `clips/user/{pk}` —— **一次 12 条全是同一个人**
-   * （见 core/NativeReels 的补货池说明）。刷新要是只拿这一页，刷出来就是一屏同一个人，
-   * 比原来那固定四条还糟。
-   * 所以这里照 `requestMore` 那套先补到"至少两家作者"，再由 drainInterleaved 交替上屏；
-   * 上屏是**整体替换**（`reset()` 已经把列表清空，drain 是往里加，不是往旧的后面接）。
+   * 三个用户要求在这里一起满足：
+   *   1. **刷新不会看见看过的**：`ingestPage` 会过滤 `ReelsSeen` 里记着的短码；
+   *   2. **避免同一个用户的多条**：`drainInterleaved` 现在**不再**用"只剩一个作者就认了"
+   *      的兜底（见那里的 ③），所以这里要**多补几页**才凑得够人；
+   *   3. **整体替换**：先把旧列表换下来再铺新的；一条都没换到就把旧列表**还回去**，
+   *      而不是留一个空屏（以前是 reset 之后什么都不剩）。
    *
-   * @returns 上屏了几条（0 = 没换到东西，调用方退回读首屏）
+   * 代价：一页作者是"某个人的 12 条"，按一人一条只剩 1 条可用，所以要 4 发左右才能凑出
+   * 一屏。这已经比"一屏同一个人 + 全是看过的"好，而且刷新/冷启动各只有一次。
+   *
+   * @returns 上屏了几条（0 = 没换到东西）
    */
   private async refreshBatch(): Promise<number> {
     const limited: boolean = ApiThrottle.blocked(ApiThrottle.CLIPS);
     let rounds: number = 0;
-    while (rounds < 3
-      && (this.pendingAuthors() < 2 || this.pending.length < REFRESH_MIN_PENDING)) {
+    /*
+     * 补到"够上屏"为止：目标条数的一半作者 + 至少两家（一家时 drain 只会出一条）。
+     * 最多四发 —— 再要多就是十几秒的转圈了。
+     */
+    const wantAuthors: number = Math.max(2, Math.ceil(REFRESH_SHOW / 2));
+    while (rounds < 4 && this.pendingAuthors() < wantAuthors) {
       const page: NativeReelsPage | null = await this.nextPage(limited);
       if (page === null) {
         break;
@@ -467,14 +528,33 @@ export class ReelsViewModel implements ReelStreamVm {
         'reels refresh fill n=%{public}d fresh=%{public}d authors=%{public}d round=%{public}d',
         page.reels.length, fresh, this.pendingAuthors(), rounds);
       if (fresh === 0) {
-        // 整页都是见过的（理论上 reset 之后不会）：这一发没意义，别再追加请求。
+        // 整页都是看过的（`clips/discover/` 那四条就是这种）：这一发没意义，换下一条源。
         break;
       }
     }
     if (this.pending.length === 0) {
+      hilog.info(DOMAIN, TAG, 'reels refresh: nothing new (seen=%{public}d)',
+        ReelsSeen.countOf(this.source));
       return 0;
     }
+    /*
+     * **先把旧列表换下来**（drain 是往 `this.reels` 里加 = 整体替换的语义），
+     * 一条都没换到再还回去 —— 不能因为"这次没新货"就把用户的列表清空。
+     */
+    const keepReels: Array<Reel> = this.reels;
+    const keepShown: Set<string> = this.shown;
+    const keepAuthors: Set<string> = this.shownAuthors;
+    this.reels = [];
+    this.shown = new Set<string>();
+    this.shownAuthors = new Set<string>();
     const added: number = this.drainInterleaved(REFRESH_SHOW, true);
+    if (added === 0) {
+      this.reels = keepReels;
+      this.shown = keepShown;
+      this.shownAuthors = keepAuthors;
+      return 0;
+    }
+    this.active = 0;
     hilog.info(DOMAIN, TAG, 'reels refresh batch added=%{public}d authors=%{public}d',
       added, this.shownAuthors.size);
     return added;

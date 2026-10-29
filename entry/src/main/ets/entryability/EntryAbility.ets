@@ -31,6 +31,8 @@ import { FeedCache } from '../core/FeedCache';
 import { NativeSearch } from '../core/NativeSearch';
 import { NativeReels, REELS_SOURCE_EXPLORE } from '../core/NativeReels';
 import { ReelsCache } from '../core/ReelsCache';
+// "看过的 Reels"台账（见 core/ReelsSeen）：避免冷启动/刷新把上一轮看过的再拿一遍。
+import { ReelsSeen } from '../core/ReelsSeen';
 // 分享数取证（落盘 files/Instamony_share_probe.txt，见那个文件的头注释）。
 import { ShareProbe } from '../core/ShareProbe';
 // 快拍托盘的落盘缓存（冷启动先画上次那排头像，见 core/TrayCache）。
@@ -180,6 +182,8 @@ export default class EntryAbility extends UIAbility {
       // reels 第一页的落盘缓存（见 core/ReelsCache）：clips 那条查询被 IG 限流时，
       // 视频标签靠它"至少还能看上次那批"，而不是一片空白。
       ReelsCache.init(this.context);
+      // 看过的 Reels 台账（见 core/ReelsSeen）：冷启动 / 下拉刷新据此跳过上一轮看过的视频。
+      ReelsSeen.init(this.context);
       /*
        * **分享数取证**（见 core/ShareProbe）：把每条取数响应的键名与"分享类键有没有"落盘到
        * `files/Instamony_share_probe.txt`。真机 hilog 抓不住（chromium 把环形缓冲冲掉），

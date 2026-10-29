@@ -138,6 +138,15 @@ export class ProfileReelsViewModel implements ReelStreamVm {
   }
 
   /**
+   * 换代（接口约定，见 model/Reel 的 ReelStreamVm）。
+   *
+   * 这条链的数据是进页时带进来的一份帖子列表、由 ProfilePage 统一取，没有"在飞的翻页"
+   * 需要作废，所以空实现即可。
+   */
+  bumpEpoch(): void {
+  }
+
+  /**
    * 再要一页：调 ProfilePage 那个闭包，把拿回来的**整份**帖子列表重新转一遍。
    *
    * 三道闸同帖子页（见 pages/Index.loadPostPageMore）：正在要、没有下一页、列表为空时都不动。

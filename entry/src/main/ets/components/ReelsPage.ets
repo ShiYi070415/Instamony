@@ -2341,6 +2341,20 @@ export struct ReelsPage {
   private static slideKey(gen: number, shortcode: string): string {
     return `${gen}#${shortcode}`;
   }
+
+  /**
+   * 列表的"样子"签名（条数 + 首条短码）。
+   *
+   * 下拉刷新可能**一条新视频都没换到**（看过的都过滤掉了，见 core/ReelsSeen），
+   * 那时列表原样保留就够了 —— 别换代（会让整排播放器重建、正在看的那条重播），
+   * 也别把位置摆回第一条。靠这个签名判断"这次到底换没换内容"。
+   */
+  private listSignature(): string {
+    if (this.reels.length === 0) {
+      return '0';
+    }
+    return `${this.reels.length}:${this.reels[0].shortcode}`;
+  }
   /** 这一次触摸里，下拉的起点 y（vp；-1 = 这次触摸不判下拉）。 */
   private pullStartY: number = -1;
   /**
@@ -2627,12 +2641,32 @@ export struct ReelsPage {
       return;
     }
     this.refreshing = true;
+    /*
+     * 记一份"刷新前的样子"：刷新可能**一条新的都没换到**（看过的都过滤掉了），那时列表原样
+     * 保留、位置也不该动 —— 靠这个签名判断"这次到底有没有换内容"。
+     */
+    const before: string = this.listSignature();
     ReelsCrashLog.note(`pull-refresh src=${this.source} had=${this.reels.length}`);
     ReelsCrashLog.flush();
     try {
-      this.vm.reset();
+      /*
+       * **只换代、不 reset**（见 ReelsViewModel.bumpEpoch）：
+       *   · 换代 = 把上一次列表还在飞的结果作废（不串旧页）；
+       *   · 不清列表 = 让刷新能"一条新的都没有时把原列表还回去"（见 refreshBatch），
+       *     也允许吃掉已经预取好、还没上屏的那几页（它们同样是没看过的）。
+       */
+      this.vm.bumpEpoch();
       this.vm.loadFirst(true)
         .then((): void => {
+          const changed: boolean = this.listSignature() !== before;
+          if (!changed) {
+            /*
+             * **这次没换到新视频**：不动列表、不动位置、不换代（换代会让整排播放器重建，
+             * 用户正看着的那条会莫名其妙重播）。只把状态行留给一句话。
+             */
+            this.syncFromVm();
+            return;
+          }
           /*
            * **换代**（见 feedGen 的说明）：先把"代"加一，再铺新列表 —— 这样 ForEach 的 key
            * 全变了，Swiper 里的每条都是新建的实例（新播放器/新封面），不会出现"封面是新的、
@@ -2665,8 +2699,6 @@ export struct ReelsPage {
             }
           }, 80);
           this.status = '';
-        })
-        .catch((): void => {
         })
         .finally((): void => {
           this.refreshing = false;
