@@ -3268,6 +3268,14 @@ struct Index {
     }
     MobileRealtime.stop().catch((): void => {
     });
+    /*
+     * **FBNS 也要停掉重来**。
+     *
+     * FBNS 客户端一旦起来就带着"旧会话的推送注册"（`push/register/` 里 `users=<旧 uid>`），
+     * 换了会话只重连 iris 的话，新会话的推送还是不会来 —— 后台就是一条都收不到。
+     * 停掉之后 `startRealtime` 会重新 `startFromSession()`：重新取 token + 用新身份注册。
+     */
+    MobileFbnsService.stop();
     this.realtimeStarted = false;
     this.realtimeStartPending = false;
     // 晚一拍再排：让旧 socket 的 close 先走完，否则新连接可能撞上"同一账号两条连接"。

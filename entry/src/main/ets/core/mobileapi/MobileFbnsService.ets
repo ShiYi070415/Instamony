@@ -257,10 +257,19 @@ export class MobileFbnsService {
     if (identity === null || !identity.isComplete()) {
       return false;
     }
-    if (!MobileFbnsService.isDeviceLevel(identity)) {
-      // 网页会话：iris 那条路还能用，别抢
-      return false;
-    }
+    /*
+     * **不再区分"设备级会话 / 带 sessionid 的会话"**（这一条是 App 内账密登录打通之后改的）。
+     *
+     * 以前这里写着"网页会话：iris 那条路还能用，别抢"，于是：
+     *   · 用 `settings.caa.json` 导入的设备级会话 → 走 FBNS（后台能收）；
+     *   · **App 内密码登录**拿到的会话是**带 sessionid 的**（真机验证：CAA 登录成功那一刻
+     *     `authorization` 里就带 sessionid），于是 `isDeviceLevel()` 为 false → **FBNS 压根没起**，
+     *     退到 iris；而 iris 只在前台活着 —— 用户看到的就是"后台收不到消息"。
+     *
+     * 但 FBNS 本身并不挑会话形状：`/v1/push/register/` 与 FBNS 的 token 请求都吃普通会话
+     * （PC 上的 `instamony.js` 一直是用带 sessionid 的 settings.json 跑 FBNS 的）。
+     * 所以现在**只要会话完整就起 FBNS**；起不来再退回 iris（下面的返回值管这个）。
+     */
     if (MobileFbnsService.started && MobileFbnsService.client !== null
       && MobileFbnsService.client.isUp()) {
       return true;
