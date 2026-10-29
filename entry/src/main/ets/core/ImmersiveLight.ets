@@ -225,3 +225,17 @@ export function materialStyleFrom(thickness: string): uiMaterial.ImmersiveStyle 
  * 需要显式给一个值，是因为"不设材质颜色"时 Button 会去继承自己的主题色底（官方 Button 说明）。
  */
 export const ARKUI_MATERIAL_COLOR: ResourceColor = Color.Transparent;
+
+/**
+ * **"实色按钮"用的材质颜色**：华为官方的品牌蓝（需求："实色按钮也要用沉浸光感效果，
+ * 用华为官方那种蓝色"）。
+ *
+ * 为什么给材质上色、而不是继续用 `.backgroundColor(不透明色)`：
+ * 系统的光感反馈（触摸时表面那道流动的光）是**材质层**画的，而 `.backgroundColor` 盖在材质
+ * 之上 —— 底是不透明的，光就全被挡住了。所以"实色 + 光感"只能这么写：**颜色交给材质**
+ * （`materialColor`），背景保持透明，光感才在颜色之上可见。
+ *
+ * 颜色取 `app.color.brand_blue`（#0A59F7，HarmonyOS 品牌蓝），不走 `sys.color.*`：
+ * 系统色名的可见性随版本变，写死在资源里可控（明暗两套都给了同一个值）。
+ */
+export const BRAND_MATERIAL_COLOR: ResourceColor = $r('app.color.brand_blue');

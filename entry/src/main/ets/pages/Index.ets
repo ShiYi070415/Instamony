@@ -7902,6 +7902,17 @@ struct Index {
          */
         onCaaVerify: (code: string): Promise<string> => {
           return this.caaVerify(code);
+        },
+        /*
+         * **"在另一台设备上同意"的轮询**（需求："2FA 过程中可以在官方客户端同意本次登录，
+         * 有部分实现同意后自动登录吗"）：可用性由 core 判定（见 CaaLogin.approvalAvailable），
+         * 登录页据此决定要不要显示提示文字、要不要起 3 秒一次的轮询。
+         */
+        onApprovalAvailable: (): boolean => {
+          return CaaSession.approvalAvailable();
+        },
+        onApprovalTick: (): Promise<string> => {
+          return CaaSession.approvalTick();
         }
       })
     } else {
@@ -11051,6 +11062,13 @@ struct Index {
           },
           onCaaVerify: (code: string): Promise<string> => {
             return this.caaVerify(code);
+          },
+          // 和整页登录页同一套「等同意」轮询（见上面那段说明）。
+          onApprovalAvailable: (): boolean => {
+            return CaaSession.approvalAvailable();
+          },
+          onApprovalTick: (): Promise<string> => {
+            return CaaSession.approvalTick();
           }
         })
       }

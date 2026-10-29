@@ -491,6 +491,14 @@ export class CaaLogin {
   private static pending: CaaPending | null = null;
 
   /**
+   * "在另一台设备上同意"那一发是**整页 app**（`app`）还是**异步 action**（`action`）。
+   *
+   * 布局里没标注，第一次轮询两种都试一下（见 pollApproval），成功那种记在这里，
+   * 之后每 3 秒只用它对 —— 不然每次轮询都要发两发，白烧请求量。
+   */
+  private static approvalKind: string = '';
+
+  /**
    * 最近一次 `send_login_request` 的**请求体脱敏副本**（`password` / `aac` 换成占位符）。
    *
    * 用来和桌面 JS 那条链路（同一份参数结构、回 200）逐键比对 —— 两边都按同样规则脱敏，
@@ -676,6 +684,140 @@ export class CaaLogin {
   /** 现在是不是"等着用户交验证码"（UI 据此决定要不要显示输入框）。 */
   static waitingCode(): boolean {
     return CaaLogin.pending !== null;
+  }
+
+  /* ------------------------------------------- 在另一台设备上同意（login approval） */
+
+  /**
+   * **这一次 2FA 能不能"在另一台设备上同意"**（IG 的 login approval）。
+   *
+   * 需求："2FA 过程中可以在官方客户端同意本次登录，有部分实现同意后自动登录吗"。
+   *
+   * 真机 App 是怎么做的（见 docs.igpapi 的 CheckTrustedNotificationStatus）：
+   *   · 账密过了之后，如果账号开了"登录确认"，登录页会多一个**等待同意**的界面；
+   *   · 这个界面**每 3 秒**打一发"看对方同意了吗"的请求，直到 `review_status` 变成 1；
+   *   · 然后它就用"空的验证码 + verification_method=4"把登录收尾。
+   *
+   * 我们这条链走的是 Bloks（`two_step_verification_context`），拿不到旧 REST 那套
+   * `two_factor_identifier`。所以这里**不猜端点**：只在 IG 自己写进布局的调用规范里
+   * 找"带 `polling_nonce` / trusted_notification / approval 的那一发"。
+   *   · 找得到 → 说明这次登录确实提供了"等同意"这条路，UI 才显示提示文字并开始轮询；
+   *   · 找不到 → 什么都不做（不显示提示、不发请求），行为和以前完全一样。
+   */
+  static approvalAvailable(): boolean {
+    const pending: CaaPending | null = CaaLogin.pending;
+    if (pending === null || pending.payload === null) {
+      return false;
+    }
+    return CaaLogin.approvalSpecOf(pending.payload) !== null;
+  }
+
+  /**
+   * 打一发"那边同意了吗"，返回：
+   *   `waiting`（还没）/ `approved`（同意了）/ `declined`（拒绝了）/
+   *   `error`（这一发没成，可以再试）/ `none`（这次登录没有"等同意"这条路）。
+   *
+   * 只在 `approvalAvailable()` 为真时才会真的发请求。
+   */
+  static async pollApproval(): Promise<string> {
+    const pending: CaaPending | null = CaaLogin.pending;
+    if (pending === null || pending.payload === null) {
+      return 'none';
+    }
+    const spec: CaaCallSpec | null = CaaLogin.approvalSpecOf(pending.payload);
+    if (spec === null) {
+      return 'none';
+    }
+    const params: Record<string, ESObject> = {};
+    const client: Record<string, string> = {
+      'device_id': pending.identity.androidDeviceId,
+      'machine_id': pending.identity.mid,
+      'is_whatsapp_installed': '0'
+    };
+    params['client_input_params'] = CaaLogin.mergeParams(client, spec.clientParams);
+    const server: Record<string, string> = {
+      'should_fallback_to_sms': '0',
+      'family_device_id': pending.identity.phoneId,
+      'device_id': pending.identity.androidDeviceId,
+      'two_step_verification_context': pending.context,
+      'flow_source': TSV_FLOW_SOURCE
+    };
+    params['server_params'] = CaaLogin.mergeParams(server, spec.serverParams);
+
+    /*
+     * 这一发到底是"整页 app"还是"异步 action"，布局里没有明确标注 —— 第一次试的时候
+     * 两种都试一下（最多两发），把成功的那种记下来，之后每 3 秒只用它对。
+     */
+    let reply: CaaHttpReply;
+    if (CaaLogin.approvalKind === 'action') {
+      reply = await CaaLogin.bloksBestHost(pending.identity, pending.extra, spec.appId, params);
+    } else if (CaaLogin.approvalKind === 'app') {
+      reply = await CaaLogin.bloksAppBestHost(pending.identity, pending.extra, spec.appId, params);
+    } else {
+      reply = await CaaLogin.bloksAppBestHost(pending.identity, pending.extra, spec.appId, params);
+      if (CaaLogin.isNullPayload(reply)) {
+        const alt: CaaHttpReply =
+          await CaaLogin.bloksBestHost(pending.identity, pending.extra, spec.appId, params);
+        if (!CaaLogin.isNullPayload(alt)) {
+          CaaLogin.approvalKind = 'action';
+          reply = alt;
+        } else {
+          CaaLogin.approvalKind = 'app';
+        }
+      } else {
+        CaaLogin.approvalKind = 'app';
+      }
+    }
+    CaaLogin.steps.push(new CaaStep('2sv_approval', reply.status, reply.host));
+
+    const payload: ESObject = CaaLogin.parse(reply.body);
+    const review: ESObject = CaaLogin.findValueDeep(payload, 'review_status', 0);
+    const text: string = review === undefined || review === null ? '' : `${review}`;
+    if (text === '1') {
+      return 'approved';
+    }
+    if (text === '2') {
+      return 'declined';
+    }
+    if (text === '0') {
+      return 'waiting';
+    }
+    return 'error';
+  }
+
+  /**
+   * 在布局的调用规范里找"等同意"那一发（见 approvalAvailable 的说明）。
+   *
+   * 判据取**参数名**而不是 app id：app id 是 IG 的内部命名（`com.bloks.www.two_factor_login.*`），
+   * 每版都可能变；而轮询那一发必须带一个"轮询票据"，键名稳定（`polling_nonce`）。
+   */
+  private static approvalSpecOf(payload: ESObject): CaaCallSpec | null {
+    const specs: Array<CaaCallSpec> = CaaLogin.nextCallSpecs(payload);
+    for (let index: number = 0; index < specs.length; index++) {
+      const spec: CaaCallSpec = specs[index];
+      if (CaaLogin.looksLikeApproval(spec.appId, spec.serverParams)
+        || CaaLogin.looksLikeApproval(spec.appId, spec.clientParams)) {
+        return spec;
+      }
+    }
+    return null;
+  }
+
+  /** 这一个规范的"名字 + 参数"里有没有"等同意"的痕迹（见 approvalSpecOf）。 */
+  private static looksLikeApproval(appId: string, params: Record<string, string>): boolean {
+    const id: string = appId.toLowerCase();
+    if (id.indexOf('trusted_notification') >= 0 || id.indexOf('login_approval') >= 0
+      || id.indexOf('approval') >= 0) {
+      return true;
+    }
+    const keys: Array<string> = Object.keys(params);
+    for (let index: number = 0; index < keys.length; index++) {
+      const key: string = keys[index].toLowerCase();
+      if (key.indexOf('polling_nonce') >= 0 || key.indexOf('pollingnonce') >= 0) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -1031,6 +1173,8 @@ export class CaaLogin {
     CaaLogin.steps = [];
     // 新的一次登录：上一次没交的验证码现场作废（免得数字串到别的账号上）。
     CaaLogin.pending = null;
+    // "等同意"那一发用哪种调用方式也重新探（见 approvalKind）。
+    CaaLogin.approvalKind = '';
     const usdidHeader: string = await usdid.header();
     const extra: Record<string, string> = {};
     extra['X-Meta-Usdid'] = usdidHeader;

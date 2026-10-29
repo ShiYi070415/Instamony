@@ -27,7 +27,7 @@
 import { curves, uiMaterial } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS } from '../core/AppSettings';
-import { ARKUI_MATERIAL_COLOR, materialStyleFrom } from '../core/ImmersiveLight';
+import { ARKUI_MATERIAL_COLOR, BRAND_MATERIAL_COLOR, materialStyleFrom } from '../core/ImmersiveLight';
 import { PlatformCap } from '../core/PlatformCap';
 
 import { LikeIcon, RepostIcon, SaveIcon } from './AnimatedIcons';
@@ -138,6 +138,50 @@ export class SurfaceModifier implements AttributeModifier<ToggleAttribute> {
     // （需求：为所有按钮加 blur）。两者都是老接口，API 20 起就有。
     instance.backgroundColor(FALLBACK_SURFACE);
     instance.backgroundBlurStyle(FALLBACK_BLUR);
+  }
+}
+
+/**
+ * **"实色按钮"的沉浸光感**（需求："实色按钮也要用沉浸光感效果，用华为官方那种蓝色"）。
+ *
+ * 为什么不能继续用 `.backgroundColor(不透明强调色)`：光感反馈（触摸时表面那道流动的光）
+ * 是**材质层**画的，而背景色盖在材质**之上** —— 底不透明，光就全被挡住了。实测就是这样：
+ * 登录页那颗「登录」一直挂着材质，但看上去一点光感都没有。
+ *
+ * 正确写法：**颜色交给材质**（`materialColor`，见 core/ImmersiveLight 的 BRAND_MATERIAL_COLOR），
+ * 组件背景保持**透明**，那道白光就浮在蓝底之上可见了。
+ *
+ * 反色（colorInvert）传 false：底色是固定的品牌蓝，跟着背景反色反而不对了。
+ */
+export class BrandSurfaceModifier implements AttributeModifier<ToggleAttribute> {
+  private readonly thickness: string;
+  /** 触摸时那道光要不要（默认要 —— 这个类就是为"实色按钮也有光感"存在的）。 */
+  private readonly lightEffect: boolean;
+
+  constructor(thickness: string, lightEffect: boolean = true) {
+    this.thickness = thickness;
+    this.lightEffect = lightEffect;
+  }
+
+  applyNormalAttribute(instance: ToggleAttribute): void {
+    if (PlatformCap.hasArkMaterial()) {
+      let applied: boolean = false;
+      try {
+        instance.systemMaterial(immersiveMaterial(this.thickness, false, true, this.lightEffect,
+          true, BRAND_MATERIAL_COLOR));
+        // 背景必须透明：否则又把材质（和它上面那道光）盖住了，见类说明。
+        instance.backgroundColor(Color.Transparent);
+        applied = true;
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'brand material skipped: %{public}s',
+          (error as Error).message ?? 'unknown');
+      }
+      if (applied) {
+        return;
+      }
+    }
+    // 降级（API < 26）：拿不到材质就退回原来的实色蓝，观感和改之前一致。
+    instance.backgroundColor($r('app.color.brand_blue'));
   }
 }
 
@@ -425,10 +469,16 @@ const LIGHT_EFFECT_OFF: uiMaterial.LightEffectOptions | null = null;
 export function immersiveMaterial(thickness: string, invert: boolean = true,
                                   applyShadow: boolean = true,
                                   lightEffect: boolean = true,
-                                  interactive: boolean = true): uiMaterial.ImmersiveMaterial {
+                                  interactive: boolean = true,
+                                  color: ResourceColor = ARKUI_MATERIAL_COLOR): uiMaterial.ImmersiveMaterial {
   return new uiMaterial.ImmersiveMaterial({
     style: materialStyleFrom(thickness),
-    materialColor: ARKUI_MATERIAL_COLOR,
+    /*
+     * 材质颜色。缺省透明（见 ARKUI_MATERIAL_COLOR）；
+     * **"实色按钮"要传品牌蓝**（BRAND_MATERIAL_COLOR）—— 颜色交给材质，那道触摸光才浮在
+     * 颜色之上可见（见 BrandSurfaceModifier 的说明）。
+     */
+    materialColor: color,
     // 交互形变（按下/拖动时材质跟着形变）；卡片关掉，见 @param interactive。
     interactive: interactive,
     // 光感交互反馈（触摸时表面出现光源流动效果）；null = 关掉（见 @param lightEffect）。

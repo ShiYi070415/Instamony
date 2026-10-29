@@ -34,6 +34,13 @@ const DOMAIN: number = 0xFF00;
 const TAG: string = 'CaaSession';
 /** 设备身份的 preferences 文件名（和 AppSettings / MobileSession 的仓分开，互不覆盖）。 */
 const STORE_NAME: string = 'instarmony_caa';
+/**
+ * 「在另一台设备上同意」的两次轮询之间至少隔多久（毫秒）。
+ *
+ * 真机 App 是每 3 秒一发（见 CaaLogin.approvalAvailable）。这里放 2.5 秒，留一点余量给
+ * "界面上万一有两个定时器"的情况，不会把请求量翻倍。
+ */
+const APPROVAL_MIN_GAP_MS: number = 2500;
 const KEY_USDID: string = 'usdid';
 const KEY_KID: string = 'usdid_kid';
 const KEY_PRIVATE: string = 'usdid_private';
@@ -86,6 +93,10 @@ export class CaaSession {
   private static store: preferences.Preferences | null = null;
   /** 已解出来的设备身份（进程内缓存：私钥解析要动 crypto，不必每次重做）。 */
   private static device: CaaUsdid | null = null;
+  /** 「在另一台设备上同意」那次轮询的时刻（节流用，见 approvalTick）。 */
+  private static approvalAt: number = 0;
+  /** 上一次轮询的结论（节流期内直接返回它）。 */
+  private static approvalLast: string = '';
 
   /** 打开设备身份的仓（幂等；`EntryAbility.onCreate` 里和 `MobileSession.init` 一起调）。 */
   static init(context: common.Context): void {
@@ -161,6 +172,8 @@ export class CaaSession {
    * @param password 明文密码（只在本进程内存里；加密后才出网，见 MobileCrypto.encryptPassword）
    */
   static async login(username: string, password: string): Promise<CaaOutcome> {
+    // 新一次登录："等同意"的轮询状态从头算（见 approvalTick / approvalAvailable）。
+    CaaSession.forgetApproval();
     const user: string = username.trim();
     if (user.length === 0 || password.length === 0) {
       return CaaSession.outcome(false, '用户名和密码都要填');
@@ -194,6 +207,8 @@ export class CaaSession {
 
   /** 交两步验证码，把登录走完（必须在 `login` 返回 needsCode 之后）。 */
   static async submitCode(code: string): Promise<CaaOutcome> {
+    // 交码这条路走完，"等同意"的轮询就没意义了（下一次登录会重新判定）。
+    CaaSession.forgetApproval();
     const result: CaaResult = await CaaLogin.submitCode(code);
     return await CaaSession.finish(result);
   }
@@ -224,6 +239,43 @@ export class CaaSession {
   /** 现在是不是等着交验证码。 */
   static waitingCode(): boolean {
     return CaaLogin.waitingCode();
+  }
+
+  /* ------------------------------------------- 在另一台设备上同意（login approval） */
+
+  /**
+   * **这一次 2FA 能不能"在另一台设备上同意"**（需求："2FA 过程中可以在官方客户端同意本次
+   * 登录…可以的话需要添加提示文本"）。
+   *
+   * 判定完全交给 core（见 `CaaLogin.approvalAvailable`）：只有 IG 自己在 Bloks 布局里
+   * 提供了"等同意"那一发时才是 true。为 false 时登录页什么都不显示、也不发任何轮询请求。
+   */
+  static approvalAvailable(): boolean {
+    return CaaLogin.approvalAvailable();
+  }
+
+  /**
+   * 轮询一次"那边同意了吗"。返回 `waiting` / `approved` / `declined` / `error` / `none`。
+   *
+   * **节流到 2.5 秒一次**：真机 App 是每 3 秒一发（见 CaaLogin.approvalAvailable 的说明），
+   * 这里给一点余量防止"界面上两个定时器同时打"把请求量翻倍。
+   */
+  static async approvalTick(): Promise<string> {
+    const now: number = Date.now();
+    if (now - CaaSession.approvalAt < APPROVAL_MIN_GAP_MS) {
+      return CaaSession.approvalLast;
+    }
+    CaaSession.approvalAt = now;
+    const state: string = await CaaLogin.pollApproval();
+    CaaSession.approvalLast = state;
+    hilog.info(DOMAIN, TAG, 'approval tick → %{public}s', state);
+    return state;
+  }
+
+  /** 清掉轮询状态（新一次登录 / 交完验证码时调）。 */
+  static forgetApproval(): void {
+    CaaSession.approvalAt = 0;
+    CaaSession.approvalLast = '';
   }
 
   /**

@@ -101,6 +101,10 @@
       "value": "这个账号开启了额外验证。请输入 Instagram 发给你的 6 位验证码（短信 / 验证器 / 备用码）。"
     },
     {
+      "name": "login_verify_approval_hint",
+      "value": "也可以在你已登录的 Instagram 客户端里点「同意本次登录」——同意之后这里会自动继续，不用输验证码。"
+    },
+    {
       "name": "login_verify_action",
       "value": "验证并登录"
     },
