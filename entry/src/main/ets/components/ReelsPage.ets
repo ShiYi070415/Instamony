@@ -2525,18 +2525,21 @@ export struct ReelsPage {
   }
 
   /**
-   * 现在能不能下拉刷新：停在第一条、有内容、没有正在刷新的另一轮。
+   * 现在能不能下拉刷新：停在第一条、并且没有另一轮刷新在跑。
    *
-   * **不看 `busy`**（那是"分页/补货在跑"）：分页一次要现拉两三发（见 requestMore），
-   * 常常持续好几秒，而用户就在这时往下拉 —— 早先这里挡了 `busy`，表现就是"拉了没反应"。
-   * 用户主动拉那一下的优先级高于后台补货：`vm.reset()` 会把 busy 归零、在飞的那一发回来也
-   * 只会被当成"同一页"对待（真机上验证过不会串内容）。
+   * 三条刻意的放宽：
+   *   · **不看 `busy`**（那是"分页/补货在跑"）：分页一次要现拉两三发，常常持续好几秒，
+   *     而用户就在这时往下拉 —— 早先挡了 `busy`，表现就是"拉了没反应"；
+   *   · **不看 `reels.length`**（空态也能拉）：某个分段首屏没拉到时，用户的第一反应就是
+   *     下拉重试 —— 早先空列表直接不判手势，于是"怎么拉都没用"；
+   *   · **不看 `activeSegment`**（用户报的"切到另一个分页下拉刷新不管用"）：那一位是
+   *     `AppStorage.setOrCreate('reels_active_segment', …)` 写的（由 Tabs 的 onChange /
+   *     onAnimationEnd 更新），切段后**有可能还是旧值**，于是可见的那一段反而被这条挡掉。
+   *     而手势本来就只会落在**可见**的那一页上（另一段在 TabContent 里不接收触摸），
+   *     这条判断对下拉是纯负担 —— 只有底栏连点（广播到两段）才需要它，见 onTabRepeatTap。
    */
   private canPullRefresh(): boolean {
-    if (this.refreshing || this.reels.length === 0) {
-      return false;
-    }
-    if (this.segment >= 0 && this.segment !== this.activeSegment) {
+    if (this.refreshing) {
       return false;
     }
     return this.activeIndex <= 0;
@@ -3282,6 +3285,16 @@ export struct ReelsPage {
         .width('100%')
         .height('100%')
         .justifyContent(FlexAlign.Center)
+        /*
+         * **空列表也要能下拉**（用户报的"另一个分页的下拉刷新不管用"）。
+         *
+         * 这一页没有 Swiper 时（首屏没拉到 / 那个分段还是空的），触摸全落在这个 Column 上，
+         * 而手势原来只挂在 Swiper 上 —— 于是下拉什么都不发生（连提示胶囊都不出现）。
+         * 挂同一个处理函数之后：空态下拉同样会量距离、显示胶囊、松手重试一次。
+         */
+        .onTouch((event: TouchEvent): void => {
+          this.onSwiperTouch(event);
+        })
       } else {
         /*
          * **整页背景：当前活动那条视频封面的高模糊版本**（需求："reels 背景用高模糊的视频封面"）。

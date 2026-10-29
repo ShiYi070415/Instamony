@@ -220,6 +220,28 @@ export class ReelsViewModel implements ReelStreamVm {
     const startedMs: number = Date.now();
     try {
       /*
+       * **下拉刷新 = 换一批，而不是"重读首屏"**（用户报的"刷新后前四条视频还是固定的，
+       * 只有顺序不一样"）。
+       *
+       * 根因：首屏那条链是 `clips/discover/`，它**永远是同一批 3~4 条**（见
+       * core/mobileapi/MobileClips 的文件头：它的游标换不动内容）。所以"重新读第一页"
+       * 拿回来的必然还是原来那几条 —— 顺序变一变，内容一条不新。
+       * 刷新改走"下一批"：作者页优先 → 探索流接着翻（`fetchFreshBatch` 就是翻页那条链），
+       * 这才是真正会换内容的一发；拿不到再退回原来读首屏的路。
+       */
+      if (forceFresh) {
+        const batch: NativeReelsPage | null = await NativeReels.fetchFreshBatch(this.source);
+        if (batch !== null && batch.reels.length > 0) {
+          this.noteCursor(batch.nextCursor);
+          this.applyFirstPage(batch);
+          hilog.info(DOMAIN, TAG, 'reels refresh batch n=%{public}d ms=%{public}d',
+            batch.reels.length, Date.now() - startedMs);
+          this.prefetchNativePage();
+          return;
+        }
+        hilog.info(DOMAIN, TAG, 'reels refresh batch miss → fall back to first page');
+      }
+      /*
        * **被限流也不能直接认输**（见 core/ApiThrottle）：
        *   ① 先把上次落盘那一页铺出来（ReelsCache）—— 用户立刻有内容；
        *   ② **仍然试一次** `fetchPage`：它内部会走**移动端探索流**兜底
