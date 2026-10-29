@@ -291,6 +291,17 @@ export class CaaSession {
    * **节流到 2.5 秒一次**：真机 App 是每 3 秒一发（见 CaaLogin.approvalAvailable 的说明），
    * 这里给一点余量防止"界面上两个定时器同时打"把请求量翻倍。
    */
+  /**
+   * 轮询一次"那边同意了吗"。返回
+   *   `waiting` / `declined` / `error` / `none`，或
+   *   **`signed-in`**（同意了、会话也收下了 —— 界面据此直接切主界面）。
+   *
+   * 节流到 7 秒一次：真机 App 那一屏的定时器是 **7500ms**（见 CaaLogin.approvalAvailable 的
+   * 现场记录），这里给一点余量防止"界面上两个定时器同时打"把请求量翻倍。
+   *
+   * 同意时 IG 会在那一发的响应里**直接给会话** —— 这里立刻落盘（和交验证码成功同一条
+   * `finish` 路径），不用再拿密码登一次。
+   */
   static async approvalTick(): Promise<string> {
     const now: number = Date.now();
     if (now - CaaSession.approvalAt < APPROVAL_MIN_GAP_MS) {
@@ -298,8 +309,23 @@ export class CaaSession {
     }
     CaaSession.approvalAt = now;
     const state: string = await CaaLogin.pollApproval();
-    CaaSession.approvalLast = state;
     hilog.info(DOMAIN, TAG, 'approval tick → %{public}s', state);
+    if (state === 'approved') {
+      const claimed: CaaResult | null = CaaLogin.takeApprovedLogin();
+      if (claimed !== null) {
+        const outcome: CaaOutcome = await CaaSession.finish(claimed);
+        if (outcome.ok) {
+          // 拿下：这条路走完了，后面的轮询都不该再发生。
+          CaaSession.approvalLast = 'signed-in';
+          return 'signed-in';
+        }
+        hilog.warn(DOMAIN, TAG, 'approval session not accepted: %{public}s', outcome.reason);
+      }
+      // 收下了"同意"但没拿到会话：让界面自己再登一次（见 LoginPage.finishByApproval）。
+      CaaSession.approvalLast = 'approved';
+      return 'approved';
+    }
+    CaaSession.approvalLast = state;
     return state;
   }
 

@@ -64,11 +64,22 @@ const LABEL_SIZE: number = 13;
 /**
  * "在另一台设备上同意"的轮询间隔（毫秒）与最多连续失败几次就停手。
  *
- * 3000 是真机 App 自己的节奏（见 core/mobileapi/CaaLogin.approvalAvailable 的说明）；
- * 失败 5 次（约 15 秒）说明这条路这一次走不通，静默停掉、让用户照常输验证码。
+ * **7500** 是 IG 那一屏自己的定时器间隔（真机 2026-10-30 抓到：
+ * `approve_from_another_device_polling_timer` 的 `(foa (e25 1) 7500 true …)`），
+ * 照它走最稳，也不至于把请求量打高。失败 5 次（约 37 秒）说明这条路这一次走不通，
+ * 静默停掉、让用户照常输验证码。
  */
-const APPROVAL_POLL_MS: number = 3000;
+const APPROVAL_POLL_MS: number = 7500;
 const APPROVAL_MAX_FAILURES: number = 5;
+/**
+ * 开头"这条登录到底有没有『等同意』这条路"的探测节奏（毫秒）与次数。
+ *
+ * 为什么要探测：是否提供"等同意"要看 **2FA 第一屏（entrypoint）的布局**，
+ * 而那一屏是账密过了之后 App 才去取的（见 CaaLogin.inspectTwoStepScreens），
+ * 通常晚 2~4 秒才回来。所以面板一打开就先每 1.2 秒问一次"认出来了没有"。
+ */
+const APPROVAL_DETECT_MS: number = 1200;
+const APPROVAL_DETECT_TRIES: number = 15;
 
 /**
  * 登录结果的哨兵值：**账号密码过了，但 IG 要求两步验证**（要走验证码那一发）。
@@ -156,6 +167,8 @@ export struct LoginPage {
    * 否则网络慢的时候会越排越多。0 = 没在跑。
    */
   private approvalTimer: number = 0;
+  /** "有没有『等同意』这条路"的探测定时器（见 startApprovalDetect）。 */
+  private approvalDetectTimer: number = 0;
   /** 轮询连续失败了几次（够多就停手，别一直打没用的一发）。 */
   private approvalFailures: number = 0;
 
@@ -476,11 +489,12 @@ export struct LoginPage {
    * 开始轮询"那边同意了吗"（需求："2FA 过程中可以在官方客户端同意本次登录，
    * 有部分实现同意后自动登录吗"）。
    *
-   * 节奏照真机 App：**每 3 秒一发**（见 core/mobileapi/CaaLogin.approvalAvailable 的说明），
-   * 用 `setTimeout` 链而不是 `setInterval` —— 上一发的请求回来了才排下一发，网络慢时不会堆。
+   * 节奏照真机 App：**每 7.5 秒一发**（见 APPROVAL_POLL_MS），用 `setTimeout` 链而不是
+   * `setInterval` —— 上一发的请求回来了才排下一发，网络慢时不会堆。
    *
-   * 三种结论：
-   *   · `approved` → 立刻用**同一个账号密码**再登一次（IG 那边这台设备已可信，这一次不带 2FA）；
+   * 几种结论：
+   *   · `signed-in` → 同意了、**而且会话已经在那一发里收下了**：直接切主界面（见 onSignedIn）；
+   *   · `approved` → 同意了但那一发没给会话：拿同一个账号密码再登一次（见 finishByApproval）；
    *   · `declined` → 显示"已在另一台设备上拒绝"，停手；
    *   · `waiting` / `error` → 接着等（`error` 连续 5 次就停，别一直打没用的一发）。
    */
@@ -496,6 +510,40 @@ export struct LoginPage {
       clearTimeout(this.approvalTimer);
       this.approvalTimer = 0;
     }
+    if (this.approvalDetectTimer !== 0) {
+      clearTimeout(this.approvalDetectTimer);
+      this.approvalDetectTimer = 0;
+    }
+  }
+
+  /**
+   * 面板刚打开时**每 1.2 秒问一次"这条登录到底有没有『等同意』这条路"**。
+   *
+   * 为什么要反复问：这个答案要看 2FA 第一屏的布局，而那一屏是登录链在后台才去取的
+   * （见 CaaLogin.inspectTwoStepScreens）—— 刚打开面板时通常还不知道。
+   * 问到了就显示提示、开始轮询；问够 `tries` 次还是 false 就静默放弃（面板和以前一样）。
+   */
+  private startApprovalDetect(tries: number): void {
+    if (this.approvalDetectTimer !== 0) {
+      clearTimeout(this.approvalDetectTimer);
+      this.approvalDetectTimer = 0;
+    }
+    if (tries <= 0 || !this.verifyOpen) {
+      return;
+    }
+    this.approvalDetectTimer = setTimeout((): void => {
+      this.approvalDetectTimer = 0;
+      if (!this.verifyOpen) {
+        return;
+      }
+      if (this.onApprovalAvailable()) {
+        hilog.info(DOMAIN, TAG, 'approval detected → watch every %{public}dms', APPROVAL_POLL_MS);
+        this.approvalPossible = true;
+        this.startApprovalWatch();
+        return;
+      }
+      this.startApprovalDetect(tries - 1);
+    }, APPROVAL_DETECT_MS);
   }
 
   /** 排下一跳（见 startApprovalWatch）。 */
@@ -517,6 +565,19 @@ export struct LoginPage {
     this.onApprovalTick()
       .then((state: string): void => {
         if (!this.verifyOpen) {
+          return;
+        }
+        if (state === 'signed-in') {
+          /*
+           * **最好的一条**：同意之后 IG 在那一发的响应里直接把会话给了，core 已经落盘
+           * （见 CaaSession.approvalTick）。这里只负责收尾：关面板、停转圈、交给宿主切主界面。
+           */
+          hilog.info(DOMAIN, TAG, 'approval signed in on another device');
+          this.stopApprovalWatch();
+          this.verifyOpen = false;
+          this.verifyCode = '';
+          this.busy = false;
+          this.onSignedIn();
           return;
         }
         if (state === 'approved') {
@@ -810,13 +871,18 @@ export struct LoginPage {
           this.verifyOpen = true;
           /*
            * **这次登录有没有"在另一台设备上同意"这条路**（需求见 onApprovalAvailable）。
-           * 有就显示那句提示并起轮询；没有就什么都不做（面板行为和以前完全一样）。
+           *
+           * 现在还不是问的时候：它取决于 **2FA 第一屏的布局**，而那一屏是登录链在后台
+           * 2~4 秒后才去取的（见 CaaLogin.inspectTwoStepScreens）。所以这里先探测式地
+           * 每 1.2 秒问一次（最多 15 次 ≈ 18 秒）—— 一问到 true 就显示提示并开始 7.5 秒轮询。
            */
           this.approvalPossible = this.onApprovalAvailable();
           if (this.approvalPossible) {
             hilog.info(DOMAIN, TAG, 'approval available → watch every %{public}dms',
               APPROVAL_POLL_MS);
             this.startApprovalWatch();
+          } else {
+            this.startApprovalDetect(APPROVAL_DETECT_TRIES);
           }
           return;
         }
