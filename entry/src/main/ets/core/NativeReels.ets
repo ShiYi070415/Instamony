@@ -31,8 +31,16 @@ import { ShareProbe } from './ShareProbe';
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeReels';
 
-/** 补货时一个作者要几条（`clips/user/` 的 `page_size`；他有多少给多少，最多这么多）。 */
-const AUTHOR_PAGE_COUNT: number = 12;
+/**
+ * 补货时一个作者要几条（`clips/user/` 的 `count`）。
+ *
+ * **只要 4 条，不是 12**（实测之后改的）：
+ *   · 视图模型那边是"一人一条"（`shownAuthors` 记住上过屏的作者），一个人一页只要得出一条能用的；
+ *   · 要 12 条时这一发是 500KB / 4~5 秒，而其中 11 条拿回来就被丢掉 —— 白花 90% 的流量和时间；
+ *   · 要 4 条约 170KB / 1~2 秒，留一点余量（个别条目是图片 / 短码重复）。
+ * 这一条直接决定"滑到下一条要不要等"，改动前先看 ReelsViewModel.drainInterleaved 的说明。
+ */
+const AUTHOR_PAGE_COUNT: number = 4;
 
 /** Clips 连接键（只给历史解析函数用，数据获取已不走它）。 */
 const CLIPS_KEY: string = 'xdt_api__v1__clips__home__connection_v2';
@@ -378,8 +386,21 @@ export class NativeReels {
     });
   }
 
-  /** 取走预热的那一页（取走即清空；太旧的不要）。 */
-  static takeWarm(source: string, maxAgeMs: number): NativeReelsPage | null {    const lane: ReelsLane = NativeReels.laneOf(source);
+  /**
+   * 取走预热的那一页（取走即清空；太旧的不要）。
+   *
+   * **薄页要和"预热好的探索流那一页"合并再交**（用户报的"前几条会加载很久才能继续滑"）：
+   *   · 预热那一页是 `clips/discover/` 第一页，只有 3~4 条 —— 再被"看过的"台账筛一遍，
+   *     真机上首次上屏只剩 **2 条**，用户两下就滑到底，然后开始等；
+   *   · 而启动时后台还会预热一页探索流（12~14 条、十几个作者，`lane.exploreWarm`），
+   *     它通常是**已经在内存里**的（真机日志：0.5 秒时就在了，而用户点开视频页是十几秒后）。
+   * 合并这一页不花任何请求，首屏直接从 2 条变成十几条。
+   *
+   * 代价说清楚：`exploreWarm` 被这里吃掉之后，第一次翻页要重新要探索流那一页（5~9 秒）——
+   * 但翻页的主力已经是 `clips/*`（游标进 body 之后能真翻页），这条代价远小于"首屏只有 2 条"。
+   */
+  static takeWarm(source: string, maxAgeMs: number): NativeReelsPage | null {
+    const lane: ReelsLane = NativeReels.laneOf(source);
     const page: NativeReelsPage | null = lane.warm;
     if (page === null) {
       return null;
@@ -392,7 +413,27 @@ export class NativeReels {
     }
     hilog.info(DOMAIN, TAG, 'warm page used source=%{public}s age=%{public}dms n=%{public}d',
       source, Date.now() - page.at, page.reels.length);
-    return page;
+    return NativeReels.enrichWarm(lane, page);
+  }
+
+  /**
+   * 预热页太薄时，把**内存里已经预热好的探索流那一页**并进来（不花请求，见 takeWarm）。
+   *
+   * 只并一次：并完就清掉 `exploreWarm`（它本来也会被第一次翻页吃掉）。
+   */
+  private static enrichWarm(lane: ReelsLane, page: NativeReelsPage): NativeReelsPage {
+    if (page.reels.length >= NativeReels.FIRST_MIN_REELS) {
+      return page;
+    }
+    const extra: NativeReelsPage | null = lane.exploreWarm;
+    if (extra === null) {
+      return page;
+    }
+    lane.exploreWarm = null;
+    const merged: NativeReelsPage = NativeReels.mergePages(page, extra);
+    hilog.info(DOMAIN, TAG, 'warm page enriched source n=%{public}d +%{public}d → %{public}d',
+      page.reels.length, extra.reels.length, merged.reels.length);
+    return new NativeReelsPage(merged.reels, page.nextCursor, page.hasMore, page.ms);
   }
 
   /**
@@ -593,13 +634,23 @@ export class NativeReels {
    * 作者自己还有下一页时，他被重新排到队尾（游标记在 lane.cursors 里）。
    *
    * 一个作者给不出东西（私密/零 Reels/被限流）就换下一个，最多试两个 —— 不在这儿死磕。
+   *
+   * @param skip **已经上过屏的作者**（视图模型的 `shownAuthors`）：直接从池子里摘掉。
+   *   为什么要有这个参数：原来是"轮到谁就问谁"，而"一人一条"的规则下，上过屏的人再问一遍
+   *   拿回来的东西**一条都用不上**（4~5 秒 + 几百 KB 全白花），用户等到的还是没东西。
    */
-  static async fetchAuthorPage(source: string): Promise<NativeReelsPage | null> {
+  static async fetchAuthorPage(source: string,
+                               skip: Set<string> | null = null): Promise<NativeReelsPage | null> {
     const lane: ReelsLane = NativeReels.laneOf(source);
     let tries: number = 0;
     while (lane.authors.length > 0 && tries < 2) {
       const pk: string | undefined = lane.authors.shift();
       if (pk === undefined || pk.length === 0) {
+        continue;
+      }
+      if (skip !== null && skip.has(pk)) {
+        // 这个人已经上过屏：别再为他要一页（整页都会在上屏前被剔掉）。
+        lane.cursors.delete(pk);
         continue;
       }
       const cursor: string = lane.cursors.get(pk) ?? '';

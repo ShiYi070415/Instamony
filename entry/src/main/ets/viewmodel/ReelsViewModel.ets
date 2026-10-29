@@ -143,6 +143,8 @@ export class ReelsViewModel implements ReelStreamVm {
     this.nativeHasMore = false;
     this.nativeFetching = false;
     this.lastFillWasAuthor = false;
+    this.nativeFillKind = '';
+    this.topUpAfterFirstLoad = false;
     this.active = 0;
     this.diag = '-';
     // 换代：在飞的那几发（翻页 / 作者页 / 探索流）回来之后一律不许写进这一份新列表。
@@ -192,6 +194,16 @@ export class ReelsViewModel implements ReelStreamVm {
   private nativeFillKind: string = '';
   /** 上次补队列补的是"某个作者的 Reels"吗（两条源交替，见 prefetchNativePage）。 */
   private lastFillWasAuthor: boolean = false;
+  /**
+   * **首屏太薄、要在 `loadFirst` 收尾之后立刻补一发**（见 finally）。
+   *
+   * 为什么要绕这一道：`loadFirst` 自己在 `finally` 里才把 `busy` 放掉，而首屏那几行
+   * 是**在 `busy` 还开着的时候**调 `requestMore()` 的 —— 它第一句 `if (this.busy) return;`
+   * 直接空跑。冷启动首屏常常只有 3~4 条（`clips/discover/` 第一页就那么薄），
+   * 于是"补内容"要等用户自己滑到末尾才发生：真机日志里首屏之后空了 **10 秒**一个请求都没有，
+   * 用户就是在这一段里干等（"前几条会加载很久才能继续滑"）。
+   */
+  private topUpAfterFirstLoad: boolean = false;
   /**
    * **这一份列表是第几代**（`reset()` 时 +1）。
    *
@@ -335,8 +347,7 @@ export class ReelsViewModel implements ReelStreamVm {
           this.prefetchNativePage();
           // 先出画面，再在后台补几条**没看过的**（requestMore 是追加，不动正在播的那条）。
           if (this.reels.length < REFRESH_SHOW / 2) {
-            this.requestMore().catch((): void => {
-            });
+            this.topUpAfterFirstLoad = true;
           }
           return;
         }
@@ -366,8 +377,7 @@ export class ReelsViewModel implements ReelStreamVm {
           this.prefetchNativePage();
           // 同上：先出画面，后台补几条没看过的。
           if (this.reels.length < REFRESH_SHOW / 2) {
-            this.requestMore().catch((): void => {
-            });
+            this.topUpAfterFirstLoad = true;
           }
           return;
         }
@@ -397,6 +407,20 @@ export class ReelsViewModel implements ReelStreamVm {
        */
       this.busy = false;
       this.onBusy(false);
+      /*
+       * **首屏太薄时在这里补一发**（不是在上面那几行里直接调）。
+       *
+       * 原因见 `topUpAfterFirstLoad`：那几行还在 `try` 里，`busy` 仍是 true，
+       * 直接调 `requestMore()` 会被它第一句挡掉 —— 真机日志里首屏 3 条之后有 10 秒空白。
+       * 放到这里，`busy` 已经放开，后台补货立刻开始（用户还在看第一条）。
+       */
+      if (this.topUpAfterFirstLoad) {
+        this.topUpAfterFirstLoad = false;
+        hilog.info(DOMAIN, TAG, 'reels first thin (%{public}d) → background top-up',
+          this.reels.length);
+        this.requestMore().catch((): void => {
+        });
+      }
     }
   }
 
@@ -761,7 +785,8 @@ export class ReelsViewModel implements ReelStreamVm {
     const epoch: number = this.epoch;
     this.nativeFetching = true;
     this.nativeFillKind = 'author';
-    NativeReels.fetchAuthorPage(this.source).then((page: NativeReelsPage | null): void => {
+    NativeReels.fetchAuthorPage(this.source, this.shownAuthors)
+      .then((page: NativeReelsPage | null): void => {
       if (epoch !== this.epoch) {
         /*
          * 这一发属于上一份列表（中途刷新过）：丢掉，别污染新的队列（见 epoch 的说明）。
@@ -952,7 +977,7 @@ export class ReelsViewModel implements ReelStreamVm {
     }
     if (NativeReels.authorPoolSize(this.source) > 0) {
       const author: NativeReelsPage | null =
-        await NativeReels.fetchAuthorPage(this.source);
+        await NativeReels.fetchAuthorPage(this.source, this.shownAuthors);
       if (author !== null && author.reels.length > 0) {
         // 这一发也算"作者页"，交替关系照记（否则下一发又是作者页，流一直不推进）。
         this.lastFillWasAuthor = true;
