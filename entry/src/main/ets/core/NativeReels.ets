@@ -550,6 +550,34 @@ export class NativeReels {
     return NativeReels.laneOf(source).authors.length;
   }
 
+  /** 这条流的**普通翻页游标**还有没有（有才能要"下一页 Reels 流"，见 fetchStreamPage）。 */
+  static hasStreamCursor(source: string): boolean {
+    const lane: ReelsLane = NativeReels.laneOf(source);
+    return source === REELS_SOURCE_FOLLOWING
+      ? lane.friendsCursor.length > 0 : lane.clipsCursor.length > 0;
+  }
+
+  /**
+   * **要"这一条流的下一页"**（补货用）：探索 = `clips/discover/`，好友 = `clips/discover/social/`。
+   *
+   * 与 `fetchPage(sentinel)` 的区别：那条会先试作者页（12 条同一个人）；这条**只用真游标**
+   * 接着翻同一条流（10~16 条、十几个作者）。补货用它，补进来的才不是"某个人一屏"。
+   * 游标还没拿到（首屏之前）返回 null。
+   */
+  static async fetchStreamPage(source: string): Promise<NativeReelsPage | null> {
+    const lane: ReelsLane = NativeReels.laneOf(source);
+    if (source === REELS_SOURCE_FOLLOWING) {
+      if (lane.friendsCursor.length === 0) {
+        return null;
+      }
+      return await NativeReels.viaFriends(lane, lane.friendsCursor);
+    }
+    if (lane.clipsCursor.length === 0) {
+      return null;
+    }
+    return await NativeReels.viaClips(lane, lane.clipsCursor);
+  }
+
   /**
    * **补货**：从池子里取一个作者，要他那页 Reels（`clips/user/{pk}/`）。
    *

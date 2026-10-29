@@ -92,6 +92,13 @@ const PENDING_MAX: number = 36;
  */
 const REFRESH_SHOW: number = 12;
 const REFRESH_MIN_PENDING: number = 12;
+/**
+ * 触底那一发最多等正在跑的预取多久（毫秒）。
+ *
+ * 流的下一页实测 10 秒上下；这里给 12 秒 —— 等它总比"再发一发、两发一起排队"快，
+ * 真等不到再自己现拉（见 nextPage）。
+ */
+const QUEUE_WAIT_MS: number = 12000;
 
 export class ReelsViewModel implements ReelStreamVm {
   /**
@@ -697,6 +704,17 @@ export class ReelsViewModel implements ReelStreamVm {
      * 那这一页就跟探索页没区别了。只有池子真的取空（都翻到底了）才落到探索流兜底。
      */
     if (this.source === REELS_SOURCE_FOLLOWING) {
+      // 关注页：好友那条流（`clips/discover/social/`）能一直翻、每页 9~10 个作者，优先要它；
+      // 作者页（快、2~4 秒）作为交替，保证"第一发补货"不会因为流那发 10 秒而空手。
+      if (this.nativeQueue.length === 0 && !this.lastFillWasAuthor
+        && NativeReels.authorPoolSize(this.source) > 0) {
+        this.fillFromAuthor();
+        return;
+      }
+      if (NativeReels.hasStreamCursor(this.source)) {
+        this.fillFromStream();
+        return;
+      }
       if (NativeReels.authorPoolSize(this.source) > 0) {
         this.fillFromAuthor();
         return;
@@ -709,6 +727,17 @@ export class ReelsViewModel implements ReelStreamVm {
       this.fillFromAuthor();
       return;
     }
+    /*
+     * **探索页：作者页之后接着同一条流翻**（`clips/discover/` 的真游标）。
+     *
+     * 为什么不继续只补作者页：一页作者是"某个人的 12 条"，补两页就是两个人的两屏；
+     * 而这条流一页 10~16 条、十几个作者、和上一页 0 重合 —— 这才是用户要的"一直有新的"。
+     * 代价是它慢（600KB / 实测 10 秒上下），所以放在后台预取、不挡当前播放。
+     */
+    if (NativeReels.hasStreamCursor(this.source)) {
+      this.fillFromStream();
+      return;
+    }
     this.fillFromExplore();
   }
 
@@ -718,7 +747,14 @@ export class ReelsViewModel implements ReelStreamVm {
     this.nativeFetching = true;
     NativeReels.fetchAuthorPage(this.source).then((page: NativeReelsPage | null): void => {
       if (epoch !== this.epoch) {
-        // 这一发属于上一份列表（中途刷新过）：丢掉，别污染新的队列（见 epoch 的说明）。
+        /*
+         * 这一发属于上一份列表（中途刷新过）：丢掉，别污染新的队列（见 epoch 的说明）。
+         *
+         * ⚠️ **在飞标记必须收掉**：早先这里直接 `return`，`nativeFetching` 就永远停在 true，
+         * `prefetchNativePage` 之后一次都不再跑 —— 用户看到的就是"看完一页要等很久才能继续滑"
+         * （每一页都退化成现拉，而现拉要 3~10 秒）。
+         */
+        this.nativeFetching = false;
         hilog.info(DOMAIN, TAG, 'reels author fill dropped (epoch %{public}d->%{public}d)',
           epoch, this.epoch);
         return;
@@ -741,6 +777,42 @@ export class ReelsViewModel implements ReelStreamVm {
     });
   }
 
+  /**
+   * 补一页"**这一条流的下一页**"进队列（探索 = `clips/discover/`，好友 = `clips/discover/social/`）。
+   *
+   * 为什么单独一条：作者页快但一页只有一个人；这条流慢（600KB / 实测 10 秒上下）却一页
+   * 10~16 条、十几个作者、和上一页 0 重合。放后台预取刚好 —— 用户看 4~10 条视频的时间够它跑完。
+   */
+  private fillFromStream(): void {
+    const epoch: number = this.epoch;
+    this.nativeFetching = true;
+    NativeReels.fetchStreamPage(this.source).then((page: NativeReelsPage | null): void => {
+      if (epoch !== this.epoch) {
+        // 同 fillFromAuthor：这一发已作废，但**在飞标记一定要收**，否则预取从此停摆。
+        this.nativeFetching = false;
+        hilog.info(DOMAIN, TAG, 'reels stream fill dropped (epoch %{public}d->%{public}d)',
+          epoch, this.epoch);
+        return;
+      }
+      this.nativeFetching = false;
+      if (page === null) {
+        // 流这一发没成：退回作者页 / 探索流接着补。
+        this.lastFillWasAuthor = true;
+        hilog.info(DOMAIN, TAG, 'reels stream fill miss, fall back');
+        this.prefetchNativePage();
+        return;
+      }
+      this.lastFillWasAuthor = false;
+      this.nativeQueue.push(page);
+      this.noteCursor(page.nextCursor);
+      hilog.info(DOMAIN, TAG, 'reels stream page queued n=%{public}d ms=%{public}d queued=%{public}d',
+        page.reels.length, page.ms, this.nativeQueue.length);
+      this.prefetchNativePage();
+    }).catch((): void => {
+      this.nativeFetching = false;
+    });
+  }
+
   /** 补一页探索流进队列（真正个性化那一条，见 core/NativeReels.fetchExplorePage）。 */
   private fillFromExplore(): void {
     this.nativeFetching = true;
@@ -755,7 +827,8 @@ export class ReelsViewModel implements ReelStreamVm {
     NativeReels.fetchExplorePage(this.source)
       .then((page: NativeReelsPage | null): void => {
         if (epoch !== this.epoch) {
-          // 同 fillFromAuthor：中途刷新过，这一发属于上一份列表。
+          // 同 fillFromAuthor：中途刷新过，这一发属于上一份列表；**在飞标记也要收**。
+          this.nativeFetching = false;
           hilog.info(DOMAIN, TAG, 'reels explore fill dropped (epoch %{public}d->%{public}d)',
             epoch, this.epoch);
           return;
@@ -789,6 +862,38 @@ export class ReelsViewModel implements ReelStreamVm {
   }
 
   /**
+   * **等预取把一页放进队列**（最多 `maxWaitMs`；预取没在跑就立刻返回 null）。
+   *
+   * 见 nextPage 里的说明：触底那一刻如果预取正在飞，等它比自己再发一发快整整一个请求。
+   */
+  private async waitForQueue(maxWaitMs: number): Promise<NativeReelsPage | null> {
+    if (!this.nativeFetching) {
+      return null;
+    }
+    const deadline: number = Date.now() + maxWaitMs;
+    while (Date.now() < deadline) {
+      await ReelsViewModel.sleep(120);
+      const page: NativeReelsPage | null = this.takeNativePage();
+      if (page !== null) {
+        return page;
+      }
+      if (!this.nativeFetching) {
+        return null;
+      }
+    }
+    return this.takeNativePage();
+  }
+
+  /** 短睡（等预取用）。 */
+  private static sleep(ms: number): Promise<void> {
+    return new Promise<void>((resolve: () => void): void => {
+      setTimeout((): void => {
+        resolve();
+      }, ms);
+    });
+  }
+
+  /**
    * 取下一页：**缓存队列优先，其次现拉**（限流时只吃队列，不发请求）。
    *
    * 拉的那一发内部已经是"作者页优先 → 探索流 → 首屏兜底"（见 core/NativeReels.fetchPage），
@@ -804,6 +909,20 @@ export class ReelsViewModel implements ReelStreamVm {
     }
     if (limited) {
       return null;
+    }
+    /*
+     * **队列空但预取还在飞：等它**（最多 QUEUE_WAIT_MS），别自己再发一发。
+     *
+     * 用户报的"看完一页要等很久才能继续滑"就是这么来的：触底那一刻正好在预取，
+     * 而这里不等、直接现拉 —— 两发都排在同一个限速闸门后面，先发的那发跑完才轮到这一发，
+     * 白白多等一整个请求（流那页实测 10 秒上下）。
+     */
+    const waited: NativeReelsPage | null = await this.waitForQueue(QUEUE_WAIT_MS);
+    if (waited !== null) {
+      this.noteCursor(waited.nextCursor);
+      hilog.info(DOMAIN, TAG, 'reels page from prefetch (waited) n=%{public}d queued=%{public}d',
+        waited.reels.length, this.nativeQueue.length);
+      return waited;
     }
     const cursor: string = this.nativeCursor.length > 0 ? this.nativeCursor : this.endCursor;
     const live: NativeReelsPage | null =
