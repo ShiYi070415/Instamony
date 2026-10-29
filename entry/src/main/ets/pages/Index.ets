@@ -137,7 +137,8 @@ import { ReelsCrashLog } from '../core/ReelsCrashLog';
 import { DirectThreadPage } from '../components/DirectThreadPage';
 import { SearchPage } from '../components/SearchPage';
 import { StoriesTray } from '../components/StoriesTray';
-import { LoginPage } from '../components/LoginPage';
+// LOGIN_NEEDS_CODE：登录页那颗「登录」返回它 = 账号密码过了但 IG 要求两步验证（见 caaLogin）。
+import { LOGIN_NEEDS_CODE, LoginPage } from '../components/LoginPage';
 import { StoryViewer } from '../components/StoryViewer';
 import { ReelsPage } from '../components/ReelsPage';
 // 视频页"隐藏全局控件"这个开关（AppStorage 键，见 components/ReelsPage 的说明）：
@@ -183,6 +184,8 @@ import { PosterCache } from '../core/PosterCache';
 import { CachedRecommendedPage, FeedCache } from '../core/FeedCache';
 import { Translator } from '../core/Translator';
 import { MobileSession, MobileIdentity } from '../core/mobileapi/MobileSession';
+// 登录页的「登录」走 **App 协议登录（CAA）**（见 caaLogin / core/mobileapi/CaaSession）。
+import { CaaOutcome, CaaSession } from '../core/mobileapi/CaaSession';
 import { MobileProbe } from '../core/mobileapi/MobileProbe';
 import { MqttProbe } from '../core/mobileapi/MqttProbe';
 import { NetProbe } from '../core/mobileapi/NetProbe';
@@ -3715,18 +3718,15 @@ struct Index {
     this.signedIn = signedIn;
     if (!signedIn) {
       /*
-       * 登录页一出现就把**隐藏网页**挂好：点「登录」时引擎已经就绪（见
-       * prepareHiddenWebForLogin 的说明），而且挂载这件事不再发生在点击路径上
-       * —— 否则输入框会被重建清空。
+       * **登录页不再预先挂隐藏网页**（需求：网页登录那条路已整条移除，登录改走
+       * App 协议登录，见 caaLogin）。
+       *
+       * 以前这里 `prepareHiddenWebForLogin()` 是为了"点登录那一刻引擎已经就绪"
+       * （无头网页登录要在网页里代填账号密码）。现在整条登录链都是原生请求，
+       * 网页只在「注册新账号」那一刻才需要 —— 由 `openSignupWeb` 自己按需挂载。
+       * 留着这个预先挂载只会白养一个 Web 引擎、还在后台加载 IG 的登录页。
        */
-      this.prepareHiddenWebForLogin();
-      if (WEB_LOGIN_AUTO_PROBE) {
-        // 诊断：登录页一出现就自己跑一次（见 WEB_LOGIN_AUTO_PROBE 的说明）。
-        setTimeout((): void => {
-          this.headlessWebLogin('zz_probe_auto', 'Qwe12345x').catch((): void => {
-          });
-        }, 3000);
-      }
+      hilog.info(DOMAIN, TAG, 'login page shown (CAA login only; no hidden web host)');
     } else {
       /*
        * 登录成功的事**不在这里处理**：这一块在 `AccountScope.adoptFrom` 之前执行，
@@ -4217,6 +4217,39 @@ struct Index {
      */
     this.webHeadless = true;
     this.mountWebHost();
+  }
+
+  /**
+   * **登录页那颗「登录」= App 协议登录（CAA）**（见 core/mobileapi/CaaSession）。
+   *
+   * 为什么换成这条路：IG 已经不给第三方客户端走"普通密码登录"（`needs_upgrade`），
+   * 而 CAA 是它**自己 App 在走的那条**（USDID 设备签名 + attestation + Bloks 编排）——
+   * 拿到的会话是**设备级**的，后台推送 / 私信这些才有得谈（见 LOGIN-429.md）。
+   * 网页登录那条路（hidden webview 里代填账号密码）已按需求移除。
+   *
+   * @returns 空串 = 成功（会话已进 Cookie 罐）；{@link LOGIN_NEEDS_CODE} = 要两步验证；
+   *          其他 = 给登录页显示的原因
+   */
+  private async caaLogin(username: string, password: string): Promise<string> {
+    const outcome: CaaOutcome = await CaaSession.login(username, password);
+    hilog.info(DOMAIN, TAG, 'caa login ok=%{public}s needsCode=%{public}s reason=%{public}s',
+      outcome.ok ? 'y' : 'n', outcome.needsCode ? 'y' : 'n', outcome.reason);
+    if (outcome.ok) {
+      return '';
+    }
+    return outcome.needsCode ? LOGIN_NEEDS_CODE : outcome.reason;
+  }
+
+  /**
+   * 两步验证码（半模态面板里那颗「验证并登录」）→ 把 CAA 那条链走完。
+   *
+   * @returns 空串 = 通过（会话已进罐）；否则是面板上显示的原因
+   */
+  private async caaVerify(code: string): Promise<string> {
+    const outcome: CaaOutcome = await CaaSession.submitCode(code);
+    hilog.info(DOMAIN, TAG, 'caa verify ok=%{public}s reason=%{public}s',
+      outcome.ok ? 'y' : 'n', outcome.reason);
+    return outcome.ok ? '' : outcome.reason;
   }
 
   /**
@@ -7732,38 +7765,29 @@ struct Index {
           this.openSignupWeb();
         },
         /*
-         * **登录成功**：会话已经登记进 Cookie 罐（见 core/WebLogin + InstagramCookieJar）。
-         * 这里按罐重读一次登录态，五个页签与底栏就会建起来 —— 和"网页登录成功后 signal
-         * 到达"走同一条路。2FA 走的是面板 → submitLoginCode，成功也落在同一个回调上。
+         * **登录成功**：会话已经登记进 Cookie 罐（见 core/mobileapi/CaaSession）。
+         * 这里按罐重读一次登录态，五个页签与底栏就会建起来。
+         * 顺手重启实时通道：CAA 拿到的可能和原来那条不是同一个会话（设备级 ↔ 网页级）。
          */
         onSignedIn: (): void => {
-          this.refreshSessionFromJar();
+          this.refreshSessionFromJar().then((): void => {
+            this.restartRealtimeForNewSession();
+          }).catch((): void => {
+          });
         },
         /*
-         * **账号密码 → 隐藏网页登录**（需求：原生输入，网页里登录，不显示网页）。
-         *
-         * 为什么这么接：IG 已经不给第三方客户端走原生密码登录（`needs_upgrade`），
-         * 但它自己的网页就是账号密码登录。于是把账号密码丢进**隐藏**的网页宿主去完成，
-         * 用户全程只看到本 App 的登录页（宿主是 `Visibility.Hidden`，见 InstagramWebHost）。
+         * **账号密码 → App 协议登录（CAA）**（需求：登录页的登录换成 App 协议登录，
+         * 网页登录整条路移除）。
          */
-        onWebLogin: (username: string, password: string): Promise<string> => {
-          return this.headlessWebLogin(username, password);
+        onCaaLogin: (username: string, password: string): Promise<string> => {
+          return this.caaLogin(username, password);
         },
         /*
-         * **两步验证码 → 半模态面板里提交**（见 core/WebLogin.submitTwoFactorCode）。
-         * 账号密码那一步返回 WEB_LOGIN_NEEDS_CODE 时，登录页弹半模态面板收码，
-         * 收完回调到这里，仍由隐藏网页把码送出去 —— 页面结构不变。
+         * **两步验证码 → 半模态面板里提交**（见 caaVerify）。
+         * 账号密码那一步返回 LOGIN_NEEDS_CODE 时，登录页弹面板收码。
          */
-        onVerifyCode: (username: string, code: string): Promise<string> => {
-          return this.submitLoginCode(username, code);
-        },
-        /*
-         * **面板判定"这个账号只能去网页里验"**（`showAccountRecoveryModal`，拿不到
-         * `two_factor_identifier`）：把隐藏网页亮出来并导航到 IG 登录页，用户在里面
-         * 走完验证即可 —— 走完那一刻 Cookie 罐里就有会话，`watchLoginSession` 会接手。
-         */
-        onWebVerify: (): void => {
-          this.openLoginWeb();
+        onCaaVerify: (code: string): Promise<string> => {
+          return this.caaVerify(code);
         }
       })
     } else {
@@ -9097,6 +9121,53 @@ struct Index {
       hilog.warn(DOMAIN, TAG, 'add-account web verify failed: %{public}s', (error as Error).message);
       // 失败就把旗子收掉（沿用 finishAddAccount 的回滚语义，别把用户留在半截状态）。
       await this.finishAddAccount('web-open-failed');
+    }
+  }
+
+  /**
+   * **新增账号 → App 协议登录（CAA）**（登录页那颗「登录」在这条支线上走的就是它）。
+   *
+   * 和整页登录页的 `caaLogin` 只多两件事，都是为了"不动当前账号"：
+   *   1. 进流程先立旗（`addAccountFlow`）：下面清罐会让壳收到"未登录"，这时若照常
+   *      `applySession(false)`，新增账号页会被换成没有返回键的整页登录页；
+   *   2. 失败时把原来那个人的会话种回去（见 `restoreAddAccountPrevious`），
+   *      "新增账号"永远可以安全退出。
+   *
+   * 2FA 属于同一个事务的后续步骤：这时罐还是空的，旗子要一直立着，
+   * 收尾交给成功的 `onSignedIn → refreshSessionFromJar → applySession(true)`（那会把这一页清掉，
+   * `onHidden` 再调 `finishAddAccount` 收旗）或者用户按返回时的 `finishAddAccount`。
+   */
+  private async addAccountCaaLogin(username: string, password: string): Promise<string> {
+    if (this.addAccountFlow) {
+      return '正在登录中，请稍候';
+    }
+    this.addAccountFlow = true;
+    let pending: boolean = false;
+    try {
+      await this.rememberAccount();
+      this.addAccountPrevious = AccountBook.find(this.currentAccountId());
+      // 先卸网页再清罐（顺序反了网页会先收到"会话没了"）。
+      this.unmountWebHost('add-account-caa');
+      try {
+        await InstagramCookieJar.getInstance().clear();
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'clear jar before add-account(caa) failed: %{public}s',
+          (error as Error).message);
+      }
+      const message: string = await this.caaLogin(username, password);
+      const ok: boolean = message.length === 0;
+      pending = message === LOGIN_NEEDS_CODE;
+      if (!ok && !pending) {
+        // 登录没成：把原来的会话种回去 —— 不能让"新增账号"把当前账号弄丢。
+        await this.restoreAddAccountPrevious('login-failed');
+      }
+      return message;
+    } finally {
+      // 见上面的说明：2FA 那一段还没结束，旗子要交给收尾那一侧。
+      if (!pending) {
+        this.addAccountFlow = false;
+        this.addAccountPrevious = null;
+      }
     }
   }
 
@@ -10835,17 +10906,12 @@ struct Index {
             // 兜底：真走到这里说明会话已经进罐了，按罐重读一次即可（applySession 会复位并清栈）。
             this.refreshSessionFromJar();
           },
-          // 登录本身和整页登录页走同一条无头链路，只是前面多了"先清干净罐"这一步。
-          onWebLogin: (username: string, password: string): Promise<string> => {
-            return this.addAccountLogin(username, password);
+          // 登录本身和整页登录页走同一条 CAA 链路，只是前面多了"先清干净罐"这一步。
+          onCaaLogin: (username: string, password: string): Promise<string> => {
+            return this.addAccountCaaLogin(username, password);
           },
-          onVerifyCode: (username: string, code: string): Promise<string> => {
-            return this.submitLoginCode(username, code);
-          },
-          // 新增账号页的「网页登录」：必须先清罐再亮网页，否则会回到当前账号的信息流。
-          onWebVerify: (): void => {
-            this.addAccountWebVerify().catch((): void => {
-            });
+          onCaaVerify: (code: string): Promise<string> => {
+            return this.caaVerify(code);
           }
         })
       }
