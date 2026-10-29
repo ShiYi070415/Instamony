@@ -403,6 +403,126 @@ export class CaaSession {
   }
 
   /**
+   * **连接事实探针**：把那一发登录请求再发两次，把 `performanceTiming` 里的事实读出来。
+   *
+   * 为什么需要（上游 issue subzeroid/instagrapi#2852 给出的方向）：
+   *   · IG 的 edge 会在**登录这一发**上按传输层特征挑客户端；那份 issue 的修法是让私有传输
+   *     **只提供 TLS 1.3**（instagrapi 3.0.21 / PR #2862），多人确认 429 消失；
+   *   · 社区那套"能过"的配置还钉了曲线（X25519…）与 HTTP/2（ALPN 只 h2、特定 SETTINGS）。
+   * 所以先要看清**我们手机上这一发到底是什么**：h1.1 还是 h2、TLS 几、是不是复用了旧连接、
+   * 是不是走了代理。`PerformanceTiming` 正好把这四件事都给了（`http` 模块唯一能读到的地方）。
+   *
+   * 顺带验证一个很可能的坑：**连接复用会让每条请求上的 `tlsOptions` 失效** ——
+   * 若 `isReusedConnection=true`，那之前"强制 TLS1.3 仍旧 429"的结论就不作数了。
+   */
+  static async connProbe(): Promise<CaaOutcome> {
+    const body: string = CaaLogin.lastSendBody;
+    if (body.length === 0) {
+      return CaaSession.outcome(false, '还没有可重发的请求（先点一次「假账号探针」或登录）');
+    }
+    const url: string = 'https://b.i.instagram.com/api/v1/bloks/async_action/'
+      + 'com.bloks.www.bloks.caa.login.async.send_login_request/';
+    const header: Record<string, string> = {};
+    const map: Record<string, string> = CaaLogin.lastSendHeaderMap;
+    for (const key of Object.keys(map)) {
+      header[key] = map[key];
+    }
+    // 逼它一条新连接：复用的话 tlsOptions 不生效，也看不到真实的协商结果。
+    header['Connection'] = 'close';
+    const lines: Array<string> = [];
+    for (let round: number = 1; round <= 2; round++) {
+      const request: http.HttpRequest = http.createHttp();
+      try {
+        const response: http.HttpResponse = await request.request(url, {
+          method: http.RequestMethod.POST,
+          header: header,
+          extraData: body,
+          connectTimeout: 20000,
+          readTimeout: 30000,
+          expectDataType: http.HttpDataType.STRING,
+          // 上游那条修法：只提供 TLS 1.3。
+          tlsOptions: {
+            tlsVersionMin: http.TlsVersion.TLS_V_1_3,
+            tlsVersionMax: http.TlsVersion.TLS_V_1_3
+          }
+        });
+        // 这些事实在 `response.connectionExtraInfo` 里（API 24 起；低版本会是 undefined）。
+        const info: http.ConnectionExtraInfo | undefined = response.connectionExtraInfo;
+        if (info === undefined) {
+          lines.push(`第${round}发 ${response.responseCode}（这一版 http 模块没给 connectionExtraInfo）`);
+          continue;
+        }
+        let tls: string = '?';
+        if (info.tlsVersion !== undefined) {
+          tls = `${info.tlsVersion}`;
+        }
+        let cipher: string = '?';
+        if (info.cipherSuite !== undefined) {
+          cipher = `${info.cipherSuite}`;
+        }
+        lines.push(`第${round}发 ${response.responseCode}`
+          + ` proto=${info.networkProtocolName}`
+          + ` tls=${tls}`
+          + ` cipher=${cipher}`
+          + ` reused=${info.isReusedConnection}`
+          + ` proxy=${info.isProxyConnection}`
+          + ` remote=${info.remoteAddress}`);
+      } catch (error) {
+        lines.push(`第${round}发 异常：${(error as Error).message}`);
+      } finally {
+        try {
+          request.destroy();
+        } catch (error) {
+        }
+      }
+    }
+    const outcome: CaaOutcome = CaaSession.outcome(false,
+      `连接事实：${lines.join('；')}`, CaaSession.stepsText());
+    CaaSession.rememberDiag('连接事实', outcome.reason, outcome.steps);
+    hilog.info(DOMAIN, TAG, 'conn probe: %{public}s', lines.join(' | '));
+    return outcome;
+  }
+
+  /**
+   * **量 TLS 指纹**：往电脑上那个只收 ClientHello 的监听发一次握手（不算密钥、不解密）。
+   *
+   * 为什么要量：上游 issue（subzeroid/instagrapi#2852）给的"能过 429"的私有传输特征很具体 ——
+   *   `JA3 = 771,4865,0-43-10-51-13-16-45,29-23,`（TLS1.3 + AES128-GCM、只有 6 个扩展、
+   *   曲线只有 X25519/P-256），外加固定的 HTTP/2 SETTINGS。
+   * 我们已经测出这台手机上登录那一发是 **TLS1.3 + TLS_AES_128_GCM_SHA256 + HTTP/2、没走代理**，
+   * 所以差别只可能在**扩展集合/顺序、曲线、签名算法**（也就是 JA3 里剩下的那几段）。
+   * 量出来一比，就知道"要不要/能不能靠换 TLS 参数解决"。
+   *
+   * @param host 电脑的局域网地址（`node .tmp/ja3-listen.js` 那台）
+   */
+  static async fpProbe(host: string, port: number = 9443): Promise<CaaOutcome> {
+    const url: string = `https://${host}:${port}/fp`;
+    const request: http.HttpRequest = http.createHttp();
+    let note: string = '';
+    try {
+      // 手握手必然失败（对面没有证书/直接断），我们要的只是"把手握发出去"。
+      await request.request(url, {
+        method: http.RequestMethod.GET,
+        connectTimeout: 8000,
+        readTimeout: 8000,
+        expectDataType: http.HttpDataType.STRING
+      });
+      note = '握手居然完成了（对面不该给证书）';
+    } catch (error) {
+      note = `握手已发出（本地结果：${(error as Error).message}）`;
+    } finally {
+      try {
+        request.destroy();
+      } catch (error) {
+      }
+    }
+    const outcome: CaaOutcome = CaaSession.outcome(false,
+      `指纹探针：${note} → 去电脑上看 JA3（${host}:${port}）`, CaaSession.stepsText());
+    CaaSession.rememberDiag('指纹探针', outcome.reason, outcome.steps);
+    return outcome;
+  }
+
+  /**
    * 限流冷却还剩几分钟（0 = 可以试了）。
    *
    * 读 preferences 里的 `last_429_at`：冷却期内直接拒绝发请求，只提示还要等多久。

@@ -272,6 +272,57 @@ export struct CaaLoginCard {
         })
 
       /*
+       * **量 TLS 指纹**：往电脑上那个只收 ClientHello 的监听发一次握手，电脑侧算出 JA3。
+       * 上游那条"能过 429"的指纹是 `771,4865,0-43-10-51-13-16-45,29-23,`，一比就知道差在哪。
+       */
+      Text('量 TLS 指纹（连电脑 192.168.3.122:9443）')
+        .fontSize(12)
+        .fontColor($r('app.color.accent'))
+        .width('100%')
+        .onClick((): void => {
+          if (this.busy) {
+            return;
+          }
+          this.busy = true;
+          this.status = '正在握手中（电脑那边会打印 JA3）…';
+          this.steps = '';
+          CaaSession.fpProbe('192.168.3.122').then((outcome: CaaOutcome): void => {
+            this.busy = false;
+            this.status = outcome.reason;
+            this.steps = outcome.steps;
+          }).catch((error: Error): void => {
+            this.busy = false;
+            this.status = `指纹探针失败：${error.message}`;
+          });
+        })
+
+      /*
+       * **连接事实探针**：读 `performanceTiming` —— 这一发到底是 h1.1 还是 h2、TLS 几、
+       * 有没有复用旧连接、有没有走代理。上游 issue（instagrapi#2852）的修法就是"只提供 TLS 1.3"，
+       * 而"连接复用会让每条请求的 tlsOptions 失效"，所以必须先看清事实。
+       */
+      Text('连接事实探针（h1/h2 · TLS 版本 · 是否复用 · 是否代理）')
+        .fontSize(12)
+        .fontColor($r('app.color.accent'))
+        .width('100%')
+        .onClick((): void => {
+          if (this.busy) {
+            return;
+          }
+          this.busy = true;
+          this.status = '正在读连接事实（连发两发，强制 TLS1.3 + 新连接）…';
+          this.steps = '';
+          CaaSession.connProbe().then((outcome: CaaOutcome): void => {
+            this.busy = false;
+            this.status = outcome.reason;
+            this.steps = outcome.steps;
+          }).catch((error: Error): void => {
+            this.busy = false;
+            this.status = `连接事实探针失败：${error.message}`;
+          });
+        })
+
+      /*
        * **TLS 变体探针**：`http`/`rcp` 两套栈都 429、PC 发同一份却 200，说明挡在传输层特征上。
        * 系统只允许改 TLS 版本与密码套件，那就把这三档都试一遍。
        */
