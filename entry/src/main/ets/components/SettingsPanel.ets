@@ -54,6 +54,8 @@ import { AppProxy, ProxyEntry } from '../core/AppProxy';
 // 保存前的连通性探测（TCP + HTTP CONNECT，见 core/ProxyProbe）。
 import { ProxyCheckResult, ProxyProbe } from '../core/ProxyProbe';
 import { PlatformCap } from '../core/PlatformCap';
+// DoH（只作用于本 app 的登录链，见 core/net/DoHResolver）。
+import { DoHResolver } from '../core/net/DoHResolver';
 import { StoryDiag } from '../core/StoryDiag';
 import { ReelsCrashLog } from '../core/ReelsCrashLog';
 import { StoryTray } from '../model/Story';
@@ -205,7 +207,9 @@ const MATERIAL_THICKNESS_ORDER: string[] = [
 export struct SettingsPanel {
   /** 代理：总开关 / 已保存列表 / 当前选中 / 添加面板草稿。 */
   @State private proxyOn: boolean = false;
-  @State private proxyNames: Array<string> = [];
+  /** DoH（见 core/net/DoHResolver）：开关 + 一行现场（最近一次解析 / 降级原因）。 */
+  @State private dohOn: boolean = false;
+  @State private dohStatus: string = '';  @State private proxyNames: Array<string> = [];
   @State private proxyActive: number = -1;
   /**
    * 下拉按钮上显示的文字（**不要**直接绑 `currentProxyLabel()`）。
@@ -300,6 +304,75 @@ export struct SettingsPanel {
     // 代理列表/选中/下拉按钮文字：进页面就读一次（不要等 proxySection 的 onAppear，
     // 否则第一帧按钮上的文字是空的）。
     this.refreshProxyNames();
+    // DoH：进页面读一次开关 + 现场（登录链解析走哪条，见 core/net/DoHResolver）。
+    this.dohOn = DoHResolver.enabled();
+    this.dohStatus = DoHResolver.describe();
+  }
+
+  /**
+   * **网络（DoH）区**：一行开关 + 一行"测一下" + 一行现场。
+   *
+   * 为什么要这个开关：`Tls13Client` 那条登录链只用自建 TLS，域名解析却还得系统做；系统 DNS
+   * 在部分网络会被污染/劫持。DoH 只影响**本 app 这条链**（连 IP、SNI 与证书仍按域名），
+   * 失败自动降级，所以默认关、由用户自己打开（见 core/net/DoHResolver 的文件头）。
+   */
+  @Builder
+  dohSection() {
+    Column({ space: 0 }) {
+      Row({ space: 12 }) {
+        Column({ space: 3 }) {
+          Text('DNS over HTTPS（DoH）')
+            .fontSize(16)
+            .fontColor($r('app.color.primary_text'))
+          Text('登录链的域名解析改走加密 DNS；任何一步失败会自动退回系统解析。')
+            .fontSize(11)
+            .lineHeight(15)
+            .fontColor($r('app.color.secondary_text'))
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+
+        Toggle({ type: ToggleType.Switch, isOn: this.dohOn })
+          .selectedColor($r('app.color.switch_track_on'))
+          .switchPointColor($r('app.color.switch_knob'))
+          .onChange((on: boolean): void => {
+            this.dohOn = on;
+            AppSettings.setDohEnabled(on);
+            // 换了解析方式：缓存里那些 IP 不一定还合适，清掉。
+            DoHResolver.clear();
+            this.dohStatus = DoHResolver.describe();
+            hilog.info(DOMAIN, TAG, 'doh enabled=%{public}s', on ? 'y' : 'n');
+          })
+      }
+      .width('100%')
+      .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING, top: 12, bottom: 12 })
+
+      this.cardDivider()
+
+      this.actionRow('测一下 DoH 解析（i.instagram.com）', (): void => {
+        this.dohStatus = '正在解析 i.instagram.com …';
+        DoHResolver.probe('i.instagram.com')
+          .then((line: string): void => {
+            this.dohStatus = line;
+            ReelsCrashLog.note(`doh probe: ${line}`);
+            ReelsCrashLog.flush();
+          })
+          .catch((error: Error): void => {
+            this.dohStatus = `解析失败：${error.message}`;
+          });
+      })
+
+      this.cardDivider()
+
+      Text(this.dohStatus.length > 0 ? this.dohStatus : DoHResolver.describe())
+        .fontSize(11)
+        .lineHeight(15)
+        .fontColor($r('app.color.secondary_text'))
+        .width('100%')
+        .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING, top: 10, bottom: 12 })
+    }
+    .width('100%')
+    .cardStyle()
   }
 
   /**
@@ -2073,6 +2146,14 @@ export struct SettingsPanel {
       }
       ListItem() {
         this.relaySection()
+      }
+      .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+
+      ListItem() {
+        this.groupHeader('网络')
+      }
+      ListItem() {
+        this.dohSection()
       }
       .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
 

@@ -30,6 +30,12 @@ import { socket } from '@kit.NetworkKit';
 import { util } from '@kit.ArkTS';
 // 证书链校验（系统信任根）—— 自建通道必须验，否则等于把密码与会话交给中间人。
 import { cert } from '@kit.DeviceCertificateKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+// DoH（可选）：只把"连哪个 IP"这一步换掉，握手仍然按域名做（见 addressOf）。
+import { DoHResolver } from './DoHResolver';
+
+const DOMAIN: number = 0xFF00;
+const TAG: string = 'Tls13Client';
 
 const TLS_RECORD_HANDSHAKE: number = 22;
 const TLS_RECORD_APPDATA: number = 23;
@@ -1448,11 +1454,19 @@ export class Tls13Client {
    */
   static async request(host: string, port: number, method: string, path: string,
                        headers: Record<string, string>, body: string): Promise<TlsHttpReply> {
+    /*
+     * **域名解析：可选走 DoH**（见 core/net/DoHResolver，开关在设置页、默认关）。
+     *
+     * 连的是**解析出来的 IP**，但握手仍然按 `host` 做（SNI + 证书校验都在 `handshake(host)` 里）——
+     * 所以 DoH 只换"去哪儿"，不改"连的是谁"。拿不到 IP（未启用 / 端点全失败）就用域名，
+     * 交给系统 net stack —— DoH 是增强，不是依赖。
+     */
+    const address: string = await Tls13Client.addressOf(host);
     const tcp: socket.TCPSocket = socket.constructTCPSocketInstance();
     const stream: TcpStream = new TcpStream(tcp);
     stream.attach();
     await tcp.connect({
-      address: { address: host, family: 1, port: port },
+      address: { address: address, family: 1, port: port },
       timeout: 15000
     });
     const connection: Tls13Connection = new Tls13Connection(stream);
@@ -1466,19 +1480,40 @@ export class Tls13Client {
     }
   }
 
+  /**
+   * **连哪个地址**：开了 DoH 就用它解析出的 IPv4，否则（或解析失败）就用域名本身。
+   *
+   * 注意这只是"地址"：`handshake(host)` 里的 SNI 与证书校验**永远按域名** ——
+   * 连 IP 不影响 TLS 身份（这也是 DoH 能安全接进来的前提）。
+   */
+  private static async addressOf(host: string): Promise<string> {
+    try {
+      const ip: string = await DoHResolver.addressFor(host);
+      if (ip.length > 0 && ip !== host) {
+        hilog.info(DOMAIN, TAG, 'connect via doh host=%{public}s ip=%{public}s', host, ip);
+        return ip;
+      }
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'doh resolve failed host=%{public}s (%{public}s)',
+        host, (error as Error).message);
+    }
+    return host;
+  }
+
   /** 离线自检（RFC 8448 向量）—— 先把"算错"和"握手错"分开。 */
-  static async selfTest(): Promise<string> {
-    const tcp: socket.TCPSocket = socket.constructTCPSocketInstance();
+  static async selfTest(): Promise<string> {    const tcp: socket.TCPSocket = socket.constructTCPSocketInstance();
     const connection: Tls13Connection = new Tls13Connection(new TcpStream(tcp));
     return await connection.selfTest();
   }
 
   static async probe(host: string, port: number, requestText: string): Promise<string> {
+    // 与 request 同一条规则：DoH 开了就按解析出的 IP 连，握手仍按域名。
+    const address: string = await Tls13Client.addressOf(host);
     const tcp: socket.TCPSocket = socket.constructTCPSocketInstance();
     const stream: TcpStream = new TcpStream(tcp);
     stream.attach();
     await tcp.connect({
-      address: { address: host, family: 1, port: port },
+      address: { address: address, family: 1, port: port },
       timeout: 15000
     });
     const connection: Tls13Connection = new Tls13Connection(stream);

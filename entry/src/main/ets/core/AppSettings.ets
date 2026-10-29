@@ -106,6 +106,14 @@ export const SETTING_DARK_UI: string = 'isDarkUi';
  */
 export const SETTING_VIDEO_MUTED: string = 'videoMuted';
 /**
+ * **DoH 开关**（见 core/net/DoHResolver）：登录链（自建 TLS1.3 通道）的域名解析改走
+ * `DNS over HTTPS`，只影响本 app，不改系统设置。
+ *
+ * 默认**关**：DoH 端点在部分网络里不可达，没测过就默认打开等于给登录链多埋一个失败点。
+ * 打开之后任何一步失败都会自动退回系统解析（DoH 是增强，不是依赖）。
+ */
+export const SETTING_DOH: string = 'dohEnabled';
+/**
  * AppStorage 键：**「我的」页的分段按钮钉住了没有**（由 ProfilePage 在滚动时写）。
  *
  * 为什么要走 AppStorage：钉住之后那条分段按钮不再画在页面里，而是交给 **HDS 标题栏**
@@ -258,6 +266,8 @@ export class AppSettings {
       AppSettings.readString(SETTING_BAR_HIDE, BAR_HIDE_SINK));
     // 静音默认关（有声音）：布尔值单独读一次（readString 那套只处理字符串）。
     AppStorage.setOrCreate(SETTING_VIDEO_MUTED, AppSettings.readBool(SETTING_VIDEO_MUTED, false));
+    // DoH 开关（见 core/net/DoHResolver）：默认关，见 SETTING_DOH 的说明。
+    AppStorage.setOrCreate(SETTING_DOH, AppSettings.readBool(SETTING_DOH, false));
     // 图片/视频清晰度：默认**自适应**（按网络类型自己挑，见 core/MediaQuality）。
     AppStorage.setOrCreate(SETTING_IMAGE_QUALITY,
       AppSettings.readString(SETTING_IMAGE_QUALITY, MEDIA_QUALITY_AUTO));
@@ -320,6 +330,12 @@ export class AppSettings {
   static setVideoMuted(muted: boolean): void {
     AppStorage.setOrCreate(SETTING_VIDEO_MUTED, muted);
     AppSettings.write(SETTING_VIDEO_MUTED, muted ? '1' : '0');
+  }
+
+  /** DoH 开关（见 SETTING_DOH 的说明）。 */
+  static setDohEnabled(on: boolean): void {
+    AppStorage.setOrCreate(SETTING_DOH, on);
+    AppSettings.write(SETTING_DOH, on ? '1' : '0');
   }
 
   /** 读一个布尔设置（存的是 '1'/'0'）。 */
