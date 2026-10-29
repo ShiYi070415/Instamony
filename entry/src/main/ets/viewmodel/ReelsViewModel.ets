@@ -73,6 +73,15 @@ const DRAIN_MIN: number = 4;
  * 36 = 三个作者那页的量；到这个量就不再预取，等上屏把这批吃掉。
  */
 const PENDING_MAX: number = 36;
+/**
+ * **下拉刷新**一次上屏多少条，以及补货要攒到多少条才肯上屏（见 refreshBatch）。
+ *
+ * `REFRESH_SHOW = 12` 与一页的量一致：刷一次就该有一屏多可看。
+ * `REFRESH_MIN_PENDING = 12`：和"至少两家作者"一起当循环条件 —— 一页作者是 12 条同一个人，
+ * 攒到 12 条时才可能凑出两家，凑不出就再要一页。
+ */
+const REFRESH_SHOW: number = 12;
+const REFRESH_MIN_PENDING: number = 12;
 
 export class ReelsViewModel implements ReelStreamVm {
   /**
@@ -226,20 +235,18 @@ export class ReelsViewModel implements ReelStreamVm {
        * 根因：首屏那条链是 `clips/discover/`，它**永远是同一批 3~4 条**（见
        * core/mobileapi/MobileClips 的文件头：它的游标换不动内容）。所以"重新读第一页"
        * 拿回来的必然还是原来那几条 —— 顺序变一变，内容一条不新。
-       * 刷新改走"下一批"：作者页优先 → 探索流接着翻（`fetchFreshBatch` 就是翻页那条链），
-       * 这才是真正会换内容的一发；拿不到再退回原来读首屏的路。
+       * 刷新改走"下一批 + 按作者打散"（见 refreshBatch）：作者页优先 → 探索流接着翻，
+       * 这两条才是真的换内容；拿不到再退回原来读首屏的路。
        */
       if (forceFresh) {
-        const batch: NativeReelsPage | null = await NativeReels.fetchFreshBatch(this.source);
-        if (batch !== null && batch.reels.length > 0) {
-          this.noteCursor(batch.nextCursor);
-          this.applyFirstPage(batch);
-          hilog.info(DOMAIN, TAG, 'reels refresh batch n=%{public}d ms=%{public}d',
-            batch.reels.length, Date.now() - startedMs);
+        const shown: number = await this.refreshBatch();
+        if (shown > 0) {
+          hilog.info(DOMAIN, TAG, 'reels refresh batch shown=%{public}d ms=%{public}d',
+            shown, Date.now() - startedMs);
           this.prefetchNativePage();
           return;
         }
-        hilog.info(DOMAIN, TAG, 'reels refresh batch miss → fall back to first page');
+        hilog.info(DOMAIN, TAG, 'reels refresh batch empty → fall back to first page');
       }
       /*
        * **被限流也不能直接认输**（见 core/ApiThrottle）：
@@ -432,6 +439,45 @@ export class ReelsViewModel implements ReelStreamVm {
     // 被限流/没网时这几十条就是视频标签能显示的全部内容（见 core/ReelsCache）。
     ReelsCache.save(this.reels, ReelsCache.keyFor(this.source));
     return out.length;
+  }
+
+  /**
+   * **下拉刷新：换一批、并且按作者打散**（用户报的"刷新后连续 12 条都是同一个人"）。
+   *
+   * 为什么不能只吃"下一页"那一发：翻页的主力是 `clips/user/{pk}` —— **一次 12 条全是同一个人**
+   * （见 core/NativeReels 的补货池说明）。刷新要是只拿这一页，刷出来就是一屏同一个人，
+   * 比原来那固定四条还糟。
+   * 所以这里照 `requestMore` 那套先补到"至少两家作者"，再由 drainInterleaved 交替上屏；
+   * 上屏是**整体替换**（`reset()` 已经把列表清空，drain 是往里加，不是往旧的后面接）。
+   *
+   * @returns 上屏了几条（0 = 没换到东西，调用方退回读首屏）
+   */
+  private async refreshBatch(): Promise<number> {
+    const limited: boolean = ApiThrottle.blocked(ApiThrottle.CLIPS);
+    let rounds: number = 0;
+    while (rounds < 3
+      && (this.pendingAuthors() < 2 || this.pending.length < REFRESH_MIN_PENDING)) {
+      const page: NativeReelsPage | null = await this.nextPage(limited);
+      if (page === null) {
+        break;
+      }
+      const fresh: number = this.ingestPage(page);
+      rounds++;
+      hilog.info(DOMAIN, TAG,
+        'reels refresh fill n=%{public}d fresh=%{public}d authors=%{public}d round=%{public}d',
+        page.reels.length, fresh, this.pendingAuthors(), rounds);
+      if (fresh === 0) {
+        // 整页都是见过的（理论上 reset 之后不会）：这一发没意义，别再追加请求。
+        break;
+      }
+    }
+    if (this.pending.length === 0) {
+      return 0;
+    }
+    const added: number = this.drainInterleaved(REFRESH_SHOW, true);
+    hilog.info(DOMAIN, TAG, 'reels refresh batch added=%{public}d authors=%{public}d',
+      added, this.shownAuthors.size);
+    return added;
   }
 
   /** 首屏那一页：整页收进来再整页上屏（同样打散，首屏里也可能连着同一个人）。 */

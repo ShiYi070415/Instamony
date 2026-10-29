@@ -764,18 +764,6 @@ export class NativeReels {
   }
 
   /**
-   * **刷新要的那一批**（下拉刷新专用）：明确要"接下来的一批"，而不是再去问首屏。
-   *
-   * 为什么不能复用首屏（用户报的"刷新后前四条视频还是固定的，只有顺序不一样"）：
-   * `clips/discover/` 那一发**永远是同一批 3~4 条**（见 MobileClips 的文件头：它的游标
-   * 换不动内容），所以"重新读第一页"拿回来的必然还是原来那几条，最多顺序变一变。
-   * 真正会换内容的是翻页那条链（作者页 / 探索流的 `max_id`），见 fetchNextPage。
-   */
-  static async fetchFreshBatch(source: string): Promise<NativeReelsPage | null> {
-    return await NativeReels.fetchNextPage(source, NativeReels.CURSOR_SENTINEL);
-  }
-
-  /**
    * **好友流首屏**（这一页在界面上叫「好友」，内部键仍是 `REELS_SOURCE_FOLLOWING`）：
    * `clips/discover/social/`（好友）+ `clips/connected/`（你关注的人）并发。
    *
