@@ -1,4 +1,33 @@
-# App 内账密登录一直 429 —— 排查记录（2026-10-29）
+# App 内账密登录一直 429 —— 排查记录与最终解法（2026-10-29）
+
+> **已解决（真机验证：真账号登录成功、2FA 正常）**。
+> 一句话：IG 在 `send_login_request` 上按 **ClientHello 指纹**挑客户端，系统 TLS 栈那一份被挡；
+> 我们在 App 里**自己实现了 TLS 1.3 + 手拼 ClientHello**（JA3 对齐上游 instagrapi 社区验证过的那套），
+> 同一台手机、同一份请求，立刻从 429 变成 200，整条 CAA（含两步验证）跑通。
+
+## 最终解法（`entry/src/main/ets/core/net/Tls13Client.ets`）
+
+- 纯 ArkTS 手写 TLS 1.3：X25519 密钥交换（`createKeyAgreement('X25519')`）、
+  HKDF 自己做（`HMAC-SHA256`，RFC 8448 向量自检通过）、AES-128-GCM 记录层、
+  Finished 校验、ChangeCipherSpec 跳过、握手消息按消息重组；
+- **ClientHello 完全由我们拼**：TLS1.3-only、只 `TLS_AES_128_GCM_SHA256`、
+  扩展顺序 `SNI → supported_versions → supported_groups → key_share → signature_algorithms → ALPN → psk_modes`、
+  曲线只有 X25519/P-256 ⇒ **JA3 = `771,4865,0-43-10-51-13-16-45,29-23,`**
+  （＝上游 issue #2852 里"能过"的那一套）；
+- 证书校验：先试系统 PKIX（真机上对这条链一直失败），失败则退到
+  **叶子 SAN + 有效期 + 链首尾相接 + 中间证书 SPKI 钉住**
+  （当前白名单：`59e738e674221702af1edb87c5200c1a4b75f64fae3d2c3d265124c61bd83c79`，
+  DigiCert Global G2 TLS RSA SHA256 2020 CA1）；
+- `CaaLogin.post()` 全部改走这条通道（5 步 CAA），`qe/sync`（取密码加密公钥）仍走系统 `http`
+  —— 它不是登录端点，系统栈在那里是正常的。
+
+### 维护提醒
+- **中间证书换 CA/换中间证书时要更新那个 SPKI 白名单**，否则登录会明确报
+  "中间证书 SPKI 不在白名单"（不会静默失败）。
+- 自检入口：面板「自建 TLS1.3 通道试一发」会先跑 `SHA256/HMAC/HKDF/AES/nonce` 已知向量，
+  再打一发真实的 `send_login_request`，一行就能看出"算错"还是"被挡"。
+
+## 排查过程（留作后人参考）
 
 > 结论先说：**不是账号、不是 IP、不是设备身份、不是请求内容、不是 HTTP 框架**。
 > 桌面链路（`tools/relay`，Node）发同一份字节是 **200**；手机 App 发同一份字节是 **429**，

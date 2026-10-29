@@ -1,0 +1,1499 @@
+/*
+ * **自己实现的 TLS 1.3 客户端（ArkTS）** —— 目的只有一个：**完全掌控 ClientHello 的字节**。
+ *
+ * ## 为什么要自己写
+ * 真机实测（见 `tools/relay/LOGIN-429.md` 与 `CaaSession.connProbe/fpProbe`）：
+ *   · App 的登录那一发已经是 `TLS 1.3 + TLS_AES_128_GCM_SHA256 + HTTP/2`、没走代理，仍然 429；
+ *   · 手机这条栈的 JA3 是
+ *       `771,4865-4866-4867-49195-…-156-157-47-53,23-65281-10-11-16-13-51-45-43,29-23-24,0`
+ *   · 上游 issue（subzeroid/instagrapi#2852）里被多人确认"能过"的指纹是
+ *       `771,4865,0-43-10-51-13-16-45,29-23,`
+ * 也就是说：**IG 的 edge 在登录端点上按 ClientHello 挑客户端**。系统的 `http` / `TLSSocket`
+ * 都不给"扩展集合/顺序/曲线"的旋钮，所以只能自己拼 ClientHello 自己握手。
+ *
+ * ## 依赖的系统能力（都在 `@kit.CryptoArchitectureKit` 里）
+ *   · X25519 密钥对与密钥协商：`createAsyKeyGenerator('X25519')` / `createKeyAgreement('X25519')`；
+ *   · HKDF-SHA256：`createKdf('HKDF|SHA256|EXTRACT_AND_EXPAND')`；
+ *   · AES-128-GCM：`createCipher('AES128|GCM|NoPadding')`；
+ *   · HMAC-SHA256（Finished 校验）：`createMac('SHA256')`；
+ *   · 原始 TCP：`@ohos.net.socket` 的 `constructTCPSocketInstance()`。
+ *
+ * ## 覆盖范围（够我们用就行）
+ *   · 只做 **TLS 1.3**、只用 **TLS_AES_128_GCM_SHA256**、只做 **X25519** 密钥交换；
+ *   · **不做证书链校验**（第一版；后续可以用 `@ohos.security.cert` 补，或钉 SPKI）；
+ *   · 只支持 TLS 1.3 的 `psk_key_exchange_modes: [psk_dhe_ke]`（无 PSK、无 0-RTT）；
+ *   · 握手完成后把 HTTP/1.1 请求写上去、读回响应（够 CAA 那几个 form POST 用）。
+ */
+
+import { cryptoFramework } from '@kit.CryptoArchitectureKit';
+import { socket } from '@kit.NetworkKit';
+import { util } from '@kit.ArkTS';
+// 证书链校验（系统信任根）—— 自建通道必须验，否则等于把密码与会话交给中间人。
+import { cert } from '@kit.DeviceCertificateKit';
+
+const TLS_RECORD_HANDSHAKE: number = 22;
+const TLS_RECORD_APPDATA: number = 23;
+const TLS_VERSION_10: number = 0x0301;
+const TLS_VERSION_12: number = 0x0303;
+const TLS_VERSION_13: number = 0x0304;
+const HANDSHAKE_CLIENT_HELLO: number = 1;
+const HANDSHAKE_SERVER_HELLO: number = 2;
+const HANDSHAKE_ENCRYPTED_EXTENSIONS: number = 8;
+const HANDSHAKE_CERTIFICATE: number = 11;
+const HANDSHAKE_CERTIFICATE_VERIFY: number = 15;
+const HANDSHAKE_FINISHED: number = 20;
+const EXT_SERVER_NAME: number = 0;
+const EXT_SUPPORTED_GROUPS: number = 10;
+const EXT_SIGNATURE_ALGORITHMS: number = 13;
+const EXT_ALPN: number = 16;
+const EXT_SUPPORTED_VERSIONS: number = 43;
+const EXT_PSK_KEY_EXCHANGE_MODES: number = 45;
+const EXT_KEY_SHARE: number = 51;
+const GROUP_X25519: number = 0x001d;
+const GROUP_P256: number = 0x0017;
+const CIPHER_AES_128_GCM_SHA256: number = 0x1301;
+
+/* ------------------------------------------------------------ 字节工具 */
+
+class ByteWriter {
+  private buffer: Uint8Array;
+  private length: number = 0;
+
+  constructor(capacity: number = 512) {
+    this.buffer = new Uint8Array(capacity);
+  }
+
+  private ensure(extra: number): void {
+    if (this.length + extra <= this.buffer.length) {
+      return;
+    }
+    let next: number = this.buffer.length * 2;
+    while (next < this.length + extra) {
+      next = next * 2;
+    }
+    const grown: Uint8Array = new Uint8Array(next);
+    grown.set(this.buffer.subarray(0, this.length), 0);
+    this.buffer = grown;
+  }
+
+  u8(value: number): ByteWriter {
+    this.ensure(1);
+    this.buffer[this.length++] = value & 0xFF;
+    return this;
+  }
+
+  u16(value: number): ByteWriter {
+    this.ensure(2);
+    this.buffer[this.length++] = (value >> 8) & 0xFF;
+    this.buffer[this.length++] = value & 0xFF;
+    return this;
+  }
+
+  u24(value: number): ByteWriter {
+    this.ensure(3);
+    this.buffer[this.length++] = (value >> 16) & 0xFF;
+    this.buffer[this.length++] = (value >> 8) & 0xFF;
+    this.buffer[this.length++] = value & 0xFF;
+    return this;
+  }
+
+  raw(bytes: Uint8Array): ByteWriter {
+    this.ensure(bytes.length);
+    this.buffer.set(bytes, this.length);
+    this.length += bytes.length;
+    return this;
+  }
+
+  /** 占位并回填长度（TLS 里到处是"先占位、后填长度"的向量）。 */
+  patchU16(at: number, value: number): void {
+    this.buffer[at] = (value >> 8) & 0xFF;
+    this.buffer[at + 1] = value & 0xFF;
+  }
+
+  patchU24(at: number, value: number): void {
+    this.buffer[at] = (value >> 16) & 0xFF;
+    this.buffer[at + 1] = (value >> 8) & 0xFF;
+    this.buffer[at + 2] = value & 0xFF;
+  }
+
+  get size(): number {
+    return this.length;
+  }
+
+  bytes(): Uint8Array {
+    return this.buffer.subarray(0, this.length);
+  }
+}
+
+class ByteReader {
+  private readonly data: Uint8Array;
+  private at: number = 0;
+
+  constructor(data: Uint8Array) {
+    this.data = data;
+  }
+
+  get remaining(): number {
+    return this.data.length - this.at;
+  }
+
+  get offset(): number {
+    return this.at;
+  }
+
+  seek(at: number): void {
+    this.at = at;
+  }
+
+  u8(): number {
+    return this.data[this.at++];
+  }
+
+  u16(): number {
+    const value: number = (this.data[this.at] << 8) | this.data[this.at + 1];
+    this.at += 2;
+    return value;
+  }
+
+  u24(): number {
+    const value: number = (this.data[this.at] << 16) | (this.data[this.at + 1] << 8)
+      | this.data[this.at + 2];
+    this.at += 3;
+    return value;
+  }
+
+  take(n: number): Uint8Array {
+    const out: Uint8Array = this.data.subarray(this.at, this.at + n);
+    this.at += n;
+    return out;
+  }
+}
+
+function concat(parts: Array<Uint8Array>): Uint8Array {
+  let total: number = 0;
+  for (let index: number = 0; index < parts.length; index++) {
+    total += parts[index].length;
+  }
+  const out: Uint8Array = new Uint8Array(total);
+  let at: number = 0;
+  for (let index: number = 0; index < parts.length; index++) {
+    out.set(parts[index], at);
+    at += parts[index].length;
+  }
+  return out;
+}
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let index: number = 0; index < a.length; index++) {
+    if (a[index] !== b[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  const out: Uint8Array = new Uint8Array(hex.length / 2);
+  for (let index: number = 0; index < out.length; index++) {
+    out[index] = Number.parseInt(hex.substring(index * 2, index * 2 + 2), 16);
+  }
+  return out;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  let out: string = '';
+  for (let index: number = 0; index < bytes.length; index++) {
+    out += bytes[index].toString(16).padStart(2, '0');
+  }
+  return out;
+}
+
+function startsWith(bytes: Uint8Array, head: Array<number>): boolean {
+  if (bytes.length < head.length) {
+    return false;
+  }
+  for (let index: number = 0; index < head.length; index++) {
+    if (bytes[index] !== head[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/* --------------------------------------------------------- TCP 读缓冲 */
+
+/**
+ * TCP 上的字节流：把 `on('message')` 的回调攒成"能按需读 N 字节"的接口。
+ *
+ * 手写 TLS 就是一路 `read(n)`，所以这层必须有；出错/对端关闭都要能让等在 read 里的
+ * Promise 立刻醒来（否则会挂到超时）。
+ */
+class TcpStream {
+  private readonly tcp: socket.TCPSocket;
+  private chunks: Array<Uint8Array> = [];
+  private total: number = 0;
+  private closed: boolean = false;
+  private failure: string = '';
+  private wake: (() => void) | null = null;
+
+  constructor(tcp: socket.TCPSocket) {
+    this.tcp = tcp;
+  }
+
+  attach(): void {
+    this.tcp.on('message', (info: socket.SocketMessageInfo): void => {
+      this.chunks.push(new Uint8Array(info.message));
+      this.total += info.message.byteLength;
+      this.wakeup();
+    });
+    this.tcp.on('close', (): void => {
+      this.closed = true;
+      this.wakeup();
+    });
+    this.tcp.on('error', (error: Object): void => {
+      this.failure = `${(error as Error).message}`;
+      this.closed = true;
+      this.wakeup();
+    });
+  }
+
+  private wakeup(): void {
+    const waiter: (() => void) | null = this.wake;
+    this.wake = null;
+    if (waiter !== null) {
+      waiter();
+    }
+  }
+
+  async write(bytes: Uint8Array): Promise<void> {
+    await this.tcp.send({ data: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length) });
+  }
+
+  /** 读够 n 字节（不够就等；超时/断开则抛错）。 */
+  async read(n: number, timeoutMs: number = 20000): Promise<Uint8Array> {
+    const deadline: number = Date.now() + timeoutMs;
+    while (this.total < n) {
+      if (this.failure.length > 0) {
+        throw new Error(`TCP 读失败：${this.failure}`);
+      }
+      if (this.closed) {
+        throw new Error(`TCP 已关闭（只收到 ${this.total}/${n} 字节）`);
+      }
+      const left: number = deadline - Date.now();
+      if (left <= 0) {
+        throw new Error(`TCP 读超时（只收到 ${this.total}/${n} 字节）`);
+      }
+      await new Promise<void>((resolve): void => {
+        this.wake = resolve;
+        setTimeout((): void => {
+          if (this.wake === resolve) {
+            this.wake = null;
+            resolve();
+          }
+        }, Math.min(left, 250));
+      });
+    }
+    const out: Uint8Array = new Uint8Array(n);
+    let filled: number = 0;
+    while (filled < n) {
+      const head: Uint8Array = this.chunks[0];
+      const need: number = n - filled;
+      if (head.length <= need) {
+        out.set(head, filled);
+        filled += head.length;
+        this.chunks.shift();
+      } else {
+        out.set(head.subarray(0, need), filled);
+        this.chunks[0] = head.subarray(need);
+        filled += need;
+      }
+    }
+    this.total -= n;
+    return out;
+  }
+
+  async close(): Promise<void> {
+    try {
+      await this.tcp.close();
+    } catch (error) {
+    }
+  }
+}
+
+/* ------------------------------------------------------------- 握手 */
+
+/** 一次 TLS 1.3 连接（握手 + 收发应用数据）。 */
+export class Tls13Connection {
+  private readonly stream: TcpStream;
+  private clientKeyPair: cryptoFramework.KeyPair | null = null;
+  private clientPub: Uint8Array = new Uint8Array(0);
+  private transcript: Array<Uint8Array> = [];
+  private sendKey: Uint8Array = new Uint8Array(16);
+  private sendIv: Uint8Array = new Uint8Array(12);
+  private recvKey: Uint8Array = new Uint8Array(16);
+  private recvIv: Uint8Array = new Uint8Array(12);
+  private sendSeq: number = 0;
+  private recvSeq: number = 0;
+  /** 握手阶段用的密钥（Finished 之后换成应用密钥）。 */
+  private handshakeSendKey: Uint8Array = new Uint8Array(16);
+  private handshakeSendIv: Uint8Array = new Uint8Array(12);
+  private handshakeRecvKey: Uint8Array = new Uint8Array(16);
+  private handshakeRecvIv: Uint8Array = new Uint8Array(12);
+  private handshakeSendSeq: number = 0;
+  private handshakeRecvSeq: number = 0;
+  private recordBuffer: Uint8Array = new Uint8Array(0);
+  private plainHandshakeBuffer: Uint8Array = new Uint8Array(0);
+  /** 服务端证书链（DER，叶子在前）—— 握手后要做 PKIX 校验与域名比对。 */
+  private serverCerts: Array<Uint8Array> = [];
+  /** 当前连接的主机名（拼 `Host` 头用）。 */
+  private host: string = '';
+  /** 握手过程的现场（失败时给诊断用）。 */
+  log: string = '';
+
+  constructor(stream: TcpStream) {
+    this.stream = stream;
+  }
+
+  private note(line: string): void {
+    this.log = this.log.length === 0 ? line : `${this.log} → ${line}`;
+  }
+
+  private addTranscript(bytes: Uint8Array): void {
+    this.transcript.push(bytes);
+  }
+
+  private transcriptHash(): Uint8Array {
+    const all: Uint8Array = concat(this.transcript);
+    const md: cryptoFramework.Md = cryptoFramework.createMd('SHA256');
+    md.updateSync({ data: all });
+    return md.digestSync().data;
+  }
+
+  /**
+   * TLS 1.3 的 HKDF-Expand-Label。
+   *
+   * **自己用 HMAC 实现**（不用系统的 KDF 接口）：鸿蒙的 `createKdf` 对"空 salt / EXTRACT_ONLY"
+   * 这些边角语义不明确（真机上直接回 `crypto operation error`），而 TLS 1.3 的
+   * Extract/Expand 本身就是两行 HMAC，自己算反而更可控。
+   */
+  private async expandLabel(secret: Uint8Array, label: string, context: Uint8Array,
+                            length: number): Promise<Uint8Array> {
+    const labelBytes: Uint8Array = new util.TextEncoder().encodeInto(`tls13 ${label}`);
+    const info: ByteWriter = new ByteWriter(64);
+    info.u16(length);
+    info.u8(labelBytes.length);
+    info.raw(labelBytes);
+    info.u8(context.length);
+    info.raw(context);
+    return await this.hkdfExpand(secret, info.bytes(), length);
+  }
+
+  /** HKDF-Extract = HMAC(salt, ikm)；salt 为空按 32 个 0 处理（RFC 5869）。 */
+  private async hkdfExtract(salt: Uint8Array, ikm: Uint8Array): Promise<Uint8Array> {
+    const effectiveSalt: Uint8Array = salt.length > 0 ? salt : new Uint8Array(32);
+    const secret: Uint8Array = await this.hmacSha256(effectiveSalt, ikm);
+    return secret;
+  }
+
+  /** HKDF-Expand（RFC 5869 §2.3）。 */
+  private async hkdfExpand(secret: Uint8Array, info: Uint8Array, length: number): Promise<Uint8Array> {
+    const chunks: Array<Uint8Array> = [];
+    let previous: Uint8Array = new Uint8Array(0);
+    let produced: number = 0;
+    let counter: number = 1;
+    while (produced < length) {
+      const input: Uint8Array = concat([previous, info, new Uint8Array([counter & 0xFF])]);
+      previous = await this.hmacSha256(secret, input);
+      chunks.push(previous);
+      produced += previous.length;
+      counter++;
+    }
+    const all: Uint8Array = concat(chunks);
+    return all.subarray(0, length);
+  }
+
+  /**
+   * HMAC-SHA256（Finished 校验用）。
+   *
+   * 注意 `Mac.init()` 收的是 **SymKey**，不是字节 —— 得先用 `SymKeyGenerator('HMAC')` 把
+   * 密钥字节转成对称密钥对象（官方 HMAC 示例就是这个写法）。
+   */
+  private async hmacSha256(key: Uint8Array, data: Uint8Array): Promise<Uint8Array> {
+    const keyGenerator: cryptoFramework.SymKeyGenerator =
+      cryptoFramework.createSymKeyGenerator('HMAC');
+    const keyBlob: cryptoFramework.DataBlob = { data: key };
+    const symKey: cryptoFramework.SymKey = keyGenerator.convertKeySync(keyBlob);
+    const mac: cryptoFramework.Mac = cryptoFramework.createMac('SHA256');
+    await mac.init(symKey);
+    mac.updateSync({ data: data });
+    return mac.doFinalSync().data;
+  }
+
+  private async aesGcmEncrypt(key: Uint8Array, nonce: Uint8Array, aad: Uint8Array,
+                              plaintext: Uint8Array): Promise<Uint8Array> {
+    const generator: cryptoFramework.SymKeyGenerator = cryptoFramework.createSymKeyGenerator('AES128');
+    const keyBlob: cryptoFramework.DataBlob = { data: key };
+    const symKey: cryptoFramework.SymKey = generator.convertKeySync(keyBlob);
+    const params: cryptoFramework.GcmParamsSpec = {
+      algName: 'GcmParamsSpec',
+      iv: { data: nonce },
+      aad: { data: aad },
+      authTag: { data: new Uint8Array(16) }
+    };
+    const cipher: cryptoFramework.Cipher = cryptoFramework.createCipher('AES128|GCM|NoPadding');
+    await cipher.init(cryptoFramework.CryptoMode.ENCRYPT_MODE, symKey, params);
+    const out: cryptoFramework.DataBlob = await cipher.doFinal({ data: plaintext });
+    return out.data;
+  }
+
+  private async aesGcmDecrypt(key: Uint8Array, nonce: Uint8Array, aad: Uint8Array,
+                              ciphertextAndTag: Uint8Array): Promise<Uint8Array> {
+    const bodyLength: number = ciphertextAndTag.length - 16;
+    const body: Uint8Array = ciphertextAndTag.subarray(0, bodyLength);
+    const tag: Uint8Array = ciphertextAndTag.subarray(bodyLength);
+    const generator: cryptoFramework.SymKeyGenerator = cryptoFramework.createSymKeyGenerator('AES128');
+    const keyBlob: cryptoFramework.DataBlob = { data: key };
+    const symKey: cryptoFramework.SymKey = generator.convertKeySync(keyBlob);
+    const params: cryptoFramework.GcmParamsSpec = {
+      algName: 'GcmParamsSpec',
+      iv: { data: nonce },
+      aad: { data: aad },
+      authTag: { data: tag }
+    };
+    const cipher: cryptoFramework.Cipher = cryptoFramework.createCipher('AES128|GCM|NoPadding');
+    await cipher.init(cryptoFramework.CryptoMode.DECRYPT_MODE, symKey, params);
+    const out: cryptoFramework.DataBlob = await cipher.doFinal({ data: body });
+    return out.data;
+  }
+
+  /** nonce = iv XOR (seq 放在最后 8 字节的大端)。 */
+  private nonceOf(iv: Uint8Array, seq: number): Uint8Array {
+    const out: Uint8Array = new Uint8Array(iv);
+    let value: number = seq;
+    for (let index: number = 0; index < 8; index++) {
+      out[iv.length - 1 - index] = iv[iv.length - 1 - index] ^ (value & 0xFF);
+      value = Math.floor(value / 256);
+    }
+    return out;
+  }
+
+  /**
+   * **离线自检**：用 RFC 8448 的已知向量验 HKDF/AES/nonce，把"哪一步算错"在真机上当场分开。
+   *
+   * 手写 TLS 的错都长一个样（`cipher doFinal failed` / `crypto operation error`），
+   * 没有这个自检的话，只能靠人肉猜。它**不联网、不需要账号**。
+   */
+  async selfTest(): Promise<string> {
+    const lines: Array<string> = [];
+    // ⓪ SHA-256 与 HMAC-SHA256 的已知对（"哪一层算错"最靠前的排查点）
+    const md: cryptoFramework.Md = cryptoFramework.createMd('SHA256');
+    md.updateSync({ data: new util.TextEncoder().encodeInto('abc') });
+    const digest: string = bytesToHex(md.digestSync().data);
+    lines.push('SHA256(abc) ' + (digest === 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
+      ? 'OK' : 'MISMATCH:' + digest));
+    const macKey: Uint8Array = new util.TextEncoder().encodeInto('key');
+    const macData: Uint8Array = new util.TextEncoder().encodeInto(
+      'The quick brown fox jumps over the lazy dog');
+    const macOut: string = bytesToHex(await this.hmacSha256(macKey, macData));
+    lines.push('HMAC-SHA256 ' + (macOut === 'f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8'
+      ? 'OK' : 'MISMATCH:' + macOut));
+
+    // ① Derive-Secret(early_secret, "derived", "") —— RFC 8448 §3 的已知对
+    const early: Uint8Array = hexToBytes(
+      '33ad0a1c607ec03b09e6cd9893680ce210adf300aa1f2660e1b22e10f170f92a');
+    const expectedDerived: string = '6f2615a108c702c5678f54fc9dbab69716c076189c48250cebeac3576c3611ba';
+    const derived: Uint8Array = await this.expandLabel(early, 'derived', await this.hashEmpty(), 32);
+    lines.push('HKDF-derived ' + (bytesToHex(derived) === expectedDerived
+      ? 'OK' : 'MISMATCH:' + bytesToHex(derived)));
+
+    // ② AES-128-GCM 加解密往返（自己加密自己解，能分开"加密错"还是"解密错"）
+    const key: Uint8Array = new Uint8Array(16);
+    const iv: Uint8Array = new Uint8Array(12);
+    const plain: Uint8Array = new util.TextEncoder().encodeInto('abc');
+    const ct: Uint8Array = await this.aesGcmEncrypt(key, iv, new Uint8Array(0), plain);
+    const back: Uint8Array = await this.aesGcmDecrypt(key, iv, new Uint8Array(0), ct);
+    lines.push('AES-GCM roundtrip ' + (bytesEqual(plain, back) ? 'OK' : 'FAIL'));
+
+    // ③ nonce XOR
+    const n1: Uint8Array = this.nonceOf(iv, 1);
+    const n256: Uint8Array = this.nonceOf(iv, 256);
+    const nonceOk: boolean = n1[11] === 1 && n1[10] === 0 && n256[10] === 1 && n256[11] === 0;
+    lines.push('nonce ' + (nonceOk ? 'OK' : 'FAIL'));
+    return lines.join(' | ');
+  }
+
+  /** 生成 X25519 密钥对，导出 32 字节公钥。 */
+  private async makeKeyPair(): Promise<void> {
+    const generator: cryptoFramework.AsyKeyGenerator =
+      cryptoFramework.createAsyKeyGenerator('X25519');
+    const pair: cryptoFramework.KeyPair = await generator.generateKeyPair();
+    this.clientKeyPair = pair;
+    const encoded: cryptoFramework.DataBlob = pair.pubKey.getEncoded();
+    // X25519 的 data 就是 32 字节裸公钥（不是 DER）。
+    this.clientPub = encoded.data.length === 32
+      ? encoded.data : encoded.data.subarray(encoded.data.length - 32);
+  }
+
+  /**
+   * 拼 ClientHello —— **这就是整个方案的核心**：扩展集合与顺序照上游那套"能过"的指纹来。
+   *
+   * 目标 JA3：`771,4865,0-43-10-51-13-16-45,29-23,`
+   *   · 密码套件只有 4865（TLS_AES_128_GCM_SHA256）；
+   *   · 扩展顺序：SNI(0) → supported_versions(43) → supported_groups(10) → key_share(51)
+   *     → signature_algorithms(13) → ALPN(16) → psk_key_exchange_modes(45)；
+   *   · 曲线只有 X25519(29) 与 P-256(23)；
+   *   · 不发 ec_point_formats / extended_master_secret / renegotiation_info。
+   */
+  private buildClientHello(host: string): Uint8Array {
+    const random: Uint8Array = cryptoFramework.createRandom().generateRandomSync(32).data;
+    const sessionId: Uint8Array = cryptoFramework.createRandom().generateRandomSync(32).data;
+    const body: ByteWriter = new ByteWriter(512);
+    body.u16(TLS_VERSION_12);              // legacy_version
+    body.raw(random);
+    body.u8(sessionId.length);
+    body.raw(sessionId);
+    body.u16(2);                           // cipher_suites 长度
+    body.u16(CIPHER_AES_128_GCM_SHA256);
+    body.u8(1);                            // compression_methods
+    body.u8(0);
+    const extLengthAt: number = body.size;
+    body.u16(0);
+    const extStart: number = body.size;
+
+    // 0 SNI
+    const hostBytes: Uint8Array = new util.TextEncoder().encodeInto(host);
+    const sni: ByteWriter = new ByteWriter(64);
+    sni.u16(hostBytes.length + 3);
+    sni.u8(0);
+    sni.u16(hostBytes.length);
+    sni.raw(hostBytes);
+    body.u16(EXT_SERVER_NAME);
+    body.u16(sni.size);
+    body.raw(sni.bytes());
+
+    // 43 supported_versions：只给 TLS 1.3
+    body.u16(EXT_SUPPORTED_VERSIONS);
+    body.u16(3);
+    body.u8(2);
+    body.u16(TLS_VERSION_13);
+
+    // 10 supported_groups：X25519、P-256
+    body.u16(EXT_SUPPORTED_GROUPS);
+    body.u16(6);
+    body.u16(4);
+    body.u16(GROUP_X25519);
+    body.u16(GROUP_P256);
+
+    // 51 key_share：一个 X25519 密钥
+    const keyShare: ByteWriter = new ByteWriter(64);
+    keyShare.u16(this.clientPub.length + 4);
+    keyShare.u16(GROUP_X25519);
+    keyShare.u16(this.clientPub.length);
+    keyShare.raw(this.clientPub);
+    body.u16(EXT_KEY_SHARE);
+    body.u16(keyShare.size);
+    body.raw(keyShare.bytes());
+
+    // 13 signature_algorithms：ECDSA-P256-SHA256、ECDSA-P384-SHA384、RSA-PSS-SHA256
+    body.u16(EXT_SIGNATURE_ALGORITHMS);
+    body.u16(8);
+    body.u16(6);
+    body.u16(0x0403);
+    body.u16(0x0503);
+    body.u16(0x0804);
+
+    // 16 ALPN：http/1.1（JA3 不含 ALPN 内容；真机能力有限，先走 HTTP/1.1）
+    const alpnText: Uint8Array = new util.TextEncoder().encodeInto('http/1.1');
+    const alpn: ByteWriter = new ByteWriter(32);
+    alpn.u16(alpnText.length + 1);
+    alpn.u8(alpnText.length);
+    alpn.raw(alpnText);
+    body.u16(EXT_ALPN);
+    body.u16(alpn.size);
+    body.raw(alpn.bytes());
+
+    // 45 psk_key_exchange_modes：psk_dhe_ke
+    body.u16(EXT_PSK_KEY_EXCHANGE_MODES);
+    body.u16(2);
+    body.u8(1);
+    body.u8(1);
+
+    body.patchU16(extLengthAt, body.size - extStart);
+
+    const handshake: ByteWriter = new ByteWriter(body.size + 8);
+    handshake.u8(HANDSHAKE_CLIENT_HELLO);
+    handshake.u24(body.size);
+    handshake.raw(body.bytes());
+    return handshake.bytes();
+  }
+
+  /**
+   * 解析 Certificate 握手消息，把每张证书的 DER 抠出来存进 `serverCerts`。
+   *
+   * 结构（RFC 8446 §4.4.2）：
+   *   `certificate_request_context`（1 字节长度 + 内容，通常为空）
+   *   `certificate_list`（3 字节总长；每项：3 字节证书长 + DER）
+   */
+  private parseCertificate(message: Uint8Array): void {
+    this.serverCerts = [];
+    const reader: ByteReader = new ByteReader(message);
+    reader.u8();                        // handshake type
+    reader.u24();                       // handshake length
+    const contextLength: number = reader.u8();
+    reader.take(contextLength);
+    const listLength: number = reader.u24();
+    const listEnd: number = reader.offset + listLength;
+    this.note(`CertList total=${listLength}B at=${reader.offset}`);
+    while (reader.offset + 3 <= listEnd) {
+      const certLength: number = reader.u24();
+      if (certLength <= 0 || reader.offset + certLength > listEnd + 3) {
+        this.note(`  cert 长度异常 ${certLength}B（剩余 ${listEnd - reader.offset}B）`);
+        break;
+      }
+      const der: Uint8Array = reader.take(certLength);
+      // DER 自校验：证书必须是 0x30 开头的 SEQUENCE，且自身长度要和 3 字节长度对上。
+      const derTotal: number = Tls13Connection.derTotalLength(der);
+      if (der[0] !== 0x30 || (derTotal > 0 && derTotal !== certLength)) {
+        this.note(`  cert DER 不符 tag=0x${der[0].toString(16)} claimed=${certLength}`
+          + ` der=${derTotal}`);
+      }
+      this.serverCerts.push(der);
+      /*
+       * **每一项后面还有 2 字节的 `extensions` 长度**（RFC 8446 §4.4.2 的 CertificateEntry）。
+       * 不跳过它就会错位 2 字节 —— 真机上表现是"第二张证书长度读成 0、只能解析出 1 张"。
+       */
+      if (reader.remaining >= 2) {
+        const extLength: number = reader.u16();
+        if (extLength > 0 && reader.remaining >= extLength) {
+          reader.take(extLength);
+        }
+      }
+    }
+    this.note(`  解析出 ${this.serverCerts.length} 张：`
+      + this.serverCerts.map((one: Uint8Array): string => `${one.length}`).join('/'));
+  }
+
+  /** 读 DER 的 TLV 总长度（读不出来返回 -1）。 */
+  static derTotalLength(der: Uint8Array): number {
+    if (der.length < 2) {
+      return -1;
+    }
+    const first: number = der[1];
+    if ((first & 0x80) === 0) {
+      return 2 + first;
+    }
+    const count: number = first & 0x7F;
+    if (count < 1 || count > 3 || der.length < 2 + count) {
+      return -1;
+    }
+    let length: number = 0;
+    for (let index: number = 0; index < count; index++) {
+      length = length * 256 + der[2 + index];
+    }
+    return 2 + count + length;
+  }
+
+  /**
+   * **校验服务端身份**：PKIX 链校验（系统信任根）+ 域名比对。
+   *
+   * 为什么必须做：这条通道是我们自己实现的，跳过了证书就等于"谁都能中间人"——
+   * 登录会把加密后的密码与会话材料交给对方。链校验过了，中间人拿不到 `b.i.instagram.com`
+   * 的合法证书，就不可能在中间插一脚。
+   */
+  private async validatePeer(host: string): Promise<void> {
+    if (this.serverCerts.length === 0) {
+      throw new Error('服务端没给证书');
+    }
+    // 先把"到底是什么证书"记进现场：链校验失败时没有这个就只能瞎猜。
+    try {
+      const leafBlob0: cert.EncodingBlob = {
+        data: this.serverCerts[0],
+        encodingFormat: cert.EncodingFormat.FORMAT_DER
+      };
+      const leafCert: cert.X509Cert = await cert.createX509Cert(leafBlob0);
+      this.note(`证书 leaf=${leafCert.getSubjectName().data} issuer=${leafCert.getIssuerName().data}`);
+    } catch (error) {
+      this.note(`证书信息读取失败：${(error as Error).message}`);
+    }
+    /*
+     * 链校验：**DER 与 PEM 两种形状都试一次**。
+     *
+     * 鸿蒙的 `CertChainValidator.validate(CertChainData)` 在不同版本上对
+     * `encodingFormat` 的支持不完全一致（真机这里 DER 回 `validate cert chain failed`），
+     * 所以两条都走，任一通过即可。
+     */
+    let lastError: string = '';
+    // 先把每张证书的 SPKI 哈希与"链是否首尾相接"记进现场（链校验失败时要靠这些定位/钉根）。
+    await this.describeChain();
+    const derChain: cert.CertChainData = {
+      data: concat(this.serverCerts),
+      count: this.serverCerts.length,
+      encodingFormat: cert.EncodingFormat.FORMAT_DER
+    };
+    try {
+      await cert.createCertChainValidator('PKIX').validate(derChain);
+      this.note('证书链 ok(PKIX)');
+      await this.checkHostName(host);
+      return;
+    } catch (error) {
+      lastError = (error as Error).message;
+      this.note(`PKIX 失败：${lastError.substring(0, 40)}`);
+    }
+    /*
+     * **PKIX 不可用时的钉住校验**。
+     *
+     * 真机上 `CertChainValidator` 对这条链（叶子 + DigiCert Global G2 中间证书）一直回
+     * `validate cert chain failed`，而证书本身是好的（叶子的 issuer 就是它）。所以退一步按
+     * **中间证书 SPKI 钉住**来验：
+     *   ① 叶子 SAN 必须覆盖主机名；
+     *   ② 叶子在有效期内；
+     *   ③ 叶子的 issuer == 中间证书 subject（链首尾相接）；
+     *   ④ 中间证书的 SPKI SHA-256 在**硬编码白名单**里。
+     * 这四条一起就排除了中间人：攻击者拿不到由"那本中间证书"签发的叶子证书。
+     */
+    await this.checkHostName(host);
+    await this.checkPinnedChain();
+  }
+
+  /** 叶子有效期 + 链首尾相接 + 中间证书 SPKI 钉住。 */
+  private async checkPinnedChain(): Promise<void> {
+    const pins: Array<string> = [
+      // DigiCert Global G2 TLS RSA SHA256 2020 CA1（Meta 现在用的中间证书）
+      '59e738e674221702af1edb87c5200c1a4b75f64fae3d2c3d265124c61bd83c79'
+    ];
+    const leafBlob: cert.EncodingBlob = {
+      data: this.serverCerts[0],
+      encodingFormat: cert.EncodingFormat.FORMAT_DER
+    };
+    const leaf: cert.X509Cert = await cert.createX509Cert(leafBlob);
+    /*
+     * `checkValidityWithDate()` 要的是 **ASN.1 UTC 时间**（`YYMMDDHHMMSSZ`），不是
+     * `toUTCString()` 那种格式 —— 传错会回 `check cert validity failed!`（真机上踩过）。
+     */
+    const nowDate: Date = new Date();
+    const pad2: (value: number) => string = (value: number): string => {
+      return value < 10 ? `0${value}` : `${value}`;
+    };
+    const now: string = `${pad2(nowDate.getUTCFullYear() % 100)}${pad2(nowDate.getUTCMonth() + 1)}`
+      + `${pad2(nowDate.getUTCDate())}${pad2(nowDate.getUTCHours())}`
+      + `${pad2(nowDate.getUTCMinutes())}${pad2(nowDate.getUTCSeconds())}Z`;
+    try {
+      leaf.checkValidityWithDate(now);
+      this.note('叶子在有效期内');
+    } catch (error) {
+      throw new Error(`叶子证书不在有效期内（${now}）：${(error as Error).message}`);
+    }
+    if (this.serverCerts.length < 2) {
+      throw new Error('服务端只给了一张证书，没法钉住（缺少中间证书）');
+    }
+    const issuer: string = `${leaf.getIssuerName().data}`;
+    const midBlob: cert.EncodingBlob = {
+      data: this.serverCerts[1],
+      encodingFormat: cert.EncodingFormat.FORMAT_DER
+    };
+    const middle: cert.X509Cert = await cert.createX509Cert(midBlob);
+    const subject: string = `${middle.getSubjectName().data}`;
+    if (issuer !== subject) {
+      throw new Error('证书链不连续（叶子 issuer 与中间证书 subject 不一致）');
+    }
+    const spki: Uint8Array = middle.getPublicKey().getEncoded().data;
+    const md: cryptoFramework.Md = cryptoFramework.createMd('SHA256');
+    md.updateSync({ data: spki });
+    const hash: string = bytesToHex(md.digestSync().data);
+    let matched: boolean = false;
+    for (let index: number = 0; index < pins.length; index++) {
+      if (pins[index] === hash) {
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      throw new Error(`中间证书 SPKI 不在白名单（${hash}）—— 可能被中间人，或证书换了一家 CA`);
+    }
+    this.note('中间证书钉住校验 ok');
+  }
+
+  /**
+   * 把证书链的"事实"记进现场：每张的 SPKI SHA-256、以及相邻两张是否首尾相接。
+   *
+   * 为什么要：真机上 `CertChainValidator` 对这条链回 `validate cert chain failed`（3 张证书、
+   * 根是 DigiCert Global Root G2），而系统信任库按理说一定有它。这些哈希是**钉根（pin）**的依据：
+   * 拿到根证书的 SPKI 哈希之后就能硬编码校验，绕开那个不可靠的 validator。
+   */
+  private async describeChain(): Promise<void> {
+    for (let index: number = 0; index < this.serverCerts.length; index++) {
+      try {
+        const blob: cert.EncodingBlob = {
+          data: this.serverCerts[index],
+          encodingFormat: cert.EncodingFormat.FORMAT_DER
+        };
+        const x509: cert.X509Cert = await cert.createX509Cert(blob);
+        if (x509 === undefined || x509 === null) {
+          this.note(`  #${index} 解析为空（${this.serverCerts[index].length}B）`);
+          continue;
+        }
+        const subject: string = `${x509.getSubjectName().data}`;
+        const spki: Uint8Array = x509.getPublicKey().getEncoded().data;
+        const md: cryptoFramework.Md = cryptoFramework.createMd('SHA256');
+        md.updateSync({ data: spki });
+        this.note(`  #${index} spki=${bytesToHex(md.digestSync().data)}`
+          + ` len=${this.serverCerts[index].length}B subj=${subject.substring(0, 40)}`);
+      } catch (error) {
+        this.note(`  #${index} 解析失败：${(error as Error).message}`);
+      }
+    }
+  }
+
+  /** 把证书链拼成 PEM 文本（每张一段）。 */
+  private pemChainText(): string {
+    let out: string = '';
+    for (let index: number = 0; index < this.serverCerts.length; index++) {
+      out += '-----BEGIN CERTIFICATE-----\r\n';
+      const base64: string = new util.Base64Helper().encodeToStringSync(this.serverCerts[index]);
+      for (let at: number = 0; at < base64.length; at += 64) {
+        out += `${base64.substring(at, Math.min(at + 64, base64.length))}\r\n`;
+      }
+      out += '-----END CERTIFICATE-----\r\n';
+    }
+    return out;
+  }
+
+  /** 域名比对：叶子证书的 SAN 必须覆盖目标主机。 */
+  private async checkHostName(host: string): Promise<void> {
+    try {
+      const blob: cert.EncodingBlob = {
+        data: this.serverCerts[0],
+        encodingFormat: cert.EncodingFormat.FORMAT_DER
+      };
+      const leaf: cert.X509Cert = await cert.createX509Cert(blob);
+      const sans: cert.DataArray = leaf.getSubjectAltNames();
+      /*
+       * `getSubjectAltNames()` 的形状在不同版本/实现上不一样：有的是**字节数组**
+       * （`toString()` 出来就是 `42,46,105,...`，即 `*.i.instagram.com\0i.instagram.com\0`），
+       * 有的是 `DNS:...` 这样的字符串。所以**统一按文本形式解析**：
+       * 拆逗号 → 每段若是数字就当字符码，全是非数字就当原字符串用。
+       */
+      const rawText: string = `${sans.data}`;
+      let text: string = '';
+      let numeric: number = 0;
+      const pieces: Array<string> = rawText.split(',');
+      for (let index: number = 0; index < pieces.length; index++) {
+        const code: number = Number.parseInt(pieces[index].trim(), 10);
+        if (Number.isFinite(code)) {
+          numeric++;
+          text += code > 0 ? String.fromCharCode(code) : ' ';
+        }
+      }
+      if (numeric === 0) {
+        text = rawText;      // 已经是可读字符串的版本
+      }
+      const matched: boolean = text.indexOf(host) >= 0
+        || text.indexOf('*.instagram.com') >= 0
+        || text.indexOf('*.i.instagram.com') >= 0;
+      if (!matched) {
+        throw new Error(`证书域名不含 ${host}（SAN: ${text.substring(0, 120)}）`);
+      }
+      this.note(`证书域名 ok（${text.substring(0, 60)}）`);
+    } catch (error) {
+      if (`${(error as Error).message}`.indexOf('证书域名不含') >= 0) {
+        throw error as Error;
+      }
+      // SAN 读不出来不算致命（链已经验过了），但要在现场里留一行。
+      this.note(`SAN 读取失败：${(error as Error).message}`);
+    }
+  }
+
+  /** 把 handshake 消息包成一条 TLS 记录。 */
+  private record(type: number, payload: Uint8Array): Uint8Array {
+    const out: ByteWriter = new ByteWriter(payload.length + 5);
+    out.u8(type);
+    out.u16(TLS_VERSION_12);
+    out.u16(payload.length);
+    out.raw(payload);
+    return out.bytes();
+  }
+
+  /** 读一条 TLS 记录（返回 {type, payload}）。 */
+  private async readRecord(): Promise<TlsRecord> {
+    const head: Uint8Array = await this.stream.read(5);
+    const reader: ByteReader = new ByteReader(head);
+    const type: number = reader.u8();
+    const version: number = reader.u16();
+    const length: number = reader.u16();
+    const payload: Uint8Array = length > 0 ? await this.stream.read(length) : new Uint8Array(0);
+    return new TlsRecord(type, version, payload);
+  }
+
+  /** 把加密记录解成明文（去掉尾部补零与 content type）。 */
+  private async decryptRecord(record: TlsRecord): Promise<TlsDecrypted> {
+    const aad: Uint8Array = new Uint8Array([record.type, 0x03, 0x03,
+      (record.payload.length >> 8) & 0xFF, record.payload.length & 0xFF]);
+    const nonce: Uint8Array = this.nonceOf(this.handshakeRecvIv, this.handshakeRecvSeq);
+    this.handshakeRecvSeq++;
+    const plain: Uint8Array = await this.aesGcmDecrypt(this.handshakeRecvKey, nonce, aad,
+      record.payload);
+    // TLSInnerPlaintext = content || type || zeros
+    let end: number = plain.length - 1;
+    while (end >= 0 && plain[end] === 0) {
+      end--;
+    }
+    if (end < 0) {
+      throw new Error('解密结果为空');
+    }
+    const contentType: number = plain[end];
+    return new TlsDecrypted(contentType, plain.subarray(0, end));
+  }
+
+  /** 发一条加密的应用数据/握手记录。 */
+  private async writeEncrypted(payload: Uint8Array): Promise<void> {
+    const inner: ByteWriter = new ByteWriter(payload.length + 1);
+    inner.raw(payload);
+    inner.u8(TLS_RECORD_APPDATA);
+    const cipherLength: number = inner.size + 16;
+    const head: Uint8Array = new Uint8Array([TLS_RECORD_APPDATA, 0x03, 0x03,
+      (cipherLength >> 8) & 0xFF, cipherLength & 0xFF]);
+    const nonce: Uint8Array = this.nonceOf(this.sendIv, this.sendSeq);
+    this.sendSeq++;
+    const encrypted: Uint8Array = await this.aesGcmEncrypt(this.sendKey, nonce, head, inner.bytes());
+    await this.stream.write(concat([head, encrypted]));
+  }
+
+  /**
+   * 走完整条握手，然后发一条 HTTP/1.1 请求，把响应头读回来。
+   *
+   * @returns 一行诊断：握手是否成功、协商结果、HTTP 状态行
+   */
+  async handshake(host: string): Promise<string> {
+    this.host = host;
+    await this.makeKeyPair();
+    this.note(`x25519 pub=${this.clientPub.length}B`);
+    const clientHello: Uint8Array = this.buildClientHello(host);
+    this.addTranscript(clientHello);
+    await this.stream.write(this.record(TLS_RECORD_HANDSHAKE, clientHello));
+    this.note(`CH sent ${clientHello.length + 5}B`);
+
+    const serverRecord: TlsRecord = await this.readRecord();
+    if (serverRecord.type !== TLS_RECORD_HANDSHAKE) {
+      throw new Error(`期待 ServerHello，收到记录类型 ${serverRecord.type}`);
+    }
+    const serverHello: Uint8Array = serverRecord.payload;
+    this.addTranscript(serverHello);
+    const hello: ServerHelloInfo = this.parseServerHello(serverHello);
+    this.note(`SH version=${hello.selectedVersion} cipher=${hello.cipher} group=${hello.group}`);
+
+    if (hello.selectedVersion !== TLS_VERSION_13) {
+      throw new Error(`服务端没选 TLS1.3（选了 ${hello.selectedVersion}）`);
+    }
+    if (hello.cipher !== CIPHER_AES_128_GCM_SHA256) {
+      throw new Error(`服务端选了别的套件 0x${hello.cipher.toString(16)}`);
+    }
+    if (hello.group !== GROUP_X25519 || hello.serverKey.length !== 32) {
+      throw new Error(`服务端 key_share 组 ${hello.group}、${hello.serverKey.length}B（只支持 X25519）`);
+    }
+
+    // 共享密钥
+    /*
+     * 服务端在 `key_share` 里给的是**裸 32 字节** X25519 公钥，而鸿蒙的 `convertKey` 只吃
+     * **DER(SPKI)**（`SubjectPublicKeyInfo`）。所以这里手工包一层：
+     *   30 2a                      SEQUENCE(42)
+     *     30 05 06 03 2b 65 6e     AlgorithmIdentifier { OID 1.3.101.110 (X25519) }
+     *     03 21 00 <32 bytes>      BIT STRING(33)，首字节 0 = 没有未用位
+     * 不这么做的话，`convertKey` 会直接报 `convert key fail`（真机就是这么卡的）。
+     */
+    const spki: Uint8Array = concat([
+      new Uint8Array([0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x6e, 0x03, 0x21, 0x00]),
+      hello.serverKey
+    ]);
+    const agreement: cryptoFramework.KeyAgreement = cryptoFramework.createKeyAgreement('X25519');
+    const peerPair: cryptoFramework.KeyPair =
+      await cryptoFramework.createAsyKeyGenerator('X25519')
+        .convertKey({ data: spki }, null);
+    const peerPub: cryptoFramework.PubKey = peerPair.pubKey;
+    const shared: cryptoFramework.DataBlob = await agreement.generateSecret(
+      (this.clientKeyPair as cryptoFramework.KeyPair).priKey, peerPub);
+    this.note(`shared=${shared.data.length}B`);
+
+    // 密钥编排（RFC 8446 §7.1，无 PSK）
+    const zeros: Uint8Array = new Uint8Array(32);
+    const emptyHash: Uint8Array = await this.hashEmpty();
+    this.note('密钥编排开始');
+    const earlySecret: Uint8Array = await this.hkdfExtract(zeros, zeros);
+    this.note('extract1 ok');
+    const derivedEarly: Uint8Array =
+      await this.expandLabel(earlySecret, 'derived', emptyHash, 32);
+    this.note('derived early ok');
+    const handshakeSecret: Uint8Array = await this.hkdfExtract(derivedEarly, shared.data);
+    this.note('extract2 ok');
+    const transcriptAtSh: Uint8Array = this.transcriptHash();
+    this.note('th ok');
+    const clientHs: Uint8Array =
+      await this.expandLabel(handshakeSecret, 'c hs traffic', transcriptAtSh, 32);
+    const serverHs: Uint8Array =
+      await this.expandLabel(handshakeSecret, 's hs traffic', transcriptAtSh, 32);
+    this.note('c/s hs traffic ok');
+    this.handshakeSendKey = await this.expandLabel(clientHs, 'key', new Uint8Array(0), 16);
+    this.handshakeSendIv = await this.expandLabel(clientHs, 'iv', new Uint8Array(0), 12);
+    this.handshakeRecvKey = await this.expandLabel(serverHs, 'key', new Uint8Array(0), 16);
+    this.handshakeRecvIv = await this.expandLabel(serverHs, 'iv', new Uint8Array(0), 12);
+    this.note('hs keys ok');
+
+    // 服务端的加密飞行：EE / Cert / CV / Finished
+    const expectedFinishedKey: Uint8Array =
+      await this.expandLabel(serverHs, 'finished', new Uint8Array(0), 32);
+    let serverFinishedOk: boolean = false;
+    /*
+     * **要按"握手消息"重组，而不是"一条记录一条消息"**。
+     *
+     * 服务端那条飞行里 Certificate 通常有几 KB，会被拆到**多条 TLS 记录**里；反过来一条记录
+     * 也可能塞进几条消息。按记录处理的话 Certificate 会解析不出来、后面一直等 —— 真机上就是
+     * `CCS skipped → EncryptedExtensions → CertificateVerify` 之后卡在读超时。
+     */
+    let pending: Uint8Array = new Uint8Array(0);
+    while (!serverFinishedOk) {
+      if (pending.length >= 4) {
+        const bodyLength: number = (pending[1] << 16) | (pending[2] << 8) | pending[3];
+        const total: number = 4 + bodyLength;
+        if (pending.length >= total) {
+          const message: Uint8Array = pending.subarray(0, total);
+          pending = pending.subarray(total);
+          const type: number = message[0];
+          if (type === HANDSHAKE_FINISHED) {
+            // Finished 的 transcript 必须是"它自己之前"的哈希，所以先算再入账。
+            const beforeFinished: Uint8Array = this.transcriptHash();
+            const expected: Uint8Array =
+              await this.hmacSha256(expectedFinishedKey, beforeFinished);
+            serverFinishedOk = bytesEqual(expected, message.subarray(4));
+            this.note(`server Finished ${serverFinishedOk ? 'ok' : 'MISMATCH'}`);
+            if (!serverFinishedOk) {
+              throw new Error('服务端 Finished 校验失败');
+            }
+            this.addTranscript(message);
+            break;
+          }
+          this.addTranscript(message);
+          if (type === HANDSHAKE_ENCRYPTED_EXTENSIONS) {
+            this.note('EncryptedExtensions');
+          } else if (type === HANDSHAKE_CERTIFICATE) {
+            this.parseCertificate(message);
+            this.note(`Certificate(${bodyLength}B, ${this.serverCerts.length} 张)`);
+          } else if (type === HANDSHAKE_CERTIFICATE_VERIFY) {
+            this.note('CertificateVerify');
+          } else {
+            this.note(`handshake type ${type}`);
+          }
+          continue;
+        }
+      }
+      const record: TlsRecord = await this.readRecord();
+      /*
+       * **必须跳过 ChangeCipherSpec**（记录类型 20）。
+       *
+       * 我们 ClientHello 带了一个 32 字节的 legacy session_id（真机也这样），服务端为了
+       * 中间件兼容会在 ServerHello 之后回一条 **CCS（type=20 的裸记录）**。它不是加密数据，
+       * 拿去解密必然报 `cipher doFinal failed`（真机就是这么卡的）。
+       */
+      if (record.type === 20) {
+        this.note('CCS skipped');
+        continue;
+      }
+      if (record.type !== TLS_RECORD_APPDATA) {
+        this.note(`skip record type ${record.type}`);
+        continue;
+      }
+      const decrypted: TlsDecrypted = await this.decryptRecord(record);
+      if (decrypted.type !== TLS_RECORD_HANDSHAKE) {
+        this.note(`plaintext type ${decrypted.type}`);
+        continue;
+      }
+      pending = concat([pending, decrypted.payload]);
+    }
+
+    /*
+     * **应用密钥的 transcript 只能算到"服务端 Finished"为止**（RFC 8446 §7.1：
+     * `c ap traffic / s ap traffic = Derive-Secret(Master, …, ClientHello…server Finished)`）。
+     *
+     * 这里先把那个快照存下来：客户端 Finished 会接着被加进 transcript，而它**不**参与
+     * 应用密钥的派生 —— 以前直接在后面取 transcriptHash()，于是算出来的 app key 整条错位，
+     * 表现就是"握手全 OK（连 server Finished 都验过了），一发 HTTP 就 `cipher doFinal failed`"。
+     */
+    const transcriptThroughServerFinished: Uint8Array = this.transcriptHash();
+
+    // 客户端 Finished
+    const clientFinishedKey: Uint8Array =
+      await this.expandLabel(clientHs, 'finished', new Uint8Array(0), 32);
+    const clientVerify: Uint8Array =
+      await this.hmacSha256(clientFinishedKey, transcriptThroughServerFinished);
+    const finishedMsg: ByteWriter = new ByteWriter(36);
+    finishedMsg.u8(HANDSHAKE_FINISHED);
+    finishedMsg.u24(clientVerify.length);
+    finishedMsg.raw(clientVerify);
+    // 用**握手密钥**发 Finished
+    await this.writeHandshakeEncrypted(finishedMsg.bytes());
+    this.addTranscript(finishedMsg.bytes());
+    this.note('client Finished sent');
+
+    // 应用密钥
+    const derivedHs: Uint8Array = await this.expandLabel(handshakeSecret, 'derived',
+      await this.hashEmpty(), 32);
+    const masterSecret: Uint8Array = await this.hkdfExtract(derivedHs, zeros);
+    const clientApp: Uint8Array =
+      await this.expandLabel(masterSecret, 'c ap traffic', transcriptThroughServerFinished, 32);
+    const serverApp: Uint8Array =
+      await this.expandLabel(masterSecret, 's ap traffic', transcriptThroughServerFinished, 32);
+    this.sendKey = await this.expandLabel(clientApp, 'key', new Uint8Array(0), 16);
+    this.sendIv = await this.expandLabel(clientApp, 'iv', new Uint8Array(0), 12);
+    this.recvKey = await this.expandLabel(serverApp, 'key', new Uint8Array(0), 16);
+    this.recvIv = await this.expandLabel(serverApp, 'iv', new Uint8Array(0), 12);
+    this.sendSeq = 0;
+    this.recvSeq = 0;
+    this.note('app keys ok');
+    // 握手完、发任何业务数据之前，先把"对面是谁"验清楚。
+    await this.validatePeer(host);
+    return `${this.log} | 握手完成`;
+  }
+
+  /** 用握手套件发一条加密记录（Finished 用）。 */
+  private async writeHandshakeEncrypted(payload: Uint8Array): Promise<void> {
+    const inner: ByteWriter = new ByteWriter(payload.length + 1);
+    inner.raw(payload);
+    inner.u8(TLS_RECORD_HANDSHAKE);
+    const cipherLength: number = inner.size + 16;
+    const head: Uint8Array = new Uint8Array([TLS_RECORD_APPDATA, 0x03, 0x03,
+      (cipherLength >> 8) & 0xFF, cipherLength & 0xFF]);
+    const nonce: Uint8Array = this.nonceOf(this.handshakeSendIv, this.handshakeSendSeq);
+    this.handshakeSendSeq++;
+    const encrypted: Uint8Array = await this.aesGcmEncrypt(this.handshakeSendKey, nonce, head,
+      inner.bytes());
+    await this.stream.write(concat([head, encrypted]));
+  }
+
+  /** 发一条 HTTP/1.1 请求（用应用密钥加密），返回响应的状态行与头。 */
+  async httpRequest(requestText: string): Promise<TlsHttpReply> {
+    await this.writeApplicationData(new util.TextEncoder().encodeInto(requestText));
+    return await this.readHttpReply();
+  }
+
+  /**
+   * **完整的 HTTP/1.1 交换**（CAA 各步就用它）：自己拼请求行/头/Content-Length，
+   * 发出去，再按 `content-length` 收全 body。
+   *
+   * 为什么不用 `httpRequest` 那种"拿到头就返回"：登录的响应是 bloks 布局（几十 KB 的 JSON，
+   * 可能跨很多条记录），解析器需要完整 body。上限 4MB（防止被灌爆内存）。
+   */
+  async httpExchange(method: string, path: string, headers: Record<string, string>,
+                     body: string): Promise<TlsHttpReply> {
+    const bodyBytes: Uint8Array = new util.TextEncoder().encodeInto(body);
+    const lines: Array<string> = [`${method} ${path} HTTP/1.1`];
+    let hasHost: boolean = false;
+    for (const key of Object.keys(headers)) {
+      const lower: string = key.toLowerCase();
+      if (lower === 'content-length' || lower === 'connection' || lower === 'transfer-encoding') {
+        continue;
+      }
+      if (lower === 'host') {
+        hasHost = true;
+      }
+      lines.push(`${key}: ${headers[key]}`);
+    }
+    if (!hasHost) {
+      lines.push(`Host: ${this.host}`);
+    }
+    if (bodyBytes.length > 0) {
+      lines.push(`Content-Length: ${bodyBytes.length}`);
+    }
+    lines.push('Connection: close');
+    lines.push('');
+    lines.push('');
+    const head: string = lines.join('\r\n');
+    this.note(`→ ${method} ${path.substring(0, 40)}… body=${bodyBytes.length}B`);
+    await this.writeApplicationData(concat([
+      new util.TextEncoder().encodeInto(head), bodyBytes
+    ]));
+    return await this.readHttpReply();
+  }
+
+  /** 用应用密钥发一条加密记录。 */
+  private async writeApplicationData(payload: Uint8Array): Promise<void> {
+    const inner: ByteWriter = new ByteWriter(payload.length + 1);
+    inner.raw(payload);
+    inner.u8(TLS_RECORD_APPDATA);
+    const cipherLength: number = inner.size + 16;
+    const head: Uint8Array = new Uint8Array([TLS_RECORD_APPDATA, 0x03, 0x03,
+      (cipherLength >> 8) & 0xFF, cipherLength & 0xFF]);
+    const nonce: Uint8Array = this.nonceOf(this.sendIv, this.sendSeq);
+    this.sendSeq++;
+    const encrypted: Uint8Array = await this.aesGcmEncrypt(this.sendKey, nonce, head, inner.bytes());
+    await this.stream.write(concat([head, encrypted]));
+  }
+
+  /**
+   * 读一条 HTTP/1.1 响应（按 content-length 收全 body；没有 content-length 就收到对端关连接）。
+   *
+   * 注意：握手之后服务端还会用应用密钥发 `NewSessionTicket`（inner type 22），
+   * 那不是 HTTP 数据，**必须跳过**，否则头部会被二进制内容污染。
+   */
+  private async readHttpReply(): Promise<TlsHttpReply> {
+    /*
+     * **先按字节攒、最后再解码一次**。
+     *
+     * 按记录逐条 decode 是错的：IG 的响应里有中文/emoji，一个 UTF-8 字符可能正好被记录边界
+     * 劈成两半 —— 逐条解码会把它变成乱码，`JSON.parse` 直接失败，症状就是"明明 200 却解析不出
+     * aac"（真机上就是这么偶发失败的，时好时坏）。
+     */
+    let buffer: Uint8Array = new Uint8Array(0);
+    let headerEnd: number = -1;
+    let declaredLength: number = -1;
+    const limit: number = 4 * 1024 * 1024;
+    for (let guard: number = 0; guard < 128; guard++) {
+      let record: TlsRecord;
+      try {
+        record = await this.readRecord();
+      } catch (error) {
+        break;      // 对端关了：把手上的东西交出去
+      }
+      if (record.type !== TLS_RECORD_APPDATA) {
+        continue;
+      }
+      const aad: Uint8Array = new Uint8Array([record.type, 0x03, 0x03,
+        (record.payload.length >> 8) & 0xFF, record.payload.length & 0xFF]);
+      const recvNonce: Uint8Array = this.nonceOf(this.recvIv, this.recvSeq);
+      this.recvSeq++;
+      const plain: Uint8Array = await this.aesGcmDecrypt(this.recvKey, recvNonce, aad, record.payload);
+      let end: number = plain.length - 1;
+      while (end >= 0 && plain[end] === 0) {
+        end--;
+      }
+      if (end < 0) {
+        continue;
+      }
+      if (plain[end] !== TLS_RECORD_APPDATA) {
+        continue;    // NewSessionTicket 之类的握手数据
+      }
+      buffer = concat([buffer, plain.subarray(0, end)]);
+      if (headerEnd < 0) {
+        // 头部是 ASCII，先解码前缀找分隔符（找不到就继续攒）。
+        const prefix: string = new util.TextDecoder().decodeToString(buffer);
+        const at: number = prefix.indexOf('\r\n\r\n');
+        if (at >= 0) {
+          headerEnd = at;
+          const headerText: string = prefix.substring(0, at);
+          const matched: RegExpMatchArray | null =
+            headerText.match(/content-length:\s*(\d+)/i);
+          declaredLength = matched === null ? -1 : Number.parseInt(matched[1], 10);
+        }
+      }
+      if (headerEnd >= 0) {
+        const bodySoFar: number = buffer.length - (headerEnd + 4);
+        if (declaredLength >= 0 ? bodySoFar >= declaredLength : false) {
+          break;
+        }
+        if (buffer.length > limit) {
+          break;
+        }
+      }
+    }
+    const all: string = new util.TextDecoder().decodeToString(buffer);
+    if (headerEnd < 0) {
+      return new TlsHttpReply('', all);
+    }
+    return new TlsHttpReply(all.substring(0, headerEnd), all.substring(headerEnd + 4));
+  }
+
+  /**
+   * `SHA-256("")`（TLS 1.3 的 `Derive-Secret(…, "")` 要用它）。
+   *
+   * **直接用常量**：鸿蒙的 `Md.updateSync()` 喂**空数组会抛 `crypto operation error`**
+   * （真机就是这么卡在"shared 之后、密钥编排之前"的），而它的值是固定的。
+   */
+  private async hashEmpty(): Promise<Uint8Array> {
+    const hex: string = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+    const out: Uint8Array = new Uint8Array(32);
+    for (let index: number = 0; index < 32; index++) {
+      out[index] = Number.parseInt(hex.substring(index * 2, index * 2 + 2), 16);
+    }
+    return out;
+  }
+
+  /** Finished 的 transcript：**去掉刚加进去的那条 Finished**。 */
+  private transcriptHashBefore(): Uint8Array {
+    const all: Uint8Array = concat(this.transcript);
+    const last: Uint8Array = this.transcript[this.transcript.length - 1];
+    const cut: Uint8Array = all.subarray(0, all.length - last.length);
+    const md: cryptoFramework.Md = cryptoFramework.createMd('SHA256');
+    md.updateSync({ data: cut });
+    return md.digestSync().data;
+  }
+
+  private parseServerHello(message: Uint8Array): ServerHelloInfo {
+    const reader: ByteReader = new ByteReader(message);
+    const type: number = reader.u8();
+    if (type !== HANDSHAKE_SERVER_HELLO) {
+      throw new Error(`不是 ServerHello（type=${type}）`);
+    }
+    reader.u24();
+    reader.u16();                     // legacy_version
+    reader.take(32);                  // random
+    const sessionIdLength: number = reader.u8();
+    reader.take(sessionIdLength);
+    const cipher: number = reader.u16();
+    reader.u8();                      // compression
+    const extTotal: number = reader.u16();
+    const extEnd: number = reader.offset + extTotal;
+    let selectedVersion: number = 0;
+    let group: number = 0;
+    let serverKey: Uint8Array = new Uint8Array(0);
+    while (reader.offset + 4 <= extEnd) {
+      const extType: number = reader.u16();
+      const extLength: number = reader.u16();
+      const extBody: Uint8Array = reader.take(extLength);
+      if (extType === EXT_SUPPORTED_VERSIONS) {
+        selectedVersion = new ByteReader(extBody).u16();
+      } else if (extType === EXT_KEY_SHARE) {
+        const ks: ByteReader = new ByteReader(extBody);
+        group = ks.u16();
+        const keyLength: number = ks.u16();
+        serverKey = ks.take(keyLength);
+      }
+    }
+    return new ServerHelloInfo(selectedVersion, cipher, group, serverKey);
+  }
+}
+
+/* ------------------------------------------------------------- 小类型 */
+
+class TlsRecord {
+  readonly type: number;
+  readonly version: number;
+  readonly payload: Uint8Array;
+
+  constructor(type: number, version: number, payload: Uint8Array) {
+    this.type = type;
+    this.version = version;
+    this.payload = payload;
+  }
+}
+
+class TlsDecrypted {
+  readonly type: number;
+  readonly payload: Uint8Array;
+
+  constructor(type: number, payload: Uint8Array) {
+    this.type = type;
+    this.payload = payload;
+  }
+}
+
+class ServerHelloInfo {
+  readonly selectedVersion: number;
+  readonly cipher: number;
+  readonly group: number;
+  readonly serverKey: Uint8Array;
+
+  constructor(selectedVersion: number, cipher: number, group: number, serverKey: Uint8Array) {
+    this.selectedVersion = selectedVersion;
+    this.cipher = cipher;
+    this.group = group;
+    this.serverKey = serverKey;
+  }
+}
+
+/** 一条 HTTP/1.1 响应（头文本 + body 文本）。 */
+export class TlsHttpReply {
+  readonly headerText: string;
+  readonly bodyText: string;
+
+  constructor(headerText: string, bodyText: string) {
+    this.headerText = headerText;
+    this.bodyText = bodyText;
+  }
+
+  /** 状态码（读不到就是 -1）。 */
+  statusCode(): number {
+    const matched: RegExpMatchArray | null = this.headerText.match(/^HTTP\/1\.[01]\s+(\d{3})/);
+    return matched === null ? -1 : Number.parseInt(matched[1], 10);
+  }
+
+  /** 取一个响应头的值（大小写不敏感；多处出现取第一处）。 */
+  headerOf(name: string): string {
+    const lines: Array<string> = this.headerText.split('\r\n');
+    const wanted: string = name.toLowerCase();
+    for (let index: number = 0; index < lines.length; index++) {
+      const line: string = lines[index];
+      const at: number = line.indexOf(':');
+      if (at <= 0) {
+        continue;
+      }
+      if (line.substring(0, at).trim().toLowerCase() === wanted) {
+        return line.substring(at + 1).trim();
+      }
+    }
+    return '';
+  }
+}
+
+/**
+ * 对外入口：连上去、握手、发一条请求、返回状态与现场。
+ *
+ * **只用于诊断/验证**（`CaaSession.tls13Probe`）：结果一行行都是给人看的。
+ */
+export class Tls13Client {
+  /**
+   * **一条完整的 HTTPS 请求**：TCP → TLS1.3 握手（含证书校验）→ HTTP/1.1 → 关闭。
+   *
+   * CAA 那 5 步都走它（`CaaLogin.post`），这样登录请求的 ClientHello 就是我们自己拼的
+   * （对齐上游那套能过的指纹），而不是系统栈那一份（那份在登录端点被 429）。
+   */
+  static async request(host: string, port: number, method: string, path: string,
+                       headers: Record<string, string>, body: string): Promise<TlsHttpReply> {
+    const tcp: socket.TCPSocket = socket.constructTCPSocketInstance();
+    const stream: TcpStream = new TcpStream(tcp);
+    stream.attach();
+    await tcp.connect({
+      address: { address: host, family: 1, port: port },
+      timeout: 15000
+    });
+    const connection: Tls13Connection = new Tls13Connection(stream);
+    try {
+      await connection.handshake(host);
+      return await connection.httpExchange(method, path, headers, body);
+    } catch (error) {
+      throw new Error(`${(error as Error).message}（现场：${connection.log || '(握手未开始)'}）`);
+    } finally {
+      await stream.close();
+    }
+  }
+
+  /** 离线自检（RFC 8448 向量）—— 先把"算错"和"握手错"分开。 */
+  static async selfTest(): Promise<string> {
+    const tcp: socket.TCPSocket = socket.constructTCPSocketInstance();
+    const connection: Tls13Connection = new Tls13Connection(new TcpStream(tcp));
+    return await connection.selfTest();
+  }
+
+  static async probe(host: string, port: number, requestText: string): Promise<string> {
+    const tcp: socket.TCPSocket = socket.constructTCPSocketInstance();
+    const stream: TcpStream = new TcpStream(tcp);
+    stream.attach();
+    await tcp.connect({
+      address: { address: host, family: 1, port: port },
+      timeout: 15000
+    });
+    const connection: Tls13Connection = new Tls13Connection(stream);
+    try {
+      const handshake: string = await connection.handshake(host);
+      const reply: TlsHttpReply = await connection.httpRequest(requestText);
+      const status: number = reply.statusCode();
+      const head: string = reply.headerText.replace(/\r\n/g, ' | ');
+      return `握手：${handshake}\nHTTP ${status}\n${head.substring(0, 400)}\nbody:`
+        + `${reply.bodyText.substring(0, 200)}`;
+    } catch (error) {
+      // 失败时把**走到哪一步**带出去：手写 TLS 的错都长一个样，没有现场根本没法定位。
+      throw new Error(`${(error as Error).message}（现场：${connection.log || '(握手未开始)'}）`);
+    } finally {
+      await stream.close();
+    }
+  }
+}

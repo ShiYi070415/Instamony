@@ -30,6 +30,8 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { util } from '@kit.ArkTS';
 import { http } from '@kit.NetworkKit';
+// 自建 TLS 1.3 传输（见 post：系统 http 栈的 ClientHello 在登录端点会被 IG 429）。
+import { Tls13Client, TlsHttpReply } from '../net/Tls13Client';
 import { MobileCrypto, PasswordKeys } from './MobileCrypto';
 // `MobileIdentity` 定义在 MobileSession（MobileRequest 只是转 import，并不导出）。
 import { MobileIdentity } from './MobileSession';
@@ -505,6 +507,8 @@ export class CaaLogin {
    */
   static lastSendBody: string = '';
   static lastSendHeaderMap: Record<string, string> = {};
+  /** 最近一次 `qe/sync`（取密码加密公钥）的现场，失败时拼进提示里。 */
+  static lastPasswordKeysNote: string = '';
 
   /**
    * **CAA 链路的 Cookie 罐**（进程内，一次登录的一串请求共用）。
@@ -930,74 +934,58 @@ export class CaaLogin {
    *
    * `host` 与 `path` 分开传：CAA 要 b.i.instagram.com，USDID 要 i.instagram.com/graphql_www
    * （**没有 /api 前缀**）。
+   *
+   * **传输层现在是自建的 TLS 1.3**（见 `core/net/Tls13Client`）。原因见
+   * `tools/relay/LOGIN-429.md`：系统 `http` 模块那条 TLS 栈的 ClientHello 会在
+   * `send_login_request` 上被 IG 的 edge 回 429，而同一份请求用"自己拼的 ClientHello"
+   * （JA3 对齐上游 instagrapi 社区那套能过的指纹）发出去是 **200**（真机验证过）。
    */
   private static async post(host: string, path: string, body: string,
                             headers: Record<string, string>): Promise<CaaHttpReply> {
-    const request: http.HttpRequest = http.createHttp();
     const all: Record<string, string> = {};
     for (const key of Object.keys(headers)) {
       all[key] = headers[key];
     }
     all['Content-Length'] = `${utf8(body).length}`;
+    const reply3: TlsHttpReply = await Tls13Client.request(host, 443,
+      body.length > 0 ? 'POST' : 'GET', path, all, body);
+    const text: string = reply3.bodyText;
+    const reply: CaaHttpReply = new CaaHttpReply(reply3.statusCode(), text, host);
+    /*
+     * **响应头留一份（脱敏）**。
+     *
+     * 429 的 body 常常是空的，此时"为什么被拒"只能从响应头里找（IG 的 edge 会带
+     * `x-ig-*` / `retry-*` 之类的线索）。名字里带 cookie / authorization / token 的
+     * 一律打码 —— 这份内容是给用户复制出来的，不能夹带会话材料。
+     */
     try {
-      const response: http.HttpResponse = await request.request(`https://${host}${path}`, {
-        method: http.RequestMethod.POST,
-        header: all,
-        extraData: body,
-        connectTimeout: 20000,
-        readTimeout: 30000,
-        expectDataType: http.HttpDataType.STRING
-      });
-      const text: string = typeof response.result === 'string'
-        ? response.result as string
-        : (response.result === null || response.result === undefined ? '' : JSON.stringify(response.result));
-      // **每个响应都把 Cookie 收进罐子**（见 cookieJar）：1~4 步下发的 csrftoken/mid/datr
-      // 必须带到第 5 步，否则 IG 认不出"同一串会话"，直接回 429。
-      CaaLogin.absorbResponseCookies(response);
-      const reply: CaaHttpReply = new CaaHttpReply(response.responseCode, text, host);
-      /*
-       * **响应头留一份（脱敏）**。
-       *
-       * 429 的 body 常常是空的，此时"为什么被拒"只能从响应头里找（IG 的 edge 会带
-       * `x-ig-*` / `retry-*` 之类的线索）。名字里带 cookie / authorization / token 的
-       * 一律打码 —— 这份内容是给用户复制出来的，不能夹带会话材料。
-       */
-      try {
-        const headerRecord: Record<string, ESObject> = response.header as Record<string, ESObject>;
-        const safe: Record<string, string> = {};
-        if (headerRecord !== null && headerRecord !== undefined) {
-          for (const key of Object.keys(headerRecord)) {
-            const lower: string = key.toLowerCase();
-            const secret: boolean = lower.indexOf('cookie') >= 0 || lower.indexOf('authorization') >= 0
-              || lower.indexOf('token') >= 0 || lower.indexOf('secret') >= 0;
-            safe[key] = secret ? '<redacted>' : `${headerRecord[key]}`;
-          }
+      const safe: Record<string, string> = {};
+      const headerLines: Array<string> = reply3.headerText.split('\r\n');
+      for (let index: number = 0; index < headerLines.length; index++) {
+        const line: string = headerLines[index];
+        const at: number = line.indexOf(':');
+        if (at <= 0) {
+          continue;
         }
-        reply.headersText = JSON.stringify(safe);
-      } catch (headerError) {
-        reply.headersText = '';
+        const name: string = line.substring(0, at).trim();
+        const value: string = line.substring(at + 1).trim();
+        const lower: string = name.toLowerCase();
+        const secret: boolean = lower.indexOf('cookie') >= 0 || lower.indexOf('authorization') >= 0
+          || lower.indexOf('token') >= 0 || lower.indexOf('secret') >= 0;
+        safe[name] = secret ? '<redacted>' : value;
       }
-      // 会话 cookie 有时只出现在响应头里（IG-Set-Authorization 同理），这里留一份
-      reply.headerOf = (name: string): string => {
-        const raw: ESObject = response.header as ESObject;
-        if (raw === null || raw === undefined) {
-          return '';
-        }
-        const record: Record<string, ESObject> = raw as Record<string, ESObject>;
-        for (const key of Object.keys(record)) {
-          if (key.toLowerCase() === name.toLowerCase()) {
-            return `${record[key]}`;
-          }
-        }
-        return '';
-      };
-      return reply;
-    } finally {
-      try {
-        request.destroy();
-      } catch (error) {
-      }
+      reply.headersText = JSON.stringify(safe);
+    } catch (headerError) {
+      reply.headersText = '';
     }
+    // 会话材料常常只在响应头里（`ig-set-*`），这里按名字取。
+    reply.headerOf = (name: string): string => {
+      return reply3.headerOf(name);
+    };
+    // 每个响应的 `Set-Cookie` 收进罐子（见 cookieJar）：1~4 步的 csrftoken/mid/datr
+    // 必须带到第 5 步。
+    CaaLogin.absorbCookieText(reply3.headerOf('set-cookie'));
+    return reply;
   }
 
   /** 移动端请求头（与 MobileRequest.baseHeaders 同源，另加 CAA 需要的几条）。 */
@@ -1210,7 +1198,8 @@ export class CaaLogin {
     // 5. 提交账号密码
     const keys: PasswordKeys | null = await CaaLogin.passwordKeys(identity);
     if (keys === null) {
-      return new CaaResult(false, '拿不到密码加密公钥（qe/sync 没回头发公钥）');
+      return new CaaResult(false,
+        `拿不到密码加密公钥（qe/sync 没回头发公钥）｜${CaaLogin.lastPasswordKeysNote}`);
     }
     const encrypted: string = await MobileCrypto.encryptPassword(password, keys);
     /*
@@ -2433,7 +2422,14 @@ export class CaaLogin {
     return null;
   }
 
-  /** 取密码加密公钥（qe/sync 的响应头）。 */
+  /**
+   * 取密码加密公钥（`qe/sync` 的响应头）。
+   *
+   * **这一发走系统 `http` 模块**，不走自建 TLS：`qe/sync` 不是登录端点，系统栈在这里是
+   * 200/405 + 正常下发公钥头（真机实测），而自建通道跑这一发会抛
+   * `Cannot read property length of undefined`（GET 路径在自建通道上还没调通）。
+   * 真正被 IG 挡的只有 `send_login_request`，那一发走自建通道就够了。
+   */
   private static async passwordKeys(identity: MobileIdentity): Promise<PasswordKeys | null> {
     const request: http.HttpRequest = http.createHttp();
     try {
@@ -2459,24 +2455,27 @@ export class CaaLogin {
           expectDataType: http.HttpDataType.STRING
         });
       CaaLogin.absorbResponseCookies(response);
-      const raw: ESObject = response.header as ESObject;
-      if (raw === null || raw === undefined) {
-        return null;
-      }
-      const record: Record<string, ESObject> = raw as Record<string, ESObject>;
       let keyId: number = 0;
       let publicKey: string = '';
-      for (const key of Object.keys(record)) {
-        const lower: string = key.toLowerCase();
-        if (lower === 'ig-set-password-encryption-key-id') {
-          keyId = Number.parseInt(`${record[key]}`, 10);
-        } else if (lower === 'ig-set-password-encryption-pub-key') {
-          publicKey = `${record[key]}`;
+      const raw: ESObject = response.header as ESObject;
+      if (raw !== null && raw !== undefined) {
+        const record: Record<string, ESObject> = raw as Record<string, ESObject>;
+        for (const key of Object.keys(record)) {
+          const lower: string = key.toLowerCase();
+          if (lower === 'ig-set-password-encryption-key-id') {
+            keyId = Number.parseInt(`${record[key]}`, 10);
+          } else if (lower === 'ig-set-password-encryption-pub-key') {
+            publicKey = `${record[key]}`;
+          }
         }
       }
-      return keyId > 0 && publicKey.length > 0 ? new PasswordKeys(keyId, publicKey) : null;
+      const parsed: number = Number.isFinite(keyId) ? keyId : 0;
+      CaaLogin.lastPasswordKeysNote = `qe/sync(http) status=${response.responseCode}`
+        + ` keyId=${parsed} pubKeyLen=${publicKey.length}`;
+      return parsed > 0 && publicKey.length > 0 ? new PasswordKeys(parsed, publicKey) : null;
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'password keys failed: %{public}s', (error as Error).message);
+      CaaLogin.lastPasswordKeysNote = `qe/sync(http) 异常：${(error as Error).message}`;
       return null;
     } finally {
       try {

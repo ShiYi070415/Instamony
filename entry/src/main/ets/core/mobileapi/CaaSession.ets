@@ -27,6 +27,8 @@ import { InstagramCookieJar, InstagramCookieSnapshot } from '../InstagramCookieJ
 import { CaaLogin, CaaResult, CaaStep, CaaUsdid } from './CaaLogin';
 import { MobileIdentity, MobileSession } from './MobileSession';
 import { base64, utf8 } from './MobileSign';
+// 自建 TLS 1.3 通道（见 tls13Probe：App 内唯一能"换 ClientHello 指纹"的手段）。
+import { Tls13Client } from '../net/Tls13Client';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'CaaSession';
@@ -177,7 +179,16 @@ export class CaaSession {
     // 登录用的"设备身份"（uuid / phoneId / mid / app 版本）走和移动 API 完全相同的那一份，
     // 这样登录出来的会话在 `MobileSession` 里就是"同一个客户端"。
     const identity: MobileIdentity = MobileSession.seedIdentity();
-    const result: CaaResult = await CaaLogin.login(identity, user, password, device, null);
+    let result: CaaResult;
+    try {
+      result = await CaaLogin.login(identity, user, password, device, null);
+    } catch (error) {
+      // 传输层（自建 TLS）抛出来的错要变成一句人话，而不是让界面炸掉。
+      const thrown: CaaOutcome = CaaSession.outcome(false,
+        `登录请求异常：${(error as Error).message}`, CaaSession.stepsText());
+      CaaSession.rememberDiag('登录', thrown.reason, thrown.steps);
+      return thrown;
+    }
     return await CaaSession.finish(result);
   }
 
@@ -236,7 +247,20 @@ export class CaaSession {
     // 形状合法但一定不存在：IG 对这类用户名的回答是固定文案（见下）。
     const bogusUser: string = `instarmony_probe_${suffix}`;
     const bogusPass: string = `Zx9!${suffix}qq`;
-    const result: CaaResult = await CaaLogin.login(identity, bogusUser, bogusPass, device, null);
+    /*
+     * **把异常收进来**：`CaaLogin.login` 现在走自建 TLS 通道，任何一个握手/证书/网络问题都会抛，
+     * 抛出去界面只剩一句"探针失败：xxx"，而现场（走到哪一步）就丢了。所以这里自己兜住。
+     */
+    let result: CaaResult;
+    try {
+      result = await CaaLogin.login(identity, bogusUser, bogusPass, device, null);
+    } catch (error) {
+      CaaSession.rememberRequest(CaaLogin.lastRequestDump);
+      const thrown: CaaOutcome = CaaSession.outcome(false,
+        `探针抛异常：${(error as Error).message}`, CaaSession.stepsText());
+      CaaSession.rememberDiag('探针', thrown.reason, thrown.steps);
+      return thrown;
+    }
     const steps: string = CaaSession.stepsText();
     // 探针也会生成"这一发请求体"的脱敏副本：真账号那次不必再消耗次数才能拿到它。
     CaaSession.rememberRequest(CaaLogin.lastRequestDump);
@@ -520,6 +544,57 @@ export class CaaSession {
       `指纹探针：${note} → 去电脑上看 JA3（${host}:${port}）`, CaaSession.stepsText());
     CaaSession.rememberDiag('指纹探针', outcome.reason, outcome.steps);
     return outcome;
+  }
+
+  /**
+   * **自建 TLS 1.3 通道试一发**（见 `core/net/Tls13Client`）。
+   *
+   * 目的：用**我们自己拼的 ClientHello**（JA3 对齐上游那套 `771,4865,0-43-10-51-13-16-45,29-23,`）
+   * 发同一发登录请求，看 IG 是否放行。系统的 `http` / `TLSSocket` 都不给"扩展集合/顺序/曲线"
+   * 的旋钮，所以这是 App 内唯一的"换指纹"手段。
+   *
+   * 第一版只做 TLS1.3 + AES128-GCM + X25519 + HTTP/1.1，**不做证书链校验**
+   * （诊断用；真要长期用必须补上，见 Tls13Client 文件头的说明）。
+   */
+  static async tls13Probe(): Promise<CaaOutcome> {
+    const body: string = CaaLogin.lastSendBody;
+    if (body.length === 0) {
+      return CaaSession.outcome(false, '还没有可重发的请求（先点一次「假账号探针」或登录）');
+    }
+    const path: string = '/api/v1/bloks/async_action/'
+      + 'com.bloks.www.bloks.caa.login.async.send_login_request/';
+    const lines: Array<string> = [`POST ${path} HTTP/1.1`];
+    const map: Record<string, string> = CaaLogin.lastSendHeaderMap;
+    for (const key of Object.keys(map)) {
+      const lower: string = key.toLowerCase();
+      if (lower === 'content-length' || lower === 'host' || lower === 'connection') {
+        continue;
+      }
+      lines.push(`${key}: ${map[key]}`);
+    }
+    lines.push('Host: b.i.instagram.com');
+    lines.push(`Content-Length: ${utf8(body).length}`);
+    lines.push('Connection: close');
+    lines.push('');
+    lines.push('');
+    const requestText: string = lines.join('\r\n') + body;
+    let selfTest: string = '(未跑)';
+    try {
+      selfTest = await Tls13Client.selfTest();
+      const report: string = await Tls13Client.probe('b.i.instagram.com', 443, requestText);
+      const outcome: CaaOutcome = CaaSession.outcome(false,
+        `自检：${selfTest}\n自建 TLS1.3 通道：${report}`, CaaSession.stepsText());
+      CaaSession.rememberRaw(report);
+      CaaSession.rememberDiag('自建 TLS1.3', outcome.reason, outcome.steps);
+      return outcome;
+    } catch (error) {
+      // 失败也要把自检结果带出来：手写 TLS 的错只有"自检哪一项不过"能定位。
+      const failed: CaaOutcome = CaaSession.outcome(false,
+        `自检：${selfTest}\n自建 TLS1.3 通道失败：${(error as Error).message}`,
+        CaaSession.stepsText());
+      CaaSession.rememberDiag('自建 TLS1.3', failed.reason, failed.steps);
+      return failed;
+    }
   }
 
   /**

@@ -272,6 +272,31 @@ export struct CaaLoginCard {
         })
 
       /*
+       * **自建 TLS 1.3 通道试一发**：用我们自己拼的 ClientHello（对齐上游"能过"的 JA3）
+       * 发同一发登录请求 —— 这是 App 内唯一能换掉传输指纹的手段。
+       */
+      Text('自建 TLS1.3 通道试一发（自拼 ClientHello）')
+        .fontSize(12)
+        .fontColor($r('app.color.accent'))
+        .width('100%')
+        .onClick((): void => {
+          if (this.busy) {
+            return;
+          }
+          this.busy = true;
+          this.status = '正在握手（自拼 ClientHello）并发送…';
+          this.steps = '';
+          CaaSession.tls13Probe().then((outcome: CaaOutcome): void => {
+            this.busy = false;
+            this.status = outcome.reason;
+            this.steps = outcome.steps;
+          }).catch((error: Error): void => {
+            this.busy = false;
+            this.status = `自建通道失败：${error.message}`;
+          });
+        })
+
+      /*
        * **量 TLS 指纹**：往电脑上那个只收 ClientHello 的监听发一次握手，电脑侧算出 JA3。
        * 上游那条"能过 429"的指纹是 `771,4865,0-43-10-51-13-16-45,29-23,`，一比就知道差在哪。
        */
