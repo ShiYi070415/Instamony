@@ -43,13 +43,10 @@ import { AppConfig } from '../config/AppConfig';
 import { InstagramPageBridge } from '../bridge/PageBridge';
 import {
   commentsOnPostPageScript,
-  DOM_COMMENTS_PROBE_SCRIPT,
-  DOM_SURVEY_SCRIPT,
   followClickScript,
   followStateScript,
   likeCommentScript,  OWN_PROFILE_SCRIPT,
   PAGE_STATE_SCRIPT,
-  PROBE_WATCH_ON_SCRIPT,
   saveOnPostPageScript,
   TIMELINE_PROBE_SCRIPT
 } from '../bridge/WebScripts';
@@ -59,7 +56,6 @@ import { FeedList } from '../components/FeedList';
 import { FEED_START_OFFSET } from '../components/FeedList';
 import { FeedSkeleton } from '../components/FeedSkeleton';
 import { InstagramWebHost } from '../components/InstagramWebHost';
-import { ProbePanel } from '../components/ProbePanel';
 import { WebChromeBar } from '../components/WebChromeBar';
 import { InstagramCookieJar, InstagramCookieSnapshot } from '../core/InstagramCookieJar';
 import { JsonRead } from '../core/JsonRead';
@@ -219,7 +215,6 @@ import { MobileRequest } from '../core/mobileapi/MobileRequest';
 // 首页时间线"能不能走移动端"的一次性实验（见 core/mobileapi/MobileFeedProbe）。
 import { FeedProbeLine, MobileFeedProbe } from '../core/mobileapi/MobileFeedProbe';
 import { SessionGate } from '../core/SessionGate';
-import { InstagramProbe } from '../probe/InstagramProbe';
 import { FeedRecommendedPage, FeedViewModel } from '../viewmodel/FeedViewModel';
 
 const TAG: string = 'InstamonyHome';
@@ -381,8 +376,6 @@ const LIKE_TIMEOUT_MS: number = 12000;
  */
 const SAVE_TIMEOUT_MS: number = 14000;
 
-/** 探针报告自动落盘的最小间隔（毫秒），见 dumpProbeSilently。 */
-const PROBE_DUMP_MIN_INTERVAL_MS: number = 60000;
 /**
  * 下拉刷新时"等网页从别处导航回来"的上限与轮询间隔（毫秒）。
  *
@@ -588,14 +581,6 @@ interface TabItem {
   label: ResourceStr;
 }
 
-/**
- * 探针入口（标题栏右上角那颗「探针」胶囊）是否显示。
- *
- * **默认关掉**：那是排查/挖接口用的工具，不属于面向用户的界面。需要时把这里改成 `true`
- * 重新编译即可 —— 代码、面板、抓模板/结构摘要/打开页面这些能力全部保留（见 menus 与 ProbePanel）。
- * 界面上的其它入口（页内右上角 more、设定页）都不再暴露探针。
- */
-const PROBE_MENU_VISIBLE: boolean = false;
 
 // 搜索框那几套常量（高度、收起来的时机、动画时长）跟着搜索框一起搬进了 SearchPage ——
 // 搜索框现在画在那一页里（见 SearchPage 的 searchBoxOverlay），标题栏只管标题和菜单。
@@ -1481,8 +1466,6 @@ struct Index {
   }
   /** 帖子页下拉刷新用的状态（这一页没有可刷新的东西，占位给 FeedList 的 `$refreshing`）。 */
   @State private postPageRefreshing: boolean = false;
-  /** 上一次探针自动落盘的时刻（节流用，见 dumpProbeSilently）。 */
-  private lastProbeDumpMs: number = 0;
   /** 屏幕宽度（vp）：底栏胶囊的左右留白按它反算（见 barSideMargin）。 */
   private screenWidthVp: number = 0;
   /**
@@ -1548,7 +1531,6 @@ struct Index {
    * （见 commentsMaxVp）。取不到时按 28vp 的常见量级兜底。
    */
   @State private topSafeVp: number = 28;
-  @State probeVisible: boolean = false;
   /** 视频静音（全局；标题栏那颗 reels 喇叭键改它）。 */
   @StorageProp(SETTING_VIDEO_MUTED) videoMuted: boolean = false;
   /**
@@ -1584,8 +1566,6 @@ struct Index {
   @State notificationsRefreshing: boolean = false;
   /** 通知取数是否正在跑（挡住重入：并发导航隐藏网页会互相打断）。 */
   private notificationsBusy: boolean = false;
-  /** 隐藏网页 DOM 探针的报告文本（诊断面板显示 / 可复制 / 可落盘）。 */
-  @State probeText: string = '';
   /** 评论面板：是否可见、是否还在等网页渲染、读回来的评论、以及读不到的原因。 */
   @State commentsVisible: boolean = false;
   /**
@@ -1861,19 +1841,6 @@ struct Index {
     if (tab === AppTab.Home) {
       // 从左到右：通知（爱心）/ 上传（加号）；探针入口默认**不显示**（见 PROBE_MENU_VISIBLE）。
       const items: Array<HdsNavigationMenuItemOptions> = [];
-      if (PROBE_MENU_VISIBLE) {
-        items.push({
-          content: {
-            // 探针入口是文字胶囊按钮：用文字样式（TextStyleMode.NORMAL）
-            // 保持「看得见字」，而不是去猜一个图标。
-            label: $r('app.string.probe_title'),
-            type: TextStyleMode.NORMAL,
-            action: (): void => {
-              this.openProbe();
-            }
-          }
-        });
-      }
       items.push({
         content: {
           icon: $r('sys.symbol.heart'),
@@ -2501,7 +2468,6 @@ struct Index {
       });
       // 「我的」四个分页：探针按钮跑完把四条接口的结构摘要落一份。
       this.profileVm.onDigest = (text: string): void => {
-        this.dumpProbeFile('profile', text);
       };
       /*
        * 「你的快拍」那一项要用自己的头像（见 selfAvatarUrl）。
@@ -2658,8 +2624,6 @@ struct Index {
       this.loadedOnce = true;
       // 这一轮里可能刚撞上 `challenge_required`（见 refreshChallengeState）。
       this.refreshChallengeState();
-      // 只落轻量报告（同步、毫秒级）。重脚本改到探针面板手动触发。
-      this.dumpProbeSilently();
     };
     /*
      * 账号安全验证的界面状态**只由 MobileChallenge 台账驱动**（见 refreshChallengeState 与
@@ -3868,8 +3832,6 @@ struct Index {
     this.bridgeReady = true;
     hilog.info(DOMAIN, TAG, 'pageReady signedIn=%{public}s tab=%{public}d posts=%{public}d',
       this.signedIn ? '1' : '0', this.selectedTab, this.viewModel.list().length);
-    // 探针：每次网页加载完成后落一份报告，方便直接取用（不含任何凭据与正文）。
-    this.dumpProbeSilently();
     if (this.signedIn && this.selectedTab === AppTab.Home && this.viewModel.list().length === 0) {
       this.viewModel.loadFeed();
     }
@@ -4144,9 +4106,7 @@ struct Index {
       MobileProbe.clearReport(context);
       // Reels 滚动日志里是这个人的 reel id / 作者名（它不走 clearDumps 那套前缀）。
       ReelsCrashLog.clear();
-      // 带时间戳的那批：文件名前缀见各 dump 的调用点（探针 / 快拍失败 / 托盘形状…）。
-      InstagramProbe.clearDumps(context,
-        ['probe', 'storyfail', 'trayshape', 'trayraw', 'search', 'Instamony_']);
+
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'wipe diagnostics failed: %{public}s', (error as Error).message);
     }
@@ -4156,133 +4116,14 @@ struct Index {
   // 探针
   // ==========================================================================
 
-  /**
-   * 把当前探针报告落一份盘（排查用）。
-   *
-   * **节流到最多 60 秒一次**：它原来挂在每次信息流"一轮加载结束"上，等于每刷一次首页
-   * 就写一次文件 + 读一次 Cookie 罐（`InstagramCookieJar.inspect`）；这些都是纯开销，
-   * 与取数速度无关。探针面板里的手动操作（`probeAndDump`）不受这个节流限制。
-   */
-  private async dumpProbeSilently(): Promise<void> {
-    const now: number = Date.now();
-    if (now - this.lastProbeDumpMs < PROBE_DUMP_MIN_INTERVAL_MS) {
-      return;
-    }
-    this.lastProbeDumpMs = now;
-    try {
-      const context: common.UIAbilityContext =
-        this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
-      const sessionLine: string = `登录态=${snapshot.signedIn ? '已登录' : '未登录'} `
-        + `cookie=${snapshot.count} 名=${snapshot.names}`;
-      InstagramProbe.getInstance().dump(context, 'probe',
-        InstagramProbe.getInstance().report(sessionLine));
-    } catch (error) {
-    }
-  }
 
-  /** 回放首页信息流接口并落盘摘要（只读，用页面自己的会话）。 */
-  private async probeAndDump(): Promise<void> {
-    const list: MediaPost[] = this.viewModel.list();
-    const first: MediaPost | null = list.length > 0 ? list[0] : null;
-    const local: string = first === null
-      ? `posts=${list.length}`
-      : `posts=${list.length} 首条=${first.ownerUsername}|赞${first.likeCount}|评${first.commentCount}`
-        + `|图${first.displayUrl.length}|v${first.videoUrl.length}|n${first.imageUrls.length}`
-        + `|${first.displayUrl.substring(0, 60)}|${this.viewModel.debugText()}`;
-    try {
-      const digest: string = await this.bridge.runBridge(TIMELINE_PROBE_SCRIPT, 20000);
-      InstagramProbe.getInstance().setApiDigest(`${local}\n${digest}`);
-    } catch (error) {
-      InstagramProbe.getInstance().setApiDigest(local);
-    }
-    try {
-      const dom: string = await this.bridge.runBridge(DOM_SURVEY_SCRIPT, 15000);
-      InstagramProbe.getInstance().setDomReport(dom);
-    } catch (error) {
-    }
-    await this.dumpProbeSilently();
-  }
 
-  /** 汇总当前登录态 + 已采集到的接口，生成可读报告。 */
-  private async refreshProbeReport(): Promise<void> {
-    const snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
-    const sessionLine: string = `登录态=${snapshot.signedIn ? '已登录' : '未登录'} `
-      + `cookie=${snapshot.count} 名=${snapshot.names}`;
-    this.probeText = InstagramProbe.getInstance().report(sessionLine);
-  }
 
-  private async openProbe(): Promise<void> {
-    this.probeVisible = true;
-    // 打开探针时顺手把页面里"请求/响应上报"的开关打开：平时它是关着的（那是有成本的常驻开销，
-    // 见 PROBE_WATCH_ON_SCRIPT 的说明），要看报告时才开。
-    try {
-      await this.bridge.runBridge(PROBE_WATCH_ON_SCRIPT, 3000, 'probe-watch-on');
-    } catch (error) {
-    }
-    await this.refreshProbeReport();
-  }
 
-  /** 网页结构探测：把当前页面（登录后首页 / 详情页 / 个人页都行）的骨架读出来。 */
-  private async probeDom(): Promise<void> {
-    const raw: string = await this.bridge.runBridge(DOM_SURVEY_SCRIPT, 15000);
-    InstagramProbe.getInstance().setDomReport(raw);
-    await this.refreshProbeReport();
-  }
 
-  private copyProbeReport(): void {
-    try {
-      const data: pasteboard.PasteData =
-        pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, this.probeText);
-      pasteboard.getSystemPasteboard().setData(data, (err: BusinessError | undefined) => {
-        this.probeText = err === undefined
-          ? `${this.probeText}\n\n[已复制到剪贴板]`
-          : `${this.probeText}\n\n[复制失败：${err.message}]`;
-      });
-    } catch (error) {
-      this.probeText = `${this.probeText}\n\n[剪贴板不可用]`;
-    }
-  }
 
-  /** 落盘到应用沙箱，便于用 hdc 直接把报告取出来。 */
-  private saveProbeReport(): void {
-    try {
-      const context: common.UIAbilityContext =
-        this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const name: string = InstagramProbe.getInstance().dump(context, 'probe', this.probeText);
-      this.probeText = name.length > 0
-        ? `${this.probeText}\n\n[已写入沙箱 ${name}]`
-        : `${this.probeText}\n\n[写入沙箱失败]`;
-    } catch (error) {
-      this.probeText = `${this.probeText}\n\n[写入沙箱失败]`;
-    }
-  }
 
-  private clearProbe(): void {
-    InstagramProbe.getInstance().clear();
-    this.refreshProbeReport();
-  }
 
-  /**
-   * 把一份探针摘要写进沙箱（`probe_<kind>_*.txt`）并返回文件名。
-   *
-   * 为什么要落文件：hilog 刷得太快（chromium 每秒几千行，缓冲区几秒就滚没了），
-   * 而"某条接口的真实结构"恰恰是写解析时唯一要看的东西 —— 只有文件能留住它。
-   */
-  private dumpProbeFile(kind: string, text: string): void {
-    if (text.length === 0) {
-      return;
-    }
-    try {
-      const context: common.UIAbilityContext =
-        this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const name: string = InstagramProbe.getInstance().dump(context, kind, text);
-      hilog.info(DOMAIN, TAG, '%{public}s digest dumped %{public}s', kind, name);
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, '%{public}s digest dump failed: %{public}s',
-        kind, (error as Error).message);
-    }
-  }
 
   // ==========================================================================
   // 网页
@@ -5235,7 +5076,6 @@ struct Index {
     this.setLocalStatus($r('app.string.probe_profile_templates'));
     this.profileVm.load(true);
     const detail: string = NativeProfile.lastDetail();
-    this.dumpProbeFile('profile', `mobile tabs via NativeProfile.fetchPosts detail=${detail}`);
     hilog.info(DOMAIN, TAG, 'probe profile (mobile) detail=%{public}s', detail);
   }
 
@@ -5248,30 +5088,10 @@ struct Index {
   private async captureSearchTemplates(): Promise<void> {
     this.setLocalStatus($r('app.string.probe_search_templates'));
     const digest: string = await this.searchVm.captureTemplates();
-    this.dumpProbeFile('search', digest);
     hilog.info(DOMAIN, TAG, 'probe search done %{public}d chars', digest.length);
   }
 
-  /** 探针面板用：读当前页面里内嵌的评论数据，结果进 hilog 与探针报告。 */
-  private async probeCommentsEmbed(): Promise<void> {
-    try {
-      const raw: string = await this.bridge.runBridge(DOM_COMMENTS_PROBE_SCRIPT, 12000, 'comments-embed');
-      hilog.info(DOMAIN, TAG, 'comments embed probe %{public}s', raw);
-      InstagramProbe.getInstance().setDomReport(`comments embed ${raw}`);
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'comments embed probe failed: %{public}s', (error as Error).message);
-    }
-  }
 
-  /**
-   * 探针面板上的「打开某个页面」：把常驻网页揭出来导航过去。
-   *
-   * **不收起面板**：下面几个探测按钮（结构摘要 / 存信息流模板 / 读内嵌评论）都要对着
-   * "当前这个页面"跑脚本，面板留着才连着点得到；要看网页本身，按面板上的「关闭」即可。
-   */
-  private openWebFromProbe(url: string): void {
-    this.openWeb(url);
-  }
 
   /**
    * 通知：打开窗口 → 立刻去原生取一趟。
@@ -7147,7 +6967,6 @@ struct Index {
     this.commentsDiag = diag;
     if (diag.length > 0) {
       hilog.info(DOMAIN, TAG, 'comments diag: %{public}s', diag);
-      InstagramProbe.getInstance().setDomReport(`comments ${post.shortcode} ${diag}`);
     }
   }
 
@@ -7303,10 +7122,6 @@ struct Index {
     }
     if (this.commentsVisible && !this.commentsSuspended) {
       this.closeComments();
-      return true;
-    }
-    if (this.probeVisible) {
-      this.probeVisible = false;
       return true;
     }
     if (this.accountMenuOpen) {
@@ -12787,92 +12602,6 @@ struct Index {
           .zIndex(80)
       }
 
-      if (this.probeVisible) {
-        ProbePanel({
-          text: this.probeText,
-          onRefresh: (): void => {
-            this.refreshProbeReport();
-          },
-          onDom: (): void => {
-            this.probeDom();
-          },
-          onCopy: (): void => {
-            this.copyProbeReport();
-          },
-          onSave: (): void => {
-            this.saveProbeReport();
-          },
-          onClear: (): void => {
-            this.clearProbe();
-          },
-          // 要挖 reels / 私信 / 搜索 / 我的 的接口，只能让网页真的走一遍那些页面；
-          // 原生这几页还没实现，所以从探针面板直接开（开完面板会自动收起）。
-          onOpenReels: (): void => {
-            this.openWebFromProbe(AppConfig.INSTAGRAM_REELS_URL);
-          },
-          onOpenSearch: (): void => {
-            this.openWebFromProbe(AppConfig.INSTAGRAM_SEARCH_URL);
-          },
-          onOpenDirect: (): void => {
-            this.openWebFromProbe(AppConfig.INSTAGRAM_DIRECT_URL);
-          },
-          onOpenProfile: (): void => {
-            // 「我的」要先从网页里查出自己的主页地址（见 openProfile / OWN_PROFILE_SCRIPT）。
-            this.openProfile();
-          },
-          onCommentsFirst: (): void => {
-            // 面板要先收掉：评论面板和它都是这一层的浮层，留着会互相盖住。
-            this.probeVisible = false;
-            const list: MediaPost[] = this.viewModel.list();
-            if (list.length === 0) {
-              this.setLocalStatus($r('app.string.feed_empty'));
-              return;
-            }
-            // 挑第一条**图片**帖：视频帖会走 `/reel/` 页面，那张页面的评论入口和帖子页结构不同，
-            // 而现在这条读法（点评论按钮 + 滚一屏逼它发请求）是照帖子页写的，拿视频帖试必然超时。
-            let target: MediaPost = list[0];
-            for (let index: number = 0; index < list.length; index++) {
-              if (!list[index].isVideo()) {
-                target = list[index];
-                break;
-              }
-            }
-            this.openComments(target);
-          },
-          onProfileTemplates: (): void => {
-            this.captureProfileTemplates();
-          },
-          // 搜索页自检（移动端两路，见 captureSearchTemplates）。
-          onSearchTemplates: (): void => {
-            this.captureSearchTemplates();
-          },
-          onOpenPostPage: (): void => {
-            // 打开首条**图片**帖的帖子页（视频帖走 /reel/，结构不同）。
-            // 这里**故意不收起面板**：下面的"读内嵌评论"要对着这个页面跑脚本，
-            // 面板留着才点得到那颗按钮（网页被盖住也会照常加载，脚本读的是它的文档）。
-            const list: MediaPost[] = this.viewModel.list();
-            if (list.length === 0) {
-              this.setLocalStatus($r('app.string.feed_empty'));
-              return;
-            }
-            let target: MediaPost = list[0];
-            for (let index: number = 0; index < list.length; index++) {
-              if (!list[index].isVideo()) {
-                target = list[index];
-                break;
-              }
-            }
-            this.openPost(target);
-          },
-          onCommentsEmbed: (): void => {
-            this.probeCommentsEmbed();
-          },
-          onClose: (): void => {
-            this.probeVisible = false;
-          }
-        })
-          .zIndex(60)
-      }
 
       // ---- 启动页浮层已移除 ----
       // 启动画面就是**系统那条启动窗口**（module.json5 的 startWindowIcon = splash_icon）。

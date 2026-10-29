@@ -59,12 +59,6 @@ const TSV_SELECT_METHOD: string =
 const TSV_VERIFY: string = 'com.bloks.www.two_step_verification.verify_code.async';
 const TSV_ENTER_BACKUP: string = 'com.bloks.www.two_factor_login.enter_backup_code';
 const TSV_FLOW_SOURCE: string = 'two_factor_login';
-/**
- * **"在另一台设备上同意"的轮询 action**（真机 2026-10-30 抓到，见 last2faRaw）。
- *
- * 只在布局里认不出具体 id 时的兜底（`adoptApprovalFrom` 会优先用扫出来的那个）。
- */
-const TSV_APPROVE_ACTION: string = 'com.bloks.www.two_step_verification.has_been_allowed.async';
 const IG_APP_ID: string = '567067343352427';
 
 /** 两步验证相关的三个 Bloks app。 */
@@ -496,56 +490,11 @@ export class CaaLogin {
   /** 等验证码时留住的现场（见 `CaaPending`）。 */
   private static pending: CaaPending | null = null;
 
-  /**
-   * "在另一台设备上同意"那一发是**整页 app**（`app`）还是**异步 action**（`action`）。
-   *
-   * 布局里没标注，第一次轮询两种都试一下（见 pollApproval），成功那种记在这里，
-   * 之后每 3 秒只用它对 —— 不然每次轮询都要发两发，白烧请求量。
-   */
-  private static approvalKind: string = '';
 
-  /**
-   * **"看对方同意了吗"那一发的 app/action id**（从布局里读出来；空 = 这次没有这条路）。
-   *
-   * 真机实测是 `com.bloks.www.two_step_verification.has_been_allowed.async`，但它是**变量引用**
-   * 拼进布局的，所以由 `adoptApprovalFrom` 按字符串扫出来，不写死（版本升级换名也认得）。
-   */
-  private static approvalAction: string = '';
 
-  /**
-   * 2FA 第一屏里认出了"在另一台设备上同意"这条路吗（见 openTwoStepScreen；诊断/日志用）。
-   */
-  static pendingHasApproval: boolean = false;
 
-  /**
-   * 同意那一发里收到的会话（见 pollApproval / takeApprovedLogin）。
-   *
-   * 同意之后 IG 会直接给会话 —— 收在这里，交给 CaaSession 走"交验证码成功"同一条落盘路径，
-   * 不用再拿密码登一次。
-   */
-  private static approvedLogin: CaaLoginPayload | null = null;
 
-  /**
-   * **这一次 2FA 现场的摘要**（诊断用：真机上看不到布局，只能把它带出来分析）。
-   *
-   * 为什么要它：用户报"2FA 面板没出现「在另一台设备上同意」那行提示，客户端同意了也没反应"——
-   * 说明这次登录的响应里**没有**我们认的那条路（`CaaLogin.approvalSpecOf` 找的是
-   * `polling_nonce`/`trusted_notification`/`approval`）。而要知道 IG 到底给了什么形状，
-   * 只能把响应里的关键字串带出来看（真机上没有 hdc，hilog 也会被冲掉）。
-   *
-   * 内容只取**含关键字的字符串**（见 digestTwoStep），几百字节到十几 KB，不含密码。
-   */
-  private static last2faDigest: string = '';
 
-  /**
-   * **这一次 2FA 的原始响应**（账密那一发 + entrypoint + method_picker，截断到 400KB）。
-   *
-   * 为什么还要原文：摘要只能"按已知关键字捞"，而 IG 的 Bloks 布局是用**变量引用**拼出来的
-   * （异步 action 的 app id 在变量表里，摘要里那几个 `(e25 2)` / `(fom 13704)` 就是它）——
-   * 光看摘要认不出该往哪个 app 打。原文落到 `filesDir/Instamony_2fa.txt`，
-   * 开发者用 hdc 取走就能照着它把"等同意"那一发拼出来。
-   */
-  private static last2faRaw: string = '';
 
   /**
    * 最近一次 `send_login_request` 的**请求体脱敏副本**（`password` / `aac` 换成占位符）。
@@ -735,409 +684,14 @@ export class CaaLogin {
     return CaaLogin.pending !== null;
   }
 
-  /* ------------------------------------------- 在另一台设备上同意（login approval） */
-
-  /**
-   * **这一次 2FA 能不能"在另一台设备上同意"**（IG 的 login approval）。
-   *
-   * 需求："2FA 过程中可以在官方客户端同意本次登录，有部分实现同意后自动登录吗"。
-   *
-   * 真机现场（2026-10-30 用 `Instamony_2fa.txt` 抓到，见 last2faRaw）：
-   *   · 2FA 的第一屏（`two_step_verification.entrypoint`）**就是**"等待同意"这一屏，里面有
-   *     `TWO_STEP_VERIFICATION_APPROVE_FROM_ANOTHER_DEVICE:is_timer_running` /
-   *     `:is_loading` 两个状态，和一个 `approve_from_another_device_polling_timer`；
-   *   · 定时器 **7500ms** 一轮（和 igpapi 记录的"真机约 7.5 秒"一致）；
-   *   · 每一轮打的是**异步 action**
-   *     `com.bloks.www.two_step_verification.has_been_allowed.async`，
-   *     server_params：`two_step_verification_context` / `flow_source` / `device_id` /
-   *     `cloud_trust_token` / `spectra_reg_login_data`，
-   *     client_input_params：`machine_id` / `device_id` / `vetted_device_nonces` / `network_bssid`。
-   *
-   * 所以判定不能看账密那一发的响应（那里没有），得看 entrypoint 的布局 —— 见
-   * `adoptApprovalFrom`（`inspectTwoStepScreens` 拿到布局后会调它）。
-   */
-  static approvalAvailable(): boolean {
-    return CaaLogin.pending !== null && CaaLogin.approvalAction.length > 0;
-  }
-
-  /** "看对方同意了吗"那一发要打的 app/action id（空 = 这次没有这条路）。 */
-  static approvalActionId(): string {
-    return CaaLogin.approvalAction;
-  }
-
-  /**
-   * 从一份布局里认出"等同意"那一发（见 approvalAvailable 的现场说明）。
-   *
-   * app id 在布局里是**变量引用**（`(e25 2)` / `(fom 13704)`），所以这里按**字符串**扫：
-   * 任何含 `has_been_allowed` 的 `com.bloks.*` 都算（版本升级换了前后缀也还认得）。
-   * 退一步：布局里出现过 `APPROVE_FROM_ANOTHER_DEVICE` 就认为有这条路（用常量兜底）。
-   *
-   * @returns 这一次有没有认出来
-   */
-  static adoptApprovalFrom(payload: ESObject): boolean {
-    const strings: Array<string> = [];
-    collectStrings(payload, strings);
-    const re: RegExp = /com\.bloks\.[A-Za-z0-9_.]*has_been_allowed[A-Za-z0-9_.]*/i;
-    for (let index: number = 0; index < strings.length; index++) {
-      const found: RegExpMatchArray | null = strings[index].match(re);
-      if (found !== null && found.length > 0) {
-        CaaLogin.approvalAction = found[0];
-        return true;
-      }
-    }
-    for (let index: number = 0; index < strings.length; index++) {
-      if (strings[index].indexOf('APPROVE_FROM_ANOTHER_DEVICE') >= 0) {
-        CaaLogin.approvalAction = TSV_APPROVE_ACTION;
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /**
-   * 打一发"那边同意了吗"，返回：
-   *   `waiting`（还没）/ `approved`（同意了，会话已收下）/ `declined`（拒绝了）/
-   *   `error`（这一发没成，可以再试）/ `none`（这次登录没有"等同意"这条路）。
-   *
-   * 同意时 IG 在响应里直接给会话（和交验证码那一发同样的形状），所以这里把登录结果
-   * 收进 `approvedLogin`，由 `takeApprovedLogin` 交给 CaaSession 落进 Cookie 罐 ——
-   * **不用再登一次密码**。
-   */
-  static async pollApproval(): Promise<string> {
-    const pending: CaaPending | null = CaaLogin.pending;
-    if (pending === null) {
-      return 'none';
-    }
-    const action: string = CaaLogin.approvalAction;
-    if (action.length === 0) {
-      return 'none';
-    }
-    const params: Record<string, ESObject> = {};
-    const server: Record<string, ESObject> = CaaLogin.mergeParams({
-      'two_step_verification_context': pending.context,
-      'flow_source': TSV_FLOW_SOURCE,
-      'device_id': pending.identity.androidDeviceId
-    }, {}) as Record<string, ESObject>;
-    // 这两个在布局里就是"字符串 null / JSON null"，照抄（见 approvalAvailable 的现场说明）。
-    server['cloud_trust_token'] = 'null';
-    server['spectra_reg_login_data'] = null;
-    params['server_params'] = server;
-    const client: Record<string, ESObject> = CaaLogin.mergeParams({
-      'machine_id': pending.identity.mid,
-      'device_id': pending.identity.androidDeviceId
-    }, {}) as Record<string, ESObject>;
-    client['network_bssid'] = null;
-    params['client_input_params'] = client;
-
-    const reply: CaaHttpReply =
-      await CaaLogin.bloksBestHost(pending.identity, pending.extra, action, params);
-    CaaLogin.steps.push(new CaaStep('2sv_approve', reply.status, reply.host));
-    CaaLogin.appendTwoFactorRaw('approve_poll', reply.body);
-
-    const payload: ESObject = CaaLogin.parse(reply.body);
-    // ① 同意了：这一发里带着会话（和 verify_code 那一发同样的形状）。
-    const login: CaaLoginPayload | null = CaaLogin.extractLoginPayload(payload);
-    if (login !== null) {
-      CaaLogin.approvedLogin = login;
-      return 'approved';
-    }
-    // ② 明确的 review_status（有的版本给数字）。
-    const review: ESObject = CaaLogin.findValueDeep(payload, 'review_status', 0);
-    const reviewText: string = review === undefined || review === null ? '' : `${review}`;
-    if (reviewText === '1') {
-      return 'approved';
-    }
-    if (reviewText === '2') {
-      return 'declined';
-    }
-    // ③ 兜底：响应文本里出现"已同意"的痕迹（字段名各版可能不同）。
-    const lower: string = reply.body.toLowerCase();
-    if (lower.indexOf('review_status\\":1') >= 0 || lower.indexOf('review_status":1') >= 0
-      || lower.indexOf('is_approved\\":true') >= 0 || lower.indexOf('is_approved":true') >= 0) {
-      return 'approved';
-    }
-    if (lower.indexOf('rejected') >= 0 || lower.indexOf('declined') >= 0) {
-      return 'declined';
-    }
-    if (reply.status === 200) {
-      return 'waiting';
-    }
-    return 'error';
-  }
-
-  /**
-   * 取走"同意"那一发收下的会话（给了 `CaaResult`，清掉内部副本；没有给 null）。
-   *
-   * 拿到之后由 CaaSession 走和"交验证码成功"完全同一条落盘路径（`finish`），
-   * 所以 Cookie 罐、Authorization、账号登记都不用另写。
-   */
-  static takeApprovedLogin(): CaaResult | null {
-    const login: CaaLoginPayload | null = CaaLogin.approvedLogin;
-    if (login === null) {
-      return null;
-    }
-    CaaLogin.approvedLogin = null;
-    const result: CaaResult = new CaaResult(true, '登录成功（在另一台设备上同意）');
-    result.cookie = login.cookie;
-    result.authorization = login.authorization;
-    result.mid = login.mid;
-    result.rur = login.rur;
-    result.claim = login.claim;
-    const pending: CaaPending | null = CaaLogin.pending;
-    if (pending !== null) {
-      result.aac = pending.aac;
-    }
-    return result;
-  }
-
   /* ------------------------------------------- 2FA 现场摘要（诊断） */
 
-  /**
-   * 最近一次"要两步验证"那一发的现场摘要（见 last2faDigest 的说明）。
-   *
-   * 只在这一次登录要 2FA 时才会有内容；设置页把它复制出来发给开发者，
-   * 用来判断 IG 这次到底提供了哪条路（短信 / 验证器 / 备用码 / 在另一台设备上同意）。
-   */
-  static twoFactorDigestNow(): string {
-    return CaaLogin.last2faDigest;
-  }
 
-  /** 这一次 2FA 的**原始响应**（见 last2faRaw；空串 = 没有）。 */
-  static twoFactorRawNow(): string {
-    return CaaLogin.last2faRaw;
-  }
 
-  /** 把一份原始响应并进 last2faRaw（带小节标题；总量封顶 400KB）。 */
-  private static appendTwoFactorRaw(title: string, body: string): void {
-    if (body.length === 0 || CaaLogin.last2faRaw.length > 400000) {
-      return;
-    }
-    const cut: string = body.length > 200000 ? body.substring(0, 200000) : body;
-    CaaLogin.last2faRaw = `${CaaLogin.last2faRaw}\n\n### ${title}\n${cut}`;
-  }
 
-  /** 一份已解析的响应转回文本（诊断落盘用；失败给空串）。 */
-  private static rawText(payload: ESObject): string {
-    try {
-      const text: string = JSON.stringify(payload);
-      return text.length > 200000 ? text.substring(0, 200000) : text;
-    } catch (error) {
-      return '';
-    }
-  }
 
-  /**
-   * **把 2FA 第一屏（entrypoint）打开一次** —— "在另一台设备上同意"要靠它。
-   *
-   * 真机对照实验（2026-10-30，同一个账号连做四版）：
-   *   · A 打开第一屏、**不轮询** → 用户在官方客户端点同意**没有**再报"请求已失效"；
-   *   · B 打开第一屏 + 每 7.5 秒轮询 → 报"已失效"；
-   *   · C 不打开第一屏 + 轮询 → 报"已失效"；
-   *   · D 什么都不做 → 报"已失效"。
-   * 结论：**打开这一屏是让那条待确认请求"成立/保持活着"的动作**，而反复轮询反而会把它搅掉。
-   * 所以现在只做这一发（和真机 App 一样：账密过了就把 2FA 屏渲染出来），之后靠
-   * "切回前台重登一次"收尾（见 LoginPage.retryAfterApproval）。
-   *
-   * 只打 entrypoint 这一屏：`method_picker` 是"换一种验证方式"，替用户提前走一遍等于
-   * 把请求取消掉（B 版报"已失效"时它也在里面）。
-   */
-  static async openTwoStepScreen(payload: ESObject, identity: MobileIdentity,
-                                 extra: Record<string, string>,
-                                 context: string): Promise<boolean> {
-    try {
-      const specs: Array<CaaCallSpec> = CaaLogin.nextCallSpecs(payload);
-      const entrySpec: CaaCallSpec | null =
-        CaaLogin.pickCallSpec(specs, ['two_step', 'two_factor']);
-      const entryApp: string = entrySpec === null ? TSV_ENTRYPOINT : entrySpec.appId;
-      const entryParams: Record<string, ESObject> = {};
-      entryParams['client_input_params'] = CaaLogin.mergeParams({
-        'device_id': identity.androidDeviceId,
-        'is_whatsapp_installed': '0',
-        'machine_id': identity.mid
-      }, entrySpec === null ? {} : entrySpec.clientParams);
-      entryParams['server_params'] = CaaLogin.mergeParams({
-        'should_fallback_to_sms': '0',
-        'family_device_id': identity.phoneId,
-        'device_id': identity.androidDeviceId,
-        'two_step_verification_context': context,
-        'flow_source': TSV_FLOW_SOURCE
-      }, entrySpec === null ? {} : entrySpec.serverParams);
-      const entry: CaaHttpReply =
-        await CaaLogin.bloksAppBestHost(identity, extra, entryApp, entryParams);
-      CaaLogin.steps.push(new CaaStep('2sv_screen', entry.status, entry.host));
-      CaaLogin.appendTwoFactorRaw('entrypoint', entry.body);
-      const entryPayload: ESObject = CaaLogin.parse(entry.body);
-      const found: boolean = CaaLogin.adoptApprovalFrom(entryPayload);
-      CaaLogin.last2faDigest = CaaLogin.digestTwoStep(entryPayload);
-      return found;
-    } catch (error) {
-      CaaLogin.steps.push(new CaaStep('2sv_screen', 0, (error as Error).message));
-      return false;
-    }
-  }
 
-  /**
-   * **把 2FA 那几个屏幕也各打一发，摘一份摘要出来**（诊断用，见 last2faDigest）。
-   *
-   * ⚠️ **不要再在正常流程里调用它**：`method_picker` 那一步会把待确认的请求取消掉
-   * （见 openTwoStepScreen 里的四版对照实验）。它只留作"要一份完整现场"时的诊断手段。
-   */
-  static async inspectTwoStepScreens(payload: ESObject, identity: MobileIdentity,
-                                     extra: Record<string, string>,
-                                     context: string): Promise<string> {
-    const parts: Array<string> = [];
-    try {
-      const specs: Array<CaaCallSpec> = CaaLogin.nextCallSpecs(payload);
-      const entrySpec: CaaCallSpec | null =
-        CaaLogin.pickCallSpec(specs, ['two_step', 'two_factor']);
-      const entryApp: string = entrySpec === null ? TSV_ENTRYPOINT : entrySpec.appId;
-      const entryParams: Record<string, ESObject> = {};
-      entryParams['client_input_params'] = CaaLogin.mergeParams({
-        'device_id': identity.androidDeviceId,
-        'is_whatsapp_installed': '0',
-        'machine_id': identity.mid
-      }, entrySpec === null ? {} : entrySpec.clientParams);
-      entryParams['server_params'] = CaaLogin.mergeParams({
-        'should_fallback_to_sms': '0',
-        'family_device_id': identity.phoneId,
-        'device_id': identity.androidDeviceId,
-        'two_step_verification_context': context,
-        'flow_source': TSV_FLOW_SOURCE
-      }, entrySpec === null ? {} : entrySpec.serverParams);
-      const entry: CaaHttpReply =
-        await CaaLogin.bloksAppBestHost(identity, extra, entryApp, entryParams);
-      CaaLogin.appendTwoFactorRaw('entrypoint', entry.body);
-      const entryPayload: ESObject = CaaLogin.parse(entry.body);
-      /*
-       * **在这一屏里认"等同意"**（见 adoptApprovalFrom）：真机实测 entrypoint 就是
-       * "等待在另一台设备上同意"那一屏，`has_been_allowed.async` 的 id 藏在它的变量表里。
-       * 认出来之后 `approvalAvailable()` 才为真，UI 才会显示那句提示并开始 7.5 秒一轮的轮询。
-       */
-      if (CaaLogin.adoptApprovalFrom(entryPayload)) {
-        parts.push(`[approval] action=${CaaLogin.approvalAction}`);
-      }
-      parts.push(`[entrypoint ${entry.status} ${entry.host}]\n`
-        + CaaLogin.digestTwoStep(entryPayload));
 
-      const pickerSpec: CaaCallSpec | null =
-        CaaLogin.pickCallSpec(CaaLogin.nextCallSpecs(entryPayload), ['method_picker']);
-      const pickerApp: string = pickerSpec === null ? TSV_METHOD_PICKER : pickerSpec.appId;
-      const pickerParams: Record<string, ESObject> = {};
-      pickerParams['client_input_params'] = CaaLogin.mergeParams({
-        'is_whatsapp_installed': '0'
-      }, pickerSpec === null ? {} : pickerSpec.clientParams);
-      pickerParams['server_params'] = CaaLogin.mergeParams({
-        'should_fallback_to_sms': '0',
-        'device_id': identity.androidDeviceId,
-        'two_step_verification_context': context,
-        'flow_source': TSV_FLOW_SOURCE
-      }, pickerSpec === null ? {} : pickerSpec.serverParams);
-      const picker: CaaHttpReply =
-        await CaaLogin.bloksAppBestHost(identity, extra, pickerApp, pickerParams);
-      CaaLogin.appendTwoFactorRaw('method_picker', picker.body);
-      parts.push(`[method_picker ${picker.status} ${picker.host}]\n`
-        + CaaLogin.digestTwoStep(CaaLogin.parse(picker.body)));
-    } catch (error) {
-      parts.push(`[inspect 出错] ${(error as Error).message}`);
-    }
-    return parts.join('\n\n');
-  }
-
-  /**
-   * 从 2FA 响应里摘出**分析要用到的那几段**（不是整份响应：整份几百 KB，粘不动）。
-   *
-   * 取三样：
-   *   ① 顶层键（`layout` / `status` / `two_factor_info` …）—— 形状第一眼就能看出来；
-   *   ② 所有**含关键字**的字符串（`two_factor` / `two_step` / `approval` / `trusted` /
-   *      `polling` / `challenge` / `identifier` / `verification_method`），每段截到 600 字；
-   *   ③ 布局里能找到的调用规范（app id），也就是我们"猜路"的依据。
-   *
-   * 去重 + 总量封顶，粘到聊天窗口里还能看。
-   */
-  private static digestTwoStep(payload: ESObject): string {
-    const lines: Array<string> = [];
-    try {
-      if (payload !== null && payload !== undefined && typeof payload === 'object') {
-        lines.push(`[顶层键] ${Object.keys(payload as Record<string, ESObject>).join(',')}`);
-      }
-      const strings: Array<string> = [];
-      collectStrings(payload, strings);
-      const keys: Array<string> = ['two_factor', 'two_step', 'approval', 'trusted', 'polling',
-        'challenge', 'identifier', 'verification_method', 'should_trust_device'];
-      const seen: Set<string> = new Set<string>();
-      let total: number = 0;
-      let kept: number = 0;
-      for (let index: number = 0; index < strings.length; index++) {
-        const text: string = strings[index];
-        if (text.length < 8) {
-          continue;
-        }
-        const lower: string = text.toLowerCase();
-        let hit: boolean = false;
-        for (let k: number = 0; k < keys.length; k++) {
-          if (lower.indexOf(keys[k]) >= 0) {
-            hit = true;
-            break;
-          }
-        }
-        if (!hit) {
-          continue;
-        }
-        const head: string = text.length > 600 ? text.substring(0, 600) : text;
-        if (seen.has(head)) {
-          continue;
-        }
-        seen.add(head);
-        lines.push(`[串${kept + 1} len=${text.length}] ${head}`);
-        kept++;
-        total = total + head.length;
-        // 封顶：够分析就行，别让复制的文本大到粘不动。
-        if (kept >= 40 || total > 60000) {
-          break;
-        }
-      }
-      lines.push(`[统计] 字符串 ${strings.length} 段 / 命中 ${kept} 段`);
-      /*
-       * **布局里出现过的所有 Bloks app id**（含变量表里的异步 action 目标）。
-       *
-       * 这一段是"等同意"的关键线索：真机实测（2026-10-30）entrypoint 那一屏里有
-       * `TWO_STEP_VERIFICATION_APPROVE_FROM_ANOTHER_DEVICE:is_timer_running` 和一个
-       * **7500ms 的轮询定时器**，但异步 action 的 app id 是**变量引用**（`(e25 2)` / `(fom 13704)`），
-       * 不是我们认的 `35 "com.bloks…"` 那套写法 —— 所以专门把 payload 里所有 `com.bloks.*`
-       * 字符串列出来，照着它就能把那一发拼出来。
-       */
-      const bloksIds: Array<string> = [];
-      const re: RegExp = /com\.bloks\.[A-Za-z0-9_.]+/g;
-      const all: Array<string> = [];
-      collectStrings(payload, all);
-      for (let index: number = 0; index < all.length; index++) {
-        const found: RegExpMatchArray | null = all[index].match(re);
-        if (found === null) {
-          continue;
-        }
-        for (let f: number = 0; f < found.length; f++) {
-          const id: string = found[f];
-          if (bloksIds.indexOf(id) < 0) {
-            bloksIds.push(id);
-          }
-        }
-      }
-      lines.push(`[布局里出现过的 bloks app] ${bloksIds.length > 0 ? bloksIds.join(' | ') : '-'}`);
-      const specs: Array<CaaCallSpec> = CaaLogin.nextCallSpecs(payload);
-      const apps: Array<string> = [];
-      for (let index: number = 0; index < specs.length; index++) {
-        const app: string = specs[index].appId;
-        if (app.length > 0 && apps.indexOf(app) < 0) {
-          apps.push(app);
-        }
-      }
-      lines.push(`[布局里的调用规范] ${apps.length > 0 ? apps.join(' | ') : '-'}`);
-      lines.push(`[等同意] ${CaaLogin.approvalAction.length > 0 ? `有（${CaaLogin.approvalAction}）` : '没找到'}`);
-    } catch (error) {
-      lines.push(`[摘要出错] ${(error as Error).message}`);
-    }
-    return lines.join('\n');
-  }
 
   /**
    * **解析器离线自检**（不联网、不需要账号）。
@@ -1492,15 +1046,6 @@ export class CaaLogin {
     CaaLogin.steps = [];
     // 新的一次登录：上一次没交的验证码现场作废（免得数字串到别的账号上）。
     CaaLogin.pending = null;
-    // "等同意"那一发用哪种调用方式也重新探（见 approvalKind）。
-    CaaLogin.approvalKind = '';
-    // 上一轮的"等同意"状态不能带过来（新登录可能是另一个账号/另一种 2FA）。
-    CaaLogin.approvalAction = '';
-    CaaLogin.approvedLogin = null;
-    CaaLogin.pendingHasApproval = false;
-    // 这一次登录的 2FA 现场摘要（见 last2faDigest）：重新登录就从空的开始。
-    CaaLogin.last2faDigest = '';
-    CaaLogin.last2faRaw = '';
     const usdidHeader: string = await usdid.header();
     const extra: Record<string, string> = {};
     extra['X-Meta-Usdid'] = usdidHeader;
@@ -1784,9 +1329,6 @@ export class CaaLogin {
         pending.needsCode = true;
         // 必须留住现场（含票据）：UI 交码时据此走 context 链。
         CaaLogin.pending = new CaaPending(identity, extra, payload, aac, context);
-        // 现场摘要（诊断用，见 last2faDigest）：用户复现一次就能把形状带出来。
-        CaaLogin.last2faDigest = CaaLogin.digestTwoStep(payload);
-        CaaLogin.last2faRaw = '### send_login_request\n' + CaaLogin.rawText(payload);
         /*
          * **不再顺手去取 entrypoint / method_picker 那两屏**（上一版会在后台各打一发，
          * 为了把"这次有哪些验证方式"记进诊断摘要）。
@@ -1818,8 +1360,6 @@ export class CaaLogin {
       if (codeProvider === null) {
         // 留住现场：UI 拿到验证码后调 `submitCode` 接着走（见 CaaPending）。
         CaaLogin.pending = new CaaPending(identity, extra, payload, aac);
-        // 同上：现场摘要留着给诊断用。
-        CaaLogin.last2faDigest = CaaLogin.digestTwoStep(payload);
         return pending;
       }
       const code: string = await codeProvider();
@@ -2339,14 +1879,6 @@ export class CaaLogin {
     // 逐条比对头是最后能定位"为什么同一发在 App 里被挡"的手段。
     if (action === SEND_LOGIN_ACTION) {
       CaaLogin.lastRequestHeaders = CaaLogin.headersDump(headers);
-      // 原始体与头各留一份在内存里：好让"换传输重发"用**同一份字节**再发一次
-      // （见 CaaSession.rcpProbe）。
-      CaaLogin.lastSendBody = body;
-      const map: Record<string, string> = {};
-      for (const key of Object.keys(headers)) {
-        map[key] = headers[key];
-      }
-      CaaLogin.lastSendHeaderMap = map;
     }
     return await CaaLogin.post(host, `/api/v1/bloks/async_action/${action}/`, body, headers);
   }

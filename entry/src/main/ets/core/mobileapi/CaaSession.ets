@@ -17,14 +17,10 @@
 
 import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
-import { fileIo } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-// 另一套 HTTP 实现（见 rcpProbe：排除"鸿蒙 http 模块这一侧"的嫌疑）。
-import { rcp } from '@kit.RemoteCommunicationKit';
 // TLS 变体探针要用 http 的类型与枚举（见 tlsProbe）。
 import { http } from '@kit.NetworkKit';
-import { AppLifecycle } from '../AppLifecycle';
 import { InstagramCookieJar, InstagramCookieSnapshot } from '../InstagramCookieJar';
 import { CaaLogin, CaaResult, CaaStep, CaaUsdid } from './CaaLogin';
 import { MobileIdentity, MobileSession } from './MobileSession';
@@ -36,21 +32,6 @@ const DOMAIN: number = 0xFF00;
 const TAG: string = 'CaaSession';
 /** 设备身份的 preferences 文件名（和 AppSettings / MobileSession 的仓分开，互不覆盖）。 */
 const STORE_NAME: string = 'instarmony_caa';
-/**
- * 「在另一台设备上同意」的两次轮询之间至少隔多久（毫秒）。
- *
- * 真机 App 是每 3 秒一发（见 CaaLogin.approvalAvailable）。这里放 2.5 秒，留一点余量给
- * "界面上万一有两个定时器"的情况，不会把请求量翻倍。
- */
-const APPROVAL_MIN_GAP_MS: number = 2500;
-/** 轮询节奏（毫秒）：IG 那一屏自己的定时器是 **7500ms**（见 CaaLogin.approvalAvailable 的现场记录）。 */
-const APPROVAL_INTERVAL_MS: number = 7500;
-/** 第一跳的延迟：面板刚弹出来时先让界面稳一下（用户这会儿还什么都没干）。 */
-const APPROVAL_FIRST_MS: number = 1200;
-/** 连续几次 `error` / `none` 就认定这条路走不通（别一直打没用的一发）。 */
-const APPROVAL_MAX_ERRORS: number = 3;
-/** 2FA 原始响应落盘的文件名（在 filesDir 下，见 writeTwoFactorProbe）。 */
-const TWO_FACTOR_PROBE_FILE: string = 'Instamony_2fa.txt';
 const KEY_USDID: string = 'usdid';
 const KEY_KID: string = 'usdid_kid';
 const KEY_PRIVATE: string = 'usdid_private';
@@ -70,13 +51,6 @@ const KEY_LAST_REQUEST: string = 'last_request';
 const KEY_LAST_429_AT: string = 'last_429_at';
 /** 连续被限流的次数（冷却时长按它升级：10 → 20 → 40 分钟，上限 60）。 */
 const KEY_429_COUNT: string = 'count_429';
-/**
- * 最近一次"要两步验证"那一发的现场摘要（诊断用，见 CaaLogin.twoFactorDigestNow）。
- *
- * 为什么落盘：用户在真机上复现一次 2FA 很贵（一次真登录），当时没复制就没了；
- * 而且开发这边没有 hdc 看布局 —— 存下来重启后还能复制，才有机会分析"IG 这次给了哪条路"。
- */
-const KEY_LAST_2FA: string = 'last_2fa';
 
 /**
  * 冷却时长：第 1 次 429 等 10 分钟，之后每次翻倍（20 / 40 / 60 封顶）。
@@ -110,29 +84,9 @@ export class CaaSession {
   private static store: preferences.Preferences | null = null;
   /** 已解出来的设备身份（进程内缓存：私钥解析要动 crypto，不必每次重做）。 */
   private static device: CaaUsdid | null = null;
-  /** 应用的 filesDir（`init` 里给；2FA 现场原文落在它下面，见 writeTwoFactorProbe）。 */
-  private static filesDir: string = '';
-  /** 「在另一台设备上同意」那次轮询的时刻（节流用，见 approvalTick）。 */
-  private static approvalAt: number = 0;
-  /** 上一次轮询的结论（节流期内直接返回它）。 */
-  private static approvalLast: string = '';
-  /** 轮询定时器（setTimeout 链，见 scheduleApproval）。0 = 没有。 */
-  private static watchTimer: number = 0;
-  /** 轮询在跑吗。 */
-  private static watchRunning: boolean = false;
-  /** 连续失败次数（够 APPROVAL_MAX_ERRORS 就停手）。 */
-  private static approvalErrors: number = 0;
-  /** "回前台补一跳"的监听只注册一次。 */
-  private static lifecycleBound: boolean = false;
 
   /** 打开设备身份的仓（幂等；`EntryAbility.onCreate` 里和 `MobileSession.init` 一起调）。 */
   static init(context: common.Context): void {
-    // filesDir 先记下来（2FA 现场原文要写在那儿；prefs 打不开也该能写）。
-    try {
-      CaaSession.filesDir = context.filesDir;
-    } catch (error) {
-      CaaSession.filesDir = '';
-    }
     if (CaaSession.store !== null) {
       return;
     }
@@ -205,8 +159,6 @@ export class CaaSession {
    * @param password 明文密码（只在本进程内存里；加密后才出网，见 MobileCrypto.encryptPassword）
    */
   static async login(username: string, password: string): Promise<CaaOutcome> {
-    // 新一次登录："等同意"的轮询状态从头算（见 approvalTick / approvalAvailable）。
-    CaaSession.forgetApproval();
     const user: string = username.trim();
     if (user.length === 0 || password.length === 0) {
       return CaaSession.outcome(false, '用户名和密码都要填');
@@ -235,665 +187,39 @@ export class CaaSession {
       CaaSession.rememberDiag('登录', thrown.reason, thrown.steps);
       return thrown;
     }
-    // 要 2FA 时把现场摘要落盘（见 KEY_LAST_2FA）：用户复现一次就能把它复制出来分析。
-    if (result.needsCode) {
-      CaaSession.rememberTwoFactor(CaaLogin.twoFactorDigestNow());
-      /*
-       * **等 entrypoint / method_picker 那两发回来之后，把原始响应落成文件**
-       * （见 writeTwoFactorProbe）。12 秒是拍脑袋的上限：两发都是几百 KB 的 Bloks 布局，
-       * 真机实测 3~6 秒回来；这个定时器只是兜底，用户这会儿正在 2FA 面板上。
-       */
-      setTimeout((): void => {
-        CaaSession.writeTwoFactorProbe(CaaLogin.twoFactorRawNow());
-        CaaSession.rememberTwoFactor(CaaLogin.twoFactorDigestNow());
-      }, 12000);
-    }
     return await CaaSession.finish(result);
   }
 
   /** 交两步验证码，把登录走完（必须在 `login` 返回 needsCode 之后）。 */
   static async submitCode(code: string): Promise<CaaOutcome> {
-    // 交码这条路走完，"等同意"的轮询就没意义了（下一次登录会重新判定）。
-    CaaSession.forgetApproval();
     const result: CaaResult = await CaaLogin.submitCode(code);
     return await CaaSession.finish(result);
   }
 
-  /**
-   * **设备 / 网络前检**（不填密码、不需要账号）。
-   *
-   * 只跑到"取到 aac"：USDID 注册 → attestation nonce → aac。这三步与账号无关，
-   * 所以它能把两类失败**分开**：
-   *   · 前检失败 → 设备身份 / 网络 / IG 端点这侧的问题（改了也白改密码）；
-   *   · 前检通过而登录失败 → 账号侧的问题（密码错、要验证码、被风控）。
-   *
-   * 注意返回的 `ok` 表示"前检通过"，**不是**"已登录"——UI 不要据此切换登录态。
-   */
-  static async preflight(): Promise<CaaOutcome> {
-    const device: CaaUsdid | null = await CaaSession.deviceIdentity();
-    if (device === null) {
-      return CaaSession.outcome(false, '设备身份没准备好（preferences 没打开？）');
-    }
-    const identity: MobileIdentity = MobileSession.seedIdentity();
-    const result: CaaResult = await CaaLogin.login(identity, '', '', device, null, true);
-    const outcome: CaaOutcome = CaaSession.outcome(result.ok, result.reason,
-      CaaSession.stepsText());
-    CaaSession.rememberDiag('前检', outcome.reason, outcome.steps);
-    return outcome;
-  }
 
   /** 现在是不是等着交验证码。 */
   static waitingCode(): boolean {
     return CaaLogin.waitingCode();
   }
 
-  /* ------------------------------------------- 在另一台设备上同意（login approval） */
 
-  /**
-   * **这一次 2FA 能不能"在另一台设备上同意"**（需求："2FA 过程中可以在官方客户端同意本次
-   * 登录…可以的话需要添加提示文本"）。
-   *
-   * 判定交给 core（见 `CaaLogin.approvalAvailable`）。注意：为 true 只是"可能"，真正的答案为
-   * false 时由第一次轮询的结论收回（`approvalStateNow()` 会变成 `none`）——
-   * 因为"IG 到底认不认这一发"只有打过去才知道。
-   */
-  static approvalAvailable(): boolean {
-    return CaaLogin.approvalAvailable();
-  }
 
-  /** 现在这条路的状态：`idle` / `waiting` / `approved` / `signed-in` / `declined` / `none`。 */
-  static approvalStateNow(): string {
-    return CaaSession.approvalLast.length > 0 ? CaaSession.approvalLast : 'idle';
-  }
 
-  /**
-   * **开始"看对方同意了吗"的轮询**（面板一打开就调）。
-   *
-   * 节奏 7500ms，与 IG 那一屏自己的定时器一致（见 `CaaLogin.approvalAvailable` 的现场记录）。
-   *
-   * ## 为什么轮询必须"回前台才算数"
-   * 用户要去**另一台设备的 Instagram 客户端**点同意，我们这边必然退到后台。而真机上退后台
-   * 之后：
-   *   · JS 定时器停摆；
-   *   · 短时任务额度经常申请不到（真机日志：`suspend delay failed 9900002`），进程随后被冻结；
-   * 所以后台的每一跳都白等。这里改成**回前台立刻补一跳**（见 ensureApprovalLifecycle），
-   * 用户点完同意切回来就能当场收尾，而不是干等下一轮。
-   */
-  static startApprovalWatch(): void {
-    if (!CaaLogin.waitingCode()) {
-      return;
-    }
-    if (CaaSession.watchRunning) {
-      return;
-    }
-    CaaSession.watchRunning = true;
-    CaaSession.approvalErrors = 0;
-    CaaSession.approvalLast = 'idle';
-    CaaSession.ensureApprovalLifecycle();
-    hilog.info(DOMAIN, TAG, 'approval watch start (%{public}dms)', APPROVAL_INTERVAL_MS);
-    CaaSession.scheduleApproval(APPROVAL_FIRST_MS);
-  }
 
-  /** 停掉轮询（面板关掉 / 交完验证码 / 退出登录时调）。 */
-  static stopApprovalWatch(): void {
-    if (!CaaSession.watchRunning) {
-      CaaSession.clearApprovalTimer();
-      return;
-    }
-    CaaSession.watchRunning = false;
-    CaaSession.clearApprovalTimer();
-    hilog.info(DOMAIN, TAG, 'approval watch stop (state=%{public}s)', CaaSession.approvalLast);
-  }
 
-  /** 清掉定时器（内部）。 */
-  private static clearApprovalTimer(): void {
-    if (CaaSession.watchTimer !== 0) {
-      clearTimeout(CaaSession.watchTimer);
-      CaaSession.watchTimer = 0;
-    }
-  }
 
-  /** 排下一跳（内部）。后台时只做"轻量重排"，等回到前台再真打。 */
-  private static scheduleApproval(delay: number): void {
-    if (!CaaSession.watchRunning) {
-      return;
-    }
-    CaaSession.clearApprovalTimer();
-    CaaSession.watchTimer = setTimeout((): void => {
-      CaaSession.watchTimer = 0;
-      if (!CaaSession.watchRunning) {
-        return;
-      }
-      if (!AppLifecycle.isForeground()) {
-        /*
-         * 后台：这一跳不打（定时器随时会被挂起、网络也可能被拒），
-         * 保持一个 1 秒的重排，回前台由监听器立刻补一跳（见 ensureApprovalLifecycle）。
-         */
-        CaaSession.scheduleApproval(1000);
-        return;
-      }
-      CaaSession.approvalTick()
-        .then((state: string): void => {
-          if (!CaaSession.watchRunning) {
-            return;
-          }
-          if (state === 'signed-in' || state === 'declined') {
-            CaaSession.watchRunning = false;
-            CaaSession.clearApprovalTimer();
-            return;
-          }
-          if (state === 'error' || state === 'none') {
-            CaaSession.approvalErrors = CaaSession.approvalErrors + 1;
-            if (CaaSession.approvalErrors >= APPROVAL_MAX_ERRORS) {
-              hilog.info(DOMAIN, TAG, 'approval watch give up after %{public}d errors',
-                CaaSession.approvalErrors);
-              CaaSession.watchRunning = false;
-              CaaSession.clearApprovalTimer();
-              CaaSession.approvalLast = 'none';
-              return;
-            }
-          } else {
-            CaaSession.approvalErrors = 0;
-          }
-          CaaSession.scheduleApproval(APPROVAL_INTERVAL_MS);
-        })
-        .catch((error: Error): void => {
-          hilog.warn(DOMAIN, TAG, 'approval tick threw: %{public}s', error.message);
-          CaaSession.approvalErrors = CaaSession.approvalErrors + 1;
-          if (CaaSession.approvalErrors >= APPROVAL_MAX_ERRORS) {
-            CaaSession.watchRunning = false;
-            CaaSession.clearApprovalTimer();
-            CaaSession.approvalLast = 'none';
-            return;
-          }
-          CaaSession.scheduleApproval(APPROVAL_INTERVAL_MS);
-        });
-    }, delay);
-  }
 
-  /** 注册"回前台补一跳"（只注册一次）。 */
-  private static ensureApprovalLifecycle(): void {
-    if (CaaSession.lifecycleBound) {
-      return;
-    }
-    CaaSession.lifecycleBound = true;
-    AppLifecycle.addVisibilityListener((foreground: boolean): void => {
-      if (!foreground || !CaaSession.watchRunning) {
-        return;
-      }
-      hilog.info(DOMAIN, TAG, 'approval watch resumed on foreground');
-      // 回前台：**立刻**打一跳（用户刚在另一台设备上点过同意）。
-      CaaSession.scheduleApproval(0);
-    });
-  }
 
-  /**
-   * 轮询一次"那边同意了吗"。返回
-   *   `waiting` / `declined` / `error` / `none` / `approved`，或
-   *   **`signed-in`**（同意了、会话也收下了 —— 界面据此直接切主界面）。
-   *
-   * 同意时 IG 会在那一发的响应里**直接给会话** —— 这里立刻落盘（和交验证码成功同一条
-   * `finish` 路径），不用再拿密码登一次。
-   */
-  static async approvalTick(): Promise<string> {
-    const now: number = Date.now();
-    if (now - CaaSession.approvalAt < APPROVAL_MIN_GAP_MS) {
-      return CaaSession.approvalLast;
-    }
-    CaaSession.approvalAt = now;
-    const state: string = await CaaLogin.pollApproval();
-    hilog.info(DOMAIN, TAG, 'approval tick → %{public}s', state);
-    if (state === 'approved') {
-      const claimed: CaaResult | null = CaaLogin.takeApprovedLogin();
-      if (claimed !== null) {
-        const outcome: CaaOutcome = await CaaSession.finish(claimed);
-        if (outcome.ok) {
-          // 拿下：这条路走完了，后面的轮询都不该再发生。
-          CaaSession.approvalLast = 'signed-in';
-          return 'signed-in';
-        }
-        hilog.warn(DOMAIN, TAG, 'approval session not accepted: %{public}s', outcome.reason);
-      }
-      // 收下了"同意"但那一发没给会话：先记成 approved，让界面提示用户再点一次登录。
-      CaaSession.approvalLast = 'approved';
-      return 'approved';
-    }
-    CaaSession.approvalLast = state;
-    return state;
-  }
 
-  /** 清掉轮询状态（新一次登录 / 交完验证码时调）。 */
-  static forgetApproval(): void {
-    CaaSession.approvalAt = 0;
-    CaaSession.approvalLast = '';
-  }
 
-  /**
-   * **这一次 2FA 的现场摘要**（设置页"复制两步验证现场"用它）。
-   *
-   * 优先拿**进程内**那一份：它在登录之后还会被补上 entrypoint / method_picker 两屏的摘要
-   * （见 CaaLogin.inspectTwoStepScreens），比登录那一刻落盘的更全。落盘那份只在重启后用。
-   *
-   * 空串 = 还没复现过（或者最近这次登录没要 2FA）。
-   */
-  static twoFactorDigest(): string {
-    const live: string = CaaLogin.twoFactorDigestNow();
-    if (live.length > 0) {
-      // 顺便把更全的这一份写回去，重启后也在。
-      CaaSession.rememberTwoFactor(live);
-      return live;
-    }
-    return CaaSession.readText(KEY_LAST_2FA);
-  }
 
-  /** 把现场摘要落盘（见 KEY_LAST_2FA 的说明）。内容可能十几 KB，超出时不写。 */
-  private static rememberTwoFactor(text: string): void {
-    if (text.length === 0 || text.length > 120000) {
-      return;
-    }
-    CaaSession.writeText(KEY_LAST_2FA, text);
-  }
 
-  /**
-   * **把 2FA 原始响应写到 `filesDir/Instamony_2fa.txt`**（诊断用，见 CaaLogin.last2faRaw）。
-   *
-   * 为什么不塞进 preferences：原文有几百 KB，prefs 装不下也不该装。
-   * 落成文件之后，开发者可以用 hdc 直接取走（用户不必再复制那一大坨）。
-   */
-  static writeTwoFactorProbe(text: string): void {
-    if (text.length === 0) {
-      return;
-    }
-    const dir: string = CaaSession.filesDir;
-    if (dir.length === 0) {
-      hilog.warn(DOMAIN, TAG, '2fa probe skipped: no filesDir');
-      return;
-    }
-    try {
-      const path: string = `${dir}/${TWO_FACTOR_PROBE_FILE}`;
-      const file: fileIo.File = fileIo.openSync(path,
-        fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
-      try {
-        fileIo.writeSync(file.fd, text);
-      } finally {
-        fileIo.closeSync(file);
-      }
-      hilog.info(DOMAIN, TAG, '2fa probe written %{public}d chars', text.length);
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, '2fa probe write failed: %{public}s', (error as Error).message);
-    }
-  }
 
-  /**
-   * **假账号探针**：用"肯定不存在的账号"把整条 CAA 跑到 `send_login_request`。
-   *
-   * 为什么需要它（这一轮就是被它分开的）：真账号登录回 429 时，有两种完全不同的原因 ——
-   *   ① 我们的请求/设备身份不成形（任何账号都会 429）；
-   *   ② IG 对这个**账号**的登录限流（换个不存在的账号就会正常回 200 + "Can't find account"）。
-   * 只看真账号那次是分不开的，而且每试一次就把限流窗口再推远一点。
-   *
-   * 假账号不会消耗真账号的尝试次数，也不会触碰它任何风控动作，可以随手多点几次。
-   * **它不经过限流冷却那一道闸**（`CaaSession.login` 才走），因为探针本身就该随时能跑。
-   */
-  static async probe(): Promise<CaaOutcome> {
-    const device: CaaUsdid | null = await CaaSession.deviceIdentity();
-    if (device === null) {
-      return CaaSession.outcome(false, '设备身份没准备好（preferences 没打开？）');
-    }
-    const identity: MobileIdentity = MobileSession.seedIdentity();
-    const suffix: string = Date.now().toString(36);
-    // 形状合法但一定不存在：IG 对这类用户名的回答是固定文案（见下）。
-    const bogusUser: string = `instarmony_probe_${suffix}`;
-    const bogusPass: string = `Zx9!${suffix}qq`;
-    /*
-     * **把异常收进来**：`CaaLogin.login` 现在走自建 TLS 通道，任何一个握手/证书/网络问题都会抛，
-     * 抛出去界面只剩一句"探针失败：xxx"，而现场（走到哪一步）就丢了。所以这里自己兜住。
-     */
-    let result: CaaResult;
-    try {
-      result = await CaaLogin.login(identity, bogusUser, bogusPass, device, null);
-    } catch (error) {
-      CaaSession.rememberRequest(CaaLogin.lastRequestDump);
-      const thrown: CaaOutcome = CaaSession.outcome(false,
-        `探针抛异常：${(error as Error).message}`, CaaSession.stepsText());
-      CaaSession.rememberDiag('探针', thrown.reason, thrown.steps);
-      return thrown;
-    }
-    const steps: string = CaaSession.stepsText();
-    // 探针也会生成"这一发请求体"的脱敏副本：真账号那次不必再消耗次数才能拿到它。
-    CaaSession.rememberRequest(CaaLogin.lastRequestDump);
-    /*
-     * 结论怎么读：
-     *   · 走到 `send_login_request 200` 且文案是 "can't find an account" → **请求/设备这侧没问题**，
-     *     真账号那个 429 就是 IG 对该账号的登录限流（等 / 换网络 / 换设备身份都没用，得等）。
-     *   · 还是 `429` → 问题在我们这一侧（设备身份被拉黑、客户端指纹、IP），得继续查。
-     */
-    const text: string = result.rateLimited
-      ? '探针也是 429：**不是账号问题**，是我们这一侧的请求/设备身份被挡了（把下面这行发我）'
-      : `探针通过：请求与设备身份没问题（IG 回：${result.reason}）`;
-    const outcome: CaaOutcome = CaaSession.outcome(result.ok, text, steps);
-    CaaSession.rememberDiag('探针', outcome.reason, outcome.steps);
-    return outcome;
-  }
 
-  /**
-   * **换一套设备身份，然后用假账号探一次**（都不消耗真账号的登录次数）。
-   *
-   * 见 `MobileSession.rotateIdentity`：这是"IG 的 429 到底绑在身份上还是绑在客户端/指纹上"
-   * 唯一能在 App 内自证的实验。换上新的 usdid + uuid/phoneId/androidId/mid 之后立刻跑探针：
-   *   · 探针 200 → 分数绑身份，App 内换身份即可登录（把这条做成正常登录流程的一部分）；
-   *   · 探针仍 429 → 分数绑客户端/指纹/IP，App 内改不动（要走上电脑中转或等）。
-   */
-  static async rotateAndProbe(): Promise<CaaOutcome> {
-    const oldMid: string = MobileSession.seedIdentity().mid;
-    const midLength: number = MobileSession.rotateIdentity();
-    // usdid 也要一起换：它是设备签名密钥，和 uuid/mid 是同一套"设备"。
-    CaaSession.forgetDevice();
-    CaaSession.clearRateLimit();
-    CaaLogin.resetCookies();
-    hilog.info(DOMAIN, TAG, 'rotated identity then probing (old mid=%{public}d, new=%{public}d)',
-      oldMid.length, midLength);
-    const probe: CaaOutcome = await CaaSession.probe();
-    const text: string = `已换设备身份（新 mid ${midLength} 位、新 usdid）→ ${probe.reason}`;
-    const outcome: CaaOutcome = CaaSession.outcome(false, text, probe.steps);
-    CaaSession.rememberDiag('换身份探针', outcome.reason, outcome.steps);
-    return outcome;
-  }
 
-  /**
-   * **换传输重发**：把刚刚那一发 `send_login_request` 用**另一套 HTTP 栈**（rcp）原样再发一次。
-   *
-   * 为什么需要：到这一步已经把"请求体逐键一致、头取值一致、设备身份一致、IP 一致、HTTP 形态
-   * （单/双 Content-Length、chunked、h2）一致"全部排除了 —— PC 上发同样的字节是 200，App 里是
-   * 429。剩下的唯一变量就是**鸿蒙 `http` 模块这条链路本身**（TLS/连接特征、代理层看到的客户端）。
-   * `@kit.RemoteCommunicationKit`（rcp）是系统里另一套独立的 HTTP 实现，用它发同一份字节：
-   *   · rcp 回 200/404 → 就是 `http` 模块这一侧，登录链路整体切到 rcp；
-   *   · rcp 也 429 → 与实现无关（IP / edge 策略那一侧），这条路要换思路。
-   */
-  static async rcpProbe(): Promise<CaaOutcome> {
-    const body: string = CaaLogin.lastSendBody;
-    if (body.length === 0) {
-      return CaaSession.outcome(false, '还没有可重发的请求（先点一次「假账号探针」或登录）');
-    }
-    const url: string = 'https://b.i.instagram.com/api/v1/bloks/async_action/'
-      + 'com.bloks.www.bloks.caa.login.async.send_login_request/';
-    const headers: rcp.RequestHeaders = {};
-    const map: Record<string, string> = CaaLogin.lastSendHeaderMap;
-    for (const key of Object.keys(map)) {
-      headers[key] = map[key];
-    }
-    let status: number = -1;
-    let text: string = '';
-    try {
-      const session: rcp.Session = rcp.createSession();
-      const request: rcp.Request = new rcp.Request(url, 'POST', headers, body);
-      const response: rcp.Response = await session.fetch(request);
-      status = response.statusCode;
-      try {
-        text = `${response.toString()}`;
-      } catch (bodyError) {
-        text = '';
-      }
-      session.close();
-    } catch (error) {
-      const message: string = (error as Error).message;
-      const failed: CaaOutcome = CaaSession.outcome(false,
-        `rcp 重发失败（不是 IG 的回答）：${message}`, CaaSession.stepsText());
-      CaaSession.rememberDiag('rcp 重发', failed.reason, failed.steps);
-      return failed;
-    }
-    const verdict: string = status === 429
-      ? 'rcp 也 429 ⇒ 与 HTTP 实现无关（IP / edge 策略那一侧），要另想办法'
-      : (status === 200 || status === 404
-        ? `rcp 拿到 ${status} ⇒ **就是 http 模块这一侧**，登录链路整体切到 rcp 即可`
-        : `rcp 拿到 ${status}（既不是 429 也不是 200/404，看下面的片段）`);
-    const outcome: CaaOutcome = CaaSession.outcome(false,
-      `rcp 重发：${verdict}`, CaaSession.stepsText());
-    // IG 的回答片段也留在诊断里（rcp 的 body 截 400 字符）。
-    CaaSession.rememberRaw(`rcp status=${status}\nbody=${CaaLogin.snippet(text, 400)}`);
-    CaaSession.rememberDiag('rcp 重发', outcome.reason, outcome.steps);
-    hilog.info(DOMAIN, TAG, 'rcp probe status=%{public}d len=%{public}d', status, text.length);
-    return outcome;
-  }
 
-  /**
-   * **TLS 变体探针**：同一份请求体/头，换几档 TLS 参数再发，看状态码变不变。
-   *
-   * 背景：`http` 与 `rcp` 两套栈发同一份字节都 429，而 PC（Node）发同一份是 200 —— 说明挡在
-   * **传输层特征**上（TLS/连接指纹，两套栈共用系统 TLS 实现），不是我们的参数。
-   * 系统也给不了"任意改指纹"的入口，但 `HttpRequestOptions.tlsOptions` 能改**TLS 版本与密码套件**
-   * ——那正好是 ClientHello 里最主要的两个变量。若换一档就从 429 变 200，这就是可用的修法。
-   */
-  static async tlsProbe(): Promise<CaaOutcome> {
-    const body: string = CaaLogin.lastSendBody;
-    if (body.length === 0) {
-      return CaaSession.outcome(false, '还没有可重发的请求（先点一次「假账号探针」或登录）');
-    }
-    const url: string = 'https://b.i.instagram.com/api/v1/bloks/async_action/'
-      + 'com.bloks.www.bloks.caa.login.async.send_login_request/';
-    const header: Record<string, string> = {};
-    const map: Record<string, string> = CaaLogin.lastSendHeaderMap;
-    for (const key of Object.keys(map)) {
-      header[key] = map[key];
-    }
-    const configs: Array<http.TlsConfig> = [];
-    const tls12: http.TlsConfig = {
-      tlsVersionMin: http.TlsVersion.TLS_V_1_2,
-      tlsVersionMax: http.TlsVersion.TLS_V_1_2
-    };
-    configs.push(tls12);
-    const tls12Aes: http.TlsConfig = {
-      tlsVersionMin: http.TlsVersion.TLS_V_1_2,
-      tlsVersionMax: http.TlsVersion.TLS_V_1_2,
-      cipherSuites: ['TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256',
-        'TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256']
-    };
-    configs.push(tls12Aes);
-    const tls13: http.TlsConfig = {
-      tlsVersionMin: http.TlsVersion.TLS_V_1_3,
-      tlsVersionMax: http.TlsVersion.TLS_V_1_3
-    };
-    configs.push(tls13);
-    const labels: Array<string> = ['TLS1.2', 'TLS1.2+AES128', 'TLS1.3'];
-    const lines: Array<string> = [];
-    for (let index: number = 0; index < configs.length; index++) {
-      const request: http.HttpRequest = http.createHttp();
-      try {
-        const response: http.HttpResponse = await request.request(url, {
-          method: http.RequestMethod.POST,
-          header: header,
-          extraData: body,
-          connectTimeout: 20000,
-          readTimeout: 30000,
-          expectDataType: http.HttpDataType.STRING,
-          tlsOptions: configs[index]
-        });
-        lines.push(`${labels[index]} -> ${response.responseCode}`);
-      } catch (error) {
-        lines.push(`${labels[index]} -> 异常 ${(error as Error).message}`);
-      } finally {
-        try {
-          request.destroy();
-        } catch (error) {
-        }
-      }
-    }
-    const text: string = `TLS 变体：${lines.join('；')}`;
-    const outcome: CaaOutcome = CaaSession.outcome(false, text, CaaSession.stepsText());
-    CaaSession.rememberDiag('TLS 变体', outcome.reason, outcome.steps);
-    return outcome;
-  }
 
-  /**
-   * **连接事实探针**：把那一发登录请求再发两次，把 `performanceTiming` 里的事实读出来。
-   *
-   * 为什么需要（上游 issue subzeroid/instagrapi#2852 给出的方向）：
-   *   · IG 的 edge 会在**登录这一发**上按传输层特征挑客户端；那份 issue 的修法是让私有传输
-   *     **只提供 TLS 1.3**（instagrapi 3.0.21 / PR #2862），多人确认 429 消失；
-   *   · 社区那套"能过"的配置还钉了曲线（X25519…）与 HTTP/2（ALPN 只 h2、特定 SETTINGS）。
-   * 所以先要看清**我们手机上这一发到底是什么**：h1.1 还是 h2、TLS 几、是不是复用了旧连接、
-   * 是不是走了代理。`PerformanceTiming` 正好把这四件事都给了（`http` 模块唯一能读到的地方）。
-   *
-   * 顺带验证一个很可能的坑：**连接复用会让每条请求上的 `tlsOptions` 失效** ——
-   * 若 `isReusedConnection=true`，那之前"强制 TLS1.3 仍旧 429"的结论就不作数了。
-   */
-  static async connProbe(): Promise<CaaOutcome> {
-    const body: string = CaaLogin.lastSendBody;
-    if (body.length === 0) {
-      return CaaSession.outcome(false, '还没有可重发的请求（先点一次「假账号探针」或登录）');
-    }
-    const url: string = 'https://b.i.instagram.com/api/v1/bloks/async_action/'
-      + 'com.bloks.www.bloks.caa.login.async.send_login_request/';
-    const header: Record<string, string> = {};
-    const map: Record<string, string> = CaaLogin.lastSendHeaderMap;
-    for (const key of Object.keys(map)) {
-      header[key] = map[key];
-    }
-    // 逼它一条新连接：复用的话 tlsOptions 不生效，也看不到真实的协商结果。
-    header['Connection'] = 'close';
-    const lines: Array<string> = [];
-    for (let round: number = 1; round <= 2; round++) {
-      const request: http.HttpRequest = http.createHttp();
-      try {
-        const response: http.HttpResponse = await request.request(url, {
-          method: http.RequestMethod.POST,
-          header: header,
-          extraData: body,
-          connectTimeout: 20000,
-          readTimeout: 30000,
-          expectDataType: http.HttpDataType.STRING,
-          // 上游那条修法：只提供 TLS 1.3。
-          tlsOptions: {
-            tlsVersionMin: http.TlsVersion.TLS_V_1_3,
-            tlsVersionMax: http.TlsVersion.TLS_V_1_3
-          }
-        });
-        // 这些事实在 `response.connectionExtraInfo` 里（API 24 起；低版本会是 undefined）。
-        const info: http.ConnectionExtraInfo | undefined = response.connectionExtraInfo;
-        if (info === undefined) {
-          lines.push(`第${round}发 ${response.responseCode}（这一版 http 模块没给 connectionExtraInfo）`);
-          continue;
-        }
-        let tls: string = '?';
-        if (info.tlsVersion !== undefined) {
-          tls = `${info.tlsVersion}`;
-        }
-        let cipher: string = '?';
-        if (info.cipherSuite !== undefined) {
-          cipher = `${info.cipherSuite}`;
-        }
-        lines.push(`第${round}发 ${response.responseCode}`
-          + ` proto=${info.networkProtocolName}`
-          + ` tls=${tls}`
-          + ` cipher=${cipher}`
-          + ` reused=${info.isReusedConnection}`
-          + ` proxy=${info.isProxyConnection}`
-          + ` remote=${info.remoteAddress}`);
-      } catch (error) {
-        lines.push(`第${round}发 异常：${(error as Error).message}`);
-      } finally {
-        try {
-          request.destroy();
-        } catch (error) {
-        }
-      }
-    }
-    const outcome: CaaOutcome = CaaSession.outcome(false,
-      `连接事实：${lines.join('；')}`, CaaSession.stepsText());
-    CaaSession.rememberDiag('连接事实', outcome.reason, outcome.steps);
-    hilog.info(DOMAIN, TAG, 'conn probe: %{public}s', lines.join(' | '));
-    return outcome;
-  }
 
-  /**
-   * **量 TLS 指纹**：往电脑上那个只收 ClientHello 的监听发一次握手（不算密钥、不解密）。
-   *
-   * 为什么要量：上游 issue（subzeroid/instagrapi#2852）给的"能过 429"的私有传输特征很具体 ——
-   *   `JA3 = 771,4865,0-43-10-51-13-16-45,29-23,`（TLS1.3 + AES128-GCM、只有 6 个扩展、
-   *   曲线只有 X25519/P-256），外加固定的 HTTP/2 SETTINGS。
-   * 我们已经测出这台手机上登录那一发是 **TLS1.3 + TLS_AES_128_GCM_SHA256 + HTTP/2、没走代理**，
-   * 所以差别只可能在**扩展集合/顺序、曲线、签名算法**（也就是 JA3 里剩下的那几段）。
-   * 量出来一比，就知道"要不要/能不能靠换 TLS 参数解决"。
-   *
-   * @param host 电脑的局域网地址（`node .tmp/ja3-listen.js` 那台）
-   */
-  static async fpProbe(host: string, port: number = 9443): Promise<CaaOutcome> {
-    const url: string = `https://${host}:${port}/fp`;
-    const request: http.HttpRequest = http.createHttp();
-    let note: string = '';
-    try {
-      // 手握手必然失败（对面没有证书/直接断），我们要的只是"把手握发出去"。
-      await request.request(url, {
-        method: http.RequestMethod.GET,
-        connectTimeout: 8000,
-        readTimeout: 8000,
-        expectDataType: http.HttpDataType.STRING
-      });
-      note = '握手居然完成了（对面不该给证书）';
-    } catch (error) {
-      note = `握手已发出（本地结果：${(error as Error).message}）`;
-    } finally {
-      try {
-        request.destroy();
-      } catch (error) {
-      }
-    }
-    const outcome: CaaOutcome = CaaSession.outcome(false,
-      `指纹探针：${note} → 去电脑上看 JA3（${host}:${port}）`, CaaSession.stepsText());
-    CaaSession.rememberDiag('指纹探针', outcome.reason, outcome.steps);
-    return outcome;
-  }
-
-  /**
-   * **自建 TLS 1.3 通道试一发**（见 `core/net/Tls13Client`）。
-   *
-   * 目的：用**我们自己拼的 ClientHello**（JA3 对齐上游那套 `771,4865,0-43-10-51-13-16-45,29-23,`）
-   * 发同一发登录请求，看 IG 是否放行。系统的 `http` / `TLSSocket` 都不给"扩展集合/顺序/曲线"
-   * 的旋钮，所以这是 App 内唯一的"换指纹"手段。
-   *
-   * 第一版只做 TLS1.3 + AES128-GCM + X25519 + HTTP/1.1，**不做证书链校验**
-   * （诊断用；真要长期用必须补上，见 Tls13Client 文件头的说明）。
-   */
-  static async tls13Probe(): Promise<CaaOutcome> {
-    const body: string = CaaLogin.lastSendBody;
-    if (body.length === 0) {
-      return CaaSession.outcome(false, '还没有可重发的请求（先点一次「假账号探针」或登录）');
-    }
-    const path: string = '/api/v1/bloks/async_action/'
-      + 'com.bloks.www.bloks.caa.login.async.send_login_request/';
-    const lines: Array<string> = [`POST ${path} HTTP/1.1`];
-    const map: Record<string, string> = CaaLogin.lastSendHeaderMap;
-    for (const key of Object.keys(map)) {
-      const lower: string = key.toLowerCase();
-      if (lower === 'content-length' || lower === 'host' || lower === 'connection') {
-        continue;
-      }
-      lines.push(`${key}: ${map[key]}`);
-    }
-    lines.push('Host: b.i.instagram.com');
-    lines.push(`Content-Length: ${utf8(body).length}`);
-    lines.push('Connection: close');
-    lines.push('');
-    lines.push('');
-    const requestText: string = lines.join('\r\n') + body;
-    let selfTest: string = '(未跑)';
-    try {
-      selfTest = await Tls13Client.selfTest();
-      const report: string = await Tls13Client.probe('b.i.instagram.com', 443, requestText);
-      const outcome: CaaOutcome = CaaSession.outcome(false,
-        `自检：${selfTest}\n自建 TLS1.3 通道：${report}`, CaaSession.stepsText());
-      CaaSession.rememberRaw(report);
-      CaaSession.rememberDiag('自建 TLS1.3', outcome.reason, outcome.steps);
-      return outcome;
-    } catch (error) {
-      // 失败也要把自检结果带出来：手写 TLS 的错只有"自检哪一项不过"能定位。
-      const failed: CaaOutcome = CaaSession.outcome(false,
-        `自检：${selfTest}\n自建 TLS1.3 通道失败：${(error as Error).message}`,
-        CaaSession.stepsText());
-      CaaSession.rememberDiag('自建 TLS1.3', failed.reason, failed.steps);
-      return failed;
-    }
-  }
 
   /**
    * 限流冷却还剩几分钟（0 = 可以试了）。
