@@ -60,6 +60,13 @@ const KEY_LAST_REQUEST: string = 'last_request';
 const KEY_LAST_429_AT: string = 'last_429_at';
 /** 连续被限流的次数（冷却时长按它升级：10 → 20 → 40 分钟，上限 60）。 */
 const KEY_429_COUNT: string = 'count_429';
+/**
+ * 最近一次"要两步验证"那一发的现场摘要（诊断用，见 CaaLogin.twoFactorDigestNow）。
+ *
+ * 为什么落盘：用户在真机上复现一次 2FA 很贵（一次真登录），当时没复制就没了；
+ * 而且开发这边没有 hdc 看布局 —— 存下来重启后还能复制，才有机会分析"IG 这次给了哪条路"。
+ */
+const KEY_LAST_2FA: string = 'last_2fa';
 
 /**
  * 冷却时长：第 1 次 429 等 10 分钟，之后每次翻倍（20 / 40 / 60 封顶）。
@@ -202,6 +209,10 @@ export class CaaSession {
       CaaSession.rememberDiag('登录', thrown.reason, thrown.steps);
       return thrown;
     }
+    // 要 2FA 时把现场摘要落盘（见 KEY_LAST_2FA）：用户复现一次就能把它复制出来分析。
+    if (result.needsCode) {
+      CaaSession.rememberTwoFactor(CaaLogin.twoFactorDigestNow());
+    }
     return await CaaSession.finish(result);
   }
 
@@ -276,6 +287,32 @@ export class CaaSession {
   static forgetApproval(): void {
     CaaSession.approvalAt = 0;
     CaaSession.approvalLast = '';
+  }
+
+  /**
+   * **这一次 2FA 的现场摘要**（设置页"复制两步验证现场"用它）。
+   *
+   * 优先拿**进程内**那一份：它在登录之后还会被补上 entrypoint / method_picker 两屏的摘要
+   * （见 CaaLogin.inspectTwoStepScreens），比登录那一刻落盘的更全。落盘那份只在重启后用。
+   *
+   * 空串 = 还没复现过（或者最近这次登录没要 2FA）。
+   */
+  static twoFactorDigest(): string {
+    const live: string = CaaLogin.twoFactorDigestNow();
+    if (live.length > 0) {
+      // 顺便把更全的这一份写回去，重启后也在。
+      CaaSession.rememberTwoFactor(live);
+      return live;
+    }
+    return CaaSession.readText(KEY_LAST_2FA);
+  }
+
+  /** 把现场摘要落盘（见 KEY_LAST_2FA 的说明）。内容可能十几 KB，超出时不写。 */
+  private static rememberTwoFactor(text: string): void {
+    if (text.length === 0 || text.length > 120000) {
+      return;
+    }
+    CaaSession.writeText(KEY_LAST_2FA, text);
   }
 
   /**

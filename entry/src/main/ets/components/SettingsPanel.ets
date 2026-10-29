@@ -1308,6 +1308,36 @@ export struct SettingsPanel {
    * **不动会话材料**（Authorization / Cookie / 已保存的账号）：这一项只用来做测试，
    * 不该顺手把人登出或者清掉账号数据 —— 那是「退出登录」的职责。
    */
+  /**
+   * **复制两步验证现场**（诊断；见设置页那一组的说明，数据来自 `CaaSession.twoFactorDigest`）。
+   *
+   * 为什么要用户手动复制：真机看不到布局（没有 hdc），而 IG 的 2FA 响应里有 2000+ 字符的票据
+   * 和一堆嵌套 JSON —— 只有把它带出来，才知道"在另一台设备上同意"该往哪个 app/action 打。
+   */
+  private copyTwoFactorDigest(): void {
+    const digest: string = CaaSession.twoFactorDigest();
+    if (digest.length === 0) {
+      this.toast('还没有两步验证记录：先用账号密码登录一次，弹出 2FA 面板之后再来复制');
+      return;
+    }
+    const text: string = `[两步验证现场]\n${digest}`;
+    try {
+      const data: pasteboard.PasteData =
+        pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text);
+      pasteboard.getSystemPasteboard().setData(data, (err: BusinessError | undefined) => {
+        if (err !== undefined && err !== null) {
+          hilog.warn(DOMAIN, TAG, '2fa digest copy failed: %{public}s', err.message);
+          this.toast($r('app.string.diag_export_failed', err.message));
+          return;
+        }
+        this.toast('已复制两步验证现场（粘贴发给开发者）');
+      });
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, '2fa digest copy threw: %{public}s', (error as Error).message);
+      this.toast($r('app.string.diag_export_failed', (error as Error).message));
+    }
+  }
+
   private clearDeviceAuth(): void {
     if (this.signedIn) {
       // 已登录时换设备身份会让当前会话看起来"来自另一台机器"，是纯粹的风险动作。
@@ -2153,10 +2183,27 @@ export struct SettingsPanel {
               this.clearDeviceAuth();
             })
             this.cardDivider()
+            /*
+             * **复制两步验证现场**（诊断）。
+             *
+             * 用户报："2FA 面板没出现「在另一台设备上同意」那行提示，客户端同意了也没反应"——
+             * 说明这次登录的响应里没有我们认的那条路（见 CaaLogin.approvalAvailable）。
+             * 真机上没有 hdc、hilog 会被冲掉，所以把响应的现场摘要（关键字串 + 布局里的调用规范）
+             * 落盘，"复现一次 → 复制 → 发给开发者"，才可能把真正的机制找出来。
+             */
+            this.actionRow('复制两步验证现场', (): void => {
+              this.copyTwoFactorDigest();
+            })
+            this.cardDivider()
             this.groupHint('把本机的设备身份整份换新（USDID + 8 个 UUID / mid）。'
               + '清完之后，下一次登录在 Instagram 眼里就是一台**新设备**：'
               + '开了两步验证的账号会重新要验证码，2FA 流程才测得出来。'
               + '这一步不会动已保存的会话，也不会清账号数据。')
+            this.cardDivider()
+            this.groupHint('「复制两步验证现场」：登录一次、弹出 2FA 面板之后点它，'
+              + '把剪贴板里的文本发给开发者 —— 里面有这一次 IG 返回的关键字段，'
+              + '用来判断"在另一台设备上同意"到底该怎么走。'
+              + '（含两步验证票据，属于敏感信息，只发给开发者。）')
           }
           .cardStyle()
         }

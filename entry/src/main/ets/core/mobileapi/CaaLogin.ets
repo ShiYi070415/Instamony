@@ -499,6 +499,18 @@ export class CaaLogin {
   private static approvalKind: string = '';
 
   /**
+   * **这一次 2FA 现场的摘要**（诊断用：真机上看不到布局，只能把它带出来分析）。
+   *
+   * 为什么要它：用户报"2FA 面板没出现「在另一台设备上同意」那行提示，客户端同意了也没反应"——
+   * 说明这次登录的响应里**没有**我们认的那条路（`CaaLogin.approvalSpecOf` 找的是
+   * `polling_nonce`/`trusted_notification`/`approval`）。而要知道 IG 到底给了什么形状，
+   * 只能把响应里的关键字串带出来看（真机上没有 hdc，hilog 也会被冲掉）。
+   *
+   * 内容只取**含关键字的字符串**（见 digestTwoStep），几百字节到十几 KB，不含密码。
+   */
+  private static last2faDigest: string = '';
+
+  /**
    * 最近一次 `send_login_request` 的**请求体脱敏副本**（`password` / `aac` 换成占位符）。
    *
    * 用来和桌面 JS 那条链路（同一份参数结构、回 200）逐键比对 —— 两边都按同样规则脱敏，
@@ -818,6 +830,148 @@ export class CaaLogin {
       }
     }
     return false;
+  }
+
+  /* ------------------------------------------- 2FA 现场摘要（诊断） */
+
+  /**
+   * 最近一次"要两步验证"那一发的现场摘要（见 last2faDigest 的说明）。
+   *
+   * 只在这一次登录要 2FA 时才会有内容；设置页把它复制出来发给开发者，
+   * 用来判断 IG 这次到底提供了哪条路（短信 / 验证器 / 备用码 / 在另一台设备上同意）。
+   */
+  static twoFactorDigestNow(): string {
+    return CaaLogin.last2faDigest;
+  }
+
+  /**
+   * **把 2FA 那几个屏幕也各打一发，摘一份摘要出来**（诊断用，见 last2faDigest）。
+   *
+   * 为什么光看 `send_login_request` 的响应不够：用户报"没出现「在另一台设备上同意」那行提示"，
+   * 而"有哪些验证方式"通常写在**后面那几个 Bloks 屏幕**（entrypoint / method_picker）里，
+   * 不在账密那一发的响应里。这里把这两屏也走一遍，把它们的摘要一起带出来。
+   *
+   * 这一步是**诊断专用的旁路**：不改 pending、不推进流程，失败也不影响用户交码。
+   */
+  static async inspectTwoStepScreens(payload: ESObject, identity: MobileIdentity,
+                                     extra: Record<string, string>,
+                                     context: string): Promise<string> {
+    const parts: Array<string> = [];
+    try {
+      const specs: Array<CaaCallSpec> = CaaLogin.nextCallSpecs(payload);
+      const entrySpec: CaaCallSpec | null =
+        CaaLogin.pickCallSpec(specs, ['two_step', 'two_factor']);
+      const entryApp: string = entrySpec === null ? TSV_ENTRYPOINT : entrySpec.appId;
+      const entryParams: Record<string, ESObject> = {};
+      entryParams['client_input_params'] = CaaLogin.mergeParams({
+        'device_id': identity.androidDeviceId,
+        'is_whatsapp_installed': '0',
+        'machine_id': identity.mid
+      }, entrySpec === null ? {} : entrySpec.clientParams);
+      entryParams['server_params'] = CaaLogin.mergeParams({
+        'should_fallback_to_sms': '0',
+        'family_device_id': identity.phoneId,
+        'device_id': identity.androidDeviceId,
+        'two_step_verification_context': context,
+        'flow_source': TSV_FLOW_SOURCE
+      }, entrySpec === null ? {} : entrySpec.serverParams);
+      const entry: CaaHttpReply =
+        await CaaLogin.bloksAppBestHost(identity, extra, entryApp, entryParams);
+      const entryPayload: ESObject = CaaLogin.parse(entry.body);
+      parts.push(`[entrypoint ${entry.status} ${entry.host}]\n`
+        + CaaLogin.digestTwoStep(entryPayload));
+
+      const pickerSpec: CaaCallSpec | null =
+        CaaLogin.pickCallSpec(CaaLogin.nextCallSpecs(entryPayload), ['method_picker']);
+      const pickerApp: string = pickerSpec === null ? TSV_METHOD_PICKER : pickerSpec.appId;
+      const pickerParams: Record<string, ESObject> = {};
+      pickerParams['client_input_params'] = CaaLogin.mergeParams({
+        'is_whatsapp_installed': '0'
+      }, pickerSpec === null ? {} : pickerSpec.clientParams);
+      pickerParams['server_params'] = CaaLogin.mergeParams({
+        'should_fallback_to_sms': '0',
+        'device_id': identity.androidDeviceId,
+        'two_step_verification_context': context,
+        'flow_source': TSV_FLOW_SOURCE
+      }, pickerSpec === null ? {} : pickerSpec.serverParams);
+      const picker: CaaHttpReply =
+        await CaaLogin.bloksAppBestHost(identity, extra, pickerApp, pickerParams);
+      parts.push(`[method_picker ${picker.status} ${picker.host}]\n`
+        + CaaLogin.digestTwoStep(CaaLogin.parse(picker.body)));
+    } catch (error) {
+      parts.push(`[inspect 出错] ${(error as Error).message}`);
+    }
+    return parts.join('\n\n');
+  }
+
+  /**
+   * 从 2FA 响应里摘出**分析要用到的那几段**（不是整份响应：整份几百 KB，粘不动）。
+   *
+   * 取三样：
+   *   ① 顶层键（`layout` / `status` / `two_factor_info` …）—— 形状第一眼就能看出来；
+   *   ② 所有**含关键字**的字符串（`two_factor` / `two_step` / `approval` / `trusted` /
+   *      `polling` / `challenge` / `identifier` / `verification_method`），每段截到 600 字；
+   *   ③ 布局里能找到的调用规范（app id），也就是我们"猜路"的依据。
+   *
+   * 去重 + 总量封顶，粘到聊天窗口里还能看。
+   */
+  private static digestTwoStep(payload: ESObject): string {
+    const lines: Array<string> = [];
+    try {
+      if (payload !== null && payload !== undefined && typeof payload === 'object') {
+        lines.push(`[顶层键] ${Object.keys(payload as Record<string, ESObject>).join(',')}`);
+      }
+      const strings: Array<string> = [];
+      collectStrings(payload, strings);
+      const keys: Array<string> = ['two_factor', 'two_step', 'approval', 'trusted', 'polling',
+        'challenge', 'identifier', 'verification_method', 'should_trust_device'];
+      const seen: Set<string> = new Set<string>();
+      let total: number = 0;
+      let kept: number = 0;
+      for (let index: number = 0; index < strings.length; index++) {
+        const text: string = strings[index];
+        if (text.length < 8) {
+          continue;
+        }
+        const lower: string = text.toLowerCase();
+        let hit: boolean = false;
+        for (let k: number = 0; k < keys.length; k++) {
+          if (lower.indexOf(keys[k]) >= 0) {
+            hit = true;
+            break;
+          }
+        }
+        if (!hit) {
+          continue;
+        }
+        const head: string = text.length > 600 ? text.substring(0, 600) : text;
+        if (seen.has(head)) {
+          continue;
+        }
+        seen.add(head);
+        lines.push(`[串${kept + 1} len=${text.length}] ${head}`);
+        kept++;
+        total = total + head.length;
+        // 封顶：够分析就行，别让复制的文本大到粘不动。
+        if (kept >= 40 || total > 60000) {
+          break;
+        }
+      }
+      lines.push(`[统计] 字符串 ${strings.length} 段 / 命中 ${kept} 段`);
+      const specs: Array<CaaCallSpec> = CaaLogin.nextCallSpecs(payload);
+      const apps: Array<string> = [];
+      for (let index: number = 0; index < specs.length; index++) {
+        const app: string = specs[index].appId;
+        if (app.length > 0 && apps.indexOf(app) < 0) {
+          apps.push(app);
+        }
+      }
+      lines.push(`[布局里的调用规范] ${apps.length > 0 ? apps.join(' | ') : '-'}`);
+      lines.push(`[等同意] ${CaaLogin.approvalSpecOf(payload) === null ? '没找到' : '找到了'}`);
+    } catch (error) {
+      lines.push(`[摘要出错] ${(error as Error).message}`);
+    }
+    return lines.join('\n');
   }
 
   /**
@@ -1175,6 +1329,8 @@ export class CaaLogin {
     CaaLogin.pending = null;
     // "等同意"那一发用哪种调用方式也重新探（见 approvalKind）。
     CaaLogin.approvalKind = '';
+    // 这一次登录的 2FA 现场摘要（见 last2faDigest）：重新登录就从空的开始。
+    CaaLogin.last2faDigest = '';
     const usdidHeader: string = await usdid.header();
     const extra: Record<string, string> = {};
     extra['X-Meta-Usdid'] = usdidHeader;
@@ -1458,6 +1614,20 @@ export class CaaLogin {
         pending.needsCode = true;
         // 必须留住现场（含票据）：UI 交码时据此走 context 链。
         CaaLogin.pending = new CaaPending(identity, extra, payload, aac, context);
+        // 现场摘要（诊断用，见 last2faDigest）：用户复现一次就能把形状带出来。
+        CaaLogin.last2faDigest = CaaLogin.digestTwoStep(payload);
+        /*
+         * 再在后台把 entrypoint / method_picker 两屏也各打一发，把"这次到底有哪些验证方式"
+         * 一起记进摘要（见 inspectTwoStepScreens）。旁路：成败都不影响用户交码。
+         */
+        CaaLogin.inspectTwoStepScreens(payload, identity, extra, context)
+          .then((text: string): void => {
+            if (text.length > 0) {
+              CaaLogin.last2faDigest = CaaLogin.last2faDigest + '\n\n' + text;
+            }
+          })
+          .catch((): void => {
+          });
         return pending;
       }
       const code: string = await codeProvider();
@@ -1471,6 +1641,8 @@ export class CaaLogin {
       if (codeProvider === null) {
         // 留住现场：UI 拿到验证码后调 `submitCode` 接着走（见 CaaPending）。
         CaaLogin.pending = new CaaPending(identity, extra, payload, aac);
+        // 同上：现场摘要留着给诊断用。
+        CaaLogin.last2faDigest = CaaLogin.digestTwoStep(payload);
         return pending;
       }
       const code: string = await codeProvider();
