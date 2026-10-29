@@ -58,9 +58,6 @@ import { PlatformCap } from '../core/PlatformCap';
 import { DoHResolver } from '../core/net/DoHResolver';
 import { StoryDiag } from '../core/StoryDiag';
 import { ReelsCrashLog } from '../core/ReelsCrashLog';
-import { StoryTray } from '../model/Story';
-import { NativeStories } from '../core/NativeStories';
-import { MobileProbe } from '../core/mobileapi/MobileProbe';
 // BYO 中转要的两样东西：这份登录态（IG 的 Cookie）与这台设备的推送 token（AGC 的 Push Kit）。
 import { InstagramCookieJar, InstagramCookieSnapshot } from '../core/InstagramCookieJar';
 import { PushCenter } from '../core/PushCenter';
@@ -275,15 +272,6 @@ export struct SettingsPanel {
   /** 视频清晰度（同上）。 */
   @StorageLink(SETTING_VIDEO_QUALITY) videoQuality: string = MEDIA_QUALITY_AUTO;
   /**
-   * 移动 API 自检的结论（见 core/mobileapi/MobileProbe）。
-   *
-   * 为什么要在这里显示：启动 6 秒后那次自检的结论**只进日志**，而真机上 chromium 的日志
-   * 会把 hilog 冲掉（本项目在网页那条路上已经吃过这个亏）—— 测试者手上也没有 hdc。
-   * 所以结论必须能**在 App 里直接看到**：进设置页读一眼，需要发回来就点一下复制。
-   * 初值取 `-` 表示"还没跑过"（启动自检没跑或没登录）。
-   */
-  @State mobileProbeResult: string = MobileProbe.lastSummary();
-  /**
    * 中转上报的输入框（见 core/PushTokenReporter）。
    *
    * 只做"记状态 → 保存"：真正发请求在 saveRelayAndReport 里，
@@ -296,11 +284,10 @@ export struct SettingsPanel {
   @State private relayBusy: boolean = false;
 
   /**
-   * 进设置页时把已经跑过的那次自检结论捞进来（启动自检是定时跑的，多半这时已经有结果）。
-   * 只读一次、不重发请求：要看最新的点那一行。
+   * 进设置页时读一次当前状态（代理列表 / DoH 开关与现场）。
+   * 只读一次、不重发请求。
    */
   aboutToAppear(): void {
-    this.mobileProbeResult = MobileProbe.lastSummary();
     // 代理列表/选中/下拉按钮文字：进页面就读一次（不要等 proxySection 的 onAppear，
     // 否则第一帧按钮上的文字是空的）。
     this.refreshProxyNames();
@@ -1340,25 +1327,6 @@ export struct SettingsPanel {
   }
 
   /**
-   * **自检一次快拍取数**（移动端私有接口）。
-   *
-   * 原来这里跑的是"抓故事页模板 / 读页面媒体"两条网页退路；模板机制退役后改为：
-   * 用移动端 `feed/reels_tray/` 拉一次托盘，把条数与失败原因如实报出来。
-   */
-  private captureStoryTemplateForDiag(): void {
-    NativeStories.tray().then((tray: StoryTray | null): void => {
-      const count: number = tray === null ? 0 : tray.items.length;
-      if (count > 0) {
-        this.toast($r('app.string.diag_story_captured'));
-        return;
-      }
-      this.toast($r('app.string.diag_story_capture_failed', NativeStories.lastDetail()));
-    }).catch((error: Error): void => {
-      this.toast($r('app.string.diag_story_capture_failed', error.message ?? '-'));
-    });
-  }
-
-  /**
    * **复制诊断摘要**：一行都存不了时的兜底（剪贴板不需要任何权限）。
    *
    * 只复制**精简版**（见 StoryDiag.exportBrief）：整份带 142 条托盘形状 + 80 条原始条目，
@@ -1381,29 +1349,6 @@ export struct SettingsPanel {
       hilog.warn(DOMAIN, TAG, 'diag copy threw: %{public}s', (error as Error).message);
       this.toast($r('app.string.diag_export_failed', (error as Error).message));
     }
-  }
-
-  /**
-   * **跑一次移动 API 自检**（见 core/mobileapi/MobileProbe；需求：换到 instagrapi 那条私有 API 路）。
-   *
-   * 三发请求：`users/{uid}/info/` → `feed/reels_tray/` → `direct_v2/inbox/`。
-   * 这个入口的意义和「抓故事页模板（测试）」一样：**当场**验证"IG 认不认我们这套身份"，
-   * 不用等某条业务路径自己踩坑才发现会话不可用。
-   *
-   * 自检只读、不改状态；异常一律吞掉只报一句，绝不影响设置页本身。
-   */
-  private runMobileProbe(): void {
-    this.mobileProbeResult = MobileProbe.lastSummary();
-    this.toast($r('app.string.diag_mobile_running'));
-    MobileProbe.run(true).then((ok: number): void => {
-      this.mobileProbeResult = MobileProbe.lastSummary();
-      this.toast($r('app.string.diag_mobile_done', ok));
-    }).catch((error: Error): void => {
-      const message: string = error.message ?? '-';
-      this.mobileProbeResult = `threw: ${message}`;
-      hilog.warn(DOMAIN, TAG, 'mobile probe threw: %{public}s', message);
-      this.toast($r('app.string.diag_mobile_failed', message));
-    });
   }
 
   /**
@@ -1439,27 +1384,6 @@ export struct SettingsPanel {
       });
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'relay material copy threw: %{public}s', (error as Error).message);
-      this.toast($r('app.string.diag_export_failed', (error as Error).message));
-    }
-  }
-
-  /** 把移动 API 自检结论复制走（和「复制诊断摘要」同一条路：剪贴板不需要权限）。 */
-  private copyMobileProbe(): void {
-    const text: string = MobileProbe.lastSummary();
-    this.mobileProbeResult = text;
-    try {
-      const data: pasteboard.PasteData =
-        pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text);
-      pasteboard.getSystemPasteboard().setData(data, (err: BusinessError | undefined) => {
-        if (err !== undefined && err !== null) {
-          hilog.warn(DOMAIN, TAG, 'mobile probe copy failed: %{public}s', err.message);
-          this.toast($r('app.string.diag_export_failed', err.message));
-          return;
-        }
-        this.toast($r('app.string.diag_copied'));
-      });
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'mobile probe copy threw: %{public}s', (error as Error).message);
       this.toast($r('app.string.diag_export_failed', (error as Error).message));
     }
   }
@@ -1520,32 +1444,6 @@ export struct SettingsPanel {
      * 一裁就没了（信息流资料栏那一行踩过同一个坑，见 FeedList.profileRow）。
      * 卡片本身是透明底 + 实线边，成员行也都带着内缩，不会溢出到圆角外面。
      */
-  }
-
-  /**
-   * 移动 API 自检结论行：标题 + 结论正文，整行可点（点一下复制）。
-   *
-   * 正文**从 `this.mobileProbeResult` 内部读**，不按值传参：@Builder 的按值参数不参与状态观察，
-   * 传进来的话自检跑完这一行不会重绘（同 fileDeep 那条注释里的教训）。
-   */
-  @Builder
-  mobileProbeRow() {
-    Column({ space: 4 }) {
-      Text($r('app.string.diag_mobile_result'))
-        .fontSize(13)
-        .fontColor($r('app.color.secondary_text'))
-        .width('100%')
-      Text(this.mobileProbeResult)
-        .fontSize(13)
-        .fontColor($r('app.color.primary_text'))
-        .width('100%')
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
-    .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING, top: 8, bottom: 8 })
-    .onClick((): void => {
-      this.copyMobileProbe();
-    })
   }
 
   /**
@@ -2180,32 +2078,6 @@ export struct SettingsPanel {
           this.actionRow($r('app.string.settings_copy_diag'), (): void => {
             this.copyDiag();
           })
-          this.cardDivider()
-          /*
-           * **抓一次"故事页"的模板**（诊断 + 手动救急）。
-           *
-           * 为什么要有这个入口：`reels_media` 那条私有 REST 在部分会话上被 IG 回 500，
-           * 我们改走"网页自己那条快拍查询"（见 NativeStories.storyViaTemplate）—— 而那条路
-           * 只有在 REST 失败时才会自己触发。这个按钮让人**当场**试一次：抓到了就说明这条路可用
-           * （之后快拍就能开），抓不到也能立刻看到失败原因，不用等复现。
-           */
-          this.actionRow($r('app.string.settings_capture_story'), (): void => {
-            this.captureStoryTemplateForDiag();
-          })
-          this.cardDivider()
-          /*
-           * **跑一次移动 API 自检**（新路径：instagrapi 那套私有移动 API，见 core/mobileapi）。
-           *
-           * 和上一行同源：网页那条路被 IG 按来源拒（reels_media 回 500 / challenge）之后，
-           * 我们在试"复用同一个 Cookie 罐、改用移动端私有 API"。这条链路的失败点很多
-           * （会话读不到、claim 不对、challenge、限流），所以给一个当场能跑的入口：
-           * 结论直接显示在下面那行，不依赖 hdc 也不依赖 hilog。
-           */
-          this.actionRow($r('app.string.settings_run_mobile_probe'), (): void => {
-            this.runMobileProbe();
-          })
-          this.cardDivider()
-          this.mobileProbeRow()
           this.cardDivider()
           this.groupHint($r('app.string.settings_diag_hint'))
         }
