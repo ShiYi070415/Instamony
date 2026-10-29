@@ -286,15 +286,20 @@ export interface ReelStreamVm {
   /** 当前看到第几条（切页重建时要恢复位置）。 */
   activeIndex(): number;
   setActiveIndex(index: number): void;
-  /** 首次取数（手上已经有数据时什么都不用做）。 */
-  loadFirst(): Promise<void>;
+  /**
+   * 首次取数（手上已经有数据时什么都不用做）。
+   *
+   * @param forceFresh **下拉刷新**专用：不许吃"启动预热"那一页，必须真发一发新的
+   *   （见 ReelsViewModel.loadFirst 的说明）。首屏 / 翻页不传。
+   */
+  loadFirst(forceFresh?: boolean): Promise<void>;
   /** 再要一页。 */
   requestMore(): Promise<void>;
   /**
    * 丢掉手上这份列表、把游标归零（"重新拉首屏"的第一步）。
    *
-   * 需求（底栏点当前项）：在第一条时再点一下 = 刷新这一页。reels 没有下拉刷新，所以刷新
-   * 就是 `reset()` + `loadFirst()`（见 ReelsPage.onTabRepeatTap）。
+   * 需求（底栏点当前项 / reels 页下拉）：在第一条时再拉一下 = 刷新这一页，实现就是
+   * `reset()` + `loadFirst(true)`（见 ReelsPage.refreshByPull）。
    * 个人主页那条链的数据是进页时带进来的，那边把它实现成"什么都不丢、只重报一次"。
    */
   reset(): void;

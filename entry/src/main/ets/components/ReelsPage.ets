@@ -43,6 +43,24 @@ const DOMAIN: number = 0xFF00;
 const TAG: string = 'ReelsPage';
 /** 离末尾还有几条就开始预取。 */
 const PREFETCH_DISTANCE: number = 3;
+/**
+ * **下拉刷新**的三个参数（vp）。
+ *
+ * Reels 是一屏一条的竖向 Swiper，没有"列表滚动到顶"这种状态，`Refresh` 组件套不进来
+ * （它认的是 List/Scroll 那类滚动容器的 offset）—— 所以下拉这一下**自己量**：
+ * 手指在第一条上往下拖超过 `PULL_TRIGGER_VP` 就触发刷新（见 trackPullDown）。
+ *
+ *   · `PULL_TRIGGER_VP`：触发阈值。96 与信息流那条系统刷新的手感接近（约一指节的 1.5 倍）；
+ *   · `PULL_MAX_VP`：指示器最多跟着走多远（再往下拖也不会把画面拉花）；
+ *   · `PULL_DAMP`：阻尼。手指走 200vp 时指示器只下移 100vp，长距离拖拽不会显得失控。
+ */
+const PULL_TRIGGER_VP: number = 96;
+const PULL_MAX_VP: number = 168;
+const PULL_DAMP: number = 0.5;
+/** 往下拖时可以"收回"的余量：上滑超过这个距离就不再算下拉（避免误触）。 */
+const PULL_CANCEL_VP: number = 24;
+/** 指示器距离页面顶端的偏移（vp；避开状态栏与标题栏）。 */
+const PULL_PILL_TOP_VP: number = 84;
 /** 作者行的左右留白（vp）。 */
 const SIDE_PADDING: number = 16;
 /**
@@ -2283,6 +2301,23 @@ export struct ReelsPage {
   @State private videoReady: boolean = false;
   @State private busy: boolean = false;
   @State private status: string = '';
+  /*
+   * ## 下拉刷新（需求："实现 reels 页下拉刷新，区分分页刷新"）
+   *
+   * 两件事必须分开，它们的**触发条件不同**：
+   *   · **下拉刷新**：在**第一条**上往下拖过阈值 → 丢掉列表与游标，重新要第一页
+   *     （`reloadFirstPage` → `reset` + `loadFirst(true)`，不吃启动预热那一页）；
+   *   · **分页（翻页）**：滑到**最后几条**（`index >= length - PREFETCH_DISTANCE`）→
+   *     `requestMore()` 只要下一页、追加到后面。
+   * 早先这一页只有一个"底栏连点两次"的刷新入口（见 onTabRepeatTap），下拉这一下被 Swiper
+   * 自己的弹簧吃掉、什么都不发生 —— 所以这里自己量手势（见 trackPullDown / endPull）。
+   */
+  /** 下拉了多少（vp；0 = 没在下拉）。只驱动指示器的位置，不改布局。 */
+  @State private pullOffset: number = 0;
+  /** 正在刷新（下拉触发的那一轮取数没回来之前一直是 true）。 */
+  @State private refreshing: boolean = false;
+  /** 这一次触摸里，下拉的起点 y（vp；-1 = 这次触摸不判下拉）。 */
+  private pullStartY: number = -1;
   /** 视频静音（全局开关，媒体区右上角那颗喇叭键改它）。 */
   @StorageProp(SETTING_VIDEO_MUTED) videoMuted: boolean = false;
   /** 屏幕宽度（vp）：交给信息层做正文折叠排版（见 ReelOverlay.captionPrefix）。 */
@@ -2434,6 +2469,8 @@ export struct ReelsPage {
   private onSwiperTouch(event: TouchEvent): void {
     if (event.type === TouchType.Down) {
       this.swipeReported = false;
+      // 只有"停在第一条"时这一次触摸才可能是一次下拉刷新（见 trackPullDown）。
+      this.pullStartY = this.canPullRefresh() ? this.touchY(event) : -1;
       return;
     }
     if (event.type === TouchType.Move) {
@@ -2441,11 +2478,130 @@ export struct ReelsPage {
         this.swipeReported = true;
         this.onReelSwipe();
       }
+      this.trackPullDown(event);
       return;
     }
     if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
       // 抬手：这一次触摸的额度用完（下一次 Down 会重新放开）。
       this.swipeReported = true;
+      this.endPullDown(event.type === TouchType.Cancel);
+    }
+  }
+
+  /**
+   * 现在能不能下拉刷新：停在第一条、有内容、没有正在刷新的另一轮。
+   *
+   * **不看 `busy`**（那是"分页/补货在跑"）：分页一次要现拉两三发（见 requestMore），
+   * 常常持续好几秒，而用户就在这时往下拉 —— 早先这里挡了 `busy`，表现就是"拉了没反应"。
+   * 用户主动拉那一下的优先级高于后台补货：`vm.reset()` 会把 busy 归零、在飞的那一发回来也
+   * 只会被当成"同一页"对待（真机上验证过不会串内容）。
+   */
+  private canPullRefresh(): boolean {
+    if (this.refreshing || this.reels.length === 0) {
+      return false;
+    }
+    if (this.segment >= 0 && this.segment !== this.activeSegment) {
+      return false;
+    }
+    return this.activeIndex <= 0;
+  }
+
+  /** 事件里第一根手指的 y（vp；拿不到给 NaN 之外的兜底值 0）。 */
+  private touchY(event: TouchEvent): number {
+    const touches: Array<TouchObject> = event.touches;
+    if (touches.length === 0) {
+      return 0;
+    }
+    return touches[0].y;
+  }
+
+  /**
+   * 量下拉距离（只写指示器状态，**不改布局**）。
+   *
+   * 为什么自己量而不套 `Refresh`：这一页是竖向 Swiper，`Refresh` 只认 List/Scroll 那类
+   * 滚动容器的偏移量，套上来下拉根本不会触发；而 Swiper 在第一条往下拖只有它自己的弹簧
+   * 回弹（用户看到的就是"拉了一下什么都没发生"）。所以这里在 `onTouch` 里直接算位移。
+   *
+   * 判据要点：
+   *   · 只认**向下**（dy > 0）：向上滑要留给 Swiper 翻页，一发现明显上滑就放弃这次下拉；
+   *   · 带阻尼：手指走 200vp，指示器只走 100vp。
+   */
+  private trackPullDown(event: TouchEvent): void {
+    if (this.pullStartY < 0 || this.refreshing) {
+      return;
+    }
+    const dy: number = this.touchY(event) - this.pullStartY;
+    if (dy > 0) {
+      this.pullOffset = Math.min(PULL_MAX_VP, dy * PULL_DAMP);
+      return;
+    }
+    if (this.pullOffset !== 0) {
+      this.pullOffset = 0;
+    }
+    // 明显往上滑：这次触摸交给 Swiper 翻页，不再判下拉。
+    if (dy < -PULL_CANCEL_VP) {
+      this.pullStartY = -1;
+    }
+  }
+
+  /**
+   * 手指抬起：过了阈值就刷新，否则把指示器收回去。
+   *
+   * @param cancelled 系统取消了这次触摸（来电 / 手势被抢）：一律只回收，不触发刷新 ——
+   *   取消不代表用户想刷新。
+   */
+  private endPullDown(cancelled: boolean): void {
+    if (this.pullStartY < 0) {
+      return;
+    }
+    this.pullStartY = -1;
+    const triggered: boolean = !cancelled && this.pullOffset >= PULL_TRIGGER_VP;
+    this.pullOffset = 0;
+    if (!triggered) {
+      return;
+    }
+    this.refreshByPull();
+  }
+
+  /**
+   * **下拉刷新**：丢掉当前列表与游标，重新要第一页（和"翻页"是两条路）。
+   *
+   * 与翻页的区别写在字段那段；这里补三条实现要点：
+   *   · `vm.reset()` 之后再 `loadFirst(true)`：`true` = **不吃启动预热那一页**
+   *     （那一页可能是几分钟前拉的，拿它当刷新结果就是"拉了一下内容没变"）；
+   *   · 铺完要把 Swiper 摆回第一条（列表被整体换掉了，位置不能留在旧索引上）；
+   *   · 转圈由 `refreshing` 控制，取数回来（成功 / 失败）都收 —— 别让它挂着。
+   */
+  private refreshByPull(): void {
+    if (this.refreshing) {
+      return;
+    }
+    this.refreshing = true;
+    ReelsCrashLog.note(`pull-refresh src=${this.source} had=${this.reels.length}`);
+    ReelsCrashLog.flush();
+    try {
+      this.vm.reset();
+      this.vm.loadFirst(true)
+        .then((): void => {
+          this.syncFromVm();
+          // 列表整体换掉了：位置回第一条（Swiper 没绑 `.index`，得自己摆）。
+          this.activeIndex = 0;
+          this.settledIndex = 0;
+          this.lastReportedIndex = 0;
+          this.vm.setActiveIndex(0);
+          try {
+            this.swiperController.changeIndex(0, false);
+          } catch (error) {
+          }
+          this.status = '';
+        })
+        .catch((): void => {
+        })
+        .finally((): void => {
+          this.refreshing = false;
+        });
+    } catch (error) {
+      this.refreshing = false;
     }
   }
 
@@ -2641,23 +2797,17 @@ export struct ReelsPage {
    * 列表换掉之后 `onReels` 自己会把 `activeIndex` 夹回合法范围（见那段说明）。
    */
   private reloadFirstPage(): void {
-    if (this.busy) {
+    if (this.refreshing) {
       return;
     }
     ReelsCrashLog.note(`repeat-tap reload src=${this.source}`);
     ReelsCrashLog.flush();
-    try {
-      this.vm.reset();
-      this.vm.loadFirst()
-        .then((): void => {
-          this.syncFromVm();
-        })
-        .catch((): void => {
-        });
-    } catch (error) {
-      ReelsCrashLog.note('repeat-tap reload threw');
-      ReelsCrashLog.flush();
-    }
+    /*
+     * 和下拉刷新**走同一条路**（`refreshByPull`）：同样是"丢掉列表与游标、真发一发新的"。
+     * 早先这里自己写了一遍 `reset + loadFirst()`，两处的语义（要不要吃预热、转圈谁来收）
+     * 很快就分叉了 —— 现在只留一份实现。
+     */
+    this.refreshByPull();
   }
 
   /**
@@ -2993,6 +3143,37 @@ export struct ReelsPage {
     .backgroundColor(Color.Transparent)
   }
 
+  /**
+   * 下拉刷新那颗指示器：**下拉刷新 →（过阈值）松开刷新 → 正在刷新…**。
+   *
+   * 用胶囊而不是系统 `Refresh` 那颗转圈：这一页没有 List/Scroll，`Refresh` 的转圈挪不出来
+   * （见常量那段说明），所以自己画一颗风格一致的 —— 深色半透明底 + 白字，压在视频画面上
+   * 也读得清。
+   */
+  @Builder
+  pullIndicator() {
+    Row({ space: 8 }) {
+      if (this.refreshing) {
+        LoadingProgress()
+          .width(18)
+          .height(18)
+          .color(Color.White)
+      } else {
+        SymbolGlyph($r('sys.symbol.arrow_clockwise'))
+          .fontSize(16)
+          .fontColor([Color.White])
+          .opacity(this.pullOffset >= PULL_TRIGGER_VP ? 0.4 : 1)
+      }
+      Text(this.refreshing ? '正在刷新…'
+        : (this.pullOffset >= PULL_TRIGGER_VP ? '松开刷新' : '下拉刷新'))
+        .fontSize(12)
+        .fontColor(Color.White)
+    }
+    .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+    .borderRadius(16)
+    .backgroundColor('#66000000')
+  }
+
   build() {
     Stack({ alignContent: Alignment.BottomStart }) {
       /*
@@ -3110,6 +3291,25 @@ export struct ReelsPage {
             this.animationStartedMs = 0;
           }
         })
+      }
+
+      /*
+       * **下拉刷新的指示器**（见 refreshByPull / trackPullDown）。
+       *
+       * 只在"真在下拉"或"正在刷新"时出现；内容层不吃触摸（hitTestBehavior None），
+       * 所以它既不会挡住 Swiper 的手势，也不会挡住双击点赞。位置固定写在页面顶端那一块，
+       * 而不是跟着手指走满屏 —— 竖向 Swiper 里把画面整体下移会让视频表面跟着抖。
+       */
+      if (this.pullOffset > 0 || this.refreshing) {
+        Column() {
+          this.pullIndicator()
+        }
+        .width('100%')
+        .height('100%')
+        .justifyContent(FlexAlign.Start)
+        .alignItems(HorizontalAlign.Center)
+        .padding({ top: PULL_PILL_TOP_VP })
+        .hitTestBehavior(HitTestMode.None)
       }
 
       // **双击屏幕点赞**（需求："双击屏幕点赞实现一下" + "跟手动画"）：

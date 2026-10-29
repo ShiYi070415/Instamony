@@ -191,8 +191,15 @@ export class ReelsViewModel implements ReelStreamVm {
     this.active = index > 0 ? index : 0;
   }
 
-  /** 首屏（或重试）拉第一页。 */
-  async loadFirst(): Promise<void> {
+  /**
+   * 首屏（或重试）拉第一页。
+   *
+   * @param forceFresh **下拉刷新**专用：不吃启动预热那一页。
+   *   预热是 app 一起来就发的那一发（`NativeReels.takeWarm`，最长算 2 分钟），拿它当
+   *   "刷新结果"就是原样换回同一批视频 —— 用户看到的现象正是"下拉了，转圈转完，一条没变"。
+   *   所以用户主动拉的那一下必须**真发一发**（`fetchPage` 自己会走 clips / 探索流那两发）。
+   */
+  async loadFirst(forceFresh: boolean = false): Promise<void> {
     if (this.busy) {
       return;
     }
@@ -221,7 +228,8 @@ export class ReelsViewModel implements ReelStreamVm {
         return;
       }
       // ---- 1) 启动预热那一页（app 一起来就发了，见 EntryAbility / NativeReels.warmStart）----
-      const warm: NativeReelsPage | null = NativeReels.takeWarm(this.source, NATIVE_WARM_MAX_AGE_MS);
+      const warm: NativeReelsPage | null = forceFresh
+        ? null : NativeReels.takeWarm(this.source, NATIVE_WARM_MAX_AGE_MS);
       if (warm !== null) {
         this.noteCursor(warm.nextCursor);
         this.applyFirstPage(warm);

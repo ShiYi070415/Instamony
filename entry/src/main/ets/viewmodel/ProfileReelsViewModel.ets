@@ -129,8 +129,11 @@ export class ProfileReelsViewModel implements ReelStreamVm {
    *
    * 这一页的数据是进页时**带进来**的，所以这里不发列表请求，只把已有的那份再报一次
    * （视图模型和组件各持一份 @State，报一次让两边对齐）。
+   *
+   * @param forceFresh 下拉刷新专用（接口约定，见 model/Reel 的 ReelStreamVm）：
+   *   这条链没有"启动预热页"可吃，天然就是"重新要一遍"，所以这里不区分。
    */
-  async loadFirst(): Promise<void> {
+  async loadFirst(forceFresh?: boolean): Promise<void> {
     this.publish();
   }
 
