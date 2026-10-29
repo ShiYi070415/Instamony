@@ -24,7 +24,7 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { MobileEngage } from './mobileapi/MobileEngage';
 import { MobileNews } from './mobileapi/MobileNews';
-import { MobileRequest, MobileResult } from './mobileapi/MobileRequest';
+import { MobileRequest, MobileResult, MobileOptions } from './mobileapi/MobileRequest';
 import { ApiThrottle } from './ApiThrottle';
 import { JsonRead } from './JsonRead';
 
@@ -117,7 +117,8 @@ export class NativeFollow {
     const dto: Record<string, Object> = JsonRead.parse(result.body);
     const statuses: Record<string, Object> | null = JsonRead.recordOf(dto, 'friendship_statuses');
     if (statuses === null) {
-      hilog.info(DOMAIN, TAG, 'show_many no statuses len=%{public}d', result.body.length);
+      hilog.info(DOMAIN, TAG, 'show_many no statuses len=%{public}d head=%{public}s',
+        result.body.length, result.body.substring(0, 160));
       return out;
     }
     for (let index: number = 0; index < wanted.length; index++) {
@@ -127,8 +128,62 @@ export class NativeFollow {
       }
       out.set(wanted[index], JsonRead.boolOf(one, 'following'));
     }
+    if (out.size === 0) {
+      // 问到 0 个时把"问了谁、回了什么"打出来：这条端点的空表有两种原因（签名体丢字段 / 服务端限流）。
+      hilog.info(DOMAIN, TAG, 'show_many asked=%{public}d got=0 ids=%{public}s statuses=%{public}s',
+        wanted.length, wanted.join(','), Object.keys(statuses).join(','));
+    }
     hilog.info(DOMAIN, TAG, 'show_many asked=%{public}d got=%{public}d',
       wanted.length, out.size);
     return out;
   }
+
+  /**
+   * **单个人**的关注状态（`GET friendships/show/{id}/`）。
+   *
+   * 为什么还要这一条：批量那一发（`show_many`）在 App 里曾经回空表（见 MobileNews.showMany 的
+   * 说明），而这一条在 PC 与真机上都稳（响应直接就是 `{"following":true,…}`，没有嵌套）。
+   * 批量拿不到的人用它逐个补，代价是每人一发 —— 所以调用方要限量（见 FeedViewModel 的核对）。
+   *
+   * @returns true/false = 问到了；null = 问不到（没 id / 被节流 / 网络失败）
+   */
+  static async stateOf(userId: string): Promise<boolean | null> {
+    const id: string = userId.trim();
+    if (id.length === 0) {
+      return null;
+    }
+    const cached: boolean | undefined = NativeFollow.stateCache.get(id);
+    if (cached !== undefined) {
+      return cached;
+    }
+    if (ApiThrottle.blocked(ApiThrottle.MEDIA_INFO)) {
+      return null;
+    }
+    try {
+      const result: MobileResult = await MobileRequest.send(
+        `friendships/show/${encodeURIComponent(id)}/`, '', '', true, null,
+        new MobileOptions(ApiThrottle.MEDIA_INFO, ApiThrottle.interactive()));
+      if (!result.ok) {
+        hilog.info(DOMAIN, TAG, 'state miss id=%{public}s %{public}s', id, result.summary());
+        return null;
+      }
+      const dto: Record<string, Object> = JsonRead.parse(result.body);
+      if (!JsonRead.has(dto, 'following')) {
+        // 有的账号会回 `{"message":"…"}` 或空体：当作问不到，别把按钮状态猜成 false。
+        hilog.info(DOMAIN, TAG, 'state no following id=%{public}s head=%{public}s',
+          id, result.body.substring(0, 140));
+        return null;
+      }
+      const value: boolean = JsonRead.boolOf(dto, 'following');
+      NativeFollow.stateCache.set(id, value);
+      hilog.info(DOMAIN, TAG, 'state id=%{public}s following=%{public}s', id, `${value}`);
+      return value;
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'state failed id=%{public}s %{public}s', id, (error as Error).message);
+      return null;
+    }
+  }
+
+  /** `stateOf` 的缓存（同一次运行里同一个人只问一次）。 */
+  private static readonly stateCache: Map<string, boolean> = new Map<string, boolean>();
 }

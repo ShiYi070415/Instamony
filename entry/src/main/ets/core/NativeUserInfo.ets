@@ -20,6 +20,8 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { MobileRequest, MobileResult, MobileOptions } from './mobileapi/MobileRequest';
 import { ApiThrottle } from './ApiThrottle';
+// 读头像字段用的 JSON 取值工具（`users/{id}/info/` 的响应体）。
+import { JsonRead } from './JsonRead';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeUserInfo';
@@ -91,7 +93,6 @@ export class NativeUserInfo {
     hilog.info(DOMAIN, TAG, 'avatar id=%{public}s ok=%{public}s', id, `${avatar.length > 0}`);
     return avatar;
   }
-
 
   /** 响应 → 头像（字段名与 NativeProfile.avatarOf 一致：direct → hd → hd_info）。 */
   private static parse(text: string): string {

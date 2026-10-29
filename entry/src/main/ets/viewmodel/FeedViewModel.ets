@@ -28,6 +28,8 @@ import { PosterCache } from '../core/PosterCache';
 import { MediaPrefetch } from '../core/MediaPrefetch';
 // 关注流的筛选要批量问"这些人我关注了吗"（见 filterFollowing）。
 import { NativeFollow } from '../core/NativeFollow';
+// 问到的关注状态要写回覆盖表：卡片上那一格是按它算的（见 filterFollowing）。
+import { FollowState } from '../core/FollowState';
 import { RepostState } from '../core/RepostState';
 
 const DOMAIN: number = 0xFF00;
@@ -146,6 +148,14 @@ const RESTART_COOLDOWN_MS: number = 60000;
  */
 const REFRESH_IDLE_TIMEOUT_MS: number = 20000;
 const REFRESH_IDLE_POLL_MS: number = 150;
+/**
+ * 关注流筛选时，**批量没问到的人**逐个补问的上限。
+ *
+ * 一页作者通常十来个，批量那一发正常就全答了；只有它失手时才退到逐个问
+ * `friendships/show/{id}/`（每人一发、节流下约 1.5 秒一个），所以这里卡在 6 个 ——
+ * 够修正首屏最上面那几条，又不至于把首屏拖到十几秒。
+ */
+const FOLLOW_VERIFY_MAX: number = 6;
 
 export class FeedViewModel {
   private readonly bridge: InstagramPageBridge = InstagramPageBridge.getInstance();
@@ -274,6 +284,15 @@ export class FeedViewModel {
    * 重建 MediaPost，标记必须能被补回来（见 setPosts），否则刷一次对勾就掉了。
    */
   private repostedKeys: Set<string> = new Set<string>();
+
+  /**
+   * 已经逐个问过 `users/{id}/info/` 的作者 id。
+   *
+   * 关注流的作者是有限的，一个人问一次就够了 —— 问过的记在这里，翻页 / 刷新都不会重复问。
+   */
+  private static readonly verifiedFollows: Set<string> = new Set<string>();
+  /** 正在跑核对（同一时刻只跑一轮，别把请求叠起来）。 */
+  private verifyingFollow: boolean = false;
 
   /** 忙碌状态变化（页面据此转圈 / 禁用按钮）。 */
   onBusy: (busy: boolean) => void = (busy: boolean): void => {
@@ -1001,10 +1020,22 @@ export class FeedViewModel {
    * 仍然照留，只是 ② 那批退化成"丢"，并且会打一行 warn 说明。
    */
   private async filterFollowing(raw: Array<MediaPost>): Promise<Array<MediaPost>> {
+    /*
+     * **不再只问"接口没说"的那些，而是把这一页的作者全都问一遍**（`friendships/show_many`）。
+     *
+     * 为什么：用户报的是"关注流里出现没关注的人"。之前只要接口带了
+     * `friendship_status.following=true` 就直接放行 —— 而时间线里的**推荐卡片/广告**
+     * 也会带这个字段（有的还是从别的节点抄来的旧值），于是"没关注的人"照样留在关注流里。
+     * `show_many` 才是**按 id 现问**的权威答案，用它当唯一判据；它漏掉的人再用
+     * `friendships/show/{id}/` 补问（上限见 FOLLOW_VERIFY_MAX）。
+     *
+     * 代价：每页多发一发请求（最多 30 个 id，一次就够）；换来的是内容正确。
+     * 查询失败时退回接口字段（宁可显示多一点，也不要整页空白）。
+     */
     const ids: Array<string> = [];
     for (let index: number = 0; index < raw.length; index++) {
       const post: MediaPost = raw[index];
-      if (post.ownerFollowKnown || post.ownerId.length === 0) {
+      if (post.ownerId.length === 0) {
         continue;
       }
       if (ids.indexOf(post.ownerId) < 0 && ids.length < 30) {
@@ -1021,6 +1052,41 @@ export class FeedViewModel {
         hilog.warn(DOMAIN, TAG, 'follow-state query failed: %{public}s', (error as Error).message);
       }
     }
+    /*
+     * **批量没问到的人逐个补**（见 `NativeFollow.stateOf` 与 FOLLOW_VERIFY_MAX）。
+     *
+     * 为什么值得多发几发：时间线会把"你没关注的人"的帖子直接混进 `media_or_ad` 里
+     * （PC 实测：一页 6 条里就有 1 条作者 `friendship_status.following=false`），
+     * 这一类帖子只能靠"现问"识别出来 —— 批量那一发万一被服务端丢字段，就全成了"不知道"，
+     * 于是又按接口字段放行、又看见没关注的人。
+     */
+    if (queried && states.size < ids.length) {
+      let asked: number = 0;
+      for (let index: number = 0; index < ids.length && asked < FOLLOW_VERIFY_MAX; index++) {
+        const id: string = ids[index];
+        if (states.has(id)) {
+          continue;
+        }
+        asked++;
+        const one: boolean | null = await NativeFollow.stateOf(id);
+        if (one !== null) {
+          states.set(id, one);
+        }
+      }
+      if (asked > 0) {
+        hilog.info(DOMAIN, TAG, 'following filter: batch miss, asked=%{public}d now=%{public}d/%{public}d',
+          asked, states.size, ids.length);
+      }
+    }
+    /*
+     * 上面问到的都算"已核对"（见 `verifyFollowingAsync`）：那一轮只补问**还没答上**的人，
+     * 否则每个人都要被连着问两遍（批量一发 + 逐个一发），白白多花几秒与几发配额。
+     */
+    for (let index: number = 0; index < ids.length; index++) {
+      if (states.has(ids[index])) {
+        FeedViewModel.verifiedFollows.add(ids[index]);
+      }
+    }
     const out: Array<MediaPost> = [];
     let keptKnown: number = 0;
     let keptQueried: number = 0;
@@ -1028,8 +1094,9 @@ export class FeedViewModel {
     let droppedUnknown: number = 0;
     for (let index: number = 0; index < raw.length; index++) {
       const post: MediaPost = raw[index];
-      if (post.ownerFollowKnown) {
-        if (post.ownerFollowing) {
+      if (post.ownerId.length === 0) {
+        // 没有 id 的问不了：只能信接口字段。
+        if (post.ownerFollowKnown && post.ownerFollowing) {
           keptKnown++;
           out.push(post);
         } else {
@@ -1037,9 +1104,22 @@ export class FeedViewModel {
         }
         continue;
       }
-      const state: boolean | undefined = post.ownerId.length > 0 ? states.get(post.ownerId) : undefined;
-      if (state === true) {
+      const state: boolean | undefined = states.get(post.ownerId);
+      if (queried && state === true) {
         keptQueried++;
+        // 问到的状态要写回覆盖表：卡片上那一格是按 `FollowState` 算的（见 FollowState 的说明）。
+        FollowState.remember(post.ownerId, post.ownerUsername, true);
+        out.push(post);
+        continue;
+      }
+      if (queried && state === false) {
+        droppedKnown++;
+        FollowState.remember(post.ownerId, post.ownerUsername, false);
+        continue;
+      }
+      // 没问到（这一发失败 / 不在返回里）：退回接口字段，别把整页清空。
+      if (post.ownerFollowKnown && post.ownerFollowing) {
+        keptKnown++;
         out.push(post);
       } else {
         droppedUnknown++;
@@ -1068,16 +1148,27 @@ export class FeedViewModel {
     const out: Array<MediaPost> = [];
     for (let index: number = 0; index < posts.length; index++) {
       const post: MediaPost = posts[index];
+      /*
+       * **"不知道"也一律丢**（以前是照旧放行）。
+       *
+       * 缓存里存的是**接口原始 DTO**（见 core/FeedCache），时间线会把推荐卡片一起塞进来，
+       * 而推荐卡片通常**不带** `friendship_status` —— 放行它们的话，冷启动那 1~2 秒里
+       * 关注流顶部就是一堆"没关注的人"，正是用户报的现象。网络那一页回来后会整体替换，
+       * 所以这里宁可先少显示。
+       */
       if (!post.ownerFollowKnown) {
         unknown++;
-      } else if (!post.ownerFollowing) {
+        continue;
+      }
+      if (!post.ownerFollowing) {
         dropped++;
         continue;
       }
       out.push(post);
     }
-    if (dropped > 0 || unknown === posts.length) {
-      hilog.info(DOMAIN, TAG, 'following filter: kept=%{public}d dropped=%{public}d unknown=%{public}d',
+    if (dropped > 0 || unknown > 0) {
+      hilog.info(DOMAIN, TAG,
+        'following filter(cache): kept=%{public}d dropped=%{public}d unknown=%{public}d',
         out.length, dropped, unknown);
     }
     return out;
@@ -1138,15 +1229,97 @@ export class FeedViewModel {
   }
 
   /**
-   * 触底 / 接近底部时的「取更多」入口。
+   * **异步核对关注流里这些作者到底关注了没有**，发现"其实没关注"的就地从列表里摘掉。
    *
-   * 列表滚动过程中这个入口会被反复调用；`busy` + `pending` 已经保证不会并发。
+   * 为什么必须核对：信息流自带的 `friendship_status.following` 对**推荐卡片/广告**不可信
+   * （有的干脆没有这个字段，有的带了别人的旧值）；批量端点 `friendships/show_many/` 在 App 里
+   * 也曾经回空表（见 `MobileNews.showMany`）。所以批量之外再按 id 逐个问
+   * `friendships/show/{id}/`（见 `NativeFollow.stateOf`）——这条在 PC 与真机上都稳。
    *
-   * **顺序跟着列表走**（列表是"关注流 → 提示卡片 → 探索流"）：
-   *   ① 关注流还有下一页 → 先翻关注流（新的一页接在关注流末尾，卡片随之往后挪）；
-   *   ② 关注流翻完了 → 翻探索流那一段（这才是用户说的"探索流无法获取更多帖子"要修的地方）；
-   *   ③ 两段都到底 → 报"没有更多"，并且这个判断**有时效**（见 END_RECHECK_MS）。
+   * 设计取舍：
+   *   · **不挡首屏**：先按接口字段铺出来，这里后台跑；
+   *   · 每轮**最多核 8 个人**（一页作者数就这么多），问过的记进 `verifiedFollows` 不再重复问；
+   *   · 一旦发现某位其实没关注，就把他的帖子从关注流里摘掉并**重新合成列表**
+   *     （同时写进 `FollowState`，卡片上那颗按钮也跟着变成「关注」）。
    */
+  private verifyFollowingAsync(): void {
+    const targets: Array<MediaPost> = [];
+    const seen: Set<string> = new Set<string>();
+    for (let index: number = 0; index < this.following.length; index++) {
+      const post: MediaPost = this.following[index];
+      if (post.ownerId.length === 0) {
+        continue;
+      }
+      if (seen.has(post.ownerId) || FeedViewModel.verifiedFollows.has(post.ownerId)) {
+        continue;
+      }
+      seen.add(post.ownerId);
+      targets.push(post);
+      if (targets.length >= 8) {
+        break;
+      }
+    }
+    if (targets.length === 0 || this.verifyingFollow) {
+      return;
+    }
+    hilog.info(DOMAIN, TAG, 'following verify: start targets=%{public}d following=%{public}d',
+      targets.length, this.following.length);
+    this.verifyingFollow = true;
+    let index: number = 0;
+    let droppedAny: boolean = false;
+    const step: () => void = (): void => {
+      if (index >= targets.length) {
+        this.verifyingFollow = false;
+        if (droppedAny) {
+          this.refilterFollowingByState();
+        }
+        return;
+      }
+      const post: MediaPost = targets[index];
+      index++;
+      NativeFollow.stateOf(post.ownerId).then((known: boolean | null): void => {
+        if (known === null) {
+          step();
+          return;
+        }
+        FeedViewModel.verifiedFollows.add(post.ownerId);
+        FollowState.remember(post.ownerId, post.ownerUsername, known);
+        if (!known) {
+          droppedAny = true;
+        }
+        step();
+      }).catch((): void => {
+        step();
+      });
+    };
+    step();
+  }
+
+  /** 按最新关注状态重算关注流那一段，并重新合成列表。 */
+  private refilterFollowingByState(): void {
+    const kept: Array<MediaPost> = [];
+    let dropped: number = 0;
+    for (let index: number = 0; index < this.following.length; index++) {
+      const post: MediaPost = this.following[index];
+      const fallback: boolean = post.ownerFollowKnown === true && post.ownerFollowing === true;
+      if (FollowState.resolve(post.ownerId, fallback)) {
+        kept.push(post);
+      } else {
+        dropped++;
+      }
+    }
+    if (dropped === 0) {
+      return;
+    }
+    hilog.info(DOMAIN, TAG, 'following verify: dropped=%{public}d kept=%{public}d',
+      dropped, kept.length);
+    this.following = kept;
+    if (kept.length === 0 && this.explore.length > 0) {
+      this.followingDry = true;
+    }
+    this.composePosts();
+  }
+
   requestMore(): void {
     if (this.busy) {
       this.pending = true;
@@ -1262,7 +1435,29 @@ export class FeedViewModel {
         first.items.length, Date.now() - startedMs, first.nextCursor.length > 0 ? 'y' : 'n',
         first.hasMore ? 'y' : 'n');
       // 把这一页落盘：**下次冷启动**就能先画它（见 core/FeedCache），不用等网络。
-      FeedCache.save(first.items, first.nextCursor, first.hasMore);
+      /*
+       * **只落盘"筛过之后"的那些**。
+       *
+       * `first.items` 是接口原始 DTO，时间线会混进推荐卡片 / 没关注的人的帖子；
+       * 整页落盘的话，下次冷启动那 1~2 秒里关注流顶部就先画出一堆"没关注的人"。
+       */
+      const keptKeys: Set<string> = new Set<string>();
+      for (let index: number = 0; index < this.following.length; index++) {
+        keptKeys.add(FeedMapper.keyOf(this.following[index]));
+      }
+      const keptItems: Array<FeedItemDto> = [];
+      for (let index: number = 0; index < first.items.length; index++) {
+        try {
+          const one: MediaPost = FeedMapper.toPost(first.items[index], index);
+          if (keptKeys.has(FeedMapper.keyOf(one))) {
+            keptItems.push(first.items[index]);
+          }
+        } catch (error) {
+        }
+      }
+      if (keptItems.length > 0) {
+        FeedCache.save(keptItems, first.nextCursor, first.hasMore);
+      }
       // 首屏封面预解码：低一档的小图先解出来垫在真图下面（见 core/PosterCache）。
       PosterCache.warm(this.posts);
       // 首屏一铺上就**在后台把后面几页抓好**：用户上滑时那些页已经在内存里（见 prefetchNativePage）。
@@ -1488,6 +1683,14 @@ export class FeedViewModel {
     }
     this.composePosts();
     FeedMapper.logKeys(prepend ? 'prepended' : 'merged', merged.posts);
+    /*
+     * **首屏先铺、随后异步核对关注状态**（见 verifyFollowingAsync）。
+     *
+     * 为什么不在 `filterFollowing` 里同步问：`users/{id}/info/` 每人一发、几百毫秒，
+     * 一页十几个作者会把首屏拖到好几秒。这里先按信息流自带的字段铺出来，
+     * 后台逐个核对，发现有"其实没关注"的再把它从关注流里摘掉。
+     */
+    this.verifyFollowingAsync();
 
     this.debug = `${this.debug} +${merged.changed}/${raw.length}`;
     if (merged.changed > 0) {

@@ -90,8 +90,18 @@ export class MobileNews {
     if (wanted.length === 0) {
       return new MobileResult(false, 'no-ids', 0, 0, 0, '', 'no-ids');
     }
-    return await MobileNews.write('friendships/show_many/', `user_ids=${encodeURIComponent(wanted.join(','))}`,
-      'show_many', priority);
+    /*
+     * **这一发不要签名**（`unsignedFirst`）。
+     *
+     * 真机日志里 `show_many asked=4 got=0`：HTTP 200、也有 `friendship_statuses` 这个键，
+     * 但里面一条都不含我们问的 id。同一时刻在 PC 上用**未签名**表单
+     * （`user_ids=1,2,3`，与 App 同一套头）问同一批 id，6 个 id 全部拿到答案 ——
+     * 差别只在 `signed_body=SIGNATURE.<表单>` 这层包装：`show_many` 的服务端会照着
+     * 签名体里的字段重新拼一遍请求，`user_ids` 在那条路上被丢掉，于是回的是空表。
+     * 所以这条端点先试未签名（与 PC 实测一致），失败再退回签名那条。
+     */
+    return await MobileNews.write('friendships/show_many/',
+      `user_ids=${encodeURIComponent(wanted.join(','))}`, 'show_many', priority, true);
   }
 
   // ------------------------------------------------------------------ 内部
@@ -103,7 +113,7 @@ export class MobileNews {
    * 已经把"同一时刻只发一发"管住了）。
    */
   private static async write(endpoint: string, extra: string, label: string,
-                             priority: number): Promise<MobileResult> {
+                             priority: number, unsignedFirst: boolean = false): Promise<MobileResult> {
     const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
     if (identity === null || !identity.isComplete()) {
       hilog.info(DOMAIN, TAG, '%{public}s skipped: no session', label);
@@ -116,6 +126,16 @@ export class MobileNews {
     const base: string = MobileRequest.formOf(MobileRequest.withExtraData(identity));
     const payload: string = extra.length > 0 ? `${base}&${extra}` : base;
     const opts: MobileOptions = new MobileOptions(ApiThrottle.MOBILE, priority);
+    if (unsignedFirst) {
+      // 见 showMany 那段说明：这只端点先走未签名。
+      const plain: MobileResult = await MobileRequest.send(endpoint, payload, '', false, null, opts);
+      if (plain.ok) {
+        return plain;
+      }
+      hilog.info(DOMAIN, TAG, '%{public}s unsigned failed (%{public}s) → signed',
+        label, plain.summary());
+      return await MobileRequest.send(endpoint, payload, '', true, null, opts);
+    }
     let result: MobileResult = await MobileRequest.send(endpoint, payload, '', true, null, opts);
     if (!result.ok) {
       hilog.info(DOMAIN, TAG, '%{public}s signed failed (%{public}s) → unsigned',
