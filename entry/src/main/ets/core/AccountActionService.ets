@@ -71,24 +71,62 @@ export class AccountActionService {
    * @returns 删成功了吗（花名册那步失败才算失败）
    */
   static forgetAccount(userId: string): boolean {
-    if (userId.length === 0) {
-      return false;
-    }
     let ok: boolean = false;
-    try {
-      AccountBook.forget(userId);
-      ok = true;
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'book forget failed: %{public}s', (error as Error).message);
+    if (userId.length > 0) {
+      try {
+        AccountBook.forget(userId);
+        ok = true;
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'book forget failed: %{public}s', (error as Error).message);
+      }
     }
+    /*
+     * **保留名单 = 花名册里还有会话的那些人**：切换账号时新账号的缓存分区刚被搬回活跃位，
+     * 不能跟着一起删；而这个账号本身已经从花名册里删掉了，所以它的分区必然落在"删"这一侧。
+     */
+    const keep: Array<string> = AccountActionService.slotsInBook();
+    /*
+     * 先按点名删（幂等），再**扫盘**把不在名单里的分区（含更早以前那些账号留下的
+     * `#backup@u…`）一起清掉 —— 后者才兜得住"缓存还没 init / 账号 id 没拿到"那两种情况。
+     */
     try {
-      AccountScope.purgeAccount(`u${userId}`);
+      if (userId.length > 0) {
+        AccountScope.purgeAccount(`u${userId}`);
+      }
+      const swept: number = AccountScope.purgeAccountsNotIn(keep, true);
+      if (swept > 0) {
+        hilog.info(DOMAIN, TAG, 'swept orphan partitions entries=%{public}d', swept);
+      }
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'purge failed: %{public}s', (error as Error).message);
     }
-    AppSettings.dropProfileHeader(userId);
+    try {
+      if (userId.length > 0) {
+        AppSettings.dropProfileHeader(userId);
+      }
+      AppSettings.forgetAccountKeys(keep);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'forget account settings failed: %{public}s', (error as Error).message);
+    }
     hilog.info(DOMAIN, TAG, 'forgot %{public}s locally (%{public}s)', userId,
       AccountBook.describe());
     return ok;
+  }
+
+  /** 花名册里还有会话的账号槽位（`u<id>`）—— 作为"别删"的保留名单。 */
+  private static slotsInBook(): Array<string> {
+    const out: Array<string> = [];
+    try {
+      const all: Array<AccountEntry> = AccountBook.all();
+      for (let index: number = 0; index < all.length; index++) {
+        const id: string = `${all[index].userId}`.trim();
+        if (id.length > 0) {
+          out.push(`u${id}`);
+        }
+      }
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'read book failed: %{public}s', (error as Error).message);
+    }
+    return out;
   }
 }

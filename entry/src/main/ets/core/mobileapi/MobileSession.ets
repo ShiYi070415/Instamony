@@ -589,6 +589,34 @@ export class MobileSession {
   }
 
   /**
+   * **退出登录：把落盘那份会话材料彻底抹掉**（设备身份保留）。
+   *
+   * 为什么不能直接用 `clearSession()`：
+   *   · 它开头 `identity === null` 就 return —— 而"退出登录"完全可能发生在一个还没
+   *     `ensure()` 过的进程里（刚启动、或者上一次复位已经把内存身份丢掉了），于是盘上那份
+   *     `authorization`（一串 `Bearer IGT:2:…`，里面**就是 sessionid**）原封不动地留着。
+   *     真机实测：退出登录之后 `instarmony_mobile_session` 里仍是完整凭据；
+   *   · 它还有两条"保留"分支（`keepAuthorizationFor` / `keepAuthorizationUntil`），
+   *     那是给"换号复位 / 刚导入设备级会话"用的 —— 退出登录**一条都不该走**。
+   * 所以这里单独一条：**从盘上读 seed → 抹掉会话字段 → 写回**，和内存里有没有身份无关。
+   */
+  wipeSessionMaterial(): void {
+    try {
+      const seed: StoredIdentity = MobileSession.loadSeed();
+      seed.wwwClaim = '0';
+      seed.igURur = '';
+      seed.authorization = '';
+      seed.authorizationOwner = '';
+      MobileSession.seed = seed;
+      MobileSession.writeSeed(seed);
+      this.identity = null;
+      hilog.info(DOMAIN, TAG, 'session material wiped (device identity kept)');
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'wipe session material failed: %{public}s', (error as Error).message);
+    }
+  }
+
+  /**
    * **登录专用的设备身份**（不需要会话已建立）。
    *
    * `accounts/login/` 恰恰是在"还没有 sessionid"的时候发的：用 `ensure()` 会被

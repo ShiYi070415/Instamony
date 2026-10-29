@@ -981,6 +981,26 @@ export class CaaSession {
   /** 最近一次 `send_login_request` 的请求体（脱敏副本，见 rememberRequest）。 */
   private static lastRequest: string = '';
 
+  /**
+   * **退出登录：把登录痕迹一起抹掉**（诊断文本 / 原始响应 / 最近请求体 / 限流冷却）。
+   *
+   * 为什么必须清：`last_raw` 是**原始响应**（里面有 `user.pk`、`username`、session 相关的
+   * 字段名与值），`last_request` 里也有账号与设备信息 —— 用户要求"退出登录必须清除所有
+   * 相关信息"，这些留着就是把上一个人的登录记录躺在盘上。
+   * **USDID / 密钥（设备身份）保留**：它属于这台设备，换账号不该重新登记。
+   */
+  static clearLoginTraces(): void {
+    CaaSession.lastDiag = '';
+    CaaSession.lastRaw = '';
+    CaaSession.lastRequest = '';
+    CaaSession.writeText(KEY_LAST_DIAG, '');
+    CaaSession.writeText(KEY_LAST_RAW, '');
+    CaaSession.writeText(KEY_LAST_REQUEST, '');
+    CaaSession.writeText(KEY_LAST_429_AT, '');
+    CaaSession.writeText(KEY_429_COUNT, '');
+    hilog.info(DOMAIN, TAG, 'login traces cleared (device identity kept)');
+  }
+
   /** 最近一次登录/前检/导入的诊断文本（给"复制诊断"用）。 */
   static diagText(): string {
     if (CaaSession.lastDiag.length === 0) {

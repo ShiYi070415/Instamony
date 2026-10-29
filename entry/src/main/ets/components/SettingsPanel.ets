@@ -59,7 +59,6 @@ import { ReelsCrashLog } from '../core/ReelsCrashLog';
 import { StoryTray } from '../model/Story';
 import { NativeStories } from '../core/NativeStories';
 import { MobileProbe } from '../core/mobileapi/MobileProbe';
-import { CaaLoginCard } from './CaaLoginCard';
 // BYO 中转要的两样东西：这份登录态（IG 的 Cookie）与这台设备的推送 token（AGC 的 Push Kit）。
 import { InstagramCookieJar, InstagramCookieSnapshot } from '../core/InstagramCookieJar';
 import { PushCenter } from '../core/PushCenter';
@@ -291,15 +290,6 @@ export struct SettingsPanel {
   @State private relayStatus: string = PushTokenReporter.statusNow();
   /** 正在上报（防连点）。 */
   @State private relayBusy: boolean = false;
-
-  /**
-   * **App 内密码登录成功**（界面见 components/CaaLoginCard，设置页与登录页共用）。
-   *
-   * 宿主（pages/Index）拿它重读一次 Cookie 罐、把壳从登录页切成已登录 ——
-   * 和网页登录成功走同一条收尾（`refreshSessionFromJar → applySession`）。
-   */
-  onSignedIn: () => void = (): void => {
-  };
 
   /**
    * 进设置页时把已经跑过的那次自检结论捞进来（启动自检是定时跑的，多半这时已经有结果）。
@@ -2073,24 +2063,11 @@ export struct SettingsPanel {
        * 不填 = 一个请求都不发（默认就是空）。
        */
       /*
-       * **账号登录（实验）**：原生密码登录（CAA 路，见 core/mobileapi/CaaSession）。
-       *
-       * 放在「中转上报」之前：它改的是**登录态本身**，比上报 token 更"上游"。
-       * 界面在 components/CaaLoginCard —— 未登录的登录页那一侧也用同一个组件，
-       * 否则两处的输入框与流程很快就会不一致。
+       * 账号登录（实验）那一组**已移除**（用户要求）：
+       *   · 它内嵌了一个带自己 Scroll 的卡片（CaaLoginCard），在设置页这张 List 里
+       *     嵌套滚动会"吃掉"上下滑动 —— 手指落在卡片上时整页滑不动；
+       *   · 功能也重复：登录页那颗「登录」现在就是 App 协议登录（见 caaLogin）。
        */
-      ListItem() {
-        this.groupHeader('账号登录（实验）')
-      }
-      ListItem() {
-        CaaLoginCard({
-          onSignedIn: (): void => {
-            this.onSignedIn();
-          }
-        })
-      }
-      .padding({ left: PAGE_PADDING, right: PAGE_PADDING, top: 4 })
-
       ListItem() {
         this.groupHeader('中转上报')
       }

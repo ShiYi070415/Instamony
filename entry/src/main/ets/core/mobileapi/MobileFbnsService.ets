@@ -26,7 +26,7 @@ import { MobileIdentity, MobileSession } from './MobileSession';
 import { MobileRequest, MobileResult } from './MobileRequest';
 import { MobileProfile, MobileUserBody } from './MobileProfile';
 import { FBNS_PACKAGE } from './MobileFbns';
-import { MobileFbnsClient } from './MobileFbnsClient';
+import { FbnsAuthStore, MobileFbnsClient } from './MobileFbnsClient';
 import { RealtimeEvent } from './MobileRealtime';
 
 const DOMAIN: number = 0xFF00;
@@ -306,6 +306,36 @@ export class MobileFbnsService {
     MobileFbnsService.started = false;
     MobileFbnsService.stopContinuousTask().catch((): void => {
     });
+  }
+
+  /**
+   * **退出登录：把这个账号的推送凭据与名字缓存一起抹掉**。
+   *
+   * 为什么必须清：
+   *   · `instarmony_fbns` 存的是**这个账号的推送授权**（clientId / userId / password /
+   *     deviceSecret）—— 留着等于把上一个人的推送通道留在本机；
+   *   · `instarmony_fbns_names` 存的是"谁发过消息"的 id → 昵称表，也是按人的资讯。
+   * 设备身份（USDID / uuid / mid）不动，那是这台手机的，不是这个账号的。
+   */
+  static forgetAccount(): void {
+    MobileFbnsService.stop();
+    try {
+      FbnsAuthStore.clear();
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'clear fbns auth failed: %{public}s', (error as Error).message);
+    }
+    MobileFbnsService.senderNames.clear();
+    MobileFbnsService.pendingNames.clear();
+    const store: preferences.Preferences | null = MobileFbnsService.nameStore;
+    if (store !== null) {
+      try {
+        store.putSync('names_v1', '');
+        store.flush();
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'clear fbns names failed: %{public}s', (error as Error).message);
+      }
+    }
+    hilog.info(DOMAIN, TAG, 'fbns account state cleared');
   }
 
   /** 一行诊断（给「导出诊断」用）。 */

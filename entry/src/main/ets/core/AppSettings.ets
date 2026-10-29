@@ -561,6 +561,51 @@ export class AppSettings {
     }
   }
 
+  /**
+   * **退出登录：把这个 store 里"按账号"的键一起清掉**（头部快照 + 私信同步位点 + 分区键）。
+   *
+   * 三样都是"这个人的痕迹"，用户要求"退出登录必须清除所有相关信息"：
+   *   · `profile_header_<uid>`：昵称 / 全名 / 简介 / 头像地址 / 粉丝数；
+   *   · `direct_sync@u<id>`：私信同步位点；
+   *   · 其它过了账号分区的键（见 AccountScope.slot）。
+   * 判据都只认**不在 keep 名单**里的账号：花名册里还留着会话的那些人（切换账号时）不能动。
+   *
+   * @param keep 要保留的账号槽位（`u<id>`；空数组 = 一个都不留）
+   * @returns 删掉的键数
+   */
+  static forgetAccountKeys(keep: Array<string>): number {
+    const store: preferences.Preferences | null = AppSettings.store;
+    if (store === null) {
+      return 0;
+    }
+    let removed: number = AccountScope.purgeStoreAccounts(store, keep, true);
+    let keys: Array<string> = [];
+    try {
+      keys = Object.keys(store.getAllSync());
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'scan settings store failed: %{public}s', (error as Error).message);
+      return removed;
+    }
+    for (let index: number = 0; index < keys.length; index++) {
+      const key: string = keys[index];
+      const prefix: string = 'profile_header_';
+      if (!key.startsWith(prefix)) {
+        continue;
+      }
+      const uid: string = key.substring(prefix.length);
+      if (uid.length === 0 || keep.indexOf(`u${uid}`) >= 0) {
+        continue;
+      }
+      if (AppSettings.dropKey(key)) {
+        removed++;
+      }
+    }
+    if (removed > 0) {
+      hilog.info(DOMAIN, TAG, 'forgot account settings keys=%{public}d', removed);
+    }
+    return removed;
+  }
+
   private static readString(key: string, fallback: string): string {
     try {
       if (AppSettings.store !== null) {

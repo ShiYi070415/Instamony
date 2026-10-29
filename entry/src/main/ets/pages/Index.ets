@@ -3727,6 +3727,15 @@ struct Index {
        * 留着这个预先挂载只会白养一个 Web 引擎、还在后台加载 IG 的登录页。
        */
       hilog.info(DOMAIN, TAG, 'login page shown (CAA login only; no hidden web host)');
+      /*
+       * **未登录时自愈一次**：把"关于某个账号"的落盘痕迹扫干净（见 sweepAccountLeftovers）。
+       *
+       * 为什么放在这里而不是只在退出登录时清：用户手机上可能已经躺着**以前那几次
+       * 退出登录**没清掉的东西（真机实测：`authorization`、`profile_header_*`、
+       * `page1_v1@u…` 一大堆）。这条幂等清扫让"现在是未登录状态"这件事生效时，
+       * 盘上就等于没有过别人 —— 冷启动也顺手把历史遗留补上。
+       */
+      this.sweepAccountLeftovers();
     } else {
       /*
        * 登录成功的事**不在这里处理**：这一块在 `AccountScope.adoptFrom` 之前执行，
@@ -3857,6 +3866,59 @@ struct Index {
     RepostState.clear();
   }
 
+  /**
+   * "未登录自愈清扫"跑过没有（一次进程只跑一次，见 sweepAccountLeftovers）。
+   */
+  private leftoversSwept: boolean = false;
+
+  /**
+   * **未登录时自愈：把"关于某个账号"的落盘痕迹扫干净**（幂等，一次进程只跑一次）。
+   *
+   * 覆盖的东西（全部有真机证据，都是以前退出登录没清掉的）：
+   *   · 缓存分区：`page1_v1@u…` / `timeline_state_v1@u…` / `… #backup@u…`（见
+   *     `AccountScope.purgeAccountsNotIn`，直接扫盘，不依赖"本进程登记过哪些缓存"）；
+   *   · 设置里的按人键：`profile_header_<uid>`（昵称/全名/简介/头像）、`direct_sync@u…`；
+   *   · 会话材料：`instarmony_mobile_session` 里的 `authorization`（解开就是 sessionid）；
+   *   · 登录痕迹：`instarmony_caa` 的 `last_raw` / `last_request` / `last_diag` / 限流计数；
+   *   · 推送凭据：`instarmony_fbns` / `instarmony_fbns_names`；
+   *   · 沙箱里的诊断文件（uid / 托盘形状 / 媒体地址）。
+   * 保留名单 = 花名册里还有会话的账号（切换账号时不能误伤另一个人）。
+   */
+  private sweepAccountLeftovers(): void {
+    if (this.leftoversSwept) {
+      return;
+    }
+    this.leftoversSwept = true;
+    try {
+      // 传空 id：花名册那一步跳过，但分区扫描 / 设置键清扫 / 保留名单照做。
+      AccountActionService.forgetAccount('');
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'sweep account data failed: %{public}s', (error as Error).message);
+    }
+    try {
+      MobileSession.getInstance().wipeSessionMaterial();
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'sweep session material failed: %{public}s', (error as Error).message);
+    }
+    try {
+      CaaSession.clearLoginTraces();
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'sweep caa traces failed: %{public}s', (error as Error).message);
+    }
+    try {
+      MobileFbnsService.forgetAccount();
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'sweep fbns state failed: %{public}s', (error as Error).message);
+    }
+    try {
+      AccountScope.setAccount('');
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'sweep account slot failed: %{public}s', (error as Error).message);
+    }
+    this.wipeDiagnostics();
+    hilog.info(DOMAIN, TAG, 'signed-out leftovers swept (%{public}s)', AccountScope.describe());
+  }
+
   private async signOut(): Promise<void> {
     /*
      * **"退出登录"是真的把这个人踢掉**（用户报的："退出登录后下拉选单里已退出的账号还可以使用，
@@ -3906,6 +3968,30 @@ struct Index {
      */
     this.forgetAccountLocally(leaving);
     AccountScope.setAccount('');
+    /*
+     * ②' **会话材料 / 登录痕迹 / 推送凭据**：这三样也是"关于这个账号的"，而且都不能指望
+     * 上面那条路顺手清掉（用户报的"退出登录没清干净"就是它们）：
+     *   · `instarmony_mobile_session` 里的 `authorization` —— 一串 `Bearer IGT:2:…`，
+     *     解开就是 sessionid，属于**活凭据**；
+     *   · `instarmony_caa` 里的 `last_raw` / `last_request` / `last_diag` —— 登录响应与请求体；
+     *   · `instarmony_fbns` + `instarmony_fbns_names` —— 这个账号的推送授权与"谁发过消息"。
+     * 都用**不看内存状态**的强制入口：退出登录可能发生在复位过 / 还没 ensure 过的进程里。
+     */
+    try {
+      MobileSession.getInstance().wipeSessionMaterial();
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'wipe mobile session failed: %{public}s', (error as Error).message);
+    }
+    try {
+      CaaSession.clearLoginTraces();
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'wipe caa traces failed: %{public}s', (error as Error).message);
+    }
+    try {
+      MobileFbnsService.forgetAccount();
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'wipe fbns state failed: %{public}s', (error as Error).message);
+    }
     // ③ 内存里"按人"的东西全清。
     this.forgetAccountMemory();
     // ④ 诊断文件：里面是上一个人的 uid / 托盘形状 / 媒体地址，删掉。
@@ -4030,6 +4116,8 @@ struct Index {
         this.getUIContext().getHostContext() as common.UIAbilityContext;
       StoryDiag.clear(context);
       MobileProbe.clearReport(context);
+      // Reels 滚动日志里是这个人的 reel id / 作者名（它不走 clearDumps 那套前缀）。
+      ReelsCrashLog.clear();
       // 带时间戳的那批：文件名前缀见各 dump 的调用点（探针 / 快拍失败 / 托盘形状…）。
       InstagramProbe.clearDumps(context,
         ['probe', 'storyfail', 'trayshape', 'trayraw', 'search', 'Instamony_']);
@@ -10838,21 +10926,6 @@ struct Index {
         SettingsPanel({
           onSignOut: (): void => {
             this.signOut();
-          },
-          /*
-           * **App 内密码登录成功**（设置页的实验入口，见 core/mobileapi/CaaSession）：
-           * 会话已经被种进 Cookie 罐，这里重读一次罐让壳从登录页切成已登录。
-           * 收尾走的就是网页登录成功那条路（`refreshSessionFromJar → applySession`），
-           * 不另开一套"会话生效"逻辑。
-           *
-           * 另外**必须重启实时通道**：这条入口多半是在"已经登录"的状态下换会话（网页会话 →
-           * 设备级会话），登录态没变，`applySession` 会认为没变化，实时连接还挂在旧会话上。
-           */
-          onSignedIn: (): void => {
-            this.refreshSessionFromJar().then((): void => {
-              this.restartRealtimeForNewSession();
-            }).catch((): void => {
-            });
           },
           /*
            * 清晰度改完：**顺手把首屏那几段重新取一遍**（展示档的地址是解析那一刻定死的，

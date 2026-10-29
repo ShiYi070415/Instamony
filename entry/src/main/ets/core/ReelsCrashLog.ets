@@ -72,6 +72,24 @@ export class ReelsCrashLog {
     ReelsCrashLog.flush();
   }
 
+  /**
+   * **退出登录：把这份滚动日志删掉**。
+   *
+   * 里面是这个人刷过哪些 reel（媒体 id / 作者名 / 播放位置），属于"关于这个账号的资讯" ——
+   * 退出登录之后不该继续躺在沙箱里。删完继续可以写（下一次进 Reels 会重新建文件）。
+   */
+  static clear(): void {
+    ReelsCrashLog.buffer = [];
+    if (!ReelsCrashLog.ready) {
+      return;
+    }
+    try {
+      fileIo.unlinkSync(`${ReelsCrashLog.dir}/${FILE_NAME}`);
+    } catch (error) {
+      // 文件不在（或已被系统清掉）：本来就干净，不用管。
+    }
+  }
+
   /** 记一行（自动带时间戳；写盘失败静默）。 */
   static note(text: string): void {
     if (!ReelsCrashLog.ready) {

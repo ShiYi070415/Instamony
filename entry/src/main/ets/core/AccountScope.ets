@@ -274,6 +274,90 @@ export class AccountScope {
     return removed;
   }
 
+  /**
+   * **扫盘清掉"不该留在本机"的账号分区**（退出登录用，兜底）。
+   *
+   * 为什么还要这一条（`purgeAccount` 之外）：
+   *   · `purgeAccount` 只按**登记过的键名**删（`AccountScope.scoped`），而那个名单要求
+   *     对应缓存在**本进程里 init 过**；退出登录完全可能发生在某个缓存还没 init 的时候；
+   *   · 它也只删"点名"的那个账号 —— 盘上还可能有**更早以前**退出过的账号留下的
+   *     `#backup@u…` 分区（真机实测就有一条 `#backup@u46473815227`）。
+   * 这里直接 `getAllSync()` 扫全部键：凡是 `<base>@u<数字>` / `<base>#backup@u<数字>`
+   * 且槽位**不在 keep 名单**里的，一律删掉；`@anon` 与普通设置键不碰。
+   *
+   * @param keep 要保留的账号槽位（`u<id>`；花名册里还有会话的那些人）
+   * @returns 删掉的键数
+   */
+  static purgeAccountsNotIn(keep: Array<string>, includeGuest: boolean = false): number {
+    let removed: number = 0;
+    for (let index: number = 0; index < AccountScope.scoped.length; index++) {
+      removed += AccountScope.purgeStoreAccounts(AccountScope.scoped[index].store, keep, includeGuest);
+    }
+    if (removed > 0) {
+      hilog.info(DOMAIN, TAG, 'purged orphan partitions entries=%{public}d', removed);
+    }
+    return removed;
+  }
+
+  /**
+   * 扫一个 store 的全部键，删掉 `@u<数字>` / `#backup@u<数字>` 里**账号不在 keep** 的那些。
+   *
+   * 公开给 `core/AppSettings`（它那个 store 里也存着按账号分区的键 —— `direct_sync@u…`）。
+   *
+   * @param includeGuest 要不要连 `@anon`（"没有账号时"的槽位）一起删。退出登录时要 ——
+   *   那份数据是**用这个人的会话抓下来的**（探索流首页、私信收件箱快照），
+   *   只是当时槽位还空着才落在 anon 上。
+   */
+  static purgeStoreAccounts(store: preferences.Preferences, keep: Array<string>,
+                            includeGuest: boolean = false): number {
+    let removed: number = 0;
+    let keys: Array<string> = [];
+    try {
+      keys = Object.keys(store.getAllSync());
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'scan store failed: %{public}s', (error as Error).message);
+      return 0;
+    }
+    for (let index: number = 0; index < keys.length; index++) {
+      const key: string = keys[index];
+      const slot: string = AccountScope.accountSlotOfKey(key);
+      if (slot.length === 0) {
+        if (includeGuest && key.endsWith(`@${ANON}`)) {
+          removed += AccountScope.drop(store, key);
+        }
+        continue;
+      }
+      if (keep.indexOf(slot) >= 0) {
+        continue;
+      }
+      removed += AccountScope.drop(store, key);
+    }
+    return removed;
+  }
+
+  /**
+   * 从分区键里取出账号槽位（`page1_v1@u123` / `page1_v1#backup@u123` → `u123`）。
+   *
+   * @returns 不是账号分区键时给空串（`@anon`、`page1_v1`、`videoMuted` …）
+   */
+  static accountSlotOfKey(key: string): string {
+    const at: number = key.lastIndexOf('@');
+    if (at < 0) {
+      return '';
+    }
+    const slot: string = key.substring(at + 1);
+    if (slot.length < 2 || slot.charAt(0) !== 'u') {
+      return '';
+    }
+    for (let index: number = 1; index < slot.length; index++) {
+      const code: number = slot.charCodeAt(index);
+      if (code < 48 || code > 57) {
+        return '';
+      }
+    }
+    return slot;
+  }
+
   /** 删一个键（存在才删）；返回是否删了。 */
   private static drop(store: preferences.Preferences, key: string): number {
     try {
