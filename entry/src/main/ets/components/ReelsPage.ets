@@ -2323,6 +2323,24 @@ export struct ReelsPage {
    *   · `2.0x` 和下拉刷新提示共用同一个沉浸光感组件、同一处位置（见 statusPill）。
    */
   @State private reelSpeed: boolean = false;
+  /**
+   * **这一份列表是第几代**（下拉刷新 / 整页替换时 +1），拼进 Swiper 里每条的子组件 key。
+   *
+   * 为什么必须带上它（用户报的"刷新后封面和实际播放的视频对不上、卡在封面、视频还在播刷新前
+   * 那一条"）：
+   *   · Swiper 的子项按 key 复用组件，key 原来只有 `shortcode`；
+   *   · 刷新后 IG 很可能把**同一批视频**再发一遍（探索位就是那几条），key 于是完全一样 →
+   *     ArkUI **复用**原来那个 `ReelSlide`（连同它已经挂上、锁存住的播放器）。
+   *     旧播放器还停在旧 URL 上继续播，而列表/封面已经是新那一条 → 封面不撤、声音是旧的。
+   *   · 把"代"拼进 key，刷新后整排子组件都是新实例：新的播放器、新的封面、新的首帧回调，
+   *     对不上的可能从根上消失。
+   */
+  @State private feedGen: number = 0;
+
+  /** Swiper 子项的 key：`代#短码`（见 feedGen 的说明）。 */
+  private static slideKey(gen: number, shortcode: string): string {
+    return `${gen}#${shortcode}`;
+  }
   /** 这一次触摸里，下拉的起点 y（vp；-1 = 这次触摸不判下拉）。 */
   private pullStartY: number = -1;
   /**
@@ -2612,6 +2630,12 @@ export struct ReelsPage {
       this.vm.reset();
       this.vm.loadFirst(true)
         .then((): void => {
+          /*
+           * **换代**（见 feedGen 的说明）：先把"代"加一，再铺新列表 —— 这样 ForEach 的 key
+           * 全变了，Swiper 里的每条都是新建的实例（新播放器/新封面），不会出现"封面是新的、
+           * 声音还是旧的"。
+           */
+          this.feedGen = this.feedGen + 1;
           this.syncFromVm();
           // 列表整体换掉了：位置回第一条（Swiper 没绑 `.index`，得自己摆）。
           this.activeIndex = 0;
@@ -3274,7 +3298,7 @@ export struct ReelsPage {
         Swiper(this.swiperController) {
           ForEach(this.reels, (reel: Reel, index: number): void => {
             this.reelPage(reel, index)
-          }, (reel: Reel, index: number): string => reel.shortcode)
+          }, (reel: Reel, index: number): string => ReelsPage.slideKey(this.feedGen, reel.shortcode))
         }
         .width('100%')
         .height('100%')

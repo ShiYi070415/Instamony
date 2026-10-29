@@ -118,6 +118,8 @@ export class ReelsViewModel implements ReelStreamVm {
     this.lastFillWasAuthor = false;
     this.active = 0;
     this.diag = '-';
+    // 换代：在飞的那几发（翻页 / 作者页 / 探索流）回来之后一律不许写进这一份新列表。
+    this.epoch = this.epoch + 1;
   }
 
   private reels: Array<Reel> = [];
@@ -153,8 +155,18 @@ export class ReelsViewModel implements ReelStreamVm {
   private nativeCursor: string = '';
   private nativeHasMore: boolean = false;
   private nativeFetching: boolean = false;
-  /** 上一次补队列补的是"某个作者的 Reels"吗（两条源交替，见 prefetchNativePage）。 */
+  /** 上次补队列补的是"某个作者的 Reels"吗（两条源交替，见 prefetchNativePage）。 */
   private lastFillWasAuthor: boolean = false;
+  /**
+   * **这一份列表是第几代**（`reset()` 时 +1）。
+   *
+   * 为什么要它（用户报的"刷新后视频流队列也对不上"）：补页是**异步**的 —— 用户拉下刷新那一刻，
+   * 可能正有一发"下一页/作者页"在飞。`reset()` 清空了队列，可那一发回来之后照样会
+   * `nativeQueue.push(page)` / `ingestPage(page)`，把**上一份列表的页**塞进刷新后的队列里，
+   * 于是刷完之后往下滑会冒出刷新前那批视频（顺序、内容都对不上）。
+   * 每次异步结果落地前比一下代数，变了就丢掉。
+   */
+  private epoch: number = 0;
 
   onReels: (reels: Array<Reel>, hasMore: boolean) => void =
     (reels: Array<Reel>, hasMore: boolean): void => {
@@ -511,8 +523,15 @@ export class ReelsViewModel implements ReelStreamVm {
 
   /** 补一页"某个作者的 Reels"进队列（不推进探索流游标）。 */
   private fillFromAuthor(): void {
+    const epoch: number = this.epoch;
     this.nativeFetching = true;
     NativeReels.fetchAuthorPage(this.source).then((page: NativeReelsPage | null): void => {
+      if (epoch !== this.epoch) {
+        // 这一发属于上一份列表（中途刷新过）：丢掉，别污染新的队列（见 epoch 的说明）。
+        hilog.info(DOMAIN, TAG, 'reels author fill dropped (epoch %{public}d->%{public}d)',
+          epoch, this.epoch);
+        return;
+      }
       this.nativeFetching = false;
       if (page === null) {
         // 池子里的作者这一轮都问不出来：别停下，退回探索流接着补。
@@ -541,8 +560,15 @@ export class ReelsViewModel implements ReelStreamVm {
      * 于是补货永远是同一条路，探索流那份个性化推荐一次都进不来，整条流就是
      * "固定那批作者的最新 12 条"反复切段（用户报的"全部都是固定重复的"）。
      */
+    const epoch: number = this.epoch;
     NativeReels.fetchExplorePage(this.source)
       .then((page: NativeReelsPage | null): void => {
+        if (epoch !== this.epoch) {
+          // 同 fillFromAuthor：中途刷新过，这一发属于上一份列表。
+          hilog.info(DOMAIN, TAG, 'reels explore fill dropped (epoch %{public}d->%{public}d)',
+            epoch, this.epoch);
+          return;
+        }
         this.nativeFetching = false;
         if (page === null) {
           // 探索流这一发没成（限流/抖动）：**别把 more 置死**，回到作者页接着补。
