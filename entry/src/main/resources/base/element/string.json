@@ -102,7 +102,7 @@
     },
     {
       "name": "login_verify_approval_hint",
-      "value": "也可以在你已登录的 Instagram 客户端里点「同意本次登录」——同意之后这里会自动继续，不用输验证码。"
+      "value": "如果 Instagram 让你在另一台设备上确认这次登录：在那边点同意，然后切回本应用 —— 会自动重试登录，不用输验证码。"
     },
     {
       "name": "login_verify_action",

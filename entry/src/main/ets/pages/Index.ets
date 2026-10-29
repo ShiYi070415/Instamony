@@ -7906,17 +7906,9 @@ struct Index {
         /*
          * **"在另一台设备上同意"的轮询**（需求："2FA 过程中可以在官方客户端同意本次登录，
          * 有部分实现同意后自动登录吗"）：可用性由 core 判定（见 CaaLogin.approvalAvailable），
-         * 轮询在 core（7500ms 一跳、回前台立刻补一跳），登录页只读状态。
+         * 
          */
-        onApprovalStart: (): void => {
-          CaaSession.startApprovalWatch();
-        },
-        onApprovalStop: (): void => {
-          CaaSession.stopApprovalWatch();
-        },
-        onApprovalState: (): string => {
-          return CaaSession.approvalStateNow();
-        }
+      // 「等同意」不再轮询：由登录页在切回前台时重登一次（见 LoginPage.retryAfterApproval）。
       })
     } else {
       Stack({ alignContent: Alignment.Bottom }) {
@@ -11067,15 +11059,7 @@ struct Index {
             return this.caaVerify(code);
           },
           // 和整页登录页同一套「等同意」等待（见上面那段说明）。
-          onApprovalStart: (): void => {
-            CaaSession.startApprovalWatch();
-          },
-          onApprovalStop: (): void => {
-            CaaSession.stopApprovalWatch();
-          },
-          onApprovalState: (): string => {
-            return CaaSession.approvalStateNow();
-          }
+        // 「等同意」不再轮询：由登录页在切回前台时重登一次（见 LoginPage.retryAfterApproval）。
         })
       }
       .titleBar({
