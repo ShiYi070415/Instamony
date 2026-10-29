@@ -41,13 +41,8 @@ import {
 } from '@kit.UIDesignKit';
 import { AppConfig } from '../config/AppConfig';
 import { InstagramPageBridge } from '../bridge/PageBridge';
-import {
-  commentsOnPostPageScript,
-  followClickScript,
-  followStateScript,
-  likeCommentScript,  OWN_PROFILE_SCRIPT,
-  PAGE_STATE_SCRIPT,
-  saveOnPostPageScript,
+import {
+  PAGE_STATE_SCRIPT,
   TIMELINE_PROBE_SCRIPT
 } from '../bridge/WebScripts';
 import { CommentsPanel, CommentsListController, COMMENTS_DRAG_ZONE_VP } from '../components/CommentsPanel';
@@ -1949,26 +1944,11 @@ struct Index {
         : $r('app.string.unfollow_done', label));
       return result.following === follow;
     }
-    hilog.warn(DOMAIN, TAG, 'native follow failed (%{public}s), fallback=%{public}s',
-      result.detail, follow ? 'web' : 'none');
-    if (!follow) {
-      this.setLocalStatus($r('app.string.follow_failed'));
-      return false;
-    }
-    // 网页兜底要靠**用户名**拼主页地址（见 followAccount）：没有用户名就没法走，
-    // 编一个名字去点是纯粹的错（见上面 label 的说明）。
-    if (username.length === 0) {
-      hilog.warn(DOMAIN, TAG, 'web follow fallback skipped: empty username id=%{public}s', id);
-      this.setLocalStatus($r('app.string.follow_failed'));
-      return false;
-    }
-    // 退回网页驱动：它自己会导航、等按钮、点击、读回状态，最后回信息流。
-    const outcome: FollowOutcome | null = await this.followAccount(username);
-    if (outcome !== null && outcome.following) {
-      FollowState.remember(id, username, true);
-      this.setLocalStatus($r('app.string.follow_done'));
-      return true;
-    }
+    /*
+     * **没有网页兜底了**（需求：隐藏 WebView 只留给"账号安全验证"）：
+     * 原生这一发失败就如实说失败，不再驱动隐藏网页去点 IG 自己的按钮。
+     */
+    hilog.warn(DOMAIN, TAG, 'follow failed (%{public}s) id=%{public}s', result.detail, id);
     this.setLocalStatus($r('app.string.follow_failed'));
     return false;
   }
@@ -2172,63 +2152,20 @@ struct Index {
       this.toast($r('app.string.save_rate_limited', throttleLeft));
       return false;
     }
-    hilog.info(DOMAIN, TAG, 'save native failed (%{public}s) id=%{public}s → web',
-      direct.detail, id);
-    // ② 网页驱动（网页自己那一发，和用户点书签一模一样）。
-    const ok: boolean = await this.saveByWeb(shortcode, isVideo, save);
-    if (!ok) {
-      this.toast($r('app.string.save_failed'));
-      return false;
-    }
+    /*
+     * ② **没有网页兜底了**（需求：隐藏 WebView 只留给"账号安全验证"）：
+     * 原生这一发失败就是失败，如实提示。
+     */
+    hilog.info(DOMAIN, TAG, 'save failed (no web fallback) id=%{public}s detail=%{public}s',
+      id, direct.detail);
+    this.toast($r('app.string.save_failed'));
+    return false;
     SaveState.remember(id, save);
     // **收藏分页要刷新**（需求）：不然用户切到「收藏」看不到刚存的这一条 / 取消收藏后它还在。
     this.profileVm.refreshSavedTab();
     return true;
   }
 
-  /**
-   * 收藏的**网页驱动**那条路（见 saveMedia 的第 ② 步）。
-   *
-   * 导航到这条的页面 → 注入 saveOnPostPageScript（它会先核对 URL 里就是这条 shortcode，
-   * 再点 `main article` 里那颗书签）→ 无论成败都导航回首页（同 likeOnPostPage / returnToFeed：
-   * 不回去的话后面的翻页、预热都会对着帖子页空转）。
-   */
-  private async saveByWeb(shortcode: string, isVideo: boolean, save: boolean): Promise<boolean> {
-    if (shortcode.length === 0) {
-      return false;
-    }
-    const post: MediaPost = new MediaPost({
-      id: `save-${shortcode}`,
-      shortcode: shortcode,
-      caption: '',
-      // 按调用方说的是不是视频决定走 `/reel/` 还是 `/p/`（见 navigateToPost）。
-      mediaType: isVideo ? 'video' : 'image',
-      displayUrl: '',
-      likeCount: 0,
-      commentCount: 0,
-      takenAtMs: 0,
-      ownerUsername: '',
-      ownerAvatarUrl: '',
-      ownerId: ''
-    });
-    const ready: boolean = await this.navigateToPost(post);
-    try {
-      if (!ready) {
-        return false;
-      }
-      const raw: string = await this.bridge.runBridge(
-        saveOnPostPageScript(shortcode, save), SAVE_TIMEOUT_MS);
-      const payload: SavePayload = JSON.parse(raw) as SavePayload;
-      hilog.info(DOMAIN, TAG, 'save web state=%{public}s save=%{public}s',
-        payload.state, `${save}`);
-      return payload.state === 'ok';
-    } catch (error) {
-      hilog.info(DOMAIN, TAG, 'save web failed: %{public}s', (error as Error).message);
-      return false;
-    } finally {
-      await this.returnToFeed();
-    }
-  }
 
   /**
    * Reels 页作者行那颗关注按钮：走已有的 followUser（HTTP 优先，网页兜底）。
@@ -4294,35 +4231,6 @@ struct Index {
     }
   }
 
-  private openLoginWeb(): void {    /*
-     * **手动网页登录也要被现场抓取**（诊断：看清 IG 自己在网页里发的登录请求/回包）。
-     *
-     * 用户在网页里**自己**点登录、自己输验证码时，页面是 SPA 正常流程 —— 那一串请求
-     * 正是我们脚本要复刻的目标。这里提前把钩子装上并把起点记一笔，之后每次
-     * `LoginTrace.snapshot` 都能看到 IG 自己发的 `/accounts/login/ajax/` 与
-     * `/accounts/login/ajax/two_factor/`（URL / 状态码 / 回包前 200 字）。
-     */
-    LoginTrace.reset();
-    LoginTrace.snapshot(this.bridge, 'manual-web-open').catch((): void => {
-    });
-    // 网页亮出来之后**持续采样**（手动登录时我们才知道 IG 发了什么，见 traceWhileManualLogin）。
-    this.traceWhileManualLogin();
-    // 挂着的时候才谈"它现在停在哪"；没挂的话下面会带着登录页地址重新建一个（见 noteStartUrl）。
-    const onInstagramAuth: boolean = this.webHostMounted
-      && this.currentUrl.indexOf('instagram.com') >= 0
-      && this.currentUrl.indexOf('/accounts/') >= 0;
-    if (!onInstagramAuth) {
-      this.noteStartUrl(AppConfig.INSTAGRAM_LOGIN_URL);
-    }
-    this.mountWebHost();
-    this.webVisible = true;
-    this.statusShown = false;
-    if (onInstagramAuth) {
-      hilog.info(DOMAIN, TAG, 'login web already at %{public}s', this.currentUrl);
-      return;
-    }
-    this.bridge.loadUrl(AppConfig.INSTAGRAM_LOGIN_URL);
-  }
 
   /**
    * 点登录页那颗「注册新账号」按钮：把网页亮出来并导航到 **IG 的注册页**。
@@ -4334,12 +4242,14 @@ struct Index {
    * 未登录时 `SessionGate` 只放行 `/accounts/…` 这类登录流程地址，注册页正好在这一族里。
    */
   private openSignupWeb(): void {
-    this.noteStartUrl(AppConfig.INSTAGRAM_SIGNUP_URL);
-    this.mountWebHost();
-    this.webVisible = true;
-    this.statusShown = false;
-    hilog.info(DOMAIN, TAG, 'open signup web');
-    this.bridge.loadUrl(AppConfig.INSTAGRAM_SIGNUP_URL);
+    /*
+     * **注册走系统浏览器**（需求：隐藏 WebView 只留给"账号安全验证"那一页）。
+     *
+     * 注册必须在 IG 自己的页面上完成（要过它的验证码 / 邮箱确认），而那条流程本来也不需要
+     * "同一个会话"——注册完回本应用用账号密码登录即可。
+     */
+    hilog.info(DOMAIN, TAG, 'open signup in system browser');
+    this.openExternal(AppConfig.INSTAGRAM_SIGNUP_URL);
   }
 
   /**
@@ -4388,13 +4298,10 @@ struct Index {
         uri: url
       };
       context.startAbility(want).catch((error: BusinessError): void => {
+        // 系统浏览器打不开：不再退回内嵌网页（WebView 只留给"账号安全验证"），如实提示。
         hilog.warn(DOMAIN, TAG, 'external open failed (%{public}d): %{public}s',
           error.code, error.message ?? '-');
-        this.noteStartUrl(url);
-        this.mountWebHost();
-        this.webVisible = true;
-        this.statusShown = false;
-        this.bridge.loadUrl(url);
+        this.toast('打不开这个链接（系统里没有可用的浏览器？）');
       });
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'external open threw: %{public}s', (error as Error).message);
@@ -5148,29 +5055,12 @@ struct Index {
         this.toast($r('app.string.follow_done'));
         return;
       }
-      hilog.warn(DOMAIN, TAG, 'notify follow http failed (%{public}s) id=%{public}s → web',
+      // 没有网页兜底了：HTTP 失败就回退界面状态并提示。
+      hilog.warn(DOMAIN, TAG, 'notify follow failed (%{public}s) id=%{public}s',
         native.detail, item.userId);
-      const outcome: FollowOutcome | null = await this.followAccount(name);
-      if (outcome === null) {
-        this.setFollowing(name, false);
-        FollowState.remember(item.userId, name, false);
-        hilog.info(DOMAIN, TAG, 'follow failed: %{public}s', name);
-        this.toast($r('app.string.follow_failed'));
-      } else if (outcome.following) {
-        // 用网页上的实际状态校正：列表里显示的状态可能是抓错了的（点一下正好修回来）。
-        this.setFollowing(name, true);
-        FollowState.remember(item.userId, name, true);
-        // 只有"这次真的点了"才报结果：页面上本来就是已关注时不必弹提示。
-        if (outcome.clicked) {
-          this.toast($r('app.string.follow_done'));
-        }
-      } else {
-        // 点了但网页上还是未关注：如实说没成功，界面保持网页上的真实状态。
-        this.setFollowing(name, false);
-        FollowState.remember(item.userId, name, false);
-        hilog.info(DOMAIN, TAG, 'follow unchanged: %{public}s', name);
-        this.toast($r('app.string.follow_failed'));
-      }
+      this.setFollowing(name, false);
+      FollowState.remember(item.userId, name, false);
+      this.toast($r('app.string.follow_failed'));
     } catch (error) {
       this.setFollowing(name, false);
       FollowState.remember(item.userId, name, false);
@@ -5181,117 +5071,8 @@ struct Index {
     }
   }
 
-  /**
-   * 真的去网页里关注一个账号：导航到对方主页 → 等头部按钮出现 → 点它 → 回首页。
-   *
-   * 返回**网页上的实际状态**（FollowOutcome）：following 是网页上真实是否已关注；
-   * null 表示没做成（主页没有关注按钮、URL 没对上、脚本报错）—— 由调用方回滚。
-   *
-   * 只做关注这一个方向：取关（点「已关注」）在网页侧要点一个二次确认菜单，而那个菜单
-   * **只认真实用户的触摸手势** —— 实测用脚本合成点击（连 pointer 事件都补上了）菜单
-   * 始终不弹（`dlg=0 hasUnfollow=false`，整页文字里根本没有"取消关注"），所以取关
-   * 从这个 App 里触发不了，通知页上那颗按钮改成了「发消息」（见 NotificationsPanel）。
-   *
-   * 为什么要拆成好几步、等待都放在原生侧：最初写成一个"在页面里 await 到底"的长脚本，
-   * 实测会**整整卡满超时**（脚本跑了 20 秒一个回报都没有）—— 主页是分段水合的，中途
-   * 页面自己的一次重载/路由跳转就会把执行上下文连同回调一起丢掉。拆开之后每一步都是
-   * 不含 await 的短脚本，页面再怎么跳转也只是某一步丢了、退化成一次可重试的读取。
-   */
-  private async followAccount(name: string): Promise<FollowOutcome | null> {
-    /*
-     * 先确认这真是一个用户名再导航。
-     *
-     * 真机日志里出现过 `page begin https://www.instagram.com/{"state":"not-ready"}/` ——
-     * 某条列表数据不完整时，桥那头的"未就绪"标记（`{"state":"not-ready"}`）被当成用户名
-     * 传进来了，于是隐藏网页被导航到一个 JSON 当路径的地址上。这里按 IG 用户名的字符集
-     * 卡一道（字母 / 数字 / 点 / 下划线），不是名字就直接放弃，不去污染共用网页。
-     */
-    if (!/^[A-Za-z0-9._]{1,64}$/.test(name)) {
-      hilog.warn(DOMAIN, TAG, 'followAccount rejected name=%{public}s', name.slice(0, 48));
-      return null;
-    }
-    this.navigating = true;
-    this.bridge.loadUrl(`https://www.instagram.com/${name}/`);
-    const ready: string = await this.bridge.awaitPageReady(NAV_READY_TIMEOUT_MS);
-    hilog.info(DOMAIN, TAG, 'nav to profile ready=%{public}s name=%{public}s', ready, name);
-    let outcome: FollowOutcome | null = null;
-    try {
-      if (ready !== 'ready') {
-        return null;
-      }
-      // 1) 等头部那颗按钮渲染出来（主页水合慢，这里轮询）。
-      const state: FollowPageState | null = await this.waitFollowButton(name);
-      if (state === null) {
-        return null;
-      }
-      // 2) 网页上其实已经关注了：不用点，只把**真实状态**带回去（界面可能显示错了）。
-      if (state.following ?? false) {
-        hilog.info(DOMAIN, TAG, 'follow already name=%{public}s label=%{public}s',
-          name, state.label ?? '');
-        return new FollowOutcome(true, false);
-      }
-      // 3) 点它。
-      const click: FollowClickResult = await this.clickFollow(name);
-      if (click.state !== 'clicked' && click.state !== 'already') {
-        hilog.info(DOMAIN, TAG, 'follow click state=%{public}s seen=%{public}s',
-          click.state, click.seen ?? '');
-        return null;
-      }
-      const clicked: boolean = click.state === 'clicked';
-      if (clicked) {
-        hilog.info(DOMAIN, TAG, 'follow clicked name=%{public}s node=%{public}s',
-          name, click.node ?? '');
-      }
-      // 4) 等页面把状态改完，再读一次：用**网页上的实际结果**校正界面，不靠猜。
-      await this.delay(FOLLOW_SETTLE_MS);
-      const after: FollowPageState | null = await this.waitFollowButton(name);
-      const now: boolean = after === null ? true : (after.following ?? true);
-      outcome = new FollowOutcome(now, clicked);
-      hilog.info(DOMAIN, TAG, 'follow done name=%{public}s actual=%{public}s',
-        name, now ? '1' : '0');
-    } catch (error) {
-      outcome = null;
-    } finally {
-      await this.returnToFeed();
-    }
-    return outcome;
-  }
 
-  /**
-   * 轮询读对方主页头部的关注按钮，直到它出现（或到上限）。
-   *
-   * 主页是分段水合的，`onPageEnd` 时头部按钮常常还没渲染出来，所以不能只读一次。
-   * 读不到返回 null（附最后一次的回报到日志里，便于定位是"没按钮"还是"URL 不对"）。
-   */
-  private async waitFollowButton(name: string): Promise<FollowPageState | null> {
-    let last: string = '';
-    for (let attempt: number = 0; attempt < FOLLOW_BUTTON_TRIES; attempt++) {
-      const raw: string = await this.bridge.runBridge(followStateScript(name), FOLLOW_STEP_TIMEOUT_MS);
-      last = raw;
-      let state: FollowPageState | null = null;
-      try {
-        state = JSON.parse(raw) as FollowPageState;
-      } catch (error) {
-        state = null;
-      }
-      if (state !== null && state.state === 'ok') {
-        return state;
-      }
-      await this.delay(FOLLOW_BUTTON_POLL_MS);
-    }
-    hilog.info(DOMAIN, TAG, 'follow button not found: %{public}s', last);
-    return null;
-  }
 
-  /** 点一下主页头部的关注按钮（脚本本身不做等待）。 */
-  private async clickFollow(name: string): Promise<FollowClickResult> {
-    const raw: string = await this.bridge.runBridge(followClickScript(name), FOLLOW_STEP_TIMEOUT_MS);
-    try {
-      return JSON.parse(raw) as FollowClickResult;
-    } catch (error) {
-      return { state: 'error', message: 'unparsable' };
-    }
-  }
 
   /** 原生侧的短暂等待（`await this.delay(ms)`）。 */
   private delay(ms: number): Promise<string> {
@@ -5475,37 +5256,7 @@ struct Index {
     this.closeWeb();
   }
 
-  /**
-   * ⚠️ 目前**没有调用方**（暂时保留，不是遗漏）。
-   *
-   * 原来是「我的」标签的实现：先用 OWN_PROFILE_SCRIPT 从网页里查出自己的主页地址，
-   * 再把网页载过去。标签改成原生页面之后这条路不再被点了 —— 但它查地址那一步正是
-   * 将来做**原生**「我的」页面时需要的（原生要显示谁的主页，就得先知道地址），
-   * 所以留着，等原生实现接上。若确定不做原生「我的」页，连同 runProfileLookup 一起删。
-   */
-  private openProfile(): void {
-    if (!this.signedIn) {
-      this.openLoginWeb();
-      return;
-    }
-    this.runProfileLookup();
-  }
 
-  private async runProfileLookup(): Promise<void> {
-    this.busy = true;
-    try {
-      const href: string = await this.bridge.runBridge(OWN_PROFILE_SCRIPT, 10000);
-      if (href.length > 1 && href.charAt(0) === '/') {
-        this.openWeb(`${AppConfig.INSTAGRAM_HOME_URL.replace(/\/$/, '')}${href}`);
-      } else {
-        this.openWeb(AppConfig.INSTAGRAM_HOME_URL);
-      }
-    } catch (error) {
-      this.openWeb(AppConfig.INSTAGRAM_HOME_URL);
-    } finally {
-      this.busy = false;
-    }
-  }
 
   /**
    * 切换底部标签。
@@ -5676,7 +5427,8 @@ struct Index {
    */
   private openDeepLinkPost(intent: DeepLinkIntent): void {
     this.selectTab(AppTab.Home);
-    this.openWeb(DeepLink.toInstagramUrl(intent));
+    // 深链改成系统浏览器：隐藏 WebView 只留给"账号安全验证"。
+    this.openExternal(DeepLink.toInstagramUrl(intent));
   }
 
   /**
@@ -5901,12 +5653,57 @@ struct Index {
   // 帖子与播放
   // ==========================================================================
 
+  /**
+   * 打开一条**只有短码**的帖子（主页格子 / 搜索结果 / 深链那种）：同样走原生帖子页。
+   *
+   * 拼一份只有它自己的列表进去（原生页会自己按 media id 把视频地址/头像/时间补齐，
+   * 见 loadPostPageVideos），所以拿不到完整帖子对象也能进页面。
+   */
+  private openLoosePost(shortcode: string, isVideo: boolean): void {
+    if (shortcode.length === 0) {
+      return;
+    }
+    const one: MediaPost = new MediaPost({
+      id: `loose-${shortcode}`,
+      shortcode: shortcode,
+      caption: '',
+      mediaType: isVideo ? 'video' : 'image',
+      displayUrl: '',
+      likeCount: 0,
+      commentCount: 0,
+      takenAtMs: 0,
+      ownerUsername: '',
+      ownerAvatarUrl: '',
+      ownerId: ''
+    });
+    this.openPostStream([one], 0,
+      (): Promise<ProfileStreamPage> => Promise.resolve(new ProfileStreamPage([], false)), false);
+  }
+
+  /**
+   * 点一条帖子 → **原生帖子页**（需求：隐藏 WebView 只留给"账号安全验证"）。
+   *
+   * 数据用**信息流当前这一份列表**（快照），锚点定位到点的那条；帖内翻页在信息流里
+   * 本来就有自己的触底加载，这里给一个"没有下一页"的空 loader 即可。
+   */
   private openPost(post: MediaPost): void {
     if (post.shortcode.length === 0) {
       return;
     }
-    const kind: string = post.isVideo() ? 'reel' : 'p';
-    this.openWeb(`https://www.instagram.com/${kind}/${post.shortcode}/`);
+    const list: Array<MediaPost> = this.viewModel.list().slice();
+    let index: number = -1;
+    for (let at: number = 0; at < list.length; at++) {
+      if (list[at].shortcode === post.shortcode) {
+        index = at;
+        break;
+      }
+    }
+    if (index < 0) {
+      list.unshift(post);
+      index = 0;
+    }
+    this.openPostStream(list, index,
+      (): Promise<ProfileStreamPage> => Promise.resolve(new ProfileStreamPage([], false)), false);
   }
 
   // 视频播放已经完全交给 components/FeedList：哪条视频出现在屏幕上就播哪条。
@@ -5924,23 +5721,7 @@ struct Index {
   // 真正导航到该帖页面，等 onPageEnd 之后再注入脚本，做完再导航回首页。
   // ==========================================================================
 
-  /** 把隐藏网页真的导航到某条帖子的页面；返回是否加载完成。 */
-  private async navigateToPost(post: MediaPost): Promise<boolean> {
-    const kind: string = post.isVideo() ? 'reel' : 'p';
-    this.navigating = true;
-    this.bridge.loadUrl(`https://www.instagram.com/${kind}/${post.shortcode}/`);
-    const ready: string = await this.bridge.awaitPageReady(NAV_READY_TIMEOUT_MS);
-    hilog.info(DOMAIN, TAG, 'nav to post ready=%{public}s', ready);
-    return ready === 'ready';
-  }
 
-  /** 回到信息流首页并等它加载完。失败也要回，否则翻页会一直对着帖子页空转。 */
-  private async returnToFeed(): Promise<void> {
-    this.bridge.loadUrl(AppConfig.INSTAGRAM_HOME_URL);
-    const ready: string = await this.bridge.awaitPageReady(NAV_READY_TIMEOUT_MS);
-    hilog.info(DOMAIN, TAG, 'back to feed ready=%{public}s', ready);
-    this.navigating = false;
-  }
 
   /**
    * 按钮传进来的 post 可能是**旧的**：卡片不再因为点赞而重建，回调是建卡片时闭包捕获的，
@@ -6236,8 +6017,11 @@ struct Index {
         this.applyComments(native, post);
         return;
       }
-      const payload: CommentsPayload | null = await this.readCommentsOnPostPage(post);
-      this.applyComments(payload, post);
+      /*
+       * 原生那条没拿到（没有媒体 id / 被限流 / 读出来是空）：**不再退回隐藏网页**。
+       * 隐藏 WebView 现在只留给"账号安全验证"（需求），评论只走原生 HTTP 那条路。
+       */
+      this.applyComments(null, post);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'comments error: %{public}s', (error as Error).message);
       this.commentsState = 'failed';
@@ -6382,7 +6166,7 @@ struct Index {
         //    模板，下次就能走 ①（自举，见 core/NativeComments 与 bridge/WebScripts）。
         hilog.info(DOMAIN, TAG, 'comment like native failed via=%{public}s → web',
           NativeComments.lastLikeVia());
-        ok = await this.likeCommentOnWeb(pk, next);
+        ok = false;
       }
     } catch (error) {
       ok = false;
@@ -6522,7 +6306,7 @@ struct Index {
     try {
       ok = await NativeComments.like(pk, next, this.commentsMediaId);
       if (!ok) {
-        ok = await this.likeCommentOnWeb(pk, next);
+        ok = false;
       }
     } catch (error) {
       ok = false;
@@ -6562,31 +6346,6 @@ struct Index {
     this.comments = this.comments.slice(0);
   }
 
-  /**
-   * 评论点赞的**网页驱动**兜底：让隐藏网页自己去点那条评论的心。
-   *
-   * 两种情形：页面当前就停在这条帖子上（评论面板是原生浮层，页面可能正好是帖子页）→ 直接点；
-   * 否则真导航到帖子页再点、点完回首页（同 likeOnPostPage）。
-   * 点完顺手 `capture('comment')`：页面刚发过的那条点赞请求会被存成模板，
-   * 下一次同样的操作就能走原生那条路（自举，和帖子点赞一样）。
-   */
-  private async likeCommentOnWeb(commentPk: string, like: boolean): Promise<boolean> {
-    const script: string = likeCommentScript(commentPk, like);
-    let state: string = await this.runLike(script, LIKE_TIMEOUT_MS);
-    if (state === 'not-found' && this.commentsPost !== null && !this.navigating) {
-      // 页面没渲染这条帖子的评论：导航过去再点一次（同样无论成败都回首页）。
-      const ready: boolean = await this.navigateToPost(this.commentsPost);
-      try {
-        if (ready) {
-          state = await this.runLike(script, LIKE_TIMEOUT_MS);
-        }
-      } finally {
-        await this.returnToFeed();
-      }
-    }
-    hilog.info(DOMAIN, TAG, 'comment like web state=%{public}s pk=%{public}s', state, commentPk);
-    return state === 'liked' || state === 'unliked';
-  }
 
   /** 就地换掉第 index 条评论（新数组，保证面板重绘）。 */
   private replaceComment(index: number, likes: number, liked: boolean): void {
@@ -6715,33 +6474,6 @@ struct Index {
     });
   }
 
-  /**
-   * 导航到帖子页读评论；无论成败都回到首页。
-   *
-   * 读完**不管成没成都把评论模板存到原生侧**：模板只要求"页面自己发过那个请求"，一旦发过
-   * 它就在 `__ogReplay` 里了。这一步必须在 `returnToFeed()` 之前做 —— 回首页是整页
-   * `loadUrl`，模板会连同页面上下文一起重建，晚一步就没得存。
-   *
-   * 为什么不再要求"这次读到了才存"：帖子页那条读法本身会超时（实测 `state=timeout`），
-   * 拿它当存模板的前提，等于把快路径一起废了。
-   */
-  private async readCommentsOnPostPage(post: MediaPost): Promise<CommentsPayload | null> {
-    const ready: boolean = await this.navigateToPost(post);
-    try {
-      if (!ready) {
-        return null;
-      }
-      // 等页面"喘口气"再注入：pageReady 只是文档加载完，之后还有水合 + 视频起播，
-      // 那几秒里主线程被占满 —— 实测这时注入的脚本要等到桥超时都排不上队
-      // （同一页面上晚十几秒再跑的探针脚本 11ms 就返回了）。
-      await Index.sleep(POST_PAGE_SETTLE_MS);
-      const payload: CommentsPayload | null =
-        await this.readComments(commentsOnPostPageScript(), POST_PAGE_READ_TIMEOUT_MS);
-      return payload;
-    } finally {
-      await this.returnToFeed();
-    }
-  }
 
   /** 把脚本回报的评论落到面板状态上。 */
   private applyComments(payload: CommentsPayload | null, post: MediaPost): void {    // 一次把状态、条数、诊断全打出来：读不到时要能一眼看出是"没等到数据"还是"脚本报错"。
@@ -8424,8 +8156,8 @@ struct Index {
         this.openProfileReels(posts, shortcode, hasMore, loadMore);
       },
       onOpen: (post: ProfilePost): void => {
-        // 兜底（没接 onOpenStream 时才会走到）：交给网页打开那条帖子。
-        this.openWeb(`https://www.instagram.com/p/${post.shortcode}/`);
+        // 兜底（没接 onOpenStream 时才会走到）：**原生帖子页**，不再交给隐藏网页。
+        this.openLoosePost(post.shortcode, false);
       },
       // 简介里的 @账号 → 打开那个人的主页（需求："点击后进入该用户主页"）。
       onOpenUser: (username: string): void => {
@@ -8834,59 +8566,6 @@ struct Index {
     this.navStack.pushPath({ name: ADD_ACCOUNT_PAGE });
   }
 
-  /**
-   * 新增账号页里的「登录」：**先把罐清干净再走无头登录**。
-   *
-   * 为什么要清：IG 的网页登录接口在一个已登录的会话上行为不稳（会回
-   * `showAccountRecoveryModal` 之类），而"换号"本质上就是"没有会话时登一次"。
-   * 所以：先把当前账号记进花名册 → 清罐 → 走 headlessWebLogin。
-   * 失败就把原会话**还回去**（否则用户点一下新增账号，自己的号就没了）。
-   */
-  /**
-   * **新增账号页的「网页登录」**（用户报："点网页登录直接跳到已登录账号的主页了"）。
-   *
-   * 原因：那颗按钮原来直接走 `openLoginWeb()` —— 它用的是**当前账号还活着的会话**，
-   * IG 的网页一看已登录，立刻重定向到信息流，用户就被带回了原账号首页（等于白点）。
-   *
-   * 新增账号要的是"在网页里登**另一个**账号"，所以必须先做和 `addAccountLogin`
-   * 一样的前置：立旗（这段时间忽略"未登录"信号）+ 记下原账号（退出时回滚用）
-   * + 卸掉隐藏网页 + 清空 Cookie 罐，**然后**才把网页亮出来。
-   * 之后用户在 IG 页面里手动登录/验证，成功后 `watchLoginSession` 照常收尾。
-   */
-  private async addAccountWebVerify(): Promise<void> {
-    if (this.addAccountFlow) {
-      return;
-    }
-    this.addAccountFlow = true;
-    try {
-      await this.rememberAccount();
-      this.addAccountPrevious = AccountBook.find(this.currentAccountId());
-      // 先卸网页再清罐（顺序反了网页会先收到"会话没了"）。
-      this.unmountWebHost('add-account-web');
-      hilog.info(DOMAIN, TAG, 'add-account: open web login (session-only clear, device kept)');
-      /*
-       * **只清会话、保留设备 cookie**（用户反馈：同 Meta 账户下、已登录大号时加小号
-       * **不需要 2FA**；而整罐清会让 IG 把我们当全新设备，转成"恢复确认"且不给验证码）。
-       * 删失败就把整罐清掉兜底 —— 至少能进登录页，不至于卡住。
-       */
-      const sessionCleared: boolean = await InstagramCookieJar.clearSessionOnly();
-      if (!sessionCleared) {
-        hilog.warn(DOMAIN, TAG, 'session-only clear failed → fall back to full clear');
-        try {
-          await InstagramCookieJar.getInstance().clear();
-        } catch (error) {
-          hilog.warn(DOMAIN, TAG, 'full clear failed too: %{public}s',
-            (error as Error).message);
-        }
-      }
-      // 现在没有 sessionid，网页会停在登录页，用户可以登**另一个**账号。
-      this.openLoginWeb();
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'add-account web verify failed: %{public}s', (error as Error).message);
-      // 失败就把旗子收掉（沿用 finishAddAccount 的回滚语义，别把用户留在半截状态）。
-      await this.finishAddAccount('web-open-failed');
-    }
-  }
 
   /**
    * **新增账号 → App 协议登录（CAA）**（登录页那颗「登录」在这条支线上走的就是它）。
@@ -9331,7 +9010,8 @@ struct Index {
     // 站外链接（链接卡片）：这一条确实该用浏览器打开。
     if (message.shareKind === 'link' && message.shareUrl.length > 0
       && code.length === 0) {
-      this.openWeb(message.shareUrl);
+      // 站外链接用系统浏览器（隐藏 WebView 只留给账号安全验证）。
+      this.openExternal(message.shareUrl);
       return;
     }
     if (code.length === 0) {
@@ -10242,9 +9922,8 @@ struct Index {
         this.openUserProfile(user.username, user.userId);
       },
       onOpenPost: (post: SearchPost): void => {
-        // 兜底（没接 onOpenReels 时才会走到）：交给网页打开那条帖子
-        // （视频是 /reel/，和首页那套同一判据）。
-        this.openWeb(`https://www.instagram.com/${post.isVideo ? 'reel' : 'p'}/${post.code}/`);
+        // 兜底（没接 onOpenReels 时才会走到）：**原生帖子页**。
+        this.openLoosePost(post.code, post.isVideo);
       },
       // 推荐流点一条 → **Reels 页**（需求：带返回、底部评论、点的那条排第一、上滑按 reels 翻）。
       onOpenReels: (posts: Array<SearchPost>, index: number): void => {
@@ -10684,8 +10363,8 @@ struct Index {
         UserProfileRoute({
           param: `${param}`,
           onOpen: (post: ProfilePost): void => {
-            // 点格子打开帖子页（和「我的」页同一条路：交给隐藏网页）。
-            this.openWeb(`https://www.instagram.com/${post.isVideo ? 'reel' : 'p'}/${post.shortcode}/`);
+            // 点格子打开帖子页：**原生帖子页**（隐藏 WebView 只留给账号安全验证）。
+            this.openLoosePost(post.shortcode, post.isVideo);
           },
           // **这条不能漏**：别人主页的格子也要能进帖子页（用户报的"feeds 流进入用户主页后
           // 点击帖子无法进入帖子页面"就是这里没接 —— 组件里的默认实现是空函数，点了什么都不发生）。
@@ -10902,13 +10581,12 @@ struct Index {
           // 标题栏交给 HDS（头像 + 名字 + 用户名 + 返回键 + 菜单），页面不再自绘
           externalHeader: true,
           onOpenWeb: (): void => {
-            // 兜底出口：关掉原生会话页、把隐藏网页导航到这条会话（老行为）。
-            const url: string = this.directThreadVm.webUrl();
-            hilog.info(DOMAIN, TAG, 'direct thread → web fallback %{public}s', url);
-            if (this.navStack.size() > 0) {
-              this.navStack.pop();
-            }
-            this.openWeb(url);
+            /*
+             * 原生会话页用不了（会话数据或接口不可用）：**不再退回隐藏网页**。
+             * 隐藏 WebView 只留给"账号安全验证"，这里给一句提示。
+             */
+            hilog.info(DOMAIN, TAG, 'direct thread unavailable (web fallback removed)');
+            this.setLocalStatus('这条会话暂时打不开（接口或会话数据不可用）');
           },
           onFeedScroll: (deltaY: number, offsetY: number, scrollState: ScrollState): void => {
             this.onFeedScroll(deltaY, offsetY, scrollState);
