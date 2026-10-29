@@ -7906,13 +7906,16 @@ struct Index {
         /*
          * **"在另一台设备上同意"的轮询**（需求："2FA 过程中可以在官方客户端同意本次登录，
          * 有部分实现同意后自动登录吗"）：可用性由 core 判定（见 CaaLogin.approvalAvailable），
-         * 登录页据此决定要不要显示提示文字、要不要起 3 秒一次的轮询。
+         * 轮询在 core（7500ms 一跳、回前台立刻补一跳），登录页只读状态。
          */
-        onApprovalAvailable: (): boolean => {
-          return CaaSession.approvalAvailable();
+        onApprovalStart: (): void => {
+          CaaSession.startApprovalWatch();
         },
-        onApprovalTick: (): Promise<string> => {
-          return CaaSession.approvalTick();
+        onApprovalStop: (): void => {
+          CaaSession.stopApprovalWatch();
+        },
+        onApprovalState: (): string => {
+          return CaaSession.approvalStateNow();
         }
       })
     } else {
@@ -11063,12 +11066,15 @@ struct Index {
           onCaaVerify: (code: string): Promise<string> => {
             return this.caaVerify(code);
           },
-          // 和整页登录页同一套「等同意」轮询（见上面那段说明）。
-          onApprovalAvailable: (): boolean => {
-            return CaaSession.approvalAvailable();
+          // 和整页登录页同一套「等同意」等待（见上面那段说明）。
+          onApprovalStart: (): void => {
+            CaaSession.startApprovalWatch();
           },
-          onApprovalTick: (): Promise<string> => {
-            return CaaSession.approvalTick();
+          onApprovalStop: (): void => {
+            CaaSession.stopApprovalWatch();
+          },
+          onApprovalState: (): string => {
+            return CaaSession.approvalStateNow();
           }
         })
       }

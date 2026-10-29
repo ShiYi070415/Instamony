@@ -1735,17 +1735,15 @@ export class CaaLogin {
         CaaLogin.last2faDigest = CaaLogin.digestTwoStep(payload);
         CaaLogin.last2faRaw = '### send_login_request\n' + CaaLogin.rawText(payload);
         /*
-         * 再在后台把 entrypoint / method_picker 两屏也各打一发，把"这次到底有哪些验证方式"
-         * 一起记进摘要（见 inspectTwoStepScreens）。旁路：成败都不影响用户交码。
+         * **不再顺手去取 entrypoint / method_picker 那两屏**（上一版会在后台各打一发，
+         * 为了把"这次有哪些验证方式"记进诊断摘要）。
+         *
+         * 真机反馈（2026-10-30）：那样做之后，用户在 Instagram 官方客户端点"同意"会被告知
+         * **"这个登录请求已失效"** —— 那两屏是 2FA 状态机的一部分（method_picker 更是
+         * "换一种验证方式"那一屏），替用户提前走一遍很可能把待确认的请求顶掉。
+         * 现在除"看对方同意了吗"那一发之外，**不碰 2FA 状态机**。
          */
-        CaaLogin.inspectTwoStepScreens(payload, identity, extra, context)
-          .then((text: string): void => {
-            if (text.length > 0) {
-              CaaLogin.last2faDigest = CaaLogin.last2faDigest + '\n\n' + text;
-            }
-          })
-          .catch((): void => {
-          });
+        CaaLogin.approvalAction = TSV_APPROVE_ACTION;
         return pending;
       }
       const code: string = await codeProvider();

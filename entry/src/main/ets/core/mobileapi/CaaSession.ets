@@ -24,6 +24,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { rcp } from '@kit.RemoteCommunicationKit';
 // TLS 变体探针要用 http 的类型与枚举（见 tlsProbe）。
 import { http } from '@kit.NetworkKit';
+import { AppLifecycle } from '../AppLifecycle';
 import { InstagramCookieJar, InstagramCookieSnapshot } from '../InstagramCookieJar';
 import { CaaLogin, CaaResult, CaaStep, CaaUsdid } from './CaaLogin';
 import { MobileIdentity, MobileSession } from './MobileSession';
@@ -42,6 +43,12 @@ const STORE_NAME: string = 'instarmony_caa';
  * "界面上万一有两个定时器"的情况，不会把请求量翻倍。
  */
 const APPROVAL_MIN_GAP_MS: number = 2500;
+/** 轮询节奏（毫秒）：IG 那一屏自己的定时器是 **7500ms**（见 CaaLogin.approvalAvailable 的现场记录）。 */
+const APPROVAL_INTERVAL_MS: number = 7500;
+/** 第一跳的延迟：面板刚弹出来时先让界面稳一下（用户这会儿还什么都没干）。 */
+const APPROVAL_FIRST_MS: number = 1200;
+/** 连续几次 `error` / `none` 就认定这条路走不通（别一直打没用的一发）。 */
+const APPROVAL_MAX_ERRORS: number = 3;
 /** 2FA 原始响应落盘的文件名（在 filesDir 下，见 writeTwoFactorProbe）。 */
 const TWO_FACTOR_PROBE_FILE: string = 'Instamony_2fa.txt';
 const KEY_USDID: string = 'usdid';
@@ -109,6 +116,14 @@ export class CaaSession {
   private static approvalAt: number = 0;
   /** 上一次轮询的结论（节流期内直接返回它）。 */
   private static approvalLast: string = '';
+  /** 轮询定时器（setTimeout 链，见 scheduleApproval）。0 = 没有。 */
+  private static watchTimer: number = 0;
+  /** 轮询在跑吗。 */
+  private static watchRunning: boolean = false;
+  /** 连续失败次数（够 APPROVAL_MAX_ERRORS 就停手）。 */
+  private static approvalErrors: number = 0;
+  /** "回前台补一跳"的监听只注册一次。 */
+  private static lifecycleBound: boolean = false;
 
   /** 打开设备身份的仓（幂等；`EntryAbility.onCreate` 里和 `MobileSession.init` 一起调）。 */
   static init(context: common.Context): void {
@@ -278,26 +293,144 @@ export class CaaSession {
    * **这一次 2FA 能不能"在另一台设备上同意"**（需求："2FA 过程中可以在官方客户端同意本次
    * 登录…可以的话需要添加提示文本"）。
    *
-   * 判定完全交给 core（见 `CaaLogin.approvalAvailable`）：只有 IG 自己在 Bloks 布局里
-   * 提供了"等同意"那一发时才是 true。为 false 时登录页什么都不显示、也不发任何轮询请求。
+   * 判定交给 core（见 `CaaLogin.approvalAvailable`）。注意：为 true 只是"可能"，真正的答案为
+   * false 时由第一次轮询的结论收回（`approvalStateNow()` 会变成 `none`）——
+   * 因为"IG 到底认不认这一发"只有打过去才知道。
    */
   static approvalAvailable(): boolean {
     return CaaLogin.approvalAvailable();
   }
 
+  /** 现在这条路的状态：`idle` / `waiting` / `approved` / `signed-in` / `declined` / `none`。 */
+  static approvalStateNow(): string {
+    return CaaSession.approvalLast.length > 0 ? CaaSession.approvalLast : 'idle';
+  }
+
   /**
-   * 轮询一次"那边同意了吗"。返回 `waiting` / `approved` / `declined` / `error` / `none`。
+   * **开始"看对方同意了吗"的轮询**（面板一打开就调）。
    *
-   * **节流到 2.5 秒一次**：真机 App 是每 3 秒一发（见 CaaLogin.approvalAvailable 的说明），
-   * 这里给一点余量防止"界面上两个定时器同时打"把请求量翻倍。
+   * 节奏 7500ms，与 IG 那一屏自己的定时器一致（见 `CaaLogin.approvalAvailable` 的现场记录）。
+   *
+   * ## 为什么轮询必须"回前台才算数"
+   * 用户要去**另一台设备的 Instagram 客户端**点同意，我们这边必然退到后台。而真机上退后台
+   * 之后：
+   *   · JS 定时器停摆；
+   *   · 短时任务额度经常申请不到（真机日志：`suspend delay failed 9900002`），进程随后被冻结；
+   * 所以后台的每一跳都白等。这里改成**回前台立刻补一跳**（见 ensureApprovalLifecycle），
+   * 用户点完同意切回来就能当场收尾，而不是干等下一轮。
    */
+  static startApprovalWatch(): void {
+    if (!CaaLogin.waitingCode()) {
+      return;
+    }
+    if (CaaSession.watchRunning) {
+      return;
+    }
+    CaaSession.watchRunning = true;
+    CaaSession.approvalErrors = 0;
+    CaaSession.approvalLast = 'idle';
+    CaaSession.ensureApprovalLifecycle();
+    hilog.info(DOMAIN, TAG, 'approval watch start (%{public}dms)', APPROVAL_INTERVAL_MS);
+    CaaSession.scheduleApproval(APPROVAL_FIRST_MS);
+  }
+
+  /** 停掉轮询（面板关掉 / 交完验证码 / 退出登录时调）。 */
+  static stopApprovalWatch(): void {
+    if (!CaaSession.watchRunning) {
+      CaaSession.clearApprovalTimer();
+      return;
+    }
+    CaaSession.watchRunning = false;
+    CaaSession.clearApprovalTimer();
+    hilog.info(DOMAIN, TAG, 'approval watch stop (state=%{public}s)', CaaSession.approvalLast);
+  }
+
+  /** 清掉定时器（内部）。 */
+  private static clearApprovalTimer(): void {
+    if (CaaSession.watchTimer !== 0) {
+      clearTimeout(CaaSession.watchTimer);
+      CaaSession.watchTimer = 0;
+    }
+  }
+
+  /** 排下一跳（内部）。后台时只做"轻量重排"，等回到前台再真打。 */
+  private static scheduleApproval(delay: number): void {
+    if (!CaaSession.watchRunning) {
+      return;
+    }
+    CaaSession.clearApprovalTimer();
+    CaaSession.watchTimer = setTimeout((): void => {
+      CaaSession.watchTimer = 0;
+      if (!CaaSession.watchRunning) {
+        return;
+      }
+      if (!AppLifecycle.isForeground()) {
+        /*
+         * 后台：这一跳不打（定时器随时会被挂起、网络也可能被拒），
+         * 保持一个 1 秒的重排，回前台由监听器立刻补一跳（见 ensureApprovalLifecycle）。
+         */
+        CaaSession.scheduleApproval(1000);
+        return;
+      }
+      CaaSession.approvalTick()
+        .then((state: string): void => {
+          if (!CaaSession.watchRunning) {
+            return;
+          }
+          if (state === 'signed-in' || state === 'declined') {
+            CaaSession.watchRunning = false;
+            CaaSession.clearApprovalTimer();
+            return;
+          }
+          if (state === 'error' || state === 'none') {
+            CaaSession.approvalErrors = CaaSession.approvalErrors + 1;
+            if (CaaSession.approvalErrors >= APPROVAL_MAX_ERRORS) {
+              hilog.info(DOMAIN, TAG, 'approval watch give up after %{public}d errors',
+                CaaSession.approvalErrors);
+              CaaSession.watchRunning = false;
+              CaaSession.clearApprovalTimer();
+              CaaSession.approvalLast = 'none';
+              return;
+            }
+          } else {
+            CaaSession.approvalErrors = 0;
+          }
+          CaaSession.scheduleApproval(APPROVAL_INTERVAL_MS);
+        })
+        .catch((error: Error): void => {
+          hilog.warn(DOMAIN, TAG, 'approval tick threw: %{public}s', error.message);
+          CaaSession.approvalErrors = CaaSession.approvalErrors + 1;
+          if (CaaSession.approvalErrors >= APPROVAL_MAX_ERRORS) {
+            CaaSession.watchRunning = false;
+            CaaSession.clearApprovalTimer();
+            CaaSession.approvalLast = 'none';
+            return;
+          }
+          CaaSession.scheduleApproval(APPROVAL_INTERVAL_MS);
+        });
+    }, delay);
+  }
+
+  /** 注册"回前台补一跳"（只注册一次）。 */
+  private static ensureApprovalLifecycle(): void {
+    if (CaaSession.lifecycleBound) {
+      return;
+    }
+    CaaSession.lifecycleBound = true;
+    AppLifecycle.addVisibilityListener((foreground: boolean): void => {
+      if (!foreground || !CaaSession.watchRunning) {
+        return;
+      }
+      hilog.info(DOMAIN, TAG, 'approval watch resumed on foreground');
+      // 回前台：**立刻**打一跳（用户刚在另一台设备上点过同意）。
+      CaaSession.scheduleApproval(0);
+    });
+  }
+
   /**
    * 轮询一次"那边同意了吗"。返回
-   *   `waiting` / `declined` / `error` / `none`，或
+   *   `waiting` / `declined` / `error` / `none` / `approved`，或
    *   **`signed-in`**（同意了、会话也收下了 —— 界面据此直接切主界面）。
-   *
-   * 节流到 7 秒一次：真机 App 那一屏的定时器是 **7500ms**（见 CaaLogin.approvalAvailable 的
-   * 现场记录），这里给一点余量防止"界面上两个定时器同时打"把请求量翻倍。
    *
    * 同意时 IG 会在那一发的响应里**直接给会话** —— 这里立刻落盘（和交验证码成功同一条
    * `finish` 路径），不用再拿密码登一次。
@@ -321,7 +454,7 @@ export class CaaSession {
         }
         hilog.warn(DOMAIN, TAG, 'approval session not accepted: %{public}s', outcome.reason);
       }
-      // 收下了"同意"但没拿到会话：让界面自己再登一次（见 LoginPage.finishByApproval）。
+      // 收下了"同意"但那一发没给会话：先记成 approved，让界面提示用户再点一次登录。
       CaaSession.approvalLast = 'approved';
       return 'approved';
     }
