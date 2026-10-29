@@ -98,8 +98,6 @@ import { AppTab } from '../model/AppTab';
 import { DeepLink, DeepLinkIntent, DeepLinkRoute } from '../core/DeepLink';
 // 点私信通知要直接进那条会话（EntryAbility 把会话 id 交给它，见 consumeNotifyRoute）。
 import { NotifyRoute } from '../core/NotifyRoute';
-// 无头网页登录：账号密码在隐藏网页里完成（见 core/WebLogin）。
-import { WebLogin, WEB_LOGIN_NEEDS_CODE, WEB_LOGIN_NEEDS_WEB } from '../core/WebLogin';
 // 多账号：本机登录过的账号花名册（见 core/AccountBook）。
 import { AccountBook, AccountEntry } from '../core/AccountBook';
 // 实时通道的 Worker 版门面（见 core/mobileapi/RealtimeWorkerClient 的文件头）。
@@ -274,28 +272,12 @@ const DIRECT_THREAD_PAGE: string = 'directThread';
 const NOTIFY_ROUTE_RETRY_MS: number = 500;
 const NOTIFY_ROUTE_MAX_TRIES: number = 15;
 /**
- * 无头网页登录：第一次挂载隐藏网页后等多久再动手（毫秒）。
- *
- * 引擎初始化 + 控制器绑定是异步的（`onControllerAttached` 之后才能 `runJavaScript`）。
- * 800ms 是按真机/模拟器上"挂载到可用"的实测节奏取的；WebLogin 自己还会轮询表单，
- * 所以这里只是别在"控制器还没绑上"时就发第一枪。
- */
-const WEB_LOGIN_MOUNT_WAIT_MS: number = 800;
-/**
  * 切到"无头模式"之后再等多久动手（毫秒）。
  *
  * 从 `Visibility.Hidden` 变成"透明可见"会让引擎重新恢复渲染，页面那侧要一两帧才真正开始跑；
  * 300ms 是给这个过程留的余量（宁可慢一点，也别在页面还没能动时发 JS）。
  */
 const WEB_HEADLESS_SETTLE_MS: number = 300;
-/**
- * **诊断开关**：登录页出现后自动跑一次无头登录（用假账号）。
- *
- * 只用来在"人手点不动"的环境里抓日志（模拟器屏幕会自己熄、按钮点不到）。
- * 生产必须是 false。开着时用 `zz_probe_auto` 这种不存在的账号，
- * 目的是看清"登录页到底有没有加载出来 / 表单是几步" —— 不会碰任何真实账号。
- */
-const WEB_LOGIN_AUTO_PROBE: boolean = false;
 /**
  * **诊断开关**：实时通道连上后跑一次 MQTT 写通道自检（见 runMqttWriteSelfTest）。
  *
@@ -4207,173 +4189,7 @@ struct Index {
     return outcome.ok ? '' : outcome.reason;
   }
 
-  /**
-   * **无头网页登录**：把账号密码交给隐藏网页去完成登录（见 core/WebLogin）。
-   *
-   * 与 `openLoginWeb` 的区别只有一处：**不把网址亮出来**（`webVisible` 保持 false）。
-   * 宿主照样要挂上（`prepareHiddenWebForLogin`），因为只有挂了才有 Web 引擎跑那段登录页的 JS；
-   * 它是 `Visibility.Hidden` 的，所以用户看不到 —— 需求要求的正是这一点。
-   *
-   * @returns 空串 = 成功；否则是给登录页显示的原因
-   */
-  private async headlessWebLogin(username: string, password: string): Promise<string> {
-    const freshlyMounted: boolean = !this.webHostMounted;
-    if (freshlyMounted) {
-      this.prepareHiddenWebForLogin();
-      // 引擎初始化 + 控制器绑定是异步的（`onControllerAttached` 之后才能 runJavaScript）。
-      await Index.delay(WEB_LOGIN_MOUNT_WAIT_MS);
-    }
-    /*
-     * **无头模式从挂载那一刻就开着**（见 prepareHiddenWebForLogin）：这里只补等一小会儿，
-     * 让引擎把页面真正跑起来。不再在结束处复位 —— 复位成 `Visibility.Hidden` 会让页面瞬间
-     * 被节流（失败后重试就没法继续用了）；真正的回收交给 `unmountWebHost`。
-     */
-    this.webHeadless = true;
-    await Index.delay(WEB_HEADLESS_SETTLE_MS);
-    /*
-     * **只做到"打开登录页 + 填好账号密码"，最后那一下交给用户点。**
-     *
-     * 实测结论（模拟器上跑了 6 轮，日志留档）：IG 现在的登录页是 **Bloks 渲染**，
-     * 那颗「登录」是 `div.wbloks_1`，对我们派发的 pointerdown/touchstart/mousedown/click
-     * **完全不响应** —— 脚本回报 `clicked:1`，页面文字却一动不动（合成事件被渲染层丢掉）。
-     * 所以改成：把网页亮出来（字段已经填好），用户只需点一下「登录」；
-     * 登录成功那一刻我们自动收起网页并进主界面（见 watchLoginSession）。
-     */
-    /*
-     * ① **先走网页自己的登录接口**（零点击）：在隐藏网页里 `fetch("/api/v1/web/accounts/login/ajax/")`。
-     *    它不经过 Bloks 渲染层，因此不存在"合成事件点不动按钮"的问题；
-     *    服务端回 `{"authenticated":true}` 时 cookie 已经种下。
-     * ② 这一发没成功（例如被要求验证码）才退回"填好 + 让用户点一下"。
-     */
-    const ajaxMessage: string = await WebLogin.loginByWebAjax(username, password);
-    if (ajaxMessage.length === 0) {
-      hilog.info(DOMAIN, TAG, 'web ajax login accepted → wait for session');
-      /*
-       * ajax 已认证：**别再走"等表单 + 点提交"那一套**（页面此时可能正在跳转），
-       * 直接等会话落罐；`awaitSession` 会先 saveCookieAsync，再清缓存轮询。
-       */
-      const waited: string = await WebLogin.awaitSession();
-      if (waited.length === 0) {
-        /*
-         * **先把"名字"记下来**（真机 bug 的修复）：头像/账号名要靠「我的」头部那一发，
-         * 真机上要好几秒，而用户登录完可能根本不进「我的」—— 那按钮就会一直显示
-         * "未命名账号 + 默认头像"。用户刚输入的账号名是**现成的、来源可靠**，先记进花名册。
-         * 头像随后由 ensureAccountProfile 补（一次 users/{pk}/info）。
-         */
-        await this.rememberTypedName(username);
-        await this.refreshSessionFromJar();
-        this.unmountWebHost('login done');
-        return '';
-      }
-      hilog.info(DOMAIN, TAG, 'web ajax accepted but session missing: %{public}s', waited);
-    } else {
-      hilog.info(DOMAIN, TAG, 'web ajax login failed: %{public}s', ajaxMessage);
-    }
-    /*
-     * **429 就直接说清楚，别再把人丢进网页**：IG 限的是这个 IP 的登录尝试频率，
-     * 在网页里点「登录」同样会 429 —— 白试一次还会把限流窗口拉长。
-     */
-    if (ajaxMessage.indexOf('429') >= 0 || ajaxMessage.indexOf('限制登录尝试') >= 0) {
-      hilog.info(DOMAIN, TAG, 'web login throttled → 不打开网页');
-      return ajaxMessage;
-    }
-    /*
-     * 2FA / 安全检查：**不要**当成失败、也不要弹网页，交给登录页弹半模态验证码面板
-     * （见 components/LoginPage 的 verifySheet）。这个标记表示"需要用户给一个验证码"。
-     *
-     * 放在 prefill / watchLoginSession **之前**：密码那一步已经过了，往网页里再填一遍
-     * 账号密码对 2FA 没有帮助，而面板一打开，验证码由 core 直接发出去。
-     */
-    if (ajaxMessage.indexOf('额外验证') >= 0 || ajaxMessage.indexOf('两步验证') >= 0) {
-      /*
-       * **一律弹半模态验证码面板**（用户明确要的交互："之前的版本可以跳半模态弹窗做 2FA"）。
-       *
-       * 上一版在这里分叉：有 `two_factor_identifier` 才弹面板，没有就直接回"去网页验证"——
-       * 结果这个账号（IG 只回 `showAccountRecoveryModal`，不带标识）**永远看不到面板**，
-       * 用户只收到一句提示，观感就是"2FA 没了"。
-       *
-       * 现在都弹面板，让用户先在自己熟悉的地方输码：
-       *   · 有标识 → 面板里直接发出去（`accounts/two_factor_login/`），输对就进首页；
-       *   · 没标识 → 面板提交时 `WebLogin.submitTwoFactorCode` 会返回
-       *     `WEB_LOGIN_NEEDS_WEB`，面板随之切到"去网页验证"那一档（它本来就有这个状态）。
-       * 也就是说：面板是主入口，网页是它的兜底，而不是把两者对立起来。
-       */
-      hilog.info(DOMAIN, TAG, 'web login needs verification (2fa id=%{public}s) → half modal',
-        WebLogin.hasTwoFactorIdentifier() ? 'y' : 'n');
-      return WEB_LOGIN_NEEDS_CODE;
-    }
-    const prefillMessage: string = await WebLogin.prefill(username, password);
-    if (prefillMessage.length > 0) {
-      hilog.info(DOMAIN, TAG, 'web login prefill failed: %{public}s', prefillMessage);
-      return ajaxMessage.length > 0 ? ajaxMessage : prefillMessage;
-    }
-    /*
-     * **不再把网页亮出来**（需求：点登录不要重构登录页）。
-     *
-     * 以前这里会 `webVisible = true`：根 Stack 一换，`LoginPage` 整个重建 ——
-     * 用户看到的"账号密码被清空"就是这么来的。现在点登录只做无头请求，
-     * 失败就把原因留在登录页上（同一次页面，输入一个都不丢）；
-     * 想手动登录的用户仍可点登录页上那颗「网页登录」（那是显式操作）。
-     */
-    this.watchLoginSession();
-    return ajaxMessage.length > 0 ? ajaxMessage : '登录没有成功，请稍后重试或用「网页登录」';
-  }
 
-  /**
-   * 半模态面板里提交的两步验证码（见 core/WebLogin.submitTwoFactorCode）。
-   *
-   * @returns 空串 = 通过并已进登录态；否则是给面板显示的原因
-   */
-  private async submitLoginCode(username: string, code: string): Promise<string> {
-    /*
-     * **先把隐藏网页确保就绪**（用户报：验证时跳网页 → 点关闭 → 回来输验证码，报"网页没准备好"）。
-     *
-     * 两步验证码是**在隐藏网页里**发出去的（`core/WebLogin.submitTwoFactorCode` 驱动页面自己的
-     * 接口）。而"关闭网页"以前会无条件卸掉宿主（见 closeWeb），引擎一没，这一步必然失败。
-     * 现在两边都兜：closeWeb 在未登录时保留宿主；这里再补一道 —— 真被卸了就重新挂 + 等就绪。
-     */
-    if (!this.webHostMounted) {
-      hilog.info(DOMAIN, TAG, 'verify code: web host not mounted → remount before submit');
-      this.mountWebHost();
-      const ready: string = await this.bridge.awaitPageReady(NAV_READY_TIMEOUT_MS);
-      if (ready.length > 0) {
-        return '网页没准备好，请稍后重试';
-      }
-    }
-    const message: string = await WebLogin.submitTwoFactorCode(username, code);
-    if (message.length > 0) {
-      /*
-       * **"还要继续验证"不算失败**（用户报："输完验证码点确认，网页自动跳出来了"）。
-       *
-       * `WEB_LOGIN_NEEDS_WEB` 的意思是"这一步得去网页里验"，面板会随之切到"去网页验证"那一档
-       * 等用户**自己点**。但"新增账号"这条支线以前把**任何**非空返回都当成失败收尾
-       * （`finishAddAccount('code-rejected')` → 回滚原会话），那个回滚动作会让网页亮出来 ——
-       * 于是用户看到的就是"点验证 → 网页自己跳出来了"。
-       * 现在把"还要继续"的两个标记排除在失败收尾之外。
-       */
-      const stillPending: boolean =
-        message === WEB_LOGIN_NEEDS_WEB || message === WEB_LOGIN_NEEDS_CODE;
-      if (this.addAccountFlow && !stillPending) {
-        // 验证码真的被拒了：按失败收尾（不把用户留在半截状态）。
-        await this.finishAddAccount('code-rejected');
-      }
-      return message;
-    }
-    const waited: string = await WebLogin.awaitSession();
-    if (waited.length > 0) {
-      if (this.addAccountFlow) {
-        await this.finishAddAccount('code-no-session');
-      }
-      return waited;
-    }
-    await this.refreshSessionFromJar();
-    this.unmountWebHost('login done');
-    // 登进去了：收旗（applySession(true) 已经把账号切过去了）。
-    if (this.addAccountFlow) {
-      await this.finishAddAccount('code-ok');
-    }
-    return '';
-  }
 
   /**
    * 盯着 Cookie 罐，等网页里登录成功那一刻：成功就收起网页、刷新登录态。
@@ -9119,57 +8935,6 @@ struct Index {
     }
   }
 
-  private async addAccountLogin(username: string, password: string): Promise<string> {
-    /*
-     * **进流程先立旗**（真机 bug 的修复）：下面清罐会让隐藏网页报"未登录"，
-     * 而 `applySession(false)` 一跑，整个壳就会换成"整页登录页"（那一页没有返回键，
-     * 用户就被困住了 —— 正是用户报的"新增账号点登录后回到没有返回按钮的登录页"）。
-     * 所以这一整段时间里，**未登录信号一律忽略**（见 applySession 开头）。
-     */
-    if (this.addAccountFlow) {
-      return '正在登录中，请稍候';
-    }
-    this.addAccountFlow = true;
-    let pending: boolean = false;
-    try {
-      await this.rememberAccount();
-      const previous: AccountEntry | null = AccountBook.find(this.currentAccountId());
-      // 记下"原来那个人"：2FA / 去网页验证这两条支线结束时还要用它回滚（见 finishAddAccount）。
-      this.addAccountPrevious = previous;
-      /*
-       * **先卸隐藏网页，再清罐**：顺序反了的话，那个还挂着的网页会先收到"会话没了"
-       * 的信号并回调 onSessionChanged(false)。
-       */
-      this.unmountWebHost('add-account');
-      try {
-        await InstagramCookieJar.getInstance().clear();
-      } catch (error) {
-        hilog.warn(DOMAIN, TAG, 'clear jar before add-account failed: %{public}s',
-          (error as Error).message);
-      }
-      const message: string = await this.headlessWebLogin(username, password);
-      const ok: boolean = message.length === 0;
-      // 2FA 那两种"还要再走一步"也不算失败：罐里还没有新会话，但流程还没结束。
-      pending = message === WEB_LOGIN_NEEDS_CODE || message === WEB_LOGIN_NEEDS_WEB;
-      if (!ok && !pending) {
-        // 登录没成：把原来的会话种回去 —— 不能让"新增账号"把当前账号弄丢。
-        await this.restoreAddAccountPrevious('login-failed');
-      }
-      return message;
-    } finally {
-      /*
-       * ⚠️ **只在"这次真的结束了"时收旗**（审计 P0）：
-       * 2FA / 去网页验证属于同一个事务的后续步骤，那时罐已经清空 —— 一旦此时把旗子收掉，
-       * 隐藏网页随后报未登录就会照常走 `applySession(false)`，整壳被换成整页登录页
-       * （新增账号页与验证码面板一起被销毁，用户以为被登出了）。
-       * 这两种情况把收旗交给 `submitLoginCode` / `finishAddAccount`。
-       */
-      if (!pending) {
-        this.addAccountFlow = false;
-        this.addAccountPrevious = null;
-      }
-    }
-  }
 
   /**
    * **新增账号事务的真正收尾**（2FA 提交完 / 网页验证回来 / 用户中途退出时调）。
