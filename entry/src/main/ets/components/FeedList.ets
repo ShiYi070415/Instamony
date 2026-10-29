@@ -744,7 +744,7 @@ export struct FeedList {
    * 用 @Link 双向绑定而不是 @Prop：Refresh 组件需要能把它置回 false 才会收起转圈，
    * 而「这一轮到底读完没有」只有页面知道（页面在刷新流程结束时置 false）。
    */
-  @Link refreshing: boolean;
+  @Link @Watch('onRefreshingChanged') refreshing: boolean;
   onLoad: () => void = (): void => {
   };
   /** 用户下拉到底：请求重新读第一页。 */
@@ -2126,6 +2126,34 @@ export struct FeedList {
    *   · 已经在顶部 → 走一次刷新。刷新用的是列表里那条**系统 Refresh**（`refreshing` 是
    *     `$$` 双向绑定的），所以转圈就是系统那颗，不是自绘的。
    */
+  /**
+   * 下拉刷新这一轮结束（`refreshing` 变回 false）→ **把列表带回顶部**。
+   *
+   * 为什么必须有这一步（用户报的"刷新后第一条帖子固定、之后就刷不动了"）：
+   * 刷新走的是"新一页**插到头部**"（view-model 的 mergePrepend）。ArkUI 的 List 默认按
+   * **像素偏移**保持视口 —— 头部多插几条之后，原来那条"第一条"还停在屏幕上同一个位置，
+   * 新帖子全被顶到视口**上方**去了。于是：
+   *   · 用户看到的第一条永远是同一条（像是被"固定"住了）；
+   *   · 视口偏移已经不是 0，**下次下拉就不再是"在顶部下拉"**，Refresh 不触发刷新，
+   *     只剩手势回弹的动画（用户说的"只有刷新动画、触发不了"）。
+   * 回车到顶部之后这两个现象一起消失（官方 App 下拉刷新后也是回到顶部）。
+   */
+  private onRefreshingChanged(): void {
+    if (this.refreshing) {
+      return;
+    }
+    const offset: number = this.listScroller.currentOffset().yOffset;
+    hilog.info(0xFF00, 'FeedList', 'refresh done → back to top from=%{public}d', offset);
+    if (offset === 0) {
+      return;
+    }
+    this.listScroller.scrollTo({
+      xOffset: 0,
+      yOffset: 0,
+      animation: { duration: 220, curve: Curve.EaseOut }
+    });
+  }
+
   private onTabRepeatTap(): void {
     // 不在前台的分页不该响应（FeedList 平时只有首页那一份，留着是为了以后复用）。
     if (!this.active) {

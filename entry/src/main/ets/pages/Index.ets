@@ -7507,8 +7507,8 @@ struct Index {
        * 这一步只补一小段等待：主菜已经在上面那道 race 里限过时了。
        */
       const idle: boolean = await this.viewModel.awaitIdle(REFRESH_SPIN_TAIL_MS);
-      hilog.info(DOMAIN, TAG, 'refresh done idle=%{public}s posts=%{public}d',
-        idle ? 'y' : 'n', this.posts.length);
+      hilog.info(DOMAIN, TAG, 'refresh done idle=%{public}s posts=%{public}d offset=%{public}d',
+        idle ? 'y' : 'n', this.posts.length, this.feedScroller.currentOffset().yOffset);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'refresh failed: %{public}s', (error as Error).message);
       this.setLocalStatus($r('app.string.status_unparsable'));

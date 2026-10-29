@@ -1480,8 +1480,20 @@ export class FeedViewModel {
       // 首屏是缓存铺的 → 网络这份要**整体替换**（否则新 7 条后面还挂着旧的 7 条，见 fromCache）。
       const replaceCached: boolean = this.fromCache;
       this.fromCache = false;
-      await this.applyPayload(this.pagePayload(first), asFirstLoad, false, prepend,
-        asFirstLoad || replaceCached);
+      /*
+       * **下拉刷新用"整体替换"，不用"插到头部"**（`forceFresh`）。
+       *
+       * 用户报的"有刷新但第一条帖子会固定"就是这么来的：IG 每次给的**顺序**都可能不同
+       * （同一批帖子重排，PC 实测两发顺序就不一样），而 `mergePrepend` 对已存在的 key
+       * 是**保持旧顺序**的 —— 于是新一发回来，列表顶部还是那一条，看起来就是"没刷新"。
+       * 替换之后列表顺序 = 这一发的结果，第一条自然跟着变。
+       *
+       * 代价：之前翻过的那几页会从列表里消失（用户已经拉回顶部了，所以看不见丢东西；
+       * 继续往下滑会按这一页的新游标重新翻）。
+       */
+      const replaceList: boolean = asFirstLoad || replaceCached || forceFresh;
+      await this.applyPayload(this.pagePayload(first), asFirstLoad, false,
+        prepend && !forceFresh, replaceList);
       this.nativeCursor = first.nextCursor;
       this.nativeHasMore = first.hasMore;
       this.debug = `${this.debug} native(${first.items.length})`;
