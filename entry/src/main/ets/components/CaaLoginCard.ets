@@ -222,6 +222,56 @@ export struct CaaLoginCard {
         })
 
       /*
+       * **换传输重发**（rcp）：把刚才那一发登录请求用系统里**另一套 HTTP 栈**原样再发一次。
+       * 两套栈同一份字节、结果不同 ⇒ 差异在传输层；结果相同 ⇒ 与 HTTP 实现无关。
+       */
+      Text('换传输重发（rcp，同一发走另一套 HTTP 栈）')
+        .fontSize(12)
+        .fontColor($r('app.color.accent'))
+        .width('100%')
+        .onClick((): void => {
+          if (this.busy) {
+            return;
+          }
+          this.busy = true;
+          this.status = '正在用 rcp 重发刚才那一发…';
+          this.steps = '';
+          CaaSession.rcpProbe().then((outcome: CaaOutcome): void => {
+            this.busy = false;
+            this.status = outcome.reason;
+            this.steps = outcome.steps;
+          }).catch((error: Error): void => {
+            this.busy = false;
+            this.status = `rcp 重发失败：${error.message}`;
+          });
+        })
+
+      /*
+       * **TLS 变体探针**：`http`/`rcp` 两套栈都 429、PC 发同一份却 200，说明挡在传输层特征上。
+       * 系统只允许改 TLS 版本与密码套件，那就把这三档都试一遍。
+       */
+      Text('TLS 变体探针（1.2 / 1.2+AES128 / 1.3 各发一次）')
+        .fontSize(12)
+        .fontColor($r('app.color.accent'))
+        .width('100%')
+        .onClick((): void => {
+          if (this.busy) {
+            return;
+          }
+          this.busy = true;
+          this.status = '正在用三档 TLS 参数重发同一发…';
+          this.steps = '';
+          CaaSession.tlsProbe().then((outcome: CaaOutcome): void => {
+            this.busy = false;
+            this.status = outcome.reason;
+            this.steps = outcome.steps;
+          }).catch((error: Error): void => {
+            this.busy = false;
+            this.status = `TLS 变体探针失败：${error.message}`;
+          });
+        })
+
+      /*
        * **清除限流冷却**（本机自己记的那个 10~60 分钟闸门）。
        *
        * 它只是一次 429 的记账，判断依据并不牢靠：这一轮就查到"提交密码那一发没带 Cookie /

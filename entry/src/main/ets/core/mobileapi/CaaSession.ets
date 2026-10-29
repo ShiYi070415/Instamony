@@ -19,6 +19,10 @@ import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
 import { util } from '@kit.ArkTS';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+// 另一套 HTTP 实现（见 rcpProbe：排除"鸿蒙 http 模块这一侧"的嫌疑）。
+import { rcp } from '@kit.RemoteCommunicationKit';
+// TLS 变体探针要用 http 的类型与枚举（见 tlsProbe）。
+import { http } from '@kit.NetworkKit';
 import { InstagramCookieJar, InstagramCookieSnapshot } from '../InstagramCookieJar';
 import { CaaLogin, CaaResult, CaaStep, CaaUsdid } from './CaaLogin';
 import { MobileIdentity, MobileSession } from './MobileSession';
@@ -247,6 +251,130 @@ export class CaaSession {
       : `探针通过：请求与设备身份没问题（IG 回：${result.reason}）`;
     const outcome: CaaOutcome = CaaSession.outcome(result.ok, text, steps);
     CaaSession.rememberDiag('探针', outcome.reason, outcome.steps);
+    return outcome;
+  }
+
+  /**
+   * **换传输重发**：把刚刚那一发 `send_login_request` 用**另一套 HTTP 栈**（rcp）原样再发一次。
+   *
+   * 为什么需要：到这一步已经把"请求体逐键一致、头取值一致、设备身份一致、IP 一致、HTTP 形态
+   * （单/双 Content-Length、chunked、h2）一致"全部排除了 —— PC 上发同样的字节是 200，App 里是
+   * 429。剩下的唯一变量就是**鸿蒙 `http` 模块这条链路本身**（TLS/连接特征、代理层看到的客户端）。
+   * `@kit.RemoteCommunicationKit`（rcp）是系统里另一套独立的 HTTP 实现，用它发同一份字节：
+   *   · rcp 回 200/404 → 就是 `http` 模块这一侧，登录链路整体切到 rcp；
+   *   · rcp 也 429 → 与实现无关（IP / edge 策略那一侧），这条路要换思路。
+   */
+  static async rcpProbe(): Promise<CaaOutcome> {
+    const body: string = CaaLogin.lastSendBody;
+    if (body.length === 0) {
+      return CaaSession.outcome(false, '还没有可重发的请求（先点一次「假账号探针」或登录）');
+    }
+    const url: string = 'https://b.i.instagram.com/api/v1/bloks/async_action/'
+      + 'com.bloks.www.bloks.caa.login.async.send_login_request/';
+    const headers: rcp.RequestHeaders = {};
+    const map: Record<string, string> = CaaLogin.lastSendHeaderMap;
+    for (const key of Object.keys(map)) {
+      headers[key] = map[key];
+    }
+    let status: number = -1;
+    let text: string = '';
+    try {
+      const session: rcp.Session = rcp.createSession();
+      const request: rcp.Request = new rcp.Request(url, 'POST', headers, body);
+      const response: rcp.Response = await session.fetch(request);
+      status = response.statusCode;
+      try {
+        text = `${response.toString()}`;
+      } catch (bodyError) {
+        text = '';
+      }
+      session.close();
+    } catch (error) {
+      const message: string = (error as Error).message;
+      const failed: CaaOutcome = CaaSession.outcome(false,
+        `rcp 重发失败（不是 IG 的回答）：${message}`, CaaSession.stepsText());
+      CaaSession.rememberDiag('rcp 重发', failed.reason, failed.steps);
+      return failed;
+    }
+    const verdict: string = status === 429
+      ? 'rcp 也 429 ⇒ 与 HTTP 实现无关（IP / edge 策略那一侧），要另想办法'
+      : (status === 200 || status === 404
+        ? `rcp 拿到 ${status} ⇒ **就是 http 模块这一侧**，登录链路整体切到 rcp 即可`
+        : `rcp 拿到 ${status}（既不是 429 也不是 200/404，看下面的片段）`);
+    const outcome: CaaOutcome = CaaSession.outcome(false,
+      `rcp 重发：${verdict}`, CaaSession.stepsText());
+    // IG 的回答片段也留在诊断里（rcp 的 body 截 400 字符）。
+    CaaSession.rememberRaw(`rcp status=${status}\nbody=${CaaLogin.snippet(text, 400)}`);
+    CaaSession.rememberDiag('rcp 重发', outcome.reason, outcome.steps);
+    hilog.info(DOMAIN, TAG, 'rcp probe status=%{public}d len=%{public}d', status, text.length);
+    return outcome;
+  }
+
+  /**
+   * **TLS 变体探针**：同一份请求体/头，换几档 TLS 参数再发，看状态码变不变。
+   *
+   * 背景：`http` 与 `rcp` 两套栈发同一份字节都 429，而 PC（Node）发同一份是 200 —— 说明挡在
+   * **传输层特征**上（TLS/连接指纹，两套栈共用系统 TLS 实现），不是我们的参数。
+   * 系统也给不了"任意改指纹"的入口，但 `HttpRequestOptions.tlsOptions` 能改**TLS 版本与密码套件**
+   * ——那正好是 ClientHello 里最主要的两个变量。若换一档就从 429 变 200，这就是可用的修法。
+   */
+  static async tlsProbe(): Promise<CaaOutcome> {
+    const body: string = CaaLogin.lastSendBody;
+    if (body.length === 0) {
+      return CaaSession.outcome(false, '还没有可重发的请求（先点一次「假账号探针」或登录）');
+    }
+    const url: string = 'https://b.i.instagram.com/api/v1/bloks/async_action/'
+      + 'com.bloks.www.bloks.caa.login.async.send_login_request/';
+    const header: Record<string, string> = {};
+    const map: Record<string, string> = CaaLogin.lastSendHeaderMap;
+    for (const key of Object.keys(map)) {
+      header[key] = map[key];
+    }
+    const configs: Array<http.TlsConfig> = [];
+    const tls12: http.TlsConfig = {
+      tlsVersionMin: http.TlsVersion.TLS_V_1_2,
+      tlsVersionMax: http.TlsVersion.TLS_V_1_2
+    };
+    configs.push(tls12);
+    const tls12Aes: http.TlsConfig = {
+      tlsVersionMin: http.TlsVersion.TLS_V_1_2,
+      tlsVersionMax: http.TlsVersion.TLS_V_1_2,
+      cipherSuites: ['TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256',
+        'TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256']
+    };
+    configs.push(tls12Aes);
+    const tls13: http.TlsConfig = {
+      tlsVersionMin: http.TlsVersion.TLS_V_1_3,
+      tlsVersionMax: http.TlsVersion.TLS_V_1_3
+    };
+    configs.push(tls13);
+    const labels: Array<string> = ['TLS1.2', 'TLS1.2+AES128', 'TLS1.3'];
+    const lines: Array<string> = [];
+    for (let index: number = 0; index < configs.length; index++) {
+      const request: http.HttpRequest = http.createHttp();
+      try {
+        const response: http.HttpResponse = await request.request(url, {
+          method: http.RequestMethod.POST,
+          header: header,
+          extraData: body,
+          connectTimeout: 20000,
+          readTimeout: 30000,
+          expectDataType: http.HttpDataType.STRING,
+          tlsOptions: configs[index]
+        });
+        lines.push(`${labels[index]} -> ${response.responseCode}`);
+      } catch (error) {
+        lines.push(`${labels[index]} -> 异常 ${(error as Error).message}`);
+      } finally {
+        try {
+          request.destroy();
+        } catch (error) {
+        }
+      }
+    }
+    const text: string = `TLS 变体：${lines.join('；')}`;
+    const outcome: CaaOutcome = CaaSession.outcome(false, text, CaaSession.stepsText());
+    CaaSession.rememberDiag('TLS 变体', outcome.reason, outcome.steps);
     return outcome;
   }
 

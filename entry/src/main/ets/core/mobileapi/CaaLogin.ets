@@ -497,6 +497,14 @@ export class CaaLogin {
   static lastRequestDump: string = '';
   /** 最近一次 `send_login_request` **实际发出去的请求头**（脱敏，见 headersDump）。 */
   static lastRequestHeaders: string = '';
+  /**
+   * 最近一次 `send_login_request` 的**原始请求体与头**（只在内存里，供"换传输重发"用）。
+   *
+   * 用途：把**完全相同的这一发**改用另一套 HTTP 栈（`@kit.RemoteCommunicationKit` 的 rcp）再发一次。
+   * 两套栈发同一份字节、结果不同 ⇒ 差异在传输层（TLS/HTTP 实现），不在我们的参数。
+   */
+  static lastSendBody: string = '';
+  static lastSendHeaderMap: Record<string, string> = {};
 
   /**
    * **CAA 链路的 Cookie 罐**（进程内，一次登录的一串请求共用）。
@@ -1849,6 +1857,14 @@ export class CaaLogin {
     // 逐条比对头是最后能定位"为什么同一发在 App 里被挡"的手段。
     if (action === SEND_LOGIN_ACTION) {
       CaaLogin.lastRequestHeaders = CaaLogin.headersDump(headers);
+      // 原始体与头各留一份在内存里：好让"换传输重发"用**同一份字节**再发一次
+      // （见 CaaSession.rcpProbe）。
+      CaaLogin.lastSendBody = body;
+      const map: Record<string, string> = {};
+      for (const key of Object.keys(headers)) {
+        map[key] = headers[key];
+      }
+      CaaLogin.lastSendHeaderMap = map;
     }
     return await CaaLogin.post(host, `/api/v1/bloks/async_action/${action}/`, body, headers);
   }
