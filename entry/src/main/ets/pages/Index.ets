@@ -395,6 +395,21 @@ const WARM_EXPLORE_REELS: number = 7;
 const REFRESH_NAV_WAIT_MS: number = 8000;
 const REFRESH_NAV_POLL_MS: number = 200;
 /**
+ * 下拉刷新时转圈最多挂多久（毫秒）——到点一定收起。
+ *
+ * 一次刷新要两发：时间线第一页（1~3 秒）+ 探索流第一页（4~9 秒），所以不能太短；
+ * 但也不能像 view-model 那边那样等到 20 秒 —— 界面上转圈挂十几秒，用户就会以为"卡住了、
+ * 刷新没完成"（用户报的"刷新成功后一直保持刷新"有一半是它）。到点收起后内容照旧会到。
+ */
+const REFRESH_SPIN_MAX_MS: number = 12000;
+/**
+ * 上面那道"比赛"结束后，再给排队中的那一轮补的等待（毫秒）。
+ *
+ * 很短：它只用来接住"下拉正好撞上在跑的一轮"那种排队情况（那一轮几百毫秒内就会开跑），
+ * 不该再让转圈挂一轮完整取数的时长。
+ */
+const REFRESH_SPIN_TAIL_MS: number = 1500;
+/**
  * 「两次返回退出」的时间窗（毫秒）。
  *
  * 在主页按返回时：第一次只弹「再一次返回关闭app」的气泡（吃掉这次返回），
@@ -1140,6 +1155,15 @@ struct Index {
    * 刷新这一轮彻底结束后再置 false —— 转圈收起的时机由页面掌握。
    */
   @State refreshing: boolean = false;
+  /**
+   * 一次下拉刷新流程正在进行（真正的"防重入"开关，`refreshing` 只是界面状态）。
+   *
+   * 为什么还要一个私有标志：系统 `Refresh` 的 `onRefreshing` 在"下拉、松手、再下拉"时
+   * 会被**回调多次**，而 `refreshFeed()` 是 async 的 —— 两次并发进来会各跑一遍取数、
+   * 各自把 `refreshing` 置 false/true，转圈就会卡住不消、内容也会二次变化
+   * （用户报的"刷新成功后一直保持刷新，然后又刷了一次"）。这里挡住第二次。
+   */
+  private refreshBusy: boolean = false;
   /**
    * 当前选中的标签。
    *
@@ -7268,25 +7292,6 @@ struct Index {
   // ==========================================================================
 
   /**
-   * 下拉刷新：重新读第一页。
-   *
-   * 刷新期间列表**不清空**（view-model 走 mergePrepend 把新一页放到头部），
-   * 所以不会闪成骨架屏，也不会跳。
-   *
-   * 两个曾经让用户"以为没反应"的点：
-   *   1) 隐藏网页正在别处导航（读通知 / 评论 / 帖子页）时，以前是**直接放弃**（转圈秒收、
-   *      什么也不发生）；现在改成等它回来（有上限）再读；
-   *   2) `viewModel.refresh()` 撞上在跑的一轮取数时只是排队就返回了，转圈会提前收起 ——
-   *      所以再 `awaitIdle()` 等它排完并跑完，转圈才收。
-   */
-  /**
-   * 取一份「为你推荐」内容（首页时间线为空时用，见 FeedViewModel.mode 的说明）。
-   *
-   * 复用搜索页那条**探索流**（`discover/topical_explore/`，见 core/NativeSearch.recommendedPage）：
-   * 它不需要任何模板、专门就是推荐内容，而且是"原生一发"。转成 `MediaPost` 之后首页
-   * 那套 FeedList 直接就能画（点赞 / 收藏 / 进帖子页全部照旧）。
-   */
-  /**
    * 取一页「为你推荐」内容（首页的两段式列表里，卡片下面那一段；见 FeedViewModel.composePosts）。
    *
    * 复用搜索页那条**探索流**（`discover/topical_explore/`，见 core/NativeSearch.recommendedPage）：
@@ -7458,20 +7463,58 @@ struct Index {
    * 所以弹窗只给一个动作：在我们的隐藏网页里打开验证页（同一个会话），验完回来即可。
    */
 
+  /**
+   * 下拉刷新：重新读第一页。
+   *
+   * 刷新期间列表**不清空**（view-model 走 mergePrepend 把新一页放到头部），
+   * 所以不会闪成骨架屏，也不会跳。
+   *
+   * 三件曾经让用户"以为没反应 / 一直转"的事，现在各有对策：
+   *   1) 隐藏网页正在别处导航（读通知 / 评论 / 帖子页）时，以前是**直接放弃**（转圈秒收、
+   *      什么也不发生）；现在改成等它回来（有上限）再读；
+   *   2) `viewModel.refresh()` 撞上在跑的一轮取数时只是排队就返回了，转圈会提前收起 ——
+   *      所以再 `awaitIdle()` 等它排完并跑完，转圈才收（上限见 REFRESH_SPIN_MAX_MS）；
+   *   3) 系统 `Refresh` 可能连着回调两次 `onRefreshing`，两轮并发会让转圈卡住、内容二次变化
+   *      （用户报的"刷新成功后还在刷新，然后自己又刷了一次"）—— 这里用 refreshBusy 挡住。
+   */
   private async refreshFeed(): Promise<void> {
+    /*
+     * **防重入**（见 refreshBusy 的说明）：`onRefreshing` 可能连着回调两次，
+     * 而同时跑两轮取数既会让内容二次变化，也会让转圈状态互相打架。
+     */
+    if (this.refreshBusy) {
+      hilog.info(DOMAIN, TAG, 'refresh ignored: already in flight');
+      return;
+    }
+    this.refreshBusy = true;
     this.refreshing = true;
     try {
       const deadline: number = Date.now() + REFRESH_NAV_WAIT_MS;
       while (this.navigating && Date.now() < deadline) {
         await this.delay(REFRESH_NAV_POLL_MS);
       }
-      await this.viewModel.refresh();
-      await this.viewModel.awaitIdle();
+      /*
+       * **这一轮取数不无限期挂着转圈**（`REFRESH_SPIN_MAX_MS`）。
+       *
+       * 一次刷新要两发：时间线第一页（1~6 秒）+ 探索流第一页（4~9 秒）。后者虽然是
+       * "新帖子"的主要来源，但它落地时列表**已经**换过一轮了 —— 让它把转圈一起拖到十几秒，
+       * 用户看到的就是"刷新成功后还在刷新"（真机实测一次能到 15 秒）。
+       * 所以这里用比赛（race）而不是硬等：到点就收，那一轮自己在后台跑完、照样会更新列表。
+       */
+      await Promise.race([this.viewModel.refresh(), this.delay(REFRESH_SPIN_MAX_MS)]);
+      /*
+       * 再确认一下"排队的那一轮有没有跑起来"（`refresh()` 撞上在跑的一轮时只是排队）。
+       * 这一步只补一小段等待：主菜已经在上面那道 race 里限过时了。
+       */
+      const idle: boolean = await this.viewModel.awaitIdle(REFRESH_SPIN_TAIL_MS);
+      hilog.info(DOMAIN, TAG, 'refresh done idle=%{public}s posts=%{public}d',
+        idle ? 'y' : 'n', this.posts.length);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'refresh failed: %{public}s', (error as Error).message);
       this.setLocalStatus($r('app.string.status_unparsable'));
     } finally {
       this.refreshing = false;
+      this.refreshBusy = false;
     }
   }
 

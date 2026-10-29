@@ -195,13 +195,18 @@ export class NativeFeed {
    *
    * 失败一律返回 null（无会话 / 非 200 / 形状变了 / 解析不出条目）。
    */
-  static async fetchPage(first: number, cursor: string): Promise<NativeFeedPage | null> {
+  static async fetchPage(first: number, cursor: string,
+                         allowWarm: boolean = true): Promise<NativeFeedPage | null> {
     /*
      * **预热那一发还在飞 → 搭车，不再发第二发**（冷启动最常见的一次浪费，见 warmTask）。
      *
      * 只在"要第一页"时这么干；翻页（cursor 非空）各页本来就不同，不能合并。
+     *
+     * `allowWarm = false` 是给**下拉刷新**用的：用户拉那一下要的是"现在这一页"，
+     * 搭冷启动那一发（可能已经发出去十几秒）等于原样换回同一批帖子 —— 用户看到的就是
+     * "下拉了但没刷新"。刷新请自己发一发新的。
      */
-    if (cursor.length === 0 && NativeFeed.warmTask !== null) {
+    if (allowWarm && cursor.length === 0 && NativeFeed.warmTask !== null) {
       const waited: number = Date.now();
       try {
         await NativeFeed.warmTask;

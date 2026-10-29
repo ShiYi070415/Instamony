@@ -267,6 +267,18 @@ export class FeedViewModel {
    */
   private wantFirstPage: boolean = false;
   /**
+   * 这一次「重新读第一页」是**用户下拉刷新**要的（而不是缓存补页 / 卡住重启）。
+   *
+   * 为什么要分开记：只有下拉刷新才要求"**必须发一发新的**"——
+   *   · 不能吃冷启动预热的那一页（`NativeFeed.takeWarm`，那份可能是几分钟前的，
+   *     拉一下只换回同一批帖子，用户看到的就是"下拉了但没刷新"）；
+   *   · 期间不许触底翻页插进来（会多跑一轮、内容二次变化，见 refresh 的说明）。
+   * `refresh()` 置它，`loadFeed()` 在**开跑那一刻**取走（排队的那一轮也能拿到）。
+   */
+  private refreshOptIn: boolean = false;
+  /** 正在跑下拉刷新那一轮（触底翻页要在这期间让路，见 requestMore）。 */
+  private refreshInFlight: boolean = false;
+  /**
    * 首屏是**从落盘缓存铺出来的**（见 FeedCache）。
    *
    * 它决定"网络那份第一页回来之后怎么合并"：缓存那份是同一页的旧版本，所以新的那一页要
@@ -493,6 +505,16 @@ export class FeedViewModel {
      * 被别的功能导航 / 后台挂起时白白多等最多 6 秒，用户看到的就是"下拉之后半天不刷新"。
      */
     this.wantFirstPage = true;
+    /*
+     * **这一轮是用户拉下来的**（见 refreshOptIn 的说明）：要点有两个 ——
+     *   ① 一定发一发新的，不吃冷启动预热那一页；
+     *   ② 期间触底翻页要让路（见 requestMore）。
+     * 顺手把排队里的那一轮**翻页**丢掉：它是上滑到底要的下一页，不该跟着刷新一起跑
+     * （否则刷新完马上又跑一轮、内容二次变化，转圈也得多撑一次，用户看到的就是
+     * "刷新成功后还在刷新，然后自己又刷了一次"）。
+     */
+    this.refreshOptIn = true;
+    this.pending = false;
     if (this.busy) {
       // 已经有一轮在跑：排队。上面这些标志会被排队的那一轮读到，目标仍是第一页。
       this.pending = true;
@@ -574,6 +596,12 @@ export class FeedViewModel {
     // 一条没新增时不该报「读不到内容」。
     const refreshing: boolean = this.wantFirstPage;
     this.wantFirstPage = false;
+    // 「用户下拉刷新」的牌子在这一刻取走（排队的那一轮也能拿到，见 refreshOptIn）。
+    const refreshRound: boolean = this.refreshOptIn;
+    this.refreshOptIn = false;
+    if (refreshRound) {
+      this.refreshInFlight = true;
+    }
     try {
       /*
        * **探索流接管这一屏时，冷启动和刷新都先取探索流**（用户要求："冷启动时如果是探索流就
@@ -595,7 +623,7 @@ export class FeedViewModel {
           this.refreshFollowingQuietly();
         }
       } else if (firstLoad || refreshing) {
-        await this.loadFirstPage(firstLoad, refreshing);
+        await this.loadFirstPage(firstLoad, refreshing, refreshRound);
         /*
          * 第一页到手之后：**时间为空就补「为你推荐」**（见 mode 的说明）。
          * 新注册的账号还没关注任何人，IG 的时间线会回空 —— 官方 App 这时展示的也是推荐内容，
@@ -610,6 +638,9 @@ export class FeedViewModel {
       this.setStatus(FeedStatus.Failed, (error as Error).message);
     } finally {
       this.setBusy(false);
+      if (refreshRound) {
+        this.refreshInFlight = false;
+      }
       this.onSettled();
       if (this.pending) {
         this.pending = false;
@@ -1321,6 +1352,19 @@ export class FeedViewModel {
   }
 
   requestMore(): void {
+    /*
+     * **下拉刷新那一轮里，触底翻页要让路**（见 refreshOptIn 的说明）。
+     *
+     * 为什么必须挡：刷新铺完第一页时列表往往还"贴着底"（关注流一页就三五条），
+     * 于是触底信号立刻又来了 —— 要么排队（刷新完再跑一轮、内容二次变化，转圈也得多撑
+     * 十几秒，用户看到的就是"刷新成功后还在刷新，然后自己又刷了一次"），要么被当成
+     * 这一轮的"下一页"。两种情况都不是用户拉那一下想要的。
+     * 刷新结束后照常：用户再滑到底会重新问（onNearEnd）。
+     */
+    if (this.refreshInFlight) {
+      hilog.info(DOMAIN, TAG, 'requestMore skipped: refresh in flight');
+      return;
+    }
     if (this.busy) {
       this.pending = true;
       return;
@@ -1401,7 +1445,8 @@ export class FeedViewModel {
    *   2) 条数不够时才触发页面重发一条完整请求，等信号、再回放整页。
    *   3) 都不行才退到 DOM 抽取。
    */
-  private async loadFirstPage(asFirstLoad: boolean, prepend: boolean): Promise<void> {
+  private async loadFirstPage(asFirstLoad: boolean, prepend: boolean,
+                             forceFresh: boolean = false): Promise<void> {
     this.setStatus(FeedStatus.Loading);
     // 计时基准：把"从开始取首屏到拿到可用数据"的毫秒数打进日志，改取数路径时靠它对比
     // （capture 快路径 vs 回放 vs DOM 兜底，见 hilog 的 first ... ms=）。
@@ -1412,13 +1457,22 @@ export class FeedViewModel {
     //      （见 NativeFeed.warmStart / takeWarm）—— 取到就零等待铺上；
     //   2) 没预热到就自己发一发（1.2~2.4 秒）。
     // 拿到的是一页真数据，铺上去用户立刻有画面；网页那条路只做"补充合并"（见下面 nativeOwnsFirstPage）。
-    let first: NativeFeedPage | null = NativeFeed.takeWarm(NATIVE_WARM_MAX_AGE_MS);
-    if (first !== null) {
+    let first: NativeFeedPage | null = forceFresh ? null : NativeFeed.takeWarm(NATIVE_WARM_MAX_AGE_MS);
+    if (forceFresh) {
+      /*
+       * **下拉刷新不吃预热那一页**（`forceFresh`，见 refreshOptIn 的说明）。
+       *
+       * 预热那一发是 app 刚起来时发的（最长算 2 分钟），拿它当"刷新结果"就是原样换回
+       * 同一批帖子 —— 用户看到的现象正是"下拉了，转圈转完，一点没变"。
+       */
+      hilog.info(DOMAIN, TAG, 'native first: refresh → skip warm page');
+    } else if (first !== null) {
       hilog.info(DOMAIN, TAG, 'native first from warm n=%{public}d ms=%{public}d',
         first.items.length, Date.now() - startedMs);
-    } else {
-      // 预热没赶上（或没登录）：自己发一发，仍然是原生、仍然不碰网页。
-      first = await NativeFeed.fetchPage(NATIVE_FIRST_COUNT, '');
+    }
+    if (first === null) {
+      // 预热没赶上（或没登录 / 是刷新）：自己发一发，仍然是原生、仍然不碰网页。
+      first = await NativeFeed.fetchPage(NATIVE_FIRST_COUNT, '', !forceFresh);
       hilog.info(DOMAIN, TAG, 'native first fetched n=%{public}d ms=%{public}d',
         first === null ? 0 : first.items.length, Date.now() - startedMs);
     }
