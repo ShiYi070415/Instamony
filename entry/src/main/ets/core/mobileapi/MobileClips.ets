@@ -5,31 +5,34 @@
  *
  * | 端点 | 形状 | 翻页 | 用不用 |
  * | --- | --- | --- | --- |
- * | `POST clips/connected/` | `items[5]`（关注流） | 换不动 | **首屏快通道**（281KB / 1~3 秒） |
- * | `POST clips/discover/` | `items_with_ads[4]`（探索 Reels） | 换不动 | **首屏快通道**（203KB / 1~2 秒） |
- * | `POST clips/discover/social/` | `items[6]`（Friends，instagrapi 的 `friends_reels`） | 换不动 | **首屏快通道**（324KB / 1~2 秒） |
+ * | `POST clips/connected/` | `items[5]`（关注流） | 游标进 body 可翻（见下） | **首屏快通道**（281KB / 1~3 秒） |
+ * | `POST clips/discover/` | `items_with_ads[4]`（探索 Reels） | 游标进 body 可翻 | **首屏快通道**（203KB / 1~2 秒） |
+ * | `POST clips/discover/social/` | `items[6]`（Friends，instagrapi 的 `friends_reels`） | 游标进 body 可翻 | **首屏快通道**（324KB / 1~2 秒） |
  * | `GET discover/topical_explore/` | `sectional_items[]`（见 MobileDiscover） | **`max_id` 真能换页** | 翻页兜底 / 补作者池 |
  *
- * 三条 `clips/*` 全是**清一色视频**，但**每页都回同一批条目**（逐页验过：`clips/discover/`
- * 连续 4 页短码完全一样、字节数只差在顺序；`social`(6 条) 与 `connected`(5 条) 同理）。
- * 所以它们只负责"首屏 2~4 秒铺满十几条"，**翻页交给作者页与探索流**（见 NativeReels.fetchPage）。
+ * 三条 `clips/*` 全是**清一色视频**。它们曾经"每页都回同一批条目"，根因是**游标放错了地方**：
+ * 放查询串（`?max_id=…`）服务端直接无视、把同一页重排一遍还回来；放进 **form body** 后
+ * 真的翻页（实测 `clips/discover/` 第二页 16 条 / 15 个作者 / 与第一页 0 重合）。
+ * 细节与实测数据见下面 `post()` 的说明。
  *
- * ### `clips/discover/` 为什么不能当主路（这条是本节的重点）
+ * ### 游标位置这件事踩了很久（这条是本节的重点）
  *
- * 现场：连续要了 4 页，每页都回**同样那 4 条**（`DetYzMxzSoK` / `DetdvCnyNuE` /
+ * 早期现场：连续要了 4 页，每页都回**同样那 4 条**（`DetYzMxzSoK` / `DetdvCnyNuE` /
  * `DeCcpBuvset` / `Detog77hNnG`），字节数一分不差（204892），只有顺序被倒过来。
- * `paging_info.max_id` 虽然每页都变，但它的"已看窗口"token 是同一批 —— 服务端**没认**我们的游标，
- * 只是把我们上次报的那几条又还回来（这就是用户说的"reels 无法获取新的视频"）。
+ * `paging_info.max_id` 虽然每页都变，但服务端显然**没认**我们的游标 —— 用户看到的就是
+ * "reels 只在那几条里打转"。
  *
- * 逐个排除过（一次性实验，结论拿到后已删）：
- *   · 游标放签名体里（`max_id=…`） → 同样那 4 条（顺序还原）
- *   · 换个参数名（`cursor=…`） → 同样那 4 条
- *   · 查询串 + 体里带 instagrapi 的 `_uid`/`_uuid` → 同样那 4 条
- *   · 加 `count`/`page_size` → 同样那 4 条
+ * 逐个排除过（一次性实验，结论拿到后已删）：换参数名（`cursor=…`）、
+ * 查询串 + 体里带 instagrapi 的 `_uid`/`_uuid`、加 `count`/`page_size` —— 都还是那 4 条。
  *
- * 同一时刻另外两条源都正常：`clips/connected/` 回 5 条关注流；
- * `discover/topical_explore/` 第一页和它的 `max_id` 第二页**短码完全不重合**。
- * 所以 Reels 的主路改成探索流，`clips/discover/` 只留作"两条都挂了"时的兜底（它至少给 4 条能播的）。
+ * **真正的原因是游标放在了查询串里**（`?max_id=…`）：服务端直接无视它。同一份会话把游标
+ * 放进 **form body** 就真的翻页了 —— `clips/discover/` 第二页 16 条 / 15 个作者 / 与第一页
+ * 0 重合，第三页同样全新；`clips/discover/social/`、`clips/connected/` 同理。
+ * 所以现在所有 `clips/*` 的游标都走 body（见 `post()`）。
+ *
+ * 这一条也是为什么"探索流"（`discover/topical_explore/`）曾经被当成唯一能翻页的路：
+ * 它一直用查询串传 `max_id`，本来就正常；而 `clips/*` 被错误地用查询串传，看起来就像
+ * "永远翻不动"。现在两条都能翻，`clips/*` 用来给视频流补"清一色视频"的页。
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -62,10 +65,10 @@ export class MobileClips {
   }
 
   /**
-   * 探索流兜底那一发（`clips/discover/`）。
+   * 探索 Reels 那一发（`clips/discover/`）。
    *
-   * **不要拿它当主路**：真机上它每页都回同样 4 条（见文件头）。
-   * 留着是因为"探索流 + 关注流都挂了"时它至少还能给 4 条能播的视频。
+   * 首页只有 4 条（`items_with_ads`），但**带 body 游标可以一直往下翻**（第二页 16 条 /
+   * 15 个作者 / 与第一页 0 重合）。视频流翻页用的就是它（`NativeReels.viaClips`）。
    */
   static async discover(cursor: string = ''): Promise<string | null> {
     return MobileClips.post(CLIPS_DISCOVER, cursor);
