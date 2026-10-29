@@ -233,6 +233,18 @@ class ReelsLane {
   seen: Set<string> = new Set<string>();
   /** 探索流的游标（首屏后台预取拿到，翻页直接用；空 = 还没拿到）。 */
   exploreCursor: string = '';
+  /**
+   * **clips 流自己的游标**（`clips/discover/` 与 `clips/discover/social/` 各一个）。
+   *
+   * 为什么单独记：实测 `max_id` **必须放在 form body** 里服务端才认（放 query 会被无视、
+   * 原样再回同一页）。放对之后 `clips/discover/` 第二页是 **16 条 / 15 个作者 / 0 重合**，
+   * 这才是真正能一直往下刷的 Reels 流（作者页那批是"某一个人的 12 条"）。
+   */
+  clipsCursor: string = '';
+  /** `clips/discover/social/`（好友那条）的游标。 */
+  friendsCursor: string = '';
+  /** `clips/connected/`（你关注的人）的游标。 */
+  connectedCursor: string = '';
   /** 后台预取探索流那一发是否在进行中。 */
   exploring: boolean = false;
   /**
@@ -257,7 +269,8 @@ export class NativeReels {
   private static saveDiagDone: boolean = false;
 
   /**
-   * 首屏那些 `clips/*` 换不动游标（每页都回同一批），所以首屏交付一个**占位游标**，
+   * 首屏交付一个**占位游标**（视图模型据此知道"还有下一页"），真正的翻页游标由本类自己管
+   * （`clips/*` 的 `max_id` 必须放 body 才生效，见 MobileClips.post —— 见下方 fetchNextPage）。
    * 让视图模型认为"还有下一页"；翻页时由作者页 / 探索流接手（见 fetchNextPage）。
    */
   private static readonly CURSOR_SENTINEL: string = '#clips';
@@ -385,7 +398,7 @@ export class NativeReels {
   /**
    * `clips/discover/social/` 那一发（instagrapi 的 `friends_reels`：Friends 那个 tab）。
    *
-   * 也是清一色视频、6 条 / 324KB / 1~2 秒；同样换不动游标，只用来把首屏铺满。
+   * 也是清一色视频、6 条 / 324KB / 1~2 秒；游标放 body 同样能接着翻（见 fetchNextPage）。
    * 归**关注**那条流：这一批是"好友/亲密关系"，不是推荐。
    */
   private static async viaFriends(lane: ReelsLane, cursor: string): Promise<NativeReelsPage | null> {
@@ -404,6 +417,9 @@ export class NativeReels {
       return null;
     }
     lane.lastSource = 'friends';
+    if (page.nextCursor.length > 0) {
+      lane.friendsCursor = page.nextCursor;
+    }
     NativeReels.noteAuthors(lane, page.reels);
     hilog.info(DOMAIN, TAG, 'reels via friends n=%{public}d more=%{public}s ms=%{public}d',
       page.reels.length, `${page.hasMore}`, page.ms);
@@ -491,6 +507,9 @@ export class NativeReels {
       return null;
     }
     lane.lastSource = 'connected';
+    if (page.nextCursor.length > 0) {
+      lane.connectedCursor = page.nextCursor;
+    }
     NativeReels.noteAuthors(lane, page.reels);
     hilog.info(DOMAIN, TAG, 'reels via connected n=%{public}d more=%{public}s cursor=%{public}d ms=%{public}d',
       page.reels.length, `${page.hasMore}`, page.nextCursor.length, page.ms);
@@ -500,7 +519,7 @@ export class NativeReels {
   /**
    * `clips/discover/` 那一发 = **探索流的首屏**。
    *
-   * 真机上它每页都回同样 3~4 条、游标换不动（见 core/mobileapi/MobileClips 文件头），
+   * 首屏 3~4 条；**游标放 body 之后能连着翻**（第二页 16 条 / 15 个作者，见 MobileClips.post），
    * 所以只当"一进探索页就有东西播"的第一屏，翻页交给探索流 + 作者页。
    */
   private static async viaClips(lane: ReelsLane, cursor: string): Promise<NativeReelsPage | null> {
@@ -516,6 +535,10 @@ export class NativeReels {
       return null;
     }
     lane.lastSource = 'clips';
+    // **真游标**：`max_id` 放 body 之后服务端才认（见 MobileClips.post），留着下一发接着翻。
+    if (page.nextCursor.length > 0) {
+      lane.clipsCursor = page.nextCursor;
+    }
     NativeReels.noteAuthors(lane, page.reels);
     hilog.info(DOMAIN, TAG, 'reels via clips n=%{public}d more=%{public}s cursor=%{public}d ms=%{public}d',
       page.reels.length, `${page.hasMore}`, page.nextCursor.length, page.ms);
@@ -772,7 +795,7 @@ export class NativeReels {
    *
    * instagrapi 的 ReelsMixin 只有三条源：
    *   `clips/connected/`（关注）· `clips/discover/`（探索 Reels）· `clips/discover/social/`（Friends）
-   * 它们**清一色是视频**、每发只要 200~330KB / 1~3 秒，但每页都回同一批条目（游标换不动内容）。
+   * 它们**清一色是视频**、每发只要 200~330KB / 1~3 秒；游标放 body 之后会真的换内容（见下）。
    * 而原来当主路的 `discover/topical_explore/` 是**图文混排**，真机实测：
    *
    *   21:40:01  connected n=5  ms=3081
@@ -786,7 +809,7 @@ export class NativeReels {
    *     凑够 `FIRST_MIN_REELS` 就直接交付，同时在后台预取探索流只为拿到它的游标（不阻塞）。
    *   · **翻页**：探索流（唯一真能翻页的源）**+ 一个作者的 `clips/user/`（12 条清一色视频）**
    *     合并着给 —— 单靠探索流每页只有 1~7 条视频，撑不住"一直往下刷"。
-   *   · 三条快通道的游标换不动，所以首屏给 `CURSOR_SENTINEL` 占位，翻页时由探索流接手。
+   *   · 翻页优先走同一个 clips 流的游标（放 body），拿不到再退作者页 / 探索流。
    *
    * @param userDriven 预留（现在不再区分：快通道本身就很轻，预热也用同一套）
    */
@@ -904,11 +927,32 @@ export class NativeReels {
   private static async fetchNextPage(source: string, cursor: string): Promise<NativeReelsPage | null> {
     const lane: ReelsLane = NativeReels.laneOf(source);
     const started: number = Date.now();
+    /*
+     * ① **真正的 Reels 流翻页**（游标放 body 之后才生效，见 MobileClips.post 的实测）：
+     *   · 探索：`clips/discover/` 第二页 16 条 / 15 个作者 / 与第一页 0 重合；
+     *   · 好友：`clips/discover/social/` 第二页 9 条 / 9 个作者；`clips/connected/` 第二页 10 条。
+     * 这才是"能一直往下刷、且每屏都不重复"的那条路 —— 以前游标放错位置，服务端每页都回同一批，
+     * 于是只能退到"某个作者的一页"（12 条同一个人），这就是用户看到的重复。
+     */
+    const streamCursor: string = source === REELS_SOURCE_FOLLOWING
+      ? lane.friendsCursor : lane.clipsCursor;
+    if (streamCursor.length > 0) {
+      const stream: NativeReelsPage | null = source === REELS_SOURCE_FOLLOWING
+        ? await NativeReels.viaFriends(lane, streamCursor)
+        : await NativeReels.viaClips(lane, streamCursor);
+      if (stream !== null && stream.reels.length > 0) {
+        hilog.info(DOMAIN, TAG, 'reels next stream src=%{public}s n=%{public}d ms=%{public}d',
+          source, stream.reels.length, Date.now() - started);
+        // **返回真游标**（不是哨兵）：下一发还能接着翻同一条流。
+        return new NativeReelsPage(stream.reels, stream.nextCursor, stream.hasMore,
+          Date.now() - started);
+      }
+    }
     const author: NativeReelsPage | null = await NativeReels.fetchAuthorPage(source);
     if (author !== null && author.reels.length > 0) {
       hilog.info(DOMAIN, TAG, 'reels next author src=%{public}s n=%{public}d ms=%{public}d pool=%{public}d',
         source, author.reels.length, Date.now() - started, lane.authors.length);
-      // 游标继续给哨兵：下一次翻页仍然"作者优先"，池子空了才会去打探索流。
+      // 游标继续给哨兵：下一次翻页仍然"流优先"，流翻不动才会再打作者页。
       return new NativeReelsPage(author.reels, NativeReels.CURSOR_SENTINEL, true,
         Date.now() - started);
     }
@@ -993,7 +1037,7 @@ export class NativeReels {
   /**
    * **探索流**（`discover/topical_explore/`，见 core/mobileapi/MobileDiscover）是 Reels 的主路。
    *
-   * 为什么是它（真机实测）：`clips/discover/` 的游标换不动内容（每页都回同样 4 条），
+   * 为什么是它（真机实测）：`clips/discover/` 首屏只回 3~4 条（游标放 query 时换不动内容），
    * 而探索流的 `max_id` 翻页**真的换内容**（第二页短码与第一页完全不重合）。
    *
    * 代价说清楚：它是"推荐/探索"的排序，不是 Reels 标签那套个性化排序；封面/音乐字段也可能稀疏

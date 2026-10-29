@@ -79,8 +79,18 @@ export class MobileClips {
   /**
    * 发一发 `clips/*`（拿不到给 null）。
    *
-   * @param endpoint `clips/connected/` 或 `clips/discover/`
-   * @param cursor 上一页 `paging_info.max_id`（空串 = 第一页）
+   * ## 游标必须放 **form body**（2026-10-30 用同一份会话实测）
+   *   · 放查询串（`?max_id=…`）→ 服务端**无视**它，把同一页原样再回一遍（字节数都一样，
+   *     只是顺序被重排）—— 这就是"前四条视频固定、只有顺序变"的根因；
+   *   · 放 body（`max_id=…`）→ 真的翻页：`clips/discover/` 第二页 **16 条 / 15 个作者 /
+   *     与第一页 0 重合**，第三页同样全新。`clips/discover/social/`、`clips/connected/` 同理。
+   *
+   * 为什么带游标时**先不发签名**：签名会把表单包装成 `signed_body=SIG.<…>`，而这条端点
+   * 在签名体里读不到 `max_id`（同一类问题在 `friendships/show_many` 上已经踩过，见
+   * MobileNews.showMany）。先未签名、失败再退回签名。
+   *
+   * @param endpoint `clips/connected/` / `clips/discover/` / `clips/discover/social/`
+   * @param cursor 上一页的 `next_max_id`（或 `paging_info.max_id`；空串 = 第一页）
    */
   private static async post(endpoint: string, cursor: string): Promise<string | null> {
     const identity: MobileIdentity | null = await MobileSession.getInstance().ensure();
@@ -88,17 +98,24 @@ export class MobileClips {
       MobileClips.lastDetail = 'no-session';
       return null;
     }
-    let params: string = '';
+    const opts: MobileOptions = new MobileOptions(ApiThrottle.CLIPS, ApiThrottle.interactive());
+    let result: MobileResult;
     if (cursor.length > 0) {
-      params = `max_id=${encodeURIComponent(cursor)}`;
+      // 翻页：游标进 body，先未签名（见上面那段实测说明）。
+      const payload: string = `max_id=${encodeURIComponent(cursor)}`;
+      result = await MobileRequest.send(endpoint, payload, '', false, null, opts);
+      if (!result.ok) {
+        hilog.info(DOMAIN, TAG, 'clips cursor(unsigned) failed %{public}s (%{public}s) → signed',
+          endpoint, result.summary());
+        result = await MobileRequest.send(endpoint, payload, '', true, null, opts);
+      }
+    } else {
+      /*
+       * 第一页：沿用 instagrapi 那条形状（体里一个空格、参数全在查询串，签名照发）。
+       * `data=" "` 不是笔误：这条要 POST，但第一页没有参数，给个空格让签名有非空输入。
+       */
+      result = await MobileRequest.send(endpoint, ' ', '', true, null, opts);
     }
-    /*
-     * `data=" "`（一个空格）不是笔误：instagrapi 就是这么发的 —— 这条要 POST，
-     * 但参数全在查询串里，体里给个空格让签名有一个非空输入。照抄最稳。
-     */
-    const result: MobileResult = await MobileRequest.send(
-      endpoint, ' ', params, true, null,
-      new MobileOptions(ApiThrottle.CLIPS, ApiThrottle.interactive()));
     if (!result.ok) {
       MobileClips.lastDetail = result.summary();
       hilog.info(DOMAIN, TAG, 'clips miss %{public}s %{public}s', endpoint, MobileClips.lastDetail);
