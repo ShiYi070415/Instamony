@@ -511,6 +511,16 @@ export class CaaLogin {
   private static last2faDigest: string = '';
 
   /**
+   * **这一次 2FA 的原始响应**（账密那一发 + entrypoint + method_picker，截断到 400KB）。
+   *
+   * 为什么还要原文：摘要只能"按已知关键字捞"，而 IG 的 Bloks 布局是用**变量引用**拼出来的
+   * （异步 action 的 app id 在变量表里，摘要里那几个 `(e25 2)` / `(fom 13704)` 就是它）——
+   * 光看摘要认不出该往哪个 app 打。原文落到 `filesDir/Instamony_2fa.txt`，
+   * 开发者用 hdc 取走就能照着它把"等同意"那一发拼出来。
+   */
+  private static last2faRaw: string = '';
+
+  /**
    * 最近一次 `send_login_request` 的**请求体脱敏副本**（`password` / `aac` 换成占位符）。
    *
    * 用来和桌面 JS 那条链路（同一份参数结构、回 200）逐键比对 —— 两边都按同样规则脱敏，
@@ -844,6 +854,30 @@ export class CaaLogin {
     return CaaLogin.last2faDigest;
   }
 
+  /** 这一次 2FA 的**原始响应**（见 last2faRaw；空串 = 没有）。 */
+  static twoFactorRawNow(): string {
+    return CaaLogin.last2faRaw;
+  }
+
+  /** 把一份原始响应并进 last2faRaw（带小节标题；总量封顶 400KB）。 */
+  private static appendTwoFactorRaw(title: string, body: string): void {
+    if (body.length === 0 || CaaLogin.last2faRaw.length > 400000) {
+      return;
+    }
+    const cut: string = body.length > 200000 ? body.substring(0, 200000) : body;
+    CaaLogin.last2faRaw = `${CaaLogin.last2faRaw}\n\n### ${title}\n${cut}`;
+  }
+
+  /** 一份已解析的响应转回文本（诊断落盘用；失败给空串）。 */
+  private static rawText(payload: ESObject): string {
+    try {
+      const text: string = JSON.stringify(payload);
+      return text.length > 200000 ? text.substring(0, 200000) : text;
+    } catch (error) {
+      return '';
+    }
+  }
+
   /**
    * **把 2FA 那几个屏幕也各打一发，摘一份摘要出来**（诊断用，见 last2faDigest）。
    *
@@ -877,6 +911,7 @@ export class CaaLogin {
       }, entrySpec === null ? {} : entrySpec.serverParams);
       const entry: CaaHttpReply =
         await CaaLogin.bloksAppBestHost(identity, extra, entryApp, entryParams);
+      CaaLogin.appendTwoFactorRaw('entrypoint', entry.body);
       const entryPayload: ESObject = CaaLogin.parse(entry.body);
       parts.push(`[entrypoint ${entry.status} ${entry.host}]\n`
         + CaaLogin.digestTwoStep(entryPayload));
@@ -896,6 +931,7 @@ export class CaaLogin {
       }, pickerSpec === null ? {} : pickerSpec.serverParams);
       const picker: CaaHttpReply =
         await CaaLogin.bloksAppBestHost(identity, extra, pickerApp, pickerParams);
+      CaaLogin.appendTwoFactorRaw('method_picker', picker.body);
       parts.push(`[method_picker ${picker.status} ${picker.host}]\n`
         + CaaLogin.digestTwoStep(CaaLogin.parse(picker.body)));
     } catch (error) {
@@ -958,6 +994,32 @@ export class CaaLogin {
         }
       }
       lines.push(`[统计] 字符串 ${strings.length} 段 / 命中 ${kept} 段`);
+      /*
+       * **布局里出现过的所有 Bloks app id**（含变量表里的异步 action 目标）。
+       *
+       * 这一段是"等同意"的关键线索：真机实测（2026-10-30）entrypoint 那一屏里有
+       * `TWO_STEP_VERIFICATION_APPROVE_FROM_ANOTHER_DEVICE:is_timer_running` 和一个
+       * **7500ms 的轮询定时器**，但异步 action 的 app id 是**变量引用**（`(e25 2)` / `(fom 13704)`），
+       * 不是我们认的 `35 "com.bloks…"` 那套写法 —— 所以专门把 payload 里所有 `com.bloks.*`
+       * 字符串列出来，照着它就能把那一发拼出来。
+       */
+      const bloksIds: Array<string> = [];
+      const re: RegExp = /com\.bloks\.[A-Za-z0-9_.]+/g;
+      const all: Array<string> = [];
+      collectStrings(payload, all);
+      for (let index: number = 0; index < all.length; index++) {
+        const found: RegExpMatchArray | null = all[index].match(re);
+        if (found === null) {
+          continue;
+        }
+        for (let f: number = 0; f < found.length; f++) {
+          const id: string = found[f];
+          if (bloksIds.indexOf(id) < 0) {
+            bloksIds.push(id);
+          }
+        }
+      }
+      lines.push(`[布局里出现过的 bloks app] ${bloksIds.length > 0 ? bloksIds.join(' | ') : '-'}`);
       const specs: Array<CaaCallSpec> = CaaLogin.nextCallSpecs(payload);
       const apps: Array<string> = [];
       for (let index: number = 0; index < specs.length; index++) {
@@ -1331,6 +1393,7 @@ export class CaaLogin {
     CaaLogin.approvalKind = '';
     // 这一次登录的 2FA 现场摘要（见 last2faDigest）：重新登录就从空的开始。
     CaaLogin.last2faDigest = '';
+    CaaLogin.last2faRaw = '';
     const usdidHeader: string = await usdid.header();
     const extra: Record<string, string> = {};
     extra['X-Meta-Usdid'] = usdidHeader;
@@ -1616,6 +1679,7 @@ export class CaaLogin {
         CaaLogin.pending = new CaaPending(identity, extra, payload, aac, context);
         // 现场摘要（诊断用，见 last2faDigest）：用户复现一次就能把形状带出来。
         CaaLogin.last2faDigest = CaaLogin.digestTwoStep(payload);
+        CaaLogin.last2faRaw = '### send_login_request\n' + CaaLogin.rawText(payload);
         /*
          * 再在后台把 entrypoint / method_picker 两屏也各打一发，把"这次到底有哪些验证方式"
          * 一起记进摘要（见 inspectTwoStepScreens）。旁路：成败都不影响用户交码。

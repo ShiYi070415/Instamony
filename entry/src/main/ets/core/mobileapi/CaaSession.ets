@@ -17,6 +17,7 @@
 
 import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
+import { fileIo } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 // 另一套 HTTP 实现（见 rcpProbe：排除"鸿蒙 http 模块这一侧"的嫌疑）。
@@ -41,6 +42,8 @@ const STORE_NAME: string = 'instarmony_caa';
  * "界面上万一有两个定时器"的情况，不会把请求量翻倍。
  */
 const APPROVAL_MIN_GAP_MS: number = 2500;
+/** 2FA 原始响应落盘的文件名（在 filesDir 下，见 writeTwoFactorProbe）。 */
+const TWO_FACTOR_PROBE_FILE: string = 'Instamony_2fa.txt';
 const KEY_USDID: string = 'usdid';
 const KEY_KID: string = 'usdid_kid';
 const KEY_PRIVATE: string = 'usdid_private';
@@ -100,6 +103,8 @@ export class CaaSession {
   private static store: preferences.Preferences | null = null;
   /** 已解出来的设备身份（进程内缓存：私钥解析要动 crypto，不必每次重做）。 */
   private static device: CaaUsdid | null = null;
+  /** 应用的 filesDir（`init` 里给；2FA 现场原文落在它下面，见 writeTwoFactorProbe）。 */
+  private static filesDir: string = '';
   /** 「在另一台设备上同意」那次轮询的时刻（节流用，见 approvalTick）。 */
   private static approvalAt: number = 0;
   /** 上一次轮询的结论（节流期内直接返回它）。 */
@@ -107,6 +112,12 @@ export class CaaSession {
 
   /** 打开设备身份的仓（幂等；`EntryAbility.onCreate` 里和 `MobileSession.init` 一起调）。 */
   static init(context: common.Context): void {
+    // filesDir 先记下来（2FA 现场原文要写在那儿；prefs 打不开也该能写）。
+    try {
+      CaaSession.filesDir = context.filesDir;
+    } catch (error) {
+      CaaSession.filesDir = '';
+    }
     if (CaaSession.store !== null) {
       return;
     }
@@ -212,6 +223,15 @@ export class CaaSession {
     // 要 2FA 时把现场摘要落盘（见 KEY_LAST_2FA）：用户复现一次就能把它复制出来分析。
     if (result.needsCode) {
       CaaSession.rememberTwoFactor(CaaLogin.twoFactorDigestNow());
+      /*
+       * **等 entrypoint / method_picker 那两发回来之后，把原始响应落成文件**
+       * （见 writeTwoFactorProbe）。12 秒是拍脑袋的上限：两发都是几百 KB 的 Bloks 布局，
+       * 真机实测 3~6 秒回来；这个定时器只是兜底，用户这会儿正在 2FA 面板上。
+       */
+      setTimeout((): void => {
+        CaaSession.writeTwoFactorProbe(CaaLogin.twoFactorRawNow());
+        CaaSession.rememberTwoFactor(CaaLogin.twoFactorDigestNow());
+      }, 12000);
     }
     return await CaaSession.finish(result);
   }
@@ -313,6 +333,36 @@ export class CaaSession {
       return;
     }
     CaaSession.writeText(KEY_LAST_2FA, text);
+  }
+
+  /**
+   * **把 2FA 原始响应写到 `filesDir/Instamony_2fa.txt`**（诊断用，见 CaaLogin.last2faRaw）。
+   *
+   * 为什么不塞进 preferences：原文有几百 KB，prefs 装不下也不该装。
+   * 落成文件之后，开发者可以用 hdc 直接取走（用户不必再复制那一大坨）。
+   */
+  static writeTwoFactorProbe(text: string): void {
+    if (text.length === 0) {
+      return;
+    }
+    const dir: string = CaaSession.filesDir;
+    if (dir.length === 0) {
+      hilog.warn(DOMAIN, TAG, '2fa probe skipped: no filesDir');
+      return;
+    }
+    try {
+      const path: string = `${dir}/${TWO_FACTOR_PROBE_FILE}`;
+      const file: fileIo.File = fileIo.openSync(path,
+        fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
+      try {
+        fileIo.writeSync(file.fd, text);
+      } finally {
+        fileIo.closeSync(file);
+      }
+      hilog.info(DOMAIN, TAG, '2fa probe written %{public}d chars', text.length);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, '2fa probe write failed: %{public}s', (error as Error).message);
+    }
   }
 
   /**
