@@ -59,8 +59,19 @@ const PULL_MAX_VP: number = 168;
 const PULL_DAMP: number = 0.5;
 /** 往下拖时可以"收回"的余量：上滑超过这个距离就不再算下拉（避免误触）。 */
 const PULL_CANCEL_VP: number = 24;
-/** 指示器距离页面顶端的偏移（vp；避开状态栏与标题栏）。 */
-const PULL_PILL_TOP_VP: number = 84;
+/**
+ * 指示器距离页面顶端的偏移（vp）。
+ *
+ * **必须让开 HDS 标题栏**：这一页的内容层是从屏幕最顶上铺的（视频要能穿到标题栏底下），
+ * 所以 y=0 是屏幕顶边。标题栏那一段 = 状态栏 + 56vp 标题栏 ≈ 94vp（与信息流那个
+ * `FEED_START_OFFSET = 94` 同源），早先写 84 就被盖住了（用户报的"被遮挡"）。
+ * 104 = 94 + 10 的呼吸间距。
+ */
+const PULL_PILL_TOP_VP: number = 104;
+/** 指示器胶囊的长宽（vp）：定宽而不是自适应 —— 文案在"下拉/松开/正在刷新"之间切换，
+ *  自适应会让胶囊在刷新那一瞬间抖一下。124 够放下最长那句（图标 16 + 间隔 6 + 5 个字）。 */
+const PULL_PILL_W: number = 124;
+const PULL_PILL_H: number = 34;
 /** 作者行的左右留白（vp）。 */
 const SIDE_PADDING: number = 16;
 /**
@@ -2318,8 +2329,18 @@ export struct ReelsPage {
   @State private refreshing: boolean = false;
   /** 这一次触摸里，下拉的起点 y（vp；-1 = 这次触摸不判下拉）。 */
   private pullStartY: number = -1;
+  /**
+   * 这一次触摸里**有没有拉到过阈值**。
+   *
+   * 为什么不能只看抬手那一瞬的 `pullOffset`：Swiper 在抢手势/回弹时会把最后几个 Move 的
+   * 位移吃掉（真机表现为"明明看到'松开刷新'了，松手却没反应"）。所以拉过就算数，
+   * 抬手时按这个旗子判。
+   */
+  private pullPeaked: boolean = false;
   /** 视频静音（全局开关，媒体区右上角那颗喇叭键改它）。 */
   @StorageProp(SETTING_VIDEO_MUTED) videoMuted: boolean = false;
+  /** 材质厚度：下拉刷新那颗胶囊的沉浸光感跟着设定页那一档（与标题栏/底栏同源）。 */
+  @StorageProp(SETTING_MATERIAL_THICKNESS) materialThickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
   /** 屏幕宽度（vp）：交给信息层做正文折叠排版（见 ReelOverlay.captionPrefix）。 */
   @State private screenWidthVp: number = FALLBACK_WIDTH_VP;
   /**
@@ -2470,6 +2491,7 @@ export struct ReelsPage {
     if (event.type === TouchType.Down) {
       this.swipeReported = false;
       // 只有"停在第一条"时这一次触摸才可能是一次下拉刷新（见 trackPullDown）。
+      this.pullPeaked = false;
       this.pullStartY = this.canPullRefresh() ? this.touchY(event) : -1;
       return;
     }
@@ -2484,7 +2506,7 @@ export struct ReelsPage {
     if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
       // 抬手：这一次触摸的额度用完（下一次 Down 会重新放开）。
       this.swipeReported = true;
-      this.endPullDown(event.type === TouchType.Cancel);
+      this.endPullDown();
     }
   }
 
@@ -2506,13 +2528,19 @@ export struct ReelsPage {
     return this.activeIndex <= 0;
   }
 
-  /** 事件里第一根手指的 y（vp；拿不到给 NaN 之外的兜底值 0）。 */
+  /**
+   * 事件里第一根手指的 y（vp）。
+   *
+   * 用**窗口坐标** `windowY` 而不是相对组件的 `y`：下拉过程中 Swiper 自己会位移/回弹，
+   * 相对坐标会跟着抖，量出来的距离时大时小（真机上就出现过"明明拉够了却不触发"）。
+   * 窗口坐标只跟手指在屏幕上的位置有关。
+   */
   private touchY(event: TouchEvent): number {
     const touches: Array<TouchObject> = event.touches;
     if (touches.length === 0) {
       return 0;
     }
-    return touches[0].y;
+    return touches[0].windowY;
   }
 
   /**
@@ -2533,6 +2561,9 @@ export struct ReelsPage {
     const dy: number = this.touchY(event) - this.pullStartY;
     if (dy > 0) {
       this.pullOffset = Math.min(PULL_MAX_VP, dy * PULL_DAMP);
+      if (this.pullOffset >= PULL_TRIGGER_VP) {
+        this.pullPeaked = true;
+      }
       return;
     }
     if (this.pullOffset !== 0) {
@@ -2545,17 +2576,19 @@ export struct ReelsPage {
   }
 
   /**
-   * 手指抬起：过了阈值就刷新，否则把指示器收回去。
+   * 手指抬起（或系统取消）：过了阈值就刷新，否则把指示器收回去。
    *
-   * @param cancelled 系统取消了这次触摸（来电 / 手势被抢）：一律只回收，不触发刷新 ——
-   *   取消不代表用户想刷新。
+   * **`Cancel` 也按"抬手"处理**：Swiper 在抢走竖向手势时会给 onTouch 发 Cancel 而不是 Up
+   * （真机上就是"拉够了、松手后什么都不发生"的主因）。真正该忽略的情况是"根本没拉到阈值"，
+   * 那个由 `pullOffset` 自己判掉。
    */
-  private endPullDown(cancelled: boolean): void {
+  private endPullDown(): void {
     if (this.pullStartY < 0) {
       return;
     }
     this.pullStartY = -1;
-    const triggered: boolean = !cancelled && this.pullOffset >= PULL_TRIGGER_VP;
+    const triggered: boolean = this.pullPeaked;
+    this.pullPeaked = false;
     this.pullOffset = 0;
     if (!triggered) {
       return;
@@ -3144,34 +3177,56 @@ export struct ReelsPage {
   }
 
   /**
-   * 下拉刷新那颗指示器：**下拉刷新 →（过阈值）松开刷新 → 正在刷新…**。
+   * 下拉刷新那颗指示器（**沉浸光感**胶囊）：下拉刷新 →（过阈值）松开刷新 → 正在刷新…。
    *
-   * 用胶囊而不是系统 `Refresh` 那颗转圈：这一页没有 List/Scroll，`Refresh` 的转圈挪不出来
-   * （见常量那段说明），所以自己画一颗风格一致的 —— 深色半透明底 + 白字，压在视频画面上
-   * 也读得清。
+   * 材质和 app 其它控件同一套（见 MaterialSurface）：底层 `Toggle` 只承载材质、不吃触摸
+   * （`hitTestBehavior(None)`），图标与文案透明地压在它上面 —— `Text` 自己不能挂沉浸光感，
+   * 只能这样叠。颜色用 `primary_text`：材质会自动反色，深浅两种主题下都读得清。
+   *
+   * 位置由外层那个对齐到顶部的 `Column` 给（见 PULL_PILL_TOP_VP：要让开 HDS 标题栏）。
    */
   @Builder
   pullIndicator() {
-    Row({ space: 8 }) {
-      if (this.refreshing) {
-        LoadingProgress()
-          .width(18)
-          .height(18)
-          .color(Color.White)
-      } else {
-        SymbolGlyph($r('sys.symbol.arrow_clockwise'))
-          .fontSize(16)
-          .fontColor([Color.White])
-          .opacity(this.pullOffset >= PULL_TRIGGER_VP ? 0.4 : 1)
+    Stack({ alignContent: Alignment.Center }) {
+      // 底层：材质底板（胶囊）
+      Toggle({ type: ToggleType.Button, isOn: false }) {
+        Text('')
       }
-      Text(this.refreshing ? '正在刷新…'
-        : (this.pullOffset >= PULL_TRIGGER_VP ? '松开刷新' : '下拉刷新'))
-        .fontSize(12)
-        .fontColor(Color.White)
+      .width(PULL_PILL_W)
+      .height(PULL_PILL_H)
+      .padding(0)
+      .borderRadius(PULL_PILL_H / 2)
+      .backgroundColor(Color.Transparent)
+      // 选中态透明：Toggle 默认选中色是主题强调色，不清掉整条会变蓝。
+      .selectedColor(Color.Transparent)
+      .attributeModifier(new SurfaceModifier(this.materialThickness, false))
+      .hitTestBehavior(HitTestMode.None)
+
+      // 上层：图标 + 文案
+      Row({ space: 6 }) {
+        if (this.refreshing) {
+          LoadingProgress()
+            .width(16)
+            .height(16)
+            .color($r('app.color.primary_text'))
+        } else {
+          SymbolGlyph($r('sys.symbol.arrow_clockwise'))
+            .fontSize(15)
+            .fontColor([$r('app.color.primary_text')])
+            .opacity(this.pullOffset >= PULL_TRIGGER_VP ? 0.4 : 1)
+        }
+        Text(this.refreshing ? '正在刷新…'
+          : (this.pullOffset >= PULL_TRIGGER_VP ? '松开刷新' : '下拉刷新'))
+          .fontSize(12)
+          .fontColor($r('app.color.primary_text'))
+          .maxLines(1)
+      }
+      .height(PULL_PILL_H)
+      .justifyContent(FlexAlign.Center)
     }
-    .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-    .borderRadius(16)
-    .backgroundColor('#66000000')
+    .width(PULL_PILL_W)
+    .height(PULL_PILL_H)
+    .borderRadius(PULL_PILL_H / 2)
   }
 
   build() {
