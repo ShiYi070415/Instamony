@@ -1579,8 +1579,19 @@ export class CaaLogin {
     }
 
     const error: string = bloksErrorText(payload);
-    const failed: CaaResult = new CaaResult(false,
-      error.length > 0 ? `登录失败：${error}` : '响应里没找到登录结果（布局形状可能变了）');
+    /*
+     * 「密码错误」是 IG 的**结论**，不是我们能改的传输问题（加密载荷已按 instagrapi
+     * 逐字节对齐并验证过）。但从真机反馈看，用户经常拿着这句提示不知道下一步做什么，
+     * 所以这里补一句可执行的话。只在 IG 说密码/账号相关时才补，别的失败不乱加。
+     */
+    const credential: boolean = error.indexOf('密码') >= 0 || error.indexOf('账号') >= 0
+      || error.toLowerCase().indexOf('password') >= 0
+      || error.toLowerCase().indexOf('incorrect') >= 0;
+    const advice: string = credential
+      ? '（口令是 IG 判的：先确认官方 App 能用同一账号密码登录；VPN 先关掉；'
+        + '连续失败就先等 30 分钟再试）' : '';
+    const failed: CaaResult = new CaaResult(false, error.length > 0
+      ? `登录失败：${error}${advice}` : '响应里没找到登录结果（布局形状可能变了）');
     /*
      * 失败时把**原始响应**带回去（截断到 100KB）。
      *
@@ -2683,6 +2694,15 @@ export class CaaLogin {
       if (csrf.length > 0) {
         headers['X-CSRFToken'] = csrf;
       }
+      /*
+       * **GET**（和 instagrapi 一致）。
+       *
+       * 实测（2026-10-30，本机对 IG 线上环境）：这个端点 GET 回 `405 Method Not Allowed`
+       * + `allow: POST`，POST 带随便一个 body 回 500 —— **两种都不给 `set-cookie`**，
+       * 但响应头里照样带加密公钥和 `ig-set-x-mid`。既然 GET 与上游实现一致、密钥也能拿到，
+       * 就不去赌 POST 的 body 形状（赌错了只是多一发 500，反而更像异常客户端）。
+       * 缺 Cookie 这件事记进 `lastPasswordKeysNote`，登录日志里能直接看到。
+       */
       const response: http.HttpResponse = await request.request(
         'https://i.instagram.com/api/v1/qe/sync/', {
           method: http.RequestMethod.GET,
@@ -2703,12 +2723,19 @@ export class CaaLogin {
             keyId = Number.parseInt(`${record[key]}`, 10);
           } else if (lower === 'ig-set-password-encryption-pub-key') {
             publicKey = `${record[key]}`;
+          } else if (lower === 'ig-set-x-mid') {
+            // 服务端下发的 machine id 比本地随机生成的更"可信"，有了就换上。
+            const mid: string = `${record[key]}`.trim();
+            if (mid.length > 0 && mid !== identity.mid) {
+              identity.mid = mid;
+            }
           }
         }
       }
       const parsed: number = Number.isFinite(keyId) ? keyId : 0;
-      CaaLogin.lastPasswordKeysNote = `qe/sync(http) status=${response.responseCode}`
-        + ` keyId=${parsed} pubKeyLen=${publicKey.length}`;
+      CaaLogin.lastPasswordKeysNote = `qe/sync status=${response.responseCode}`
+        + ` keyId=${parsed} pubKeyLen=${publicKey.length}`
+        + ` cookie=${CaaLogin.cookieNames() || '(空)'}`;
       return parsed > 0 && publicKey.length > 0 ? new PasswordKeys(parsed, publicKey) : null;
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'password keys failed: %{public}s', (error as Error).message);
