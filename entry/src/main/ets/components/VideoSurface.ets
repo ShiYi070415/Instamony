@@ -264,6 +264,8 @@ export struct VideoSurface {
   private appliedSpeed: number = 0;
   /** 上一次上报进度的时刻（节流用，见 PROGRESS_REPORT_MIN_MS）。 */
   private lastProgressMs: number = 0;
+  /** 上一次把"播到第几秒"写进崩溃日志的时刻（5 秒一次，见 reportProgress）。 */
+  private lastProbeMs: number = 0;
   /**
    * 应用现在是不是前台。
    *
@@ -447,9 +449,7 @@ export struct VideoSurface {
     if (player === null) {
       return;
     }
-    if (state === 'initialized' || state === 'prepared' || state === 'playing') {
-      ReelsCrashLog.noteNow(`state=${state} seg=${this.segment}/${this.activeSegment}`);
-    }
+    ReelsCrashLog.noteNow(`state=${state} seg=${this.segment}/${this.activeSegment}`);
     if (state === 'initialized') {
       // 有表面就先挂上；**没有表面则把 prepare 挂起**（等 onLoad 补一次）。
       //
@@ -567,6 +567,17 @@ export struct VideoSurface {
       return;
     }
     this.lastProgressMs = now;
+    /*
+     * **每 5 秒记一行"播到第几秒"**。
+     *
+     * 崩溃若总发生在"播到第 N 秒"附近，就说明是解码器遇到特定帧/GOP 崩的（原生崩溃里最典型的一种）；
+     * 若每次都是"刚起播几秒"，那就是播放器生命周期/表面那边的问题。这条信息很便宜，但能定性。
+     */
+    if (now - this.lastProbeMs >= 5000) {
+      this.lastProbeMs = now;
+      ReelsCrashLog.noteNow(`progress=${Math.floor(positionMs / 1000)}s `
+        + `seg=${this.segment}/${this.activeSegment}`);
+    }
     const total: number = this.playerDurationMs();
     try {
       this.onProgress(positionMs > 0 ? positionMs : 0, total);
