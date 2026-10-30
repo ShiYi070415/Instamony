@@ -66,6 +66,7 @@ import { PushTokenReporter } from '../core/PushTokenReporter';
 import { CaaSession } from '../core/mobileapi/CaaSession';
 // 登录日志（登录失败时让用户自己把现场带出来，见 core/LoginLog）。
 import { LoginLog } from '../core/LoginLog';
+import { MeoW } from '../core/MeoW';
 import { NetQuality, NodeReport } from '../core/NetQuality';
 import { MobileSession } from '../core/mobileapi/MobileSession';
 import { fileIo, picker } from '@kit.CoreFileKit';
@@ -1418,9 +1419,28 @@ export struct SettingsPanel {
     }
   }
 
-  /** 导出登录日志成一个 txt（系统文件选择器，不需要任何存储权限）。 */
+  /**
+   * **推送登录日志到 MeoW**（需求：点「导出登录日志」直接推给开发者，不再让用户找文件）。
+   *
+   * 推的是 `LoginLog.compose` 那份**已脱敏**的纯文本（不含密码、Cookie 值、会话）。
+   * 推送失败（网络 / 429 / 昵称未注册）**自动退回"存成 txt"**，别让用户的日志白跑一趟。
+   */
   private async exportLoginLog(): Promise<void> {
+    this.toast('正在推送登录日志到 MeoW…');
     const text: string = await LoginLog.compose(this.appVersionText());
+    const result: string = await MeoW.push('Instamony 登录日志', text);
+    hilog.info(DOMAIN, TAG, 'login log push: %{public}s', result.substring(0, 120));
+    if (result.indexOf('已推送') >= 0) {
+      this.toast(result);
+      return;
+    }
+    // 推送没成功：退回存文件（用户仍然能把日志带走）。
+    this.toast(result);
+    await this.saveLoginLogFile(text);
+  }
+
+  /** 把日志存成 txt（系统文件选择器，不需要任何存储权限）。 */
+  private async saveLoginLogFile(text: string): Promise<void> {
     const name: string = LoginLog.fileName();
     try {
       const context: common.UIAbilityContext =
@@ -2224,7 +2244,7 @@ export struct SettingsPanel {
             this.copyLoginLog();
           })
           this.cardDivider()
-          this.actionRow('导出登录日志', (): void => {
+          this.actionRow('推送登录日志（MeoW）', (): void => {
             this.exportLoginLog();
           })
           this.cardDivider()
