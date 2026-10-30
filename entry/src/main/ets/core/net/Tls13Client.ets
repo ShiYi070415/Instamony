@@ -1910,7 +1910,19 @@ export class Tls13Client {
 
   private static async addressOf(host: string): Promise<string> {
     try {
-      const ip: string = await DoHResolver.addressFor(host);
+      /*
+       * **强制走 DoH**（忽略设置页那个开关）。
+       *
+       * 2026-10-30 真机（Mate 80 Pro / SGT-AL00）：系统 DNS 把 `i.instagram.com`
+       * 解到 **74.86.12.172**（SoftLayer 的地址，明显是被污染/投毒的结果），
+       * connect 三次全 `Operation in progress`、系统栈 `Operation timeout` ——
+       * 用户换节点就好，说明"解析到的 IP 是假的"这一类问题在我们这条链上很常见。
+       *
+       * DoH 的端点表里本来就有 `223.5.5.5` / `dns.alidns.com`（国内可达）和
+       * Cloudflare/Google（国外线路），拿到的是真实 Meta 地址。它只影响**我们自己**
+       * 这条 TLS 通道（登录 / CAA / 自检），不碰系统设置；拿不到就退回系统 DNS。
+       */
+      const ip: string = await DoHResolver.addressFor(host, true);
       if (ip.length > 0 && ip !== host) {
         hilog.info(DOMAIN, TAG, 'connect via doh host=%{public}s ip=%{public}s', host, ip);
         return ip;
