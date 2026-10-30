@@ -33,9 +33,9 @@ const ENDPOINT: string = 'https://api.chuckfang.com/';
 /**
  * MeoW **接收方昵称**（消息落到谁那里）。
  *
- * 2026-10-30 用户指定：日志统一推到 **Yijin**。
+ * 2026-10-30 用户指定：日志统一推到 **Yijin0**（先 Yijin，后改为 Yijin0）。
  */
-const NICKNAME: string = 'Yijin';
+const NICKNAME: string = 'Yijin0';
 /**
  * 通知里显示的**名字/标题**。
  *
