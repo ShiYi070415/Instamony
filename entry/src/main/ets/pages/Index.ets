@@ -4090,6 +4090,15 @@ struct Index {
     if (outcome.ok) {
       return '';
     }
+    /*
+     * **登录失败后同步一次"账号安全验证"台账**。
+     *
+     * CAA 这条路上 IG 有时会把 checkpoint 报成"密码错误"（见 CaaLogin 里那段说明），
+     * 而 CaaLogin 现在会从网页接口把真正的 `checkpoint_url`（/auth_platform/?apc=…）
+     * 记进 MobileChallenge —— 这里立刻同步一次，用户就能看到横幅/弹窗里的「去验证」，
+     * 在我们的网页里把验证做完，而不是对着"密码错误"反复重试。
+     */
+    this.refreshChallengeState();
     return outcome.needsCode ? LOGIN_NEEDS_CODE : outcome.reason;
   }
 

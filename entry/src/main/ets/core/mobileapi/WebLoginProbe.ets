@@ -44,17 +44,24 @@ export class WebProbeResult {
   readonly nativeFlow: boolean;
   /** `/challenge/<uid>/<nonce>/` 这类 api_path（有的话）。 */
   readonly apiPath: string;
+  /**
+   * 真正的验证入口（新版验证平台给的是 `checkpoint_url`，形如
+   * `/auth_platform/?apc=…`）。有值就可以在我们的网页里直接打开让用户完成验证。
+   */
+  readonly checkpointUrl: string;
   /** 脱敏后的现场摘要（进登录日志）。 */
   readonly detailNote: string;
 
   constructor(text: string, credentialsOk: boolean, challengeType: string = '',
-              nativeFlow: boolean = false, apiPath: string = '', detailNote: string = '') {
+              nativeFlow: boolean = false, apiPath: string = '', detailNote: string = '',
+              checkpointUrl: string = '') {
     this.text = text;
     this.credentialsOk = credentialsOk;
     this.challengeType = challengeType;
     this.nativeFlow = nativeFlow;
     this.apiPath = apiPath;
     this.detailNote = detailNote;
+    this.checkpointUrl = checkpointUrl;
   }
 }
 
@@ -134,38 +141,42 @@ export class WebLoginProbe {
       || lower.indexOf('"native_flow": true') >= 0;
     const apiPath: string = WebLoginProbe.fieldOf(json, 'api_path');
     const challengeType: string = WebLoginProbe.fieldOf(json, 'challengeType');
+    // 新版验证平台：`{"message":"checkpoint_required","checkpoint_url":"/auth_platform/?apc=…"}`
+    const checkpointUrl: string = WebLoginProbe.fieldOf(json, 'checkpoint_url');
     const detail: string = `native_flow=${nativeFlow ? 'true' : 'false'}`
       + ` api_path=${apiPath.length > 0 ? apiPath : '(无)'}`
       + ` challengeType=${challengeType.length > 0 ? challengeType : '(无)'}`
+      + ` error_type=${WebLoginProbe.fieldOf(json, 'error_type') || '(无)'}`
       + ` raw=${json.length > 900 ? json.substring(0, 900) + '…' : json}`;
     if (lower.indexOf('"authenticated":true') >= 0) {
       return new WebProbeResult('IG 认可这组账号密码（网页接口直接给了会话）→ 问题在本机 CAA 链路',
-        true, challengeType, nativeFlow, apiPath, detail);
+        true, challengeType, nativeFlow, apiPath, detail, checkpointUrl);
     }
     if (lower.indexOf('two_factor_required') >= 0 || lower.indexOf('two_factor') >= 0) {
       return new WebProbeResult('密码是对的，IG 要两步验证（网页接口也这么要求）',
-        true, challengeType, nativeFlow, apiPath, detail);
+        true, challengeType, nativeFlow, apiPath, detail, checkpointUrl);
     }
     if (lower.indexOf('challenge') >= 0 || lower.indexOf('checkpoint') >= 0
       || lower.indexOf('consent') >= 0) {
       const how: string = nativeFlow
         ? '（这是 native_flow：只能在官方 App / 受信设备上完成，第三方客户端拿不到可提交的步骤）'
-        : (challengeType.length > 0 ? `（类型 ${challengeType}）` : '');
+        : (checkpointUrl.length > 0 ? '（可以在 App 内的验证网页里完成）'
+          : (challengeType.length > 0 ? `（类型 ${challengeType}）` : ''));
       return new WebProbeResult(`密码是对的，IG 要求安全验证（checkpoint）${how}`,
-        true, challengeType, nativeFlow, apiPath, detail);
+        true, challengeType, nativeFlow, apiPath, detail, checkpointUrl);
     }
     if (lower.indexOf('bad_password') >= 0 || lower.indexOf('"authenticated":false') >= 0) {
       return new WebProbeResult('网页接口也不认这组账号密码（IG 两个面结论一致）',
-        false, challengeType, nativeFlow, apiPath, detail);
+        false, challengeType, nativeFlow, apiPath, detail, checkpointUrl);
     }
     if (lower.indexOf('wait') >= 0 || lower.indexOf('too many') >= 0
       || lower.indexOf('rate') >= 0 || status === 429) {
       return new WebProbeResult('被 IG 限流了（先等 30 分钟再试）', false, challengeType,
-        nativeFlow, apiPath, detail);
+        nativeFlow, apiPath, detail, checkpointUrl);
     }
     const snippet: string = json.length > 160 ? `${json.substring(0, 160)}…` : json;
     return new WebProbeResult(`网页接口回了意料之外的东西（HTTP ${status}）：${snippet}`,
-      false, challengeType, nativeFlow, apiPath, detail);
+      false, challengeType, nativeFlow, apiPath, detail, checkpointUrl);
   }
 
   /** 从 JSON 文本里取一个字符串字段（值里不能再有引号，够用且不依赖解析器）。 */

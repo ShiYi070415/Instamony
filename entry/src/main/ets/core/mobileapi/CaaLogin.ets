@@ -38,6 +38,7 @@ import { MobileIdentity } from './MobileSession';
 import { MobileRequest } from './MobileRequest';
 import { base64, base64UrlNoPad, textOf, utf8 } from './MobileSign';
 import { WebLoginProbe, WebProbeResult } from './WebLoginProbe';
+import { MobileChallenge } from './MobileChallenge';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'CaaLogin';
@@ -1616,6 +1617,14 @@ export class CaaLogin {
       CaaLogin.lastWebProbeDetail = probed.detailNote;
       probeNote = probed.text;
       if (probed.credentialsOk) {
+        /*
+         * 把真正的验证入口交给 `MobileChallenge`：界面会立刻出现「去验证」，
+         * 在我们自己的网页（www.instagram.com 那个会话）里完成验证 —— 这是
+         * `/auth_platform/?apc=…` 这类 checkpoint 唯一能走的路。
+         */
+        if (probed.checkpointUrl.length > 0) {
+          MobileChallenge.noteUrl(probed.checkpointUrl);
+        }
         const how: string = probed.nativeFlow
           ? '这一步是 IG 的 native_flow checkpoint：只能在官方 App / 受信设备上完成，第三方客户端拿不到可提交的步骤。'
           : '请先在 Instagram 官方 App 或网页版用同一账号登录，把"确认是你"那一步做完，再回来登录。';

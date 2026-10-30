@@ -53,17 +53,58 @@ export class MobileChallenge {
     }
     const path: string = MobileChallenge.fieldOf(body, 'api_path');
     const raw: string = MobileChallenge.fieldOf(body, 'url');
+    // 新版验证平台（`AuthPlatformAntiScriptingException`）只给相对路径 `checkpoint_url`。
+    const checkpoint: string = MobileChallenge.fieldOf(body, 'checkpoint_url');
     let web: string = MobileChallenge.webUrl(path, raw);
+    if (web.length === 0 && checkpoint.length > 0) {
+      web = MobileChallenge.absolute(checkpoint);
+    }
     if (web.length === 0) {
       // 认不出具体地址也别丢信号：至少让界面提示"需要验证"，按钮退回挑战首页。
       web = 'https://www.instagram.com/challenge/';
     }
+    MobileChallenge.adopt(web, body.substring(0, 200));
+  }
+
+  /**
+   * 直接把"要在网页里打开的验证地址"记下来。
+   *
+   * 来源：`WebLoginProbe`（IG 网页登录接口）。CAA 这条路对 `/auth_platform/?apc=…`
+   * 这类验证只回"密码错误"（2026-10-30 真机实测），`note(body)` 永远等不到 `challenge`
+   * 片段；网页接口却明写着
+   *   `{"message":"checkpoint_required","error_type":"AuthPlatformAntiScriptingException",
+   *     "checkpoint_url":"/auth_platform/?apc=…"}`
+   * 交给这里，界面立刻就有「去验证」入口（我们自己的网页里完成验证）。
+   */
+  static noteUrl(url: string): void {
+    if (url.length === 0) {
+      return;
+    }
+    const web: string = MobileChallenge.absolute(url);
+    if (web.length === 0) {
+      return;
+    }
+    MobileChallenge.adopt(web, `checkpoint_url=${url.substring(0, 180)}`);
+  }
+
+  /** 相对地址补成 www 上的绝对地址（`i.instagram.com` 的也换到 www，网页会话在 www 上）。 */
+  private static absolute(url: string): string {
+    if (url.indexOf('http') === 0) {
+      return url.indexOf('i.instagram.com') >= 0
+        ? url.replace('i.instagram.com', 'www.instagram.com') : url;
+    }
+    const path: string = url.charAt(0) === '/' ? url : `/${url}`;
+    return `https://www.instagram.com${path}`;
+  }
+
+  /** 落到台账（地址没变就不动）+ 熔断可选流量。 */
+  private static adopt(web: string, detail: string): void {
     if (web === MobileChallenge.url) {
       return;
     }
     MobileChallenge.url = web;
     MobileChallenge.atMs = Date.now();
-    MobileChallenge.detail = body.substring(0, 200);
+    MobileChallenge.detail = detail;
     /*
      * **整账号熔断**：被要求过安全验证之后继续发请求，只会让 IG 把账号盯得更紧
      * （审计文档里"越打越久"的那一类）。这里停 1 小时的可选流量，等用户去网页里验完
