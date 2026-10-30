@@ -104,6 +104,18 @@ export class ReelsCrashLog {
     }
   }
 
+  /**
+   * 记一行并**立刻落盘**（关键路径用）。
+   *
+   * `note()` 是攒 4 行才刷一次；"进程被硬杀/原生崩"时最后 0~3 行会丢 —— 而崩溃前的
+   * 最后几步恰恰是最关键的（2026-10-30：`player create ok` 之后 30ms 就 ABORTED，
+   * 中间做了什么全靠猜）。这里给播放器初始化这种"一步都不许丢"的位置用。
+   */
+  static noteNow(text: string): void {
+    ReelsCrashLog.note(text);
+    ReelsCrashLog.flush();
+  }
+
   /** 立刻把这批行写下去。 */
   static flush(): void {
     if (!ReelsCrashLog.ready || ReelsCrashLog.buffer.length === 0) {

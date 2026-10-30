@@ -194,8 +194,8 @@ export struct VideoSurface {
     const alive: number = VideoSurface.alivePlayers;
     if (alive >= 3) {
       hilog.warn(DOMAIN, TAG, 'players alive=%{public}d url=%{public}s', alive, url);
-      ReelsCrashLog.note(`players alive=${alive} (create)`);
     }
+    ReelsCrashLog.note(`player create ok alive=${alive} (${url})`);
   }
 
   /** 释放一个播放器时的计数与打点。 */
@@ -207,8 +207,8 @@ export struct VideoSurface {
     if (alive >= 3) {
       hilog.warn(DOMAIN, TAG, 'players still alive=%{public}d after release url=%{public}s',
         alive, url);
-      ReelsCrashLog.note(`players alive=${alive} (release)`);
     }
+    ReelsCrashLog.note(`player release alive=${alive}`);
   }
   private surfaceId: string = '';
   /** 已经交给播放器的地址（见 onPropChanged 里那道判据）。 */
@@ -292,11 +292,22 @@ export struct VideoSurface {
   }
 
   /** 建播放器并挂状态机；策略在 setMediaSource 时就带上（那是最早能带的时机）。 */
-  private createPlayer(): void {    VideoProbe.log('createPlayer');
+  private createPlayer(): void {
+    VideoProbe.log('createPlayer');
     if (this.player !== null || this.creating || this.destroyed || !this.wanted()) {
       return;
     }
     this.creating = true;
+    /*
+     * **创建播放器这一发也要进滚动日志**（每次都记，不只 >=3 时记）。
+     *
+     * 2026-10-30 用户日志里崩溃前最后几步是
+     *   `switch -> 2/7` →（4ms 后）session ABORTED
+     * 而日志里只有 >=3 个播放器时才打点，看不出"这一刻在创建/释放第几个"。
+     * 把每一发都记下来，才能判断是不是"切条时播放器创建/释放交错"导致的硬崩。
+     */
+    ReelsCrashLog.note(`player create begin alive=${VideoSurface.alivePlayers} `
+      + `seg=${this.segment}/${this.activeSegment} preload=${this.preload ? 'y' : 'n'}`);
     media.createAVPlayer().then((player: media.AVPlayer): void => {
       this.creating = false;
       // 等播放器创出来的这段时间里，属性可能已经变了（用户滑走了）：那就当场释放，
@@ -412,6 +423,9 @@ export struct VideoSurface {
     const player: media.AVPlayer | null = this.player;
     if (player === null) {
       return;
+    }
+    if (state === 'initialized' || state === 'prepared' || state === 'playing') {
+      ReelsCrashLog.noteNow(`state=${state} seg=${this.segment}/${this.activeSegment}`);
     }
     if (state === 'initialized') {
       // 有表面就先挂上；**没有表面则把 prepare 挂起**（等 onLoad 补一次）。
@@ -682,6 +696,7 @@ export struct VideoSurface {
     if (player === null || this.destroyed) {
       return;
     }
+    ReelsCrashLog.noteNow(`prepare begin state=${player.state} surface=${this.surfaceReady ? 'y' : 'n'}`);
     this.watchPromise(player.prepare(), (error: BusinessError): void => {
       this.reportError(`prepare failed code=${error.code} msg=${error.message}`);
     });
@@ -821,6 +836,7 @@ export struct VideoSurface {
     if (player === null || this.surfaceId.length === 0) {
       return;
     }
+    ReelsCrashLog.noteNow(`bind surface begin state=${player.state} seg=${this.segment}/${this.activeSegment}`);
     try {
       player.surfaceId = this.surfaceId;
       this.surfaceReady = true;
@@ -835,6 +851,7 @@ export struct VideoSurface {
    * 两件事：把 surfaceId 挂上去；把"因为没表面而等着"的 prepare / play 补上。
    */
   private onSurfaceReady(): void {
+    ReelsCrashLog.noteNow(`surface ready seg=${this.segment}/${this.activeSegment} ` + `player=${this.player === null ? 'n' : 'y'} url=${this.url.length > 0 ? 'y' : 'n'}`);
     this.tryBindSurface();
     if (this.pendingPrepare && this.surfaceReady && !this.prepared) {
       this.pendingPrepare = false;
@@ -857,6 +874,7 @@ export struct VideoSurface {
     // play 之前补一次倍速：部分机型 pause → play 之后倍速会被播放器丢回 1.0（见 speed 的说明）。
     this.appliedSpeed = 0;
     this.applySpeed();
+    ReelsCrashLog.noteNow(`play begin state=${player.state}`);
     this.watchPromise(player.play(), (error: BusinessError): void => {
       hilog.warn(DOMAIN, TAG, 'play failed: %{public}s', error.message);
     });
@@ -888,6 +906,8 @@ export struct VideoSurface {
       showFirstFrameOnPrepare: true
     };
     try {
+      ReelsCrashLog.noteNow(`mediaSource begin state=${player.state} `
+        + `surface=${this.surfaceReady ? 'y' : 'n'}`);
       const source: media.MediaSource = media.createMediaSourceWithUrl(this.url, {});
       // 注意：实测这一版实现在**成功时返回 undefined**（接口声明是 Promise<void>）——
       // 直接 `.catch()` 会抛 "Cannot read property catch of undefined"，而且会被误当成"设源失败"。
@@ -895,6 +915,7 @@ export struct VideoSurface {
       this.watchPromise(player.setMediaSource(source, strategy), (error: BusinessError): void => {
         this.retrySource(`setMediaSource failed code=${error.code} msg=${error.message}`);
       });
+      ReelsCrashLog.noteNow(`mediaSource ok state=${player.state}`);
     } catch (error) {
       const err: BusinessError = error as BusinessError;
       this.retrySource(`setMediaSource threw code=${err.code} msg=${err.message}`);
