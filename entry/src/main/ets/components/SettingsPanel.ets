@@ -1428,7 +1428,7 @@ export struct SettingsPanel {
   private async exportLoginLog(): Promise<void> {
     this.toast('正在推送登录日志到 MeoW…');
     const text: string = await LoginLog.compose(this.appVersionText());
-    const result: string = await MeoW.push('Instamony 登录日志', text);
+    const result: string = await MeoW.pushLog(text);
     hilog.info(DOMAIN, TAG, 'login log push: %{public}s', result.substring(0, 120));
     if (result.indexOf('已推送') >= 0) {
       this.toast(result);

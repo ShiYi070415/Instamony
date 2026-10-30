@@ -31,18 +31,40 @@ const DOMAIN: number = 0xFF00;
 const TAG: string = 'MeoW';
 const ENDPOINT: string = 'https://api.chuckfang.com/';
 /**
- * MeoW 昵称（消息落在谁的手机上）。
+ * MeoW **接收方昵称**（消息落到谁那里）。
  *
- * 2026-10-30 用户指定：**栗子炸弹**（原来是 `Yijin`）。
+ * 2026-10-30 用户指定：日志统一推到 **Yijin**。
  */
-const NICKNAME: string = '栗子炸弹';
+const NICKNAME: string = 'Yijin';
+/**
+ * 通知里显示的**名字/标题**。
+ *
+ * 2026-10-30 用户指定：推送用户名称用 **栗子炸弹**（就是通知标题那一行）。
+ * 接口形态是 `POST /{昵称}/{title}`，所以"谁收"和"显示成什么"分别对应
+ * 昵称与标题两个位置。
+ */
+const SENDER_NAME: string = '栗子炸弹';
 /** 单条消息的长度上限：接口没写死，但通知里几万字也没法看，截断更稳。 */
 const MAX_MSG_CHARS: number = 3500;
 
 export class MeoW {
-  /** 现在的昵称（界面上可以显示，方便核对）。 */
+  /** 接收方昵称（界面上可以显示，方便核对）。 */
   static nickname(): string {
     return NICKNAME;
+  }
+
+  /** 通知标题里显示的名字。 */
+  static senderName(): string {
+    return SENDER_NAME;
+  }
+
+  /**
+   * 推一条**登录日志**：标题固定用 `栗子炸弹`，正文是已脱敏的日志。
+   *
+   * @returns 一行给人看的结论
+   */
+  static async pushLog(msg: string): Promise<string> {
+    return MeoW.push(SENDER_NAME, msg);
   }
 
   /**
@@ -77,7 +99,7 @@ export class MeoW {
       const message: string = MeoW.fieldText(text, 'msg');
       hilog.info(DOMAIN, TAG, 'push status=%{public}d len=%{public}d', status, body.length);
       if (status === 200) {
-        return `已推送到 MeoW（${NICKNAME}，${body.length} 字）`;
+        return `已推送到 MeoW（${NICKNAME}，标题「${title}」，${body.length} 字）`;
       }
       const why: string = status === 404 ? '昵称未注册'
         : status === 429 ? '频率/IP 超限（等几分钟再试，或换网络）'
