@@ -4243,6 +4243,24 @@ struct Index {
   }
 
   /**
+   * **网页登录兜底**：在 App 内的网页里登录一次，过人机验证 / 检查点。
+   *
+   * 背景（2026-10-30 两个真机反馈）：密码这条路会被 IG 的反脚本判定挡住，
+   * IG 给的是 `FakeIncorrectPassword` / `AuthPlatformAntiScriptingException`，
+   * 有时还会要求图形验证码 —— 而 **reCAPTCHA 只能在浏览器里渲染**，
+   * 原生实现替不了用户点，所以这时候必须回到网页。
+   *
+   * 网页登录成功后 Cookie 进同一份罐子，`watchLoginSession` 轮询发现会话就收起网页、
+   * 切主界面（沿用原来那条链路，见 refreshSessionFromJar）。
+   */
+  private webLoginFallback(): void {
+    hilog.info(DOMAIN, TAG, 'web login fallback: open instagram login page');
+    this.openWeb('https://www.instagram.com/accounts/login/');
+    this.watchLoginSession();
+    this.toast('在页面里登录（可能要过人机验证），成功后会自己进入');
+  }
+
+  /**
    * 把网页亮出来并导航到某条地址（登录 / 注册 / 帖子 / 私信会话 / 验证页都走这里）。
    *
    * 两种情况都要覆盖，见 `noteStartUrl` 与 `PageBridge.loadUrl`：
@@ -7268,6 +7286,17 @@ struct Index {
             LoginLog.rememberWebProbe(result.text, result.credentialsOk, result.detailNote);
             return result;
           });
+        },
+        /*
+         * **网页登录兜底**（登录页那行小字）：密码这条路被 IG 的反脚本判定挡住时
+         * （FakeIncorrectPassword / 反脚本检查点 / 图形验证码），只有网页能过人机验证 ——
+         * reCAPTCHA 必须由浏览器渲染，任何原生实现都替不了用户点。
+         *
+         * 走 App 内的隐藏网页（同一份 Cookie 罐）：登录成功后 `watchLoginSession`
+         * 会在 1.5 秒内发现会话、收起网页并切到主界面。
+         */
+        onWebLogin: (): void => {
+          this.webLoginFallback();
         },
         /*
          * **"在另一台设备上同意"的轮询**（需求："2FA 过程中可以在官方客户端同意本次登录，

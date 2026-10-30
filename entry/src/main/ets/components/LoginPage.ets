@@ -107,6 +107,16 @@ export struct LoginPage {
     (username: string, password: string): Promise<WebProbeResult> => {
       return Promise.resolve(new WebProbeResult('核对功能未接入', false));
     };
+  /**
+   * **网页登录兜底**：在 App 内的网页里登录一次（能过 IG 的人机验证 / 检查点）。
+   *
+   * 为什么需要：密码这条路被 IG 的反脚本判定挡住时（`FakeIncorrectPassword` /
+   * `AuthPlatformAntiScriptingException` / 图形验证码），**只有网页能过人机验证** ——
+   * reCAPTCHA 这类必须由浏览器渲染，任何原生实现都替不了用户点。网页登录成功后
+   * 会话 Cookie 进同一份罐子，App 会自动进入主界面。
+   */
+  onWebLogin: () => void = (): void => {
+  };
   /** 材质厚度：跟随设置页那一档（@StorageLink 与其它页面同源）。 */
   @StorageLink(SETTING_MATERIAL_THICKNESS) materialThickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
 
@@ -477,6 +487,23 @@ export struct LoginPage {
           .fontColor($r('app.color.secondary_text'))
           .width('100%')
       }
+
+      /*
+       * **人机验证的兜底**：密码这条路被反脚本判定挡住时，只有网页能过图形验证码 /
+       * 检查点（reCAPTCHA 必须由浏览器渲染）。登录成功后会话会进同一份 Cookie 罐，
+       * App 自动切到主界面。
+       */
+      Row({ space: 6 }) {
+        Text('还是进不去？用网页登录一次（能过人机验证）')
+          .fontSize(11)
+          .lineHeight(16)
+          .fontColor($r('app.color.brand_blue'))
+          .layoutWeight(1)
+          .onClick((): void => {
+            this.onWebLogin();
+          })
+      }
+      .width('100%')
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
