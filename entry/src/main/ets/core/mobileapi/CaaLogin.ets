@@ -972,7 +972,13 @@ export class CaaLogin {
       || lower.indexOf('refused') >= 0 || lower.indexOf('unreachable') >= 0
       || lower.indexOf('network') >= 0 || lower.indexOf('reset') >= 0
       || reason.indexOf('服务端没选 TLS1.3') >= 0 || reason.indexOf('别的套件') >= 0
-      || reason.indexOf('key_share') >= 0 || reason.indexOf('握手') >= 0;
+      || reason.indexOf('key_share') >= 0 || reason.indexOf('握手') >= 0
+      /*
+       * 解密失败也回退：证书链已经验过、钉住也过了，是**大响应逐条解密**在真机上
+       * 挂了（Mate 70 Pro+ 上就是 `第 3 条应用数据解密失败：cipher doFinal failed`）。
+       * 这类失败换系统栈能过，且没有把校验让给别人。
+       */
+      || reason.indexOf('解密失败') >= 0 || lower.indexOf('dofinal') >= 0;
   }
 
   private static async post(host: string, path: string, body: string,

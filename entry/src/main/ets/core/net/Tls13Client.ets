@@ -43,6 +43,9 @@ const TAG: string = 'Tls13Client';
 
 const TLS_RECORD_HANDSHAKE: number = 22;
 const TLS_RECORD_APPDATA: number = 23;
+/** 夹在应用数据里的握手类型：KeyUpdate(24) / NewSessionTicket(4)。 */
+const HANDSHAKE_KEY_UPDATE: number = 24;
+const HANDSHAKE_NEW_SESSION_TICKET: number = 4;
 const TLS_VERSION_10: number = 0x0301;
 const TLS_VERSION_12: number = 0x0303;
 const TLS_VERSION_13: number = 0x0304;
@@ -347,6 +350,17 @@ export class Tls13Connection {
   private recvIv: Uint8Array = new Uint8Array(12);
   private sendSeq: number = 0;
   private recvSeq: number = 0;
+  /**
+   * **应用流量密钥本尊**（不只是它的 key/iv）。
+   *
+   * 为什么必须留着：TLS 1.3 允许对端在中途发 `KeyUpdate`（内部握手 type 24），
+   * 之后的记录换一套密钥。没有原密钥就没法派生下一代 —— 表现就是「握手全 OK、
+   * 大响应读到一半 `cipher doFinal failed`」（真机 Mate 70 Pro+ 上就是这么挂的）。
+   */
+  private sendSecret: Uint8Array = new Uint8Array(32);
+  private recvSecret: Uint8Array = new Uint8Array(32);
+  /** 已经读了几条应用数据记录（诊断用：解密失败时能说清是第几条）。 */
+  private recvRecordIndex: number = 0;
   /** 握手阶段用的密钥（Finished 之后换成应用密钥）。 */
   private handshakeSendKey: Uint8Array = new Uint8Array(16);
   private handshakeSendIv: Uint8Array = new Uint8Array(12);
@@ -1153,6 +1167,8 @@ export class Tls13Connection {
       await this.expandLabel(masterSecret, 'c ap traffic', transcriptThroughServerFinished, 32);
     const serverApp: Uint8Array =
       await this.expandLabel(masterSecret, 's ap traffic', transcriptThroughServerFinished, 32);
+    this.sendSecret = clientApp;
+    this.recvSecret = serverApp;
     this.sendKey = await this.expandLabel(clientApp, 'key', new Uint8Array(0), 16);
     this.sendIv = await this.expandLabel(clientApp, 'iv', new Uint8Array(0), 12);
     this.recvKey = await this.expandLabel(serverApp, 'key', new Uint8Array(0), 16);
@@ -1245,6 +1261,64 @@ export class Tls13Connection {
    * 注意：握手之后服务端还会用应用密钥发 `NewSessionTicket`（inner type 22），
    * 那不是 HTTP 数据，**必须跳过**，否则头部会被二进制内容污染。
    */
+  /**
+   * 处理夹在应用数据里的握手消息（TLS 1.3 只有 `NewSessionTicket` 和 `KeyUpdate`）。
+   *
+   * 一条记录里可能有好几条消息（`type(1) + len(3) + body`），所以要按长度循环。
+   */
+  private async handleInnerHandshake(payload: Uint8Array): Promise<void> {
+    let at: number = 0;
+    while (at + 4 <= payload.length) {
+      const type: number = payload[at];
+      const length: number = (payload[at + 1] << 16) | (payload[at + 2] << 8) | payload[at + 3];
+      const from: number = at + 4;
+      if (from + length > payload.length) {
+        return;
+      }
+      if (type === HANDSHAKE_KEY_UPDATE) {
+        const requested: boolean = length > 0 && payload[from] === 1;
+        await this.updateRecvKeys();
+        this.note('KeyUpdate 收到，已换读密钥');
+        if (requested) {
+          // 对端要我们也换：按 RFC 换完再回一条 update_requested=0 的 KeyUpdate。
+          await this.updateSendKeys();
+          await this.sendKeyUpdate();
+          this.note('KeyUpdate 已回');
+        }
+      } else if (type !== HANDSHAKE_NEW_SESSION_TICKET) {
+        this.note(`内部握手 type ${type} 跳过`);
+      }
+      at = from + length;
+    }
+  }
+
+  /** 换下一代**读**密钥：`traffic upd` 派生 secret，再派生 key/iv，序号归零。 */
+  private async updateRecvKeys(): Promise<void> {
+    this.recvSecret = await this.expandLabel(this.recvSecret, 'traffic upd',
+      new Uint8Array(0), 32);
+    this.recvKey = await this.expandLabel(this.recvSecret, 'key', new Uint8Array(0), 16);
+    this.recvIv = await this.expandLabel(this.recvSecret, 'iv', new Uint8Array(0), 12);
+    this.recvSeq = 0;
+  }
+
+  /** 换下一代**写**密钥（对端 `update_requested` 时要跟着换）。 */
+  private async updateSendKeys(): Promise<void> {
+    this.sendSecret = await this.expandLabel(this.sendSecret, 'traffic upd',
+      new Uint8Array(0), 32);
+    this.sendKey = await this.expandLabel(this.sendSecret, 'key', new Uint8Array(0), 16);
+    this.sendIv = await this.expandLabel(this.sendSecret, 'iv', new Uint8Array(0), 12);
+    this.sendSeq = 0;
+  }
+
+  /** 回一条 `KeyUpdate(update_requested=0)`。 */
+  private async sendKeyUpdate(): Promise<void> {
+    const message: ByteWriter = new ByteWriter(5);
+    message.u8(HANDSHAKE_KEY_UPDATE);
+    message.u24(1);
+    message.u8(0);
+    await this.writeApplicationData(message.bytes());
+  }
+
   private async readHttpReply(): Promise<TlsHttpReply> {
     /*
      * **先按字节攒、最后再解码一次**。
@@ -1271,7 +1345,18 @@ export class Tls13Connection {
         (record.payload.length >> 8) & 0xFF, record.payload.length & 0xFF]);
       const recvNonce: Uint8Array = this.nonceOf(this.recvIv, this.recvSeq);
       this.recvSeq++;
-      const plain: Uint8Array = await this.aesGcmDecrypt(this.recvKey, recvNonce, aad, record.payload);
+      this.recvRecordIndex++;
+      if (this.recvRecordIndex % 10 === 0) {
+        this.note(`已收 ${this.recvRecordIndex} 条记录`);
+      }
+      let plain: Uint8Array;
+      try {
+        plain = await this.aesGcmDecrypt(this.recvKey, recvNonce, aad, record.payload);
+      } catch (error) {
+        // 解密失败要能说清「第几条、多长」：这一条以前只有一句 cipher doFinal failed。
+        throw new Error(`第 ${this.recvRecordIndex} 条应用数据解密失败（len=${record.payload.length}B，`
+          + `已收 ${buffer.length}B）：${(error as Error).message}`);
+      }
       let end: number = plain.length - 1;
       while (end >= 0 && plain[end] === 0) {
         end--;
@@ -1279,8 +1364,17 @@ export class Tls13Connection {
       if (end < 0) {
         continue;
       }
+      if (plain[end] === TLS_RECORD_HANDSHAKE) {
+        /*
+         * **握手消息夹在应用数据里**：`NewSessionTicket`（type 4）跳过就行，
+         * 但 **`KeyUpdate`（type 24）必须处理** —— 对端换密钥之后，后面的记录用旧密钥解就是
+         * `cipher doFinal failed`。IG 的大响应（登录那一发几百 KB）就会中途发它。
+         */
+        await this.handleInnerHandshake(plain.subarray(0, end));
+        continue;
+      }
       if (plain[end] !== TLS_RECORD_APPDATA) {
-        continue;    // NewSessionTicket 之类的握手数据
+        continue;    // 其它内部类型（alert 等）一律跳过
       }
       buffer = concat([buffer, plain.subarray(0, end)]);
       if (headerEnd < 0) {
