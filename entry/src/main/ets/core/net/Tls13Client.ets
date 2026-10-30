@@ -41,6 +41,7 @@ import { DoHResolver } from './DoHResolver';
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'Tls13Client';
 
+const TLS_RECORD_ALERT: number = 21;
 const TLS_RECORD_HANDSHAKE: number = 22;
 const TLS_RECORD_APPDATA: number = 23;
 /** 夹在应用数据里的握手类型：KeyUpdate(24) / NewSessionTicket(4)。 */
@@ -1319,6 +1320,91 @@ export class Tls13Connection {
     await this.writeApplicationData(message.bytes());
   }
 
+  /** 记录头的 `type + version + length`（AEAD 的 AAD）。 */
+  private aadOf(type: number, version: number, length: number): Uint8Array {
+    return new Uint8Array([type, (version >> 8) & 0xFF, version & 0xFF,
+      (length >> 8) & 0xFF, length & 0xFF]);
+  }
+
+  /** 解一次应用数据记录；失败返回 `null`（**不抛**，由调用方决定下一步）。 */
+  private async tryDecryptAppData(key: Uint8Array, iv: Uint8Array, seq: number,
+                                  type: number, version: number,
+                                  payload: Uint8Array): Promise<Uint8Array | null> {
+    try {
+      const nonce: Uint8Array = this.nonceOf(iv, seq);
+      return await this.aesGcmDecrypt(key, nonce, this.aadOf(type, version, payload.length),
+        payload);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /** 一串字节的前 n 个转成十六进制（诊断用）。 */
+  private hexHead(bytes: Uint8Array, count: number): string {
+    const table: string = '0123456789abcdef';
+    let text: string = '';
+    const stop: number = Math.min(count, bytes.length);
+    for (let index: number = 0; index < stop; index++) {
+      const value: number = bytes[index];
+      text += table.charAt(value >> 4) + table.charAt(value & 0x0F);
+    }
+    return text;
+  }
+
+  /**
+   * 解一条应用数据记录，**带真实世界的容错**。
+   *
+   * 2026-10-30 真机日志（Mate 70 Pro+ / VPN）：登录第一发 `/graphql_www` 收到 3233B 之后，
+   * 第 5 条记录 `len=19B` 解不开。19B = **2 字节告警 + 1 字节内部类型 + 16 字节 tag**，
+   * 也就是「对端的告警记录」—— 业务数据其实已经收全了，判失败的只是这条收尾记录。
+   *
+   * 所以这里按顺序试四种现场，试成哪种就**把状态修正成哪种**并记一条 note：
+   *   1. 标准路径（当前密钥 + 当前序号 + 头部版本）；
+   *   2. **头部 `legacy_record_version` 不是 0x0303**（有的实现只在告警记录上写 0x0301）
+   *      → 按 0x0303 重算 AAD；
+   *   3. **序号差一**（中途漏算/多算一条记录）→ 用 `seq+1`；
+   *   4. **漏看了一条 `KeyUpdate`** → 用 `traffic upd` 派生下一代密钥、序号归零。
+   */
+  private async decryptAppData(record: TlsRecord): Promise<Uint8Array | null> {
+    const payload: Uint8Array = record.payload;
+    let plain: Uint8Array | null = await this.tryDecryptAppData(this.recvKey, this.recvIv,
+      this.recvSeq, record.type, record.version, payload);
+    if (plain !== null) {
+      this.recvSeq++;
+      return plain;
+    }
+    if (record.version !== TLS_VERSION_12) {
+      plain = await this.tryDecryptAppData(this.recvKey, this.recvIv, this.recvSeq,
+        record.type, TLS_VERSION_12, payload);
+      if (plain !== null) {
+        this.note(`记录版本 0x${record.version.toString(16)}，按 0x0303 解开了`);
+        this.recvSeq++;
+        return plain;
+      }
+    }
+    plain = await this.tryDecryptAppData(this.recvKey, this.recvIv, this.recvSeq + 1,
+      record.type, TLS_VERSION_12, payload);
+    if (plain !== null) {
+      this.note(`序号差一（${this.recvSeq}→${this.recvSeq + 1}），已纠正`);
+      this.recvSeq += 2;
+      return plain;
+    }
+    const nextSecret: Uint8Array = await this.expandLabel(this.recvSecret, 'traffic upd',
+      new Uint8Array(0), 32);
+    const nextKey: Uint8Array = await this.expandLabel(nextSecret, 'key', new Uint8Array(0), 16);
+    const nextIv: Uint8Array = await this.expandLabel(nextSecret, 'iv', new Uint8Array(0), 12);
+    plain = await this.tryDecryptAppData(nextKey, nextIv, 0, record.type, TLS_VERSION_12, payload);
+    if (plain !== null) {
+      this.recvSecret = nextSecret;
+      this.recvKey = nextKey;
+      this.recvIv = nextIv;
+      this.recvSeq = 1;
+      this.note('漏看了一条 KeyUpdate，已按下一代读密钥续上');
+      return plain;
+    }
+    return null;
+  }
+
   private async readHttpReply(): Promise<TlsHttpReply> {
     /*
      * **先按字节攒、最后再解码一次**。
@@ -1330,32 +1416,42 @@ export class Tls13Connection {
     let buffer: Uint8Array = new Uint8Array(0);
     let headerEnd: number = -1;
     let declaredLength: number = -1;
+    let chunked: boolean = false;
     const limit: number = 4 * 1024 * 1024;
-    for (let guard: number = 0; guard < 128; guard++) {
+    for (let guard: number = 0; guard < 256; guard++) {
       let record: TlsRecord;
       try {
         record = await this.readRecord();
       } catch (error) {
         break;      // 对端关了：把手上的东西交出去
       }
+      if (record.type === TLS_RECORD_ALERT) {
+        // 明文告警（2 字节：level + description）：记下来，然后交出手上的响应。
+        if (record.payload.length >= 2) {
+          this.note(`收到明文告警 level=${record.payload[0]} desc=${record.payload[1]}`);
+        }
+        break;
+      }
       if (record.type !== TLS_RECORD_APPDATA) {
         continue;
       }
-      const aad: Uint8Array = new Uint8Array([record.type, 0x03, 0x03,
-        (record.payload.length >> 8) & 0xFF, record.payload.length & 0xFF]);
-      const recvNonce: Uint8Array = this.nonceOf(this.recvIv, this.recvSeq);
-      this.recvSeq++;
       this.recvRecordIndex++;
-      if (this.recvRecordIndex % 10 === 0) {
-        this.note(`已收 ${this.recvRecordIndex} 条记录`);
-      }
-      let plain: Uint8Array;
-      try {
-        plain = await this.aesGcmDecrypt(this.recvKey, recvNonce, aad, record.payload);
-      } catch (error) {
-        // 解密失败要能说清「第几条、多长」：这一条以前只有一句 cipher doFinal failed。
+      const plain: Uint8Array | null = await this.decryptAppData(record);
+      if (plain === null) {
+        /*
+         * 解不开：**如果 HTTP 已经攒够，就当它是对端的收尾记录，把响应交出去**。
+         * 登录第一发就是这么挂的 —— 响应其实已经完整收到，只是末尾那条解不开，
+         * 旧写法把整次登录判失败，用户看到的是「登录失败」而不是真正的 HTTP 错误。
+         */
+        this.note(`第 ${this.recvRecordIndex} 条记录解不开（len=${record.payload.length}B, `
+          + `ver=0x${record.version.toString(16)}，已收 ${buffer.length}B，`
+          + `头=${this.hexHead(record.payload, 16)}）`);
+        if (headerEnd >= 0) {
+          break;
+        }
         throw new Error(`第 ${this.recvRecordIndex} 条应用数据解密失败（len=${record.payload.length}B，`
-          + `已收 ${buffer.length}B）：${(error as Error).message}`);
+          + `ver=0x${record.version.toString(16)}，已收 ${buffer.length}B，`
+          + `头=${this.hexHead(record.payload, 16)}）：${this.log}`);
       }
       let end: number = plain.length - 1;
       while (end >= 0 && plain[end] === 0) {
@@ -1387,11 +1483,22 @@ export class Tls13Connection {
           const matched: RegExpMatchArray | null =
             headerText.match(/content-length:\s*(\d+)/i);
           declaredLength = matched === null ? -1 : Number.parseInt(matched[1], 10);
+          chunked = /transfer-encoding:\s*chunked/i.test(headerText);
         }
       }
       if (headerEnd >= 0) {
         const bodySoFar: number = buffer.length - (headerEnd + 4);
-        if (declaredLength >= 0 ? bodySoFar >= declaredLength : false) {
+        if (chunked) {
+          /*
+           * `Transfer-Encoding: chunked` 且**没有 Content-Length**（IG 的 4xx 就常这样）：
+           * 收全的标志是最后那个 `0\r\n\r\n`。不加这条会一直等下去，等到对端发告警/关连接，
+           * 表现就是「响应其实全到了，但登录判失败」。
+           */
+          const body: string = new util.TextDecoder().decodeToString(buffer.subarray(headerEnd + 4));
+          if (body.length >= 5 && body.substring(body.length - 5) === '0\r\n\r\n') {
+            break;
+          }
+        } else if (declaredLength >= 0 && bodySoFar >= declaredLength) {
           break;
         }
         if (buffer.length > limit) {
@@ -1403,7 +1510,44 @@ export class Tls13Connection {
     if (headerEnd < 0) {
       return new TlsHttpReply('', all);
     }
-    return new TlsHttpReply(all.substring(0, headerEnd), all.substring(headerEnd + 4));
+    const headerText: string = all.substring(0, headerEnd);
+    let bodyText: string = all.substring(headerEnd + 4);
+    if (chunked) {
+      bodyText = this.dechunk(bodyText);
+    }
+    return new TlsHttpReply(headerText, bodyText);
+  }
+
+  /**
+   * 把 `Transfer-Encoding: chunked` 的 body 还原成原始正文（解析不了就原样返回）。
+   *
+   * 不加这一步，`JSON.parse` 会看到 `1a2b\r\n{…}\r\n0\r\n\r\n` 这种分块壳，直接报解析错 ——
+   * 用户看到的又是「登录失败」，但原因其实是"没解块"。
+   */
+  private dechunk(body: string): string {
+    let out: string = '';
+    let at: number = 0;
+    for (let guard: number = 0; guard < 8192; guard++) {
+      const lineEnd: number = body.indexOf('\r\n', at);
+      if (lineEnd < 0) {
+        break;
+      }
+      const sizeText: string = body.substring(at, lineEnd).trim();
+      if (sizeText.length === 0 || !/^[0-9a-fA-F]+$/.test(sizeText)) {
+        return body;
+      }
+      const size: number = Number.parseInt(sizeText, 16);
+      const from: number = lineEnd + 2;
+      if (size === 0) {
+        return out;
+      }
+      if (from + size > body.length) {
+        return out + body.substring(from);
+      }
+      out += body.substring(from, from + size);
+      at = from + size + 2;
+    }
+    return out.length > 0 ? out : body;
   }
 
   /**

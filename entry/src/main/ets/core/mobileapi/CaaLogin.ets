@@ -1125,8 +1125,13 @@ export class CaaLogin {
     regHeaders['X-Graphql-Client-Library'] = 'pando';
     regHeaders['X-Root-Field-Name'] = 'usdid_registration';
     const reg: CaaHttpReply = await CaaLogin.post('i.instagram.com', '/graphql_www', regBody, regHeaders);
-    CaaLogin.steps.push(new CaaStep('usdid', reg.status,
-      reg.status === 200 ? 'ok' : ''));
+    /*
+     * 非 200 时**把正文头 160 字也记进步骤**：USDID 注册这一发被拒（429 / 400）时，
+     * IG 的正文里通常写着是限速还是参数问题，只记一个状态码等于什么都没说。
+     */
+    const regDetail: string = reg.status === 200 ? 'ok'
+      : `HTTP ${reg.status} ${reg.body.substring(0, 160).replace(/\s+/g, ' ')}`;
+    CaaLogin.steps.push(new CaaStep('usdid', reg.status, regDetail));
     hilog.info(DOMAIN, TAG, 'usdid registration status=%{public}d', reg.status);
 
     // 2. attestation（拿 challenge_nonce；keystore 不可用是可接受状态）
