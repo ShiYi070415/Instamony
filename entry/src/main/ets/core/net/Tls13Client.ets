@@ -1231,7 +1231,8 @@ export class Tls13Connection {
     if (bodyBytes.length > 0) {
       lines.push(`Content-Length: ${bodyBytes.length}`);
     }
-    lines.push('Connection: close');
+    // keep-alive?? host ???????????? TLS ???? Tls13Client.pooled??
+    lines.push('Connection: keep-alive');
     lines.push('');
     lines.push('');
     const head: string = lines.join('\r\n');
@@ -1417,6 +1418,8 @@ export class Tls13Connection {
     let headerEnd: number = -1;
     let declaredLength: number = -1;
     let chunked: boolean = false;
+    /** body 是否**干净收尾**（只有这种响应后面的连接才敢复用，见 TlsHttpReply.complete）。 */
+    let complete: boolean = false;
     const limit: number = 4 * 1024 * 1024;
     for (let guard: number = 0; guard < 256; guard++) {
       let record: TlsRecord;
@@ -1496,9 +1499,18 @@ export class Tls13Connection {
            */
           const body: string = new util.TextDecoder().decodeToString(buffer.subarray(headerEnd + 4));
           if (body.length >= 5 && body.substring(body.length - 5) === '0\r\n\r\n') {
+            complete = true;
             break;
           }
         } else if (declaredLength >= 0 && bodySoFar >= declaredLength) {
+          complete = true;
+          break;
+        } else if (declaredLength < 0 && !chunked) {
+          /*
+           * **??? Content-Length ??? chunked**?HTTP/1.1 ??????? body ???
+           * ??????????????? keep-alive ??????????????
+           * ?????"???"???????
+           */
           break;
         }
         if (buffer.length > limit) {
@@ -1515,7 +1527,7 @@ export class Tls13Connection {
     if (chunked) {
       bodyText = this.dechunk(bodyText);
     }
-    return new TlsHttpReply(headerText, bodyText);
+    return new TlsHttpReply(headerText, bodyText, complete);
   }
 
   /**
@@ -1548,6 +1560,19 @@ export class Tls13Connection {
       at = from + size + 2;
     }
     return out.length > 0 ? out : body;
+  }
+
+  /**
+   * **立刻断开底层 TCP**（连接池淘汰 / 复用失败时用；不抛）。
+   *
+   * 和 `request()` 里的 `stream.close()` 是同一件事，只是从"连接对象"这一侧发起 ——
+   * 池里放的是 `Tls13Connection`，淘汰时拿不到它内部的 stream。
+   */
+  async closeNow(): Promise<void> {
+    try {
+      await this.stream.close();
+    } catch (error) {
+    }
   }
 
   /**
@@ -1648,14 +1673,33 @@ class ServerHelloInfo {
   }
 }
 
+/** 池里的一条连接 + 它被放回池子的时刻（超过 POOL_IDLE_MS 就关掉重连）。 */
+class PooledConnection {
+  readonly connection: Tls13Connection;
+  readonly atMs: number;
+
+  constructor(connection: Tls13Connection, atMs: number) {
+    this.connection = connection;
+    this.atMs = atMs;
+  }
+}
+
 /** 一条 HTTP/1.1 响应（头文本 + body 文本）。 */
 export class TlsHttpReply {
   readonly headerText: string;
   readonly bodyText: string;
+  /**
+   * body 是不是**完整**读完了（按 `Content-Length` 收满，或 chunked 的 `0\r\n\r\n` 收尾）。
+   *
+   * 为什么要这个标：连接复用（keep-alive）只敢复用"这一发干净收尾"的连接 ——
+   * 靠"对端关连接/告警/解不开"结束的响应，连接状态已经不可信了，必须丢掉重连。
+   */
+  readonly complete: boolean;
 
-  constructor(headerText: string, bodyText: string) {
+  constructor(headerText: string, bodyText: string, complete: boolean = false) {
     this.headerText = headerText;
     this.bodyText = bodyText;
+    this.complete = complete;
   }
 
   /** 状态码（读不到就是 -1）。 */
@@ -1689,30 +1733,120 @@ export class TlsHttpReply {
  */
 export class Tls13Client {
   /**
-   * **一条完整的 HTTPS 请求**：TCP → TLS1.3 握手（含证书校验）→ HTTP/1.1 → 关闭。
+   * **连接池**（keep-alive）：同 host 的连续请求复用同一条 TLS 连接。
+   *
+   * 为什么值得做：原来每一发都是"TCP 连接 + TLS1.3 握手（1~2 个 RTT + X25519/HKDF 计算）
+   * + 请求 + 关闭"。个人主页一次进入要发 6 发（头部 / 当前网格 / 高光 / 另外三段首页），
+   * 光握手就多花掉大半秒到一两秒 —— 这正是用户感觉"分页和高光加载慢"的一部分。
+   *
+   * 只复用**干净收尾**的连接（`TlsHttpReply.complete` 且响应头没有 `Connection: close`）；
+   * 复用失败（对端已关 / 状态坏了）自动退回"新建一条"，对调用方透明。
+   */
+  private static readonly POOL_IDLE_MS: number = 8000;
+  private static pooled: Map<string, PooledConnection> = new Map<string, PooledConnection>();
+  /** 复用命中次数（诊断用：`ApiThrottle.paceDescribe` 那种一行现场）。 */
+  private static reusedCount: number = 0;
+
+  private static poolKey(host: string, port: number): string {
+    return `${host}:${port}`;
+  }
+
+  /** 取一条可复用的连接（取走即从池里摘掉；过期的顺手关掉）。 */
+  private static takePooled(key: string): Tls13Connection | null {
+    const one: PooledConnection | undefined = Tls13Client.pooled.get(key);
+    if (one === undefined) {
+      return null;
+    }
+    Tls13Client.pooled.delete(key);
+    if (Date.now() - one.atMs > Tls13Client.POOL_IDLE_MS) {
+      one.connection.closeNow();
+      return null;
+    }
+    return one.connection;
+  }
+
+  /**
+   * 把一条连接放回池子（**只有干净收尾**、且响应没说 `Connection: close` 才放）。
+   *
+   * 判断依据是 `reply.complete`：靠"对端关连接 / 告警 / 解不开"结束的响应，连接状态不可信。
+   */
+  private static recycle(key: string, connection: Tls13Connection, reply: TlsHttpReply): void {
+    const closeHint: string = reply.headerOf('connection').toLowerCase();
+    if (!reply.complete || closeHint.indexOf('close') >= 0) {
+      connection.closeNow();
+      return;
+    }
+    const old: PooledConnection | undefined = Tls13Client.pooled.get(key);
+    if (old !== undefined) {
+      old.connection.closeNow();
+    }
+    const entry: PooledConnection = new PooledConnection(connection, Date.now());
+    Tls13Client.pooled.set(key, entry);
+    /*
+     * **空闲连接自己过期**：池里只有一条、懒淘汰只在"下次来取"时发生 ——
+     * 如果用户之后不再请求，这条连接会一直挂着（占一条 TCP + 一个解码器）。所以放一个定时器，
+     * 到点还在池里就关掉（`entry` 是同一个对象引用，能保证不会误关"新放进来"的那条）。
+     */
+    setTimeout((): void => {
+      const current: PooledConnection | undefined = Tls13Client.pooled.get(key);
+      if (current !== undefined && current === entry) {
+        Tls13Client.pooled.delete(key);
+        entry.connection.closeNow();
+      }
+    }, Tls13Client.POOL_IDLE_MS + 1000);
+  }
+
+  /** 复用命中次数（诊断/日志用）。 */
+  static poolHits(): number {
+    return Tls13Client.reusedCount;
+  }
+
+  /**
+   * **一条完整的 HTTPS 请求**：优先复用池里的连接；没有就新建（TCP → TLS1.3 握手 → HTTP/1.1）。
    *
    * CAA 那 5 步都走它（`CaaLogin.post`），这样登录请求的 ClientHello 就是我们自己拼的
    * （对齐上游那套能过的指纹），而不是系统栈那一份（那份在登录端点被 429）。
    */
   static async request(host: string, port: number, method: string, path: string,
                        headers: Record<string, string>, body: string): Promise<TlsHttpReply> {
+    const key: string = Tls13Client.poolKey(host, port);
     /*
-     * **域名解析：可选走 DoH**（见 core/net/DoHResolver，开关在设置页、默认关）。
-     *
-     * 连的是**解析出来的 IP**，但握手仍然按 `host` 做（SNI + 证书校验都在 `handshake(host)` 里）——
-     * 所以 DoH 只换"去哪儿"，不改"连的是谁"。拿不到 IP（未启用 / 端点全失败）就用域名，
-     * 交给系统 net stack —— DoH 是增强，不是依赖。
+     * **① 先试复用**：命中就直接发，省掉 TCP + 握手。
+     * 失败（对端已经关了 / 状态坏了）只记一行日志，然后落到下面"新建一条"那条路 ——
+     * 对调用方完全透明（重试一次，不会重复业务请求，因为上一次那一发并没有真正开始）。
+     */
+    const pooled: Tls13Connection | null = Tls13Client.takePooled(key);
+    if (pooled !== null) {
+      try {
+        const reply: TlsHttpReply = await pooled.httpExchange(method, path, headers, body);
+        Tls13Client.reusedCount++;
+        hilog.info(DOMAIN, TAG, 'reuse pooled connection host=%{public}s hits=%{public}d',
+          host, Tls13Client.reusedCount);
+        Tls13Client.recycle(key, pooled, reply);
+        return reply;
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'pooled connection unusable host=%{public}s (%{public}s) → reconnect',
+          host, Tls13Client.errorText(error));
+        pooled.closeNow();
+      }
+    }
+    /*
+     * **② 新建**：域名解析 → 连接（带重试/多地址）→ 握手 → 请求。
+     * 连的是**解析出来的 IP**，但握手仍然按 `host` 做（SNI + 证书校验都在 `handshake(host)` 里）。
      */
     const stream: TcpStream = await Tls13Client.openStream(host, port);
     const connection: Tls13Connection = new Tls13Connection(stream);
+    let reply: TlsHttpReply;
     try {
       await connection.handshake(host);
-      return await connection.httpExchange(method, path, headers, body);
+      reply = await connection.httpExchange(method, path, headers, body);
     } catch (error) {
-      throw new Error(`${(error as Error).message}（现场：${connection.log || '(握手未开始)'}）`);
-    } finally {
       await stream.close();
+      throw new Error(`${(error as Error).message}（现场：${connection.log || '(握手未开始)'}）`);
     }
+    // 干净收尾的才进池子；否则当场关掉（相当于原来的行为）。
+    Tls13Client.recycle(key, connection, reply);
+    return reply;
   }
 
   /**

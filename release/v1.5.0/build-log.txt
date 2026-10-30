@@ -23,11 +23,11 @@
 > hvigor [32mUP-TO-DATE :entry:default@ProcessLibs...  [39m
 > hvigor [32mUP-TO-DATE :entry:default@CompileResource...  [39m
 > hvigor [32mUP-TO-DATE :entry:default@DoNativeStrip...  [39m
-> hvigor [32mFinished :entry:default@BuildJS... after 3 ms [39m
+> hvigor [32mFinished :entry:default@BuildJS... after 4 ms [39m
 > hvigor [32mUP-TO-DATE :entry:default@CacheNativeLibs...  [39m
 node : > hvigor [33mWARN: [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/Instagram
 CookieJar.ets:353:38
-At line:1 char:220
+At line:24 char:149
 + ... tudio\sdk'; node "C:\Program Files\Huawei\DevEco Studio\tools\hvigor\ ...
 +                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     + CategoryInfo          : NotSpecified: (> hvigor [33mW...eJar.ets:353:38:String) [], RemoteException
@@ -321,16 +321,16 @@ At line:1 char:220
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:1041:55
  The system capacity of this api 'priKey' is not supported on all devices
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:1573:52
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:1598:52
  The system capacity of this api 'createMd' is not supported on all devices
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:1573:52
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:1598:52
  Function may throw exceptions. Special handling is required.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:1574:8
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:1599:8
  Function may throw exceptions. Special handling is required.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:1575:15
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:1600:15
  Function may throw exceptions. Special handling is required.
 [39m[39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileCrypto.ets:154:27
@@ -937,8 +937,6 @@ s 6.0.0(20).
  'animateTo' has been deprecated.
 [39m[39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/CreatePost.ets:68:13
-> hvigor [32mFinished :entry:default@CompileArkTS... after 10 s 554 ms [39m
-> hvigor [32mUP-TO-DATE :entry:default@GeneratePkgModuleJson...  [39m
  The 'systemMaterialEffect' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version i
 s 6.0.0(20).
  It is recommended to use apiAvailable to safeguard API compatibility.
@@ -974,6 +972,8 @@ s 6.0.0(20).
 [39m[39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/LinkIn.ets:75:48
  The 'ADAPTIVE' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(20).
+> hvigor [32mFinished :entry:default@CompileArkTS... after 5 s 296 ms [39m
+> hvigor [32mUP-TO-DATE :entry:default@GeneratePkgModuleJson...  [39m
  It is recommended to use apiAvailable to safeguard API compatibility.
 [39m[39m
 [39m
@@ -981,18 +981,18 @@ s 6.0.0(20).
 > hvigor [33mWARN: If obfuscation is needed, enable obfuscation settings in this build process; failing to do so may p
 revent future obfuscation. 
                Properly configure obfuscation rules to avoid runtime issues.[39m
-> hvigor [32mFinished :entry:default@PackageHap... after 338 ms [39m
-> hvigor [32mFinished :entry:default@PackingCheck... after 7 ms [39m
-> hvigor [32mFinished :entry:default@SignHap... after 1 s 483 ms [39m
+> hvigor [32mFinished :entry:default@PackageHap... after 332 ms [39m
+> hvigor [32mFinished :entry:default@PackingCheck... after 6 ms [39m
+> hvigor [32mFinished :entry:default@SignHap... after 1 s 455 ms [39m
 > hvigor [32mFinished :entry:default@CollectDebugSymbol... after 6 ms [39m
 > hvigor [32mFinished :entry:assembleHap... after 1 ms [39m
 > hvigor [32mUP-TO-DATE ::MakeProjectPackInfo...  [39m
 > hvigor [32mUP-TO-DATE ::ProcessProjectPrivacyProfile...  [39m
 > hvigor [32mUP-TO-DATE ::GeneratePackRes...  [39m
-> hvigor [32mFinished ::PackageApp... after 477 ms [39m
-> hvigor [32mFinished ::SignPackagesFromApp... after 3 ms [39m
-> hvigor [32mFinished ::SignApp... after 1 s 385 ms [39m
+> hvigor [32mFinished ::PackageApp... after 461 ms [39m
+> hvigor [32mFinished ::SignPackagesFromApp... after 2 ms [39m
+> hvigor [32mFinished ::SignApp... after 1 s 419 ms [39m
 > hvigor [32mFinished ::assembleApp... after 1 ms [39m
-> hvigor [32mBUILD SUCCESSFUL in 17 s 528 ms [39m
+> hvigor [32mBUILD SUCCESSFUL in 12 s 406 ms [39m
 
 42 tasks in total: 23 executed, 19 up-to-date

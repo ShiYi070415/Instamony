@@ -1209,7 +1209,8 @@ export class ProfileViewModel {
       return;
     }
     state.prefetching = true;
-    this.fetchPage(op, cursor, tab).then((page: ProfilePostsPage | null): void => {
+    // ??????????? warm??"????????????"?interactive????
+    this.fetchPage(op, cursor, tab, ApiThrottle.warm()).then((page: ProfilePostsPage | null): void => {
       state.prefetching = false;
       if (page !== null && page.posts.length > 0) {
         state.nextPages.push(page);
