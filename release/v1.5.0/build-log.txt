@@ -1,0 +1,998 @@
+> hvigor [32mFinished ::PreBuildApp... after 1 ms [39m
+> hvigor [32mUP-TO-DATE :entry:default@PreBuild...  [39m
+> hvigor [32mFinished ::DuplicateDependencyCheck... after 1 ms [39m
+> hvigor [32mFinished :entry:default@CreateModuleInfo... after 1 ms [39m
+> hvigor [32mUP-TO-DATE :entry:default@GenerateMetadata...  [39m
+> hvigor [32mFinished :entry:default@ConfigureCmake... after 1 ms [39m
+> hvigor [32mUP-TO-DATE :entry:default@MergeProfile...  [39m
+> hvigor [32mUP-TO-DATE :entry:default@CreateBuildProfile...  [39m
+> hvigor [32mFinished :entry:default@PreCheckSyscap... after 1 ms [39m
+> hvigor [32mUP-TO-DATE :entry:default@GeneratePkgContextInfo...  [39m
+> hvigor [32mFinished :entry:default@GeneratePkgSdkInfo... after 2 ms [39m
+> hvigor [32mFinished :entry:default@ProcessIntegratedHsp... after 1 ms [39m
+> hvigor [32mFinished :entry:default@BuildNativeWithCmake... after 1 ms [39m
+> hvigor [32mUP-TO-DATE :entry:default@MakePackInfo...  [39m
+> hvigor [32mFinished :entry:default@SyscapTransform... after 8 ms [39m
+> hvigor [32mUP-TO-DATE :entry:default@ProcessProfile...  [39m
+> hvigor [32mUP-TO-DATE :entry:default@ProcessRouterMap...  [39m
+> hvigor [32mUP-TO-DATE :entry:default@ProcessShareConfig...  [39m
+> hvigor [32mFinished :entry:default@ProcessStartupConfig... after 2 ms [39m
+> hvigor [32mFinished :entry:default@BuildNativeWithNinja... after 1 ms [39m
+> hvigor [32mUP-TO-DATE :entry:default@ProcessResource...  [39m
+> hvigor [32mUP-TO-DATE :entry:default@GenerateLoaderJson...  [39m
+> hvigor [32mUP-TO-DATE :entry:default@ProcessLibs...  [39m
+> hvigor [32mUP-TO-DATE :entry:default@CompileResource...  [39m
+> hvigor [32mUP-TO-DATE :entry:default@DoNativeStrip...  [39m
+> hvigor [32mFinished :entry:default@BuildJS... after 4 ms [39m
+> hvigor [32mUP-TO-DATE :entry:default@CacheNativeLibs...  [39m
+node : > hvigor [33mWARN: [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/Instagram
+CookieJar.ets:353:38
+At line:1 char:220
++ ... tudio\sdk'; node "C:\Program Files\Huawei\DevEco Studio\tools\hvigor\ ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (> hvigor [33mW...eJar.ets:353:38:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ The 'domain' API is supported since SDK version 23. However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/InstagramCookieJar.ets:357:36
+ The 'name' API is supported since SDK version 23. However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/InstagramCookieJar.ets:358:37
+ The 'value' API is supported since SDK version 23. However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/InstagramCookieJar.ets:362:54
+ The 'isHttpOnly' API is supported since SDK version 23. However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileSign.ets:67:52
+ The system capacity of this api 'createMd' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileSign.ets:93:30
+ The system capacity of this api 'createRandom' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileSign.ets:102:56
+ The system capacity of this api 'generateRandomSync' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileSign.ets:151:70
+ The system capacity of this api 'createSymKeyGenerator' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileSign.ets:151:70
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileSign.ets:152:52
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileSign.ets:154:52
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileSign.ets:155:7
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileSign.ets:156:7
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileSign.ets:157:14
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileSign.ets:227:60
+ The system capacity of this api 'createRandom' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileSign.ets:228:52
+ The system capacity of this api 'generateRandomSync' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/DoHResolver.ets:167:57
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:286:20
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:395:52
+ The system capacity of this api 'createMd' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:395:52
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:396:8
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:397:15
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:451:23
+ The system capacity of this api 'createSymKeyGenerator' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:451:23
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:453:57
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:454:54
+ The system capacity of this api 'createMac' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:454:54
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:455:15
+ The system capacity of this api 'init' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:455:15
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:456:9
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:457:16
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:462:72
+ The system capacity of this api 'createSymKeyGenerator' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:462:72
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:464:54
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:471:60
+ The system capacity of this api 'createCipher' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:471:60
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:472:18
+ The system capacity of this api 'init' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:472:18
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:472:39
+ The system capacity of this api 'CryptoMode' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:472:50
+ The system capacity of this api 'ENCRYPT_MODE' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:473:56
+ The system capacity of this api 'doFinal' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:473:56
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:482:72
+ The system capacity of this api 'createSymKeyGenerator' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:482:72
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:484:54
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:491:60
+ The system capacity of this api 'createCipher' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:491:60
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:492:18
+ The system capacity of this api 'init' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:492:18
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:492:39
+ The system capacity of this api 'CryptoMode' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:492:50
+ The system capacity of this api 'DECRYPT_MODE' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:493:56
+ The system capacity of this api 'doFinal' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:493:56
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:517:52
+ The system capacity of this api 'createMd' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:517:52
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:518:8
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:519:42
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:556:23
+ The system capacity of this api 'createAsyKeyGenerator' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:556:23
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:557:59
+ The system capacity of this api 'generateKeyPair' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:557:59
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:559:52
+ The system capacity of this api 'pubKey' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:559:59
+ The system capacity of this api 'getEncoded' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:559:59
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:576:48
+ The system capacity of this api 'createRandom' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:576:48
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:576:63
+ The system capacity of this api 'generateRandomSync' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:576:63
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:577:51
+ The system capacity of this api 'createRandom' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:577:51
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:577:66
+ The system capacity of this api 'generateRandomSync' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:577:66
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:796:44
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:817:36
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:822:46
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:823:39
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:827:37
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:827:52
+ The system capacity of this api 'getEncoded' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:827:52
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:828:52
+ The system capacity of this api 'createMd' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:828:52
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:829:8
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:830:40
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:864:54
+ The system capacity of this api 'getEncoded' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:865:56
+ The system capacity of this api 'createMd' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:1035:69
+ The system capacity of this api 'createKeyAgreement' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:1035:69
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:1037:29
+ The system capacity of this api 'createAsyKeyGenerator' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:1037:29
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:1038:10
+ The system capacity of this api 'convertKey' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:1038:10
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:1039:54
+ The system capacity of this api 'pubKey' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:1040:62
+ The system capacity of this api 'generateSecret' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:1040:62
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:1041:55
+ The system capacity of this api 'priKey' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:1573:52
+ The system capacity of this api 'createMd' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:1573:52
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:1574:8
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/net/Tls13Client.ets:1575:15
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileCrypto.ets:154:27
+ The system capacity of this api 'createAsyKeyGenerator' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileCrypto.ets:156:27
+ The system capacity of this api 'convertKey' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileCrypto.ets:157:64
+ The system capacity of this api 'createCipher' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileCrypto.ets:158:22
+ The system capacity of this api 'init' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileCrypto.ets:158:43
+ The system capacity of this api 'CryptoMode' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileCrypto.ets:158:54
+ The system capacity of this api 'ENCRYPT_MODE' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileCrypto.ets:158:73
+ The system capacity of this api 'pubKey' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileCrypto.ets:159:66
+ The system capacity of this api 'doFinal' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileCrypto.ets:225:25
+ The system capacity of this api 'createSymKeyGenerator' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileCrypto.ets:226:62
+ The system capacity of this api 'convertKey' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileCrypto.ets:233:62
+ The system capacity of this api 'createCipher' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileCrypto.ets:234:20
+ The system capacity of this api 'init' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileCrypto.ets:234:41
+ The system capacity of this api 'CryptoMode' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileCrypto.ets:234:52
+ The system capacity of this api 'ENCRYPT_MODE' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileCrypto.ets:236:22
+ The system capacity of this api 'doFinal' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileCrypto.ets:254:62
+ The system capacity of this api 'createRandom' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileCrypto.ets:255:53
+ The system capacity of this api 'generateRandomSync' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/CaaLogin.ets:550:23
+ The system capacity of this api 'createAsyKeyGenerator' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/CaaLogin.ets:550:23
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/CaaLogin.ets:551:59
+ The system capacity of this api 'generateKeyPair' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/CaaLogin.ets:551:59
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/CaaLogin.ets:552:37
+ The system capacity of this api 'pubKey' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/CaaLogin.ets:552:44
+ The system capacity of this api 'getEncoded' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/CaaLogin.ets:552:44
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/CaaLogin.ets:554:12
+ The system capacity of this api 'priKey' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/CaaLogin.ets:562:25
+ The system capacity of this api 'createAsyKeyGenerator' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/CaaLogin.ets:565:61
+ The system capacity of this api 'convertKey' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/CaaLogin.ets:567:44
+ The system capacity of this api 'priKey' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/CaaLogin.ets:590:35
+ The system capacity of this api 'getEncoded' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/CaaLogin.ets:590:35
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/CaaLogin.ets:596:58
+ The system capacity of this api 'createSign' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/CaaLogin.ets:596:58
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/CaaLogin.ets:597:18
+ The system capacity of this api 'init' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/CaaLogin.ets:597:18
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/CaaLogin.ets:599:57
+ The system capacity of this api 'sign' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/CaaLogin.ets:599:57
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/AccountBook.ets:204:46
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ReelsCrashLog.ets:148:17
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ReelsCrashLog.ets:151:38
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ReelsCrashLog.ets:156:38
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ReelsCrashLog.ets:157:33
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ReelsCrashLog.ets:158:12
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/PushCenter.ets:208:19
+ This API is unavailable to phone(earlier than API level 23), tablet(earlier than API level 23).
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/PushCenter.ets:586:28
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileFbnsClient.ets:81:39
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:118:18
+ The 'barFloatingStyle' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.
+0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:153:27
+ The 'IMMERSIVE_GRADIENT_BLUR' API is supported since SDK version 6.1.0(23). However, the current compatible SDK versio
+n is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:168:7
+ The 'hdsMaterial' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(2
+0).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:168:19
+ The 'MaterialType' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(
+20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:168:32
+ The 'IMMERSIVE' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(20)
+.
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:169:7
+ The 'hdsMaterial' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(2
+0).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:169:19
+ The 'MaterialType' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(
+20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:169:32
+ The 'ADAPTIVE' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:182:9
+ The 'hdsMaterial' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(2
+0).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:182:21
+ The 'MaterialLevel' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0
+(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:182:35
+ The 'EXQUISITE' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(20)
+.
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:183:9
+ The 'hdsMaterial' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(2
+0).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:183:21
+ The 'MaterialLevel' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0
+(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:183:35
+ The 'SMOOTH' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:187:9
+ The 'hdsMaterial' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(2
+0).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:187:21
+ The 'MaterialLevel' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0
+(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:187:35
+ The 'GENTLE' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:188:9
+ The 'hdsMaterial' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(2
+0).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:188:21
+ The 'MaterialLevel' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0
+(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:188:35
+ The 'SMOOTH' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:191:12
+ The 'hdsMaterial' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(2
+0).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:191:24
+ The 'MaterialLevel' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0
+(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:191:38
+ The 'SMOOTH' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:194:10
+ The 'hdsMaterial' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(2
+0).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:194:22
+ The 'MaterialLevel' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0
+(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:194:36
+ The 'ADAPTIVE' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:206:12
+ The 'uiMaterial' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:206:23
+ The 'ImmersiveStyle' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(2
+0).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:206:38
+ The 'THIN' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:209:12
+ The 'uiMaterial' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:209:23
+ The 'ImmersiveStyle' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(2
+0).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:209:38
+ The 'REGULAR' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:212:12
+ The 'uiMaterial' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:212:23
+ The 'ImmersiveStyle' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(2
+0).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:212:38
+ The 'THICK' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:215:12
+ The 'uiMaterial' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:215:23
+ The 'ImmersiveStyle' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(2
+0).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:215:38
+ The 'ULTRA_THICK' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:217:10
+ The 'uiMaterial' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:217:21
+ The 'ImmersiveStyle' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(2
+0).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:217:36
+ The 'ULTRA_THIN' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/AnimatedIcons.ets:134:5
+ 'animateTo' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/AnimatedIcons.ets:183:5
+ 'animateTo' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/AnimatedIcons.ets:254:5
+ 'animateTo' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/AnimatedIcons.ets:264:5
+ 'animateTo' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/AnimatedIcons.ets:265:7
+ 'animateTo' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/MaterialSurface.ets:474:14
+ The 'uiMaterial' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/MaterialSurface.ets:474:25
+ The 'ImmersiveMaterial' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.
+0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/VideoProbe.ets:22:28
+ 'getContext' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:300:5
+ The system capacity of this api 'media' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:447:38
+ The system capacity of this api 'media' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:504:11
+ The system capacity of this api 'media' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:505:11
+ The system capacity of this api 'media' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:590:27
+ The system capacity of this api 'media' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:622:9
+ The system capacity of this api 'media' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:623:40
+ The system capacity of this api 'media' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:685:30
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:860:30
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:891:41
+ The system capacity of this api 'media' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/MediaDownloader.ets:82:46
+ The system capacity of this api 'request' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/MediaDownloader.ets:82:54
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/MediaDownloader.ets:146:50
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/MediaDownloader.ets:150:44
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/MediaDownloader.ets:151:43
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/MediaDownloader.ets:153:20
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/MediaDownloader.ets:155:14
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/MediaDownloader.ets:156:14
+ Function may throw exceptions. Special handling is required.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/MediaActionButtons.ets:30:18
+ 'showToast' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/FeedList.ets:1581:31
+ 'px2vp' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/FeedList.ets:1609:29
+ 'px2vp' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/FeedList.ets:2456:55
+ 'px2vp' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/SettingsPanel.ets:541:14
+ 'getContext' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/SettingsPanel.ets:685:15
+ The 'systemMaterial' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(2
+0).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/SettingsPanel.ets:685:36
+ The 'uiMaterial' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/SettingsPanel.ets:685:47
+ The 'ImmersiveMaterial' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.
+0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/SettingsPanel.ets:686:16
+ The 'uiMaterial' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/SettingsPanel.ets:686:27
+ The 'ImmersiveStyle' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(2
+0).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/SettingsPanel.ets:686:42
+ The 'ULTRA_THIN' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/SettingsPanel.ets:1296:20
+ 'showToast' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/SettingsPanel.ets:1722:32
+ 'px2vp' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/ProfilePage.ets:829:44
+ The system capacity of this api 'media' is not supported on all devices
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/SearchPage.ets:732:6
+ The 'contentEndOffset' API is supported since SDK version 22. However, the current compatible SDK version is 6.0.0(20)
+.
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/LoginPage.ets:389:15
+ The 'systemMaterial' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(2
+0).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:503:22
+ 'px2vp' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:504:22
+ 'px2vp' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:586:5
+ 'animateTo' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:621:5
+ 'animateTo' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:679:7
+ 'animateTo' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:726:5
+ 'animateTo' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:754:9
+ 'animateTo' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:834:5
+ 'animateTo' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:840:5
+ 'animateTo' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:859:5
+ 'animateTo' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:863:5
+ 'animateTo' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:920:28
+ 'px2vp' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:921:28
+ 'px2vp' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:922:28
+ 'px2vp' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:926:31
+ 'px2vp' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:927:31
+ 'px2vp' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:928:31
+ 'px2vp' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:972:5
+ 'animateTo' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:980:5
+ 'animateTo' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:987:5
+ 'animateTo' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:1010:7
+ 'animateTo' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:1130:5
+ 'animateTo' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:1426:27
+ 'px2vp' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:1427:27
+ 'px2vp' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:1428:23
+ 'px2vp' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:1429:23
+ 'px2vp' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:1476:31
+ 'px2vp' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:1477:44
+ 'px2vp' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:1478:32
+ 'px2vp' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/StoryViewer.ets:1479:46
+ 'px2vp' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/TouchProbe.ets:24:28
+ 'getContext' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/ReelsPage.ets:2948:5
+ 'animateTo' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:6934:14
+ The 'systemMaterial' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(2
+0).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:6937:7
+ 'AlertDialog' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:6937:19
+ 'show' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7528:41
+ 'px2vp' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7540:41
+ 'px2vp' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7541:41
+ 'px2vp' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7588:13
+ The 'systemMaterialEffect' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version i
+s 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7657:13
+ The 'systemMaterialEffect' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version i
+s 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7675:13
+ The 'systemMaterialEffect' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version i
+s 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:9818:5
+ 'animateTo' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:9828:5
+ 'animateTo' has been deprecated.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/CreatePost.ets:68:13
+ The 'systemMaterialEffect' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version i
+s 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/CreatePost.ets:69:23
+ The 'hdsMaterial' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(2
+0).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/CreatePost.ets:69:35
+ The 'MaterialType' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(
+20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/CreatePost.ets:69:48
+ The 'ADAPTIVE' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/LinkIn.ets:74:13
+ The 'systemMaterialEffect' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version i
+s 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/LinkIn.ets:75:23
+ The 'hdsMaterial' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(2
+0).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+> hvigor [32mFinished :entry:default@CompileArkTS... after 4 s 665 ms [39m
+> hvigor [32mUP-TO-DATE :entry:default@GeneratePkgModuleJson...  [39m
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/LinkIn.ets:75:35
+ The 'MaterialType' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(
+20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/LinkIn.ets:75:48
+ The 'ADAPTIVE' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(20).
+ It is recommended to use apiAvailable to safeguard API compatibility.
+[39m[39m
+[39m
+> hvigor [32mFinished :entry:default@ProcessCompiledResources... after 1 ms [39m
+> hvigor [33mWARN: If obfuscation is needed, enable obfuscation settings in this build process; failing to do so may p
+revent future obfuscation. 
+               Properly configure obfuscation rules to avoid runtime issues.[39m
+> hvigor [32mFinished :entry:default@PackageHap... after 338 ms [39m
+> hvigor [32mFinished :entry:default@PackingCheck... after 7 ms [39m
+> hvigor [32mFinished :entry:default@SignHap... after 1 s 507 ms [39m
+> hvigor [32mFinished :entry:default@CollectDebugSymbol... after 6 ms [39m
+> hvigor [32mFinished :entry:assembleHap... after 1 ms [39m
+> hvigor [32mUP-TO-DATE ::MakeProjectPackInfo...  [39m
+> hvigor [32mUP-TO-DATE ::ProcessProjectPrivacyProfile...  [39m
+> hvigor [32mUP-TO-DATE ::GeneratePackRes...  [39m
+> hvigor [32mFinished ::PackageApp... after 471 ms [39m
+> hvigor [32mFinished ::SignPackagesFromApp... after 3 ms [39m
+> hvigor [32mFinished ::SignApp... after 1 s 408 ms [39m
+> hvigor [32mFinished ::assembleApp... after 1 ms [39m
+> hvigor [32mBUILD SUCCESSFUL in 11 s 801 ms [39m
+
+42 tasks in total: 23 executed, 19 up-to-date
