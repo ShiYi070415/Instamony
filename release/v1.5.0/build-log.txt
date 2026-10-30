@@ -786,7 +786,7 @@ n is 6.0.0(20).
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/SettingsPanel.ets:1752:32
  'px2vp' has been deprecated.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/ProfilePage.ets:829:44
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/ProfilePage.ets:889:44
  The system capacity of this api 'media' is not supported on all devices
 [39m[39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/SearchPage.ets:732:6
@@ -900,7 +900,6 @@ n is 6.0.0(20).
 0).
  It is recommended to use apiAvailable to safeguard API compatibility.
 [39m[39m
-> hvigor [32mFinished :entry:default@CompileArkTS... after 5 s 110 ms [39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:6926:7
  'AlertDialog' has been deprecated.
 [39m[39m
@@ -926,6 +925,8 @@ s 6.0.0(20).
 s 6.0.0(20).
  It is recommended to use apiAvailable to safeguard API compatibility.
 [39m[39m
+> hvigor [32mFinished :entry:default@CompileArkTS... after 4 s 906 ms [39m
+> hvigor [32mUP-TO-DATE :entry:default@GeneratePkgModuleJson...  [39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7664:13
  The 'systemMaterialEffect' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version i
 s 6.0.0(20).
@@ -976,23 +977,22 @@ s 6.0.0(20).
  It is recommended to use apiAvailable to safeguard API compatibility.
 [39m[39m
 [39m
-> hvigor [32mUP-TO-DATE :entry:default@GeneratePkgModuleJson...  [39m
 > hvigor [32mFinished :entry:default@ProcessCompiledResources... after 1 ms [39m
 > hvigor [33mWARN: If obfuscation is needed, enable obfuscation settings in this build process; failing to do so may p
 revent future obfuscation. 
                Properly configure obfuscation rules to avoid runtime issues.[39m
-> hvigor [32mFinished :entry:default@PackageHap... after 342 ms [39m
-> hvigor [32mFinished :entry:default@PackingCheck... after 6 ms [39m
-> hvigor [32mFinished :entry:default@SignHap... after 1 s 455 ms [39m
-> hvigor [32mFinished :entry:default@CollectDebugSymbol... after 5 ms [39m
+> hvigor [32mFinished :entry:default@PackageHap... after 328 ms [39m
+> hvigor [32mFinished :entry:default@PackingCheck... after 5 ms [39m
+> hvigor [32mFinished :entry:default@SignHap... after 1 s 465 ms [39m
+> hvigor [32mFinished :entry:default@CollectDebugSymbol... after 7 ms [39m
 > hvigor [32mFinished :entry:assembleHap... after 1 ms [39m
 > hvigor [32mUP-TO-DATE ::MakeProjectPackInfo...  [39m
 > hvigor [32mUP-TO-DATE ::ProcessProjectPrivacyProfile...  [39m
 > hvigor [32mUP-TO-DATE ::GeneratePackRes...  [39m
-> hvigor [32mFinished ::PackageApp... after 473 ms [39m
+> hvigor [32mFinished ::PackageApp... after 470 ms [39m
 > hvigor [32mFinished ::SignPackagesFromApp... after 2 ms [39m
-> hvigor [32mFinished ::SignApp... after 1 s 382 ms [39m
+> hvigor [32mFinished ::SignApp... after 1 s 399 ms [39m
 > hvigor [32mFinished ::assembleApp... after 1 ms [39m
-> hvigor [32mBUILD SUCCESSFUL in 12 s 138 ms [39m
+> hvigor [32mBUILD SUCCESSFUL in 11 s 858 ms [39m
 
 42 tasks in total: 23 executed, 19 up-to-date

@@ -308,6 +308,8 @@ export class ProfileViewModel {
   private precaching: boolean = false;
   /** 其余分段的"第一页预取"是否在跑（B1：提前到 load 入口，避免重复排队）。 */
   private prefetchingOthers: boolean = false;
+  /** 已经排过一次"延迟预取另外三段"（见 schedulePrefetchOthers）。 */
+  private prefetchScheduled: boolean = false;
   /** 已经为哪些媒体 id 试过补封面了（见 backfillVideoCovers：同一个 id 只试一次）。 */
   private coverTried: Array<string> = [];
   /** 这一轮是不是靠"真的打开一次网页"换来的数据（状态行据此措辞）。 */
@@ -692,13 +694,7 @@ export class ProfileViewModel {
      * （见 prefetchOthersSequential 的注释）。这里只是把它**提前**到入口并发地"排上队"，
      * UI 不等它，当前段一回来就能显示。
      */
-    if (!this.prefetchingOthers) {
-      this.prefetchingOthers = true;
-      this.prefetchOthersSequential().catch((): void => {
-      }).then((): void => {
-        this.prefetchingOthers = false;
-      });
-    }
+    this.schedulePrefetchOthers();
     try {
       // 本人：网格请求体的目标键也要回正（见 ensureOwnName），所以发请求前先落实"我是谁"。
       // 同样先确认这份本人状态属于当前账号（换账号后必须作废，见 ensureSelfScope）。
@@ -802,13 +798,7 @@ export class ProfileViewModel {
       // 首屏到手之后：① 顺手把另外三个分页也备好（**顺序**拉，模板已有的才拉，
       //    见 prefetchOthersSequential）；② 把本分页的**下一页**也预取上（需求："缓存页加载"）。
       // 兜底再排一次（幂等：已 loaded/loading 的分段会直接跳过；正常情况下入口那次已排上）。
-      if (!this.prefetchingOthers) {
-        this.prefetchingOthers = true;
-        this.prefetchOthersSequential().catch((): void => {
-        }).then((): void => {
-          this.prefetchingOthers = false;
-        });
-      }
+      this.schedulePrefetchOthers();
       this.prefetchNext(tab);
       // 精选快拍（高光）：首屏之后的那一发保留（缓存未命中时这里才真正走网络）。
     } catch (error) {
@@ -1027,6 +1017,33 @@ export class ProfileViewModel {
    * 和 `prefetchOthers` 的区别只有一个：**串行**。并发的四条重查询在真机上会把网页/网络
    * 挤在一起，用户切过去时反而更慢（而且日志里那四条大小不一的响应会互相插队）。
    */
+  /**
+   * **延迟启动**"另外三段首屏"的预取。
+   *
+   * 为什么不再进门就抓：那三发每条 100~800KB，进门时正好和"头部 / 当前网格 / 高光"抢带宽
+   * （即使已经是 idle 优先级，带宽是实打实共用的）。用户真正在看当前那一段，另外三段
+   * 多半要几秒后才切过去 —— 延迟 2 秒再开始，首屏就干净了。
+   *
+   * 幂等：已经排过（`prefetchScheduled`）或正在跑（`prefetchingOthers`）都不再排。
+   */
+  private schedulePrefetchOthers(delayMs: number = 2000): void {
+    if (this.prefetchScheduled || this.prefetchingOthers) {
+      return;
+    }
+    this.prefetchScheduled = true;
+    setTimeout((): void => {
+      this.prefetchScheduled = false;
+      if (this.prefetchingOthers) {
+        return;
+      }
+      this.prefetchingOthers = true;
+      this.prefetchOthersSequential().catch((): void => {
+      }).then((): void => {
+        this.prefetchingOthers = false;
+      });
+    }, delayMs);
+  }
+
   private async prefetchOthersSequential(): Promise<void> {
     const tabs: Array<number> = this.order.slice(0);
     for (let index: number = 0; index < tabs.length; index++) {
@@ -1218,7 +1235,7 @@ export class ProfileViewModel {
       return;
     }
     state.prefetching = true;
-    // ??????????? warm??"????????????"?interactive????
+    // 预取（用户还没滑到）用 warm：让"用户当场触底触发的那一发"（interactive）先走。
     this.fetchPage(op, cursor, tab, ApiThrottle.warm()).then((page: ProfilePostsPage | null): void => {
       state.prefetching = false;
       if (page !== null && page.posts.length > 0) {

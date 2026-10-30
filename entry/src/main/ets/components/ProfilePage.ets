@@ -221,22 +221,82 @@ class ProfileRowSource implements IDataSource {
     }
   }
 
-  /** 换一批帖子：切分页、翻页、刷新都走这里。 */
+  /**
+   * 换一批帖子：切分页、翻页、刷新都走这里。
+   *
+   * **不再每次都 `onDataReloaded()`**：翻页是"在后面追加"，整份重载会让 LazyForEach
+   * 把所有可见行重建一遍（重新布局 + 重新拉图，观感就是"触底后卡一下、画面抖一下"）。
+   * 按官方 `DataChangeListener` 的语义分三种情况：
+   *   · 头部换了（切分页 / 收藏后刷新把新内容排到最前）→ 代次 +1 + `onDataReloaded()`；
+   *   · **只是变长**（翻页）→ 只对新增的那几行 `onDataAdd(i)`；
+   *   · 长度不变但有行内容变了（封面回填）→ 只对变了的行 `onDataChange(i)`；
+   *   · 变短（取消收藏 / 刷新后变少）→ 只能整份重载。
+   */
   apply(posts: Array<ProfilePost>): void {
     const rows: Array<Array<ProfilePost>> = [];
     for (let index: number = 0; index < posts.length; index += GRID_COLUMNS) {
       rows.push(posts.slice(index, index + GRID_COLUMNS));
     }
+    const before: Array<Array<ProfilePost>> = this.rows;
     // 头变了（第一条不是原来那条）= 换了一整份内容：代次 +1（见 generation）。
-    const headBefore: string = this.rows.length > 0 && this.rows[0].length > 0
-      ? this.rows[0][0].shortcode : '';
+    const headBefore: string = before.length > 0 && before[0].length > 0
+      ? before[0][0].shortcode : '';
     const headAfter: string = rows.length > 0 && rows[0].length > 0 ? rows[0][0].shortcode : '';
     if (headBefore !== headAfter) {
       this.generation++;
+      this.rows = rows;
+      this.notifyReload();
+      return;
     }
     this.rows = rows;
+    if (rows.length < before.length) {
+      // 变少：LazyForEach 没有"批量删"的低成本路径（onDataDelete 要倒序发且容易错位），
+      // 这种时候（取消收藏之类）整份重载是对的。
+      this.notifyReload();
+      return;
+    }
+    if (rows.length > before.length) {
+      // 翻页：只通知新增的行。
+      for (let index: number = before.length; index < rows.length; index++) {
+        this.notifyAdd(index);
+      }
+      return;
+    }
+    // 长度相同：逐行比 shortcode 签名，只通知真正变了的那几行（封面回填走这条）。
+    for (let index: number = 0; index < rows.length; index++) {
+      if (ProfileRowSource.rowKey(before[index]) !== ProfileRowSource.rowKey(rows[index])) {
+        this.notifyChange(index);
+      }
+    }
+  }
+
+  /** 一行内容的签名（这一行的 shortcode 拼起来）。 */
+  private static rowKey(row: Array<ProfilePost> | undefined): string {
+    if (row === undefined || row.length === 0) {
+      return '';
+    }
+    let key: string = '';
+    for (let index: number = 0; index < row.length; index++) {
+      key += `${row[index].shortcode},`;
+    }
+    return key;
+  }
+
+  private notifyReload(): void {
     for (let at: number = 0; at < this.listeners.length; at++) {
       this.listeners[at].onDataReloaded();
+    }
+  }
+
+  private notifyAdd(index: number): void {
+    for (let at: number = 0; at < this.listeners.length; at++) {
+      this.listeners[at].onDataAdd(index);
+    }
+  }
+
+  private notifyChange(index: number): void {
+    for (let at: number = 0; at < this.listeners.length; at++) {
+      this.listeners[at].onDataChange(index);
     }
   }
 }
