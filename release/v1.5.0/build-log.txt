@@ -12,7 +12,7 @@
 > hvigor [32mFinished :entry:default@ProcessIntegratedHsp... after 1 ms [39m
 > hvigor [32mFinished :entry:default@BuildNativeWithCmake... after 1 ms [39m
 > hvigor [32mUP-TO-DATE :entry:default@MakePackInfo...  [39m
-> hvigor [32mFinished :entry:default@SyscapTransform... after 7 ms [39m
+> hvigor [32mFinished :entry:default@SyscapTransform... after 8 ms [39m
 > hvigor [32mUP-TO-DATE :entry:default@ProcessProfile...  [39m
 > hvigor [32mUP-TO-DATE :entry:default@ProcessRouterMap...  [39m
 > hvigor [32mUP-TO-DATE :entry:default@ProcessShareConfig...  [39m
@@ -684,34 +684,34 @@ n is 6.0.0(20).
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/VideoProbe.ets:22:28
  'getContext' has been deprecated.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:300:5
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:311:5
  The system capacity of this api 'media' is not supported on all devices
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:447:38
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:458:38
  The system capacity of this api 'media' is not supported on all devices
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:504:11
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:515:11
  The system capacity of this api 'media' is not supported on all devices
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:505:11
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:516:11
  The system capacity of this api 'media' is not supported on all devices
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:590:27
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:601:27
  The system capacity of this api 'media' is not supported on all devices
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:622:9
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:633:9
  The system capacity of this api 'media' is not supported on all devices
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:623:40
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:634:40
  The system capacity of this api 'media' is not supported on all devices
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:685:30
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:696:30
  Function may throw exceptions. Special handling is required.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:860:30
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:871:30
  Function may throw exceptions. Special handling is required.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:891:41
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:902:41
  The system capacity of this api 'media' is not supported on all devices
 [39m[39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/MediaDownloader.ets:82:46
@@ -936,8 +936,6 @@ s 6.0.0(20).
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:9828:5
  'animateTo' has been deprecated.
 [39m[39m
-> hvigor [32mFinished :entry:default@CompileArkTS... after 4 s 891 ms [39m
-> hvigor [32mUP-TO-DATE :entry:default@GeneratePkgModuleJson...  [39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/CreatePost.ets:68:13
  The 'systemMaterialEffect' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version i
 s 6.0.0(20).
@@ -947,6 +945,7 @@ s 6.0.0(20).
  The 'hdsMaterial' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(2
 0).
  It is recommended to use apiAvailable to safeguard API compatibility.
+> hvigor [32mFinished :entry:default@CompileArkTS... after 5 s 571 ms [39m
 [39m[39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/CreatePost.ets:69:35
  The 'MaterialType' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(
@@ -962,6 +961,7 @@ s 6.0.0(20).
 s 6.0.0(20).
  It is recommended to use apiAvailable to safeguard API compatibility.
 [39m[39m
+> hvigor [32mUP-TO-DATE :entry:default@GeneratePkgModuleJson...  [39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/LinkIn.ets:75:23
  The 'hdsMaterial' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(2
 0).
@@ -981,18 +981,18 @@ s 6.0.0(20).
 > hvigor [33mWARN: If obfuscation is needed, enable obfuscation settings in this build process; failing to do so may p
 revent future obfuscation. 
                Properly configure obfuscation rules to avoid runtime issues.[39m
-> hvigor [32mFinished :entry:default@PackageHap... after 341 ms [39m
-> hvigor [32mFinished :entry:default@PackingCheck... after 3 ms [39m
-> hvigor [32mFinished :entry:default@SignHap... after 1 s 509 ms [39m
-> hvigor [32mFinished :entry:default@CollectDebugSymbol... after 6 ms [39m
+> hvigor [32mFinished :entry:default@PackageHap... after 334 ms [39m
+> hvigor [32mFinished :entry:default@PackingCheck... after 6 ms [39m
+> hvigor [32mFinished :entry:default@SignHap... after 1 s 489 ms [39m
+> hvigor [32mFinished :entry:default@CollectDebugSymbol... after 5 ms [39m
 > hvigor [32mFinished :entry:assembleHap... after 1 ms [39m
 > hvigor [32mUP-TO-DATE ::MakeProjectPackInfo...  [39m
 > hvigor [32mUP-TO-DATE ::ProcessProjectPrivacyProfile...  [39m
 > hvigor [32mUP-TO-DATE ::GeneratePackRes...  [39m
-> hvigor [32mFinished ::PackageApp... after 458 ms [39m
-> hvigor [32mFinished ::SignPackagesFromApp... after 2 ms [39m
-> hvigor [32mFinished ::SignApp... after 1 s 390 ms [39m
+> hvigor [32mFinished ::PackageApp... after 461 ms [39m
+> hvigor [32mFinished ::SignPackagesFromApp... after 3 ms [39m
+> hvigor [32mFinished ::SignApp... after 1 s 430 ms [39m
 > hvigor [32mFinished ::assembleApp... after 1 ms [39m
-> hvigor [32mBUILD SUCCESSFUL in 11 s 918 ms [39m
+> hvigor [32mBUILD SUCCESSFUL in 12 s 701 ms [39m
 
 42 tasks in total: 23 executed, 19 up-to-date
