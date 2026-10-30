@@ -23,7 +23,7 @@ import { deviceInfo } from '@kit.BasicServicesKit';
 import { Tls13Client } from './net/Tls13Client';
 import { DoHResolver } from './net/DoHResolver';
 import { CaaSession } from './mobileapi/CaaSession';
-import { humanHints } from './mobileapi/CaaLogin';
+import { CaaLogin, humanHints } from './mobileapi/CaaLogin';
 import { ApiThrottle } from './ApiThrottle';
 import { InstagramCookieJar, InstagramCookieSnapshot } from './InstagramCookieJar';
 import { PlatformCap } from './PlatformCap';
@@ -186,6 +186,9 @@ export class LoginLog {
       ? `${LoginLog.stamp(LoginLog.webProbeAtMs)}：${LoginLog.webProbeOk ? '密码被认可' : '未通过'}`
         + `｜${LoginLog.webProbeText}`
       : '（还没核对过：登录失败后点提示下面那行小字「账号密码对不对？」）');
+    if (CaaLogin.lastWebProbeNote.length > 0) {
+      lines.push(`（上次登录失败时自动核对：${CaaLogin.lastWebProbeNote}）`);
+    }
     lines.push('');
     // ---- 通道自检 ----
     lines.push('[登录通道自检：TCP → TLS 1.3 → 一行 GET]');

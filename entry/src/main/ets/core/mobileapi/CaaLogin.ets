@@ -37,6 +37,7 @@ import { MobileCrypto, PasswordKeys } from './MobileCrypto';
 import { MobileIdentity } from './MobileSession';
 import { MobileRequest } from './MobileRequest';
 import { base64, base64UrlNoPad, textOf, utf8 } from './MobileSign';
+import { WebLoginProbe, WebProbeResult } from './WebLoginProbe';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'CaaLogin';
@@ -660,6 +661,8 @@ export class CaaLogin {
   static lastSendHeaderMap: Record<string, string> = {};
   /** 最近一次 `qe/sync`（取密码加密公钥）的现场，失败时拼进提示里。 */
   static lastPasswordKeysNote: string = '';
+  /** 最近一次 CAA 登录失败时，网页接口核对账号密码的结论（登录日志会带出来）。 */
+  static lastWebProbeNote: string = '';
   /** 这一次提交的密码里有没有非 ASCII 字符（`password_contains_non_ascii` 用）。 */
   private static passwordNonAscii: string = 'false';
 
@@ -1593,9 +1596,38 @@ export class CaaLogin {
     const credential: boolean = error.indexOf('密码') >= 0 || error.indexOf('账号') >= 0
       || error.toLowerCase().indexOf('password') >= 0
       || error.toLowerCase().indexOf('incorrect') >= 0;
+    /*
+     * **IG 说「密码错误」时，再用网页接口问一次"到底是谁的问题"**。
+     *
+     * 2026-10-30 真机（Mate 70 Pro+）：CAA 一直回「你输入的密码有误」，而网页接口
+     * （WebLoginProbe）回的是 **密码被认可、要求安全验证（checkpoint）** ——
+     * 同一组账号密码，IG 的两个面结论相反。也就是说 CAA 这条路把"要过安全验证"
+     * 也报成了"密码错误"，用户照着提示去改密码只会越走越远。
+     *
+     * 所以：CAA 判口令类失败时自动核一次（只在失败时打一发，不增加正常登录的流量），
+     * 拿到"密码被认可"就把话改成**可执行**的那句 —— 先去官方 App 过 checkpoint。
+     */
+    let probeNote: string = '';
+    if (credential) {
+      const probed: WebProbeResult = await WebLoginProbe.probe(username, password);
+      CaaLogin.lastWebProbeNote = probed.text;
+      probeNote = probed.text;
+      if (probed.credentialsOk) {
+        const blocked: CaaResult = new CaaResult(false,
+          `登录失败：IG 要求先完成账号安全验证（checkpoint）——`
+            + `密码是对的（网页接口已确认：${probed.text}）。`
+            + `请先在 Instagram 官方 App 或网页版用同一账号登录，把"确认是你"那一步做完，再回来登录。`);
+        blocked.aac = aac;
+        try {
+          blocked.raw = JSON.stringify(payload).substring(0, 100000);
+        } catch (rawError) {
+          blocked.raw = '';
+        }
+        return blocked;
+      }
+    }
     const advice: string = credential
-      ? '（口令是 IG 判的：先确认官方 App 能用同一账号密码登录；VPN 先关掉；'
-        + '连续失败就先等 30 分钟再试）' : '';
+      ? `（网页接口的结论：${probeNote.length > 0 ? probeNote : '没能核对'}）` : '';
     const failed: CaaResult = new CaaResult(false, error.length > 0
       ? `登录失败：${error}${advice}` : '响应里没找到登录结果（布局形状可能变了）');
     /*
