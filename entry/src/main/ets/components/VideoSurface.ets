@@ -187,6 +187,19 @@ export struct VideoSurface {
    * 用户下次导出诊断时能直接看出是不是这个原因。
    */
   private static alivePlayers: number = 0;
+  /**
+   * **同时活着的播放器上限（预加载玩家的闸门）**。
+   *
+   * 真机日志（2026-10-30 17:45，装了逐次打点的包）显示：崩溃前那一刻
+   * `player create ok alive=3`（当前 + 预加载 + 又一个预加载），并且三个都各自
+   * 绑了 surface / 走过 prepare，随后 `first frame play+33ms` 之后进程直接 ABORTED
+   * —— 没有任何 JS 异常、也没有系统 fault 记录，是**原生层**在多个解码器/表面之间崩的。
+   *
+   * 所以给"预加载用的播放器"加一道闸：**进程内已经有 2 个播放器时，预加载不再建**
+   * （正在播的那条不受影响，保证播放优先）。等它真的滑到当前位，`playing` 变 true
+   * 会再走一次 createPlayer，那时才允许创建。
+   */
+  private static readonly MAX_ALIVE_FOR_PRELOAD: number = 2;
 
   /** 建好一个播放器时的计数与打点。 */
   private static notePlayerCreated(url: string): void {
@@ -295,6 +308,16 @@ export struct VideoSurface {
   private createPlayer(): void {
     VideoProbe.log('createPlayer');
     if (this.player !== null || this.creating || this.destroyed || !this.wanted()) {
+      return;
+    }
+    /*
+     * **预加载闸门**（见 MAX_ALIVE_FOR_PRELOAD 的说明）：只播不看的那些玩家，
+     * 在已经有 2 个播放器时就不建了 —— 多建一个解码器换来的"提前量"，
+     * 远不如一次原生闪退的代价大。
+     */
+    const preloadOnly: boolean = this.preload && !this.playing;
+    if (preloadOnly && VideoSurface.alivePlayers >= VideoSurface.MAX_ALIVE_FOR_PRELOAD) {
+      ReelsCrashLog.note(`skip preload player alive=${VideoSurface.alivePlayers}`);
       return;
     }
     this.creating = true;
