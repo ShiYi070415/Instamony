@@ -708,6 +708,17 @@ export class ProfileViewModel {
        */
       this.paintHeaderSnapshot();
       /*
+       * **网格也先画上一份的落盘快照**（冷启动 6~7 秒里的"第一屏空白"就是这么省掉的）。
+       *
+       * 只在"这一页还没有内容"时画：之后网络那一发会 `mergePosts` 把新内容并到前面
+       * （见下面 `refresh && state.posts.length > 0` 那一支），不会出现"缓存把新数据挡住"。
+       * 快照里也带游标，但这里**不使用它的游标**做翻页 —— 只用于显示，翻页仍从网络第一页
+       * 之后重新接（避免"缓存里的旧游标翻出重复内容"）。
+       */
+      if (state.posts.length === 0) {
+        this.paintPageSnapshot(tab);
+      }
+      /*
        * 账号名**不再提前要**（见 loadHeader 那段说明 + 用户报的"切回大号头部太慢"）：
        * 头部那一发本来就会把 `username` 带回来（loadHeader 末尾会写进 ownName），
        * 这里再要一次等于把同一发 `users/{pk}/info/` 打两遍 —— 两发还共用同一个
@@ -795,6 +806,8 @@ export class ProfileViewModel {
       }
       // 这一段首屏里"没有封面的视频"补一下封面（见 backfillVideoCovers）。
       this.backfillVideoCovers(tab);
+      this.savePageSnapshot(tab, page);
+      this.precacheTabMedia(tab);
       // 首屏到手之后：① 顺手把另外三个分页也备好（**顺序**拉，模板已有的才拉，
       //    见 prefetchOthersSequential）；② 把本分页的**下一页**也预取上（需求："缓存页加载"）。
       // 兜底再排一次（幂等：已 loaded/loading 的分段会直接跳过；正常情况下入口那次已排上）。
@@ -1426,6 +1439,59 @@ export class ProfileViewModel {
      */
     this.reset();
     this.selfId = id;
+  }
+
+  /**
+   * **画上一份"第一页"的落盘快照**（冷启动省掉第一屏空白，见 `load` 里的调用点）。
+   *
+   * 只用它显示、**不用它的游标翻页**：网络那一发回来会把新内容并到前面（按 shortcode 去重），
+   * 游标与 `more` 仍由网络那一发决定 —— 否则会拿旧游标翻出重复内容。
+   */
+  private paintPageSnapshot(tab: number): void {
+    const uid: string = this.snapshotOwnerId();
+    if (uid.length === 0) {
+      return;
+    }
+    const rawJson: string = AppSettings.loadProfilePage(uid, tab);
+    const page: ProfilePostsPage | null = ProfilePostsPage.fromJson(rawJson);
+    if (page === null) {
+      return;
+    }
+    const state: ProfileTabState = this.tabs[tab];
+    if (state.posts.length > 0) {
+      return;
+    }
+    state.posts = page.posts;
+    state.loaded = false;
+    state.more = true;
+    hilog.info(DOMAIN, TAG, 'paint snapshot tab=%{public}d n=%{public}d (cold start)',
+      tab, page.posts.length);
+    if (this.tab === tab) {
+      this.syncFrom(state);
+    }
+    this.precacheTabMedia(tab);
+  }
+
+  /** ???"????"??????? selfId???? target.id? */
+  private snapshotOwnerId(): string {
+    if (this.target.isSelf()) {
+      return this.selfId.length > 0 ? this.selfId : NativeProfile.ownIdCached();
+    }
+    return this.target.id;
+  }
+
+  /** ????????????????? paintPageSnapshot?? */
+  private savePageSnapshot(tab: number, page: ProfilePostsPage): void {
+    const uid: string = this.snapshotOwnerId();
+    if (uid.length === 0 || page.posts.length === 0) {
+      return;
+    }
+    try {
+      AppSettings.saveProfilePage(uid, tab, page.toJson());
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'save page snapshot failed: %{public}s',
+        (error as Error).message);
+    }
   }
 
   private headerFromSnapshot: boolean = false;

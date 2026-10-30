@@ -115,7 +115,7 @@ export class MobileProfile {
     if (kind === 'tagged') {
       // instagram-private-api 的 `UsertagsFeed`：`GET /api/v1/usertags/{pk}/feed/`
       const page: MobileGridPage | null = await MobileProfile.gridGet(
-        `usertags/${encodeURIComponent(userId)}/feed/`, maxId, 'tagged', priority);
+        `usertags/${encodeURIComponent(userId)}/feed/`, maxId, 'tagged', priority, count);
       return page;
     }
     if (kind === 'clips') {
@@ -127,7 +127,7 @@ export class MobileProfile {
     if (kind === 'saved') {
       // 收藏：候选 `feed/saved/`（通了就记住，之后这个分页也走移动端）。
       const page: MobileGridPage | null = await MobileProfile.gridGet('feed/saved/', maxId, 'saved',
-        priority);
+        priority, count);
       return page;
     }
     return null;
@@ -148,8 +148,8 @@ export class MobileProfile {
 
   /** 一发 GET 网格（被标注 / 收藏那两条用）。 */
   private static async gridGet(endpoint: string, maxId: string, kind: string,
-                               priority: number): Promise<MobileGridPage | null> {
-    let params: string = 'count=24';
+                               priority: number, count: number = GRID_COUNT): Promise<MobileGridPage | null> {
+    let params: string = `count=${count}`;
     if (maxId.length > 0) {
       params += `&max_id=${encodeURIComponent(maxId)}`;
     }

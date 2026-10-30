@@ -57,6 +57,8 @@ const CONNECTION_MAX_DEPTH: number = 4;
  * 判据和搜索页那面网格完全一致（见 NativeSearch 的 COVER_WIDTH）。
  */
 const COVER_WIDTH: number = 360;
+/** ????**???**????????????? fetchPosts ?????? */
+const PROFILE_FIRST_PAGE_COUNT: number = 12;
 /**
  * 请求体里"这一份数据是谁的"那几个键（见 ProfileTarget / bodyWith）。
  *
@@ -492,7 +494,14 @@ export class NativeProfile {
       NativeProfile.detail = 'no-user-id';
       return null;
     }
-    const page: MobileGridPage | null = await MobileProfile.tab(kind, uid, after, undefined, priority);
+    /*
+     * **????? 12 ?**????????? 9~12 ??24 ????? 100~800KB?
+     * ????????"?????"???????????????? + ???
+     * ????? 24?? `nextPages` ??????????????
+     */
+    const pageCount: number = after.length === 0 ? PROFILE_FIRST_PAGE_COUNT : 0;
+    const page: MobileGridPage | null = await MobileProfile.tab(kind, uid, after,
+      pageCount > 0 ? pageCount : undefined, priority);
     if (page === null) {
       NativeProfile.detail = `tab-${kind}-fail`;
       hilog.warn(DOMAIN, TAG, 'tab failed kind=%{public}s uid=%{public}s', kind, uid);

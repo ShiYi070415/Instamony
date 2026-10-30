@@ -12,22 +12,22 @@
 > hvigor [32mFinished :entry:default@ProcessIntegratedHsp... after 1 ms [39m
 > hvigor [32mFinished :entry:default@BuildNativeWithCmake... after 1 ms [39m
 > hvigor [32mUP-TO-DATE :entry:default@MakePackInfo...  [39m
-> hvigor [32mFinished :entry:default@SyscapTransform... after 8 ms [39m
+> hvigor [32mFinished :entry:default@SyscapTransform... after 7 ms [39m
 > hvigor [32mUP-TO-DATE :entry:default@ProcessProfile...  [39m
 > hvigor [32mUP-TO-DATE :entry:default@ProcessRouterMap...  [39m
 > hvigor [32mUP-TO-DATE :entry:default@ProcessShareConfig...  [39m
-> hvigor [32mFinished :entry:default@ProcessStartupConfig... after 2 ms [39m
+> hvigor [32mFinished :entry:default@ProcessStartupConfig... after 1 ms [39m
 > hvigor [32mFinished :entry:default@BuildNativeWithNinja... after 1 ms [39m
 > hvigor [32mUP-TO-DATE :entry:default@ProcessResource...  [39m
 > hvigor [32mUP-TO-DATE :entry:default@GenerateLoaderJson...  [39m
 > hvigor [32mUP-TO-DATE :entry:default@ProcessLibs...  [39m
 > hvigor [32mUP-TO-DATE :entry:default@CompileResource...  [39m
 > hvigor [32mUP-TO-DATE :entry:default@DoNativeStrip...  [39m
-> hvigor [32mFinished :entry:default@BuildJS... after 3 ms [39m
+> hvigor [32mFinished :entry:default@BuildJS... after 4 ms [39m
 > hvigor [32mUP-TO-DATE :entry:default@CacheNativeLibs...  [39m
 node : > hvigor [33mWARN: [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/Instagram
 CookieJar.ets:353:38
-At line:53 char:147
+At line:11 char:149
 + ... tudio\sdk'; node "C:\Program Files\Huawei\DevEco Studio\tools\hvigor\ ...
 +                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     + CategoryInfo          : NotSpecified: (> hvigor [33mW...eJar.ets:353:38:String) [], RemoteException
@@ -909,7 +909,6 @@ n is 6.0.0(20).
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7517:41
  'px2vp' has been deprecated.
 [39m[39m
-> hvigor [32mFinished :entry:default@CompileArkTS... after 7 s 745 ms [39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7529:41
  'px2vp' has been deprecated.
 [39m[39m
@@ -957,9 +956,10 @@ s 6.0.0(20).
  It is recommended to use apiAvailable to safeguard API compatibility.
 [39m[39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/LinkIn.ets:74:13
-> hvigor [32mUP-TO-DATE :entry:default@GeneratePkgModuleJson...  [39m
  The 'systemMaterialEffect' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version i
 s 6.0.0(20).
+> hvigor [32mFinished :entry:default@CompileArkTS... after 5 s 655 ms [39m
+> hvigor [32mUP-TO-DATE :entry:default@GeneratePkgModuleJson...  [39m
  It is recommended to use apiAvailable to safeguard API compatibility.
 [39m[39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/LinkIn.ets:75:23
@@ -981,18 +981,18 @@ s 6.0.0(20).
 > hvigor [33mWARN: If obfuscation is needed, enable obfuscation settings in this build process; failing to do so may p
 revent future obfuscation. 
                Properly configure obfuscation rules to avoid runtime issues.[39m
-> hvigor [32mFinished :entry:default@PackageHap... after 338 ms [39m
-> hvigor [32mFinished :entry:default@PackingCheck... after 8 ms [39m
-> hvigor [32mFinished :entry:default@SignHap... after 1 s 455 ms [39m
-> hvigor [32mFinished :entry:default@CollectDebugSymbol... after 6 ms [39m
+> hvigor [32mFinished :entry:default@PackageHap... after 332 ms [39m
+> hvigor [32mFinished :entry:default@PackingCheck... after 6 ms [39m
+> hvigor [32mFinished :entry:default@SignHap... after 1 s 447 ms [39m
+> hvigor [32mFinished :entry:default@CollectDebugSymbol... after 9 ms [39m
 > hvigor [32mFinished :entry:assembleHap... after 1 ms [39m
 > hvigor [32mUP-TO-DATE ::MakeProjectPackInfo...  [39m
 > hvigor [32mUP-TO-DATE ::ProcessProjectPrivacyProfile...  [39m
 > hvigor [32mUP-TO-DATE ::GeneratePackRes...  [39m
-> hvigor [32mFinished ::PackageApp... after 454 ms [39m
+> hvigor [32mFinished ::PackageApp... after 439 ms [39m
 > hvigor [32mFinished ::SignPackagesFromApp... after 2 ms [39m
-> hvigor [32mFinished ::SignApp... after 1 s 371 ms [39m
+> hvigor [32mFinished ::SignApp... after 1 s 373 ms [39m
 > hvigor [32mFinished ::assembleApp... after 1 ms [39m
-> hvigor [32mBUILD SUCCESSFUL in 14 s 625 ms [39m
+> hvigor [32mBUILD SUCCESSFUL in 12 s 557 ms [39m
 
 42 tasks in total: 23 executed, 19 up-to-date

@@ -383,6 +383,60 @@ export class ProfilePost {
   }
 
   /**
+   * **落盘用**：把一条帖子压成紧凑 JSON 数组（字段顺序见 `fromJson`）。
+   *
+   * 为什么不用对象字面量：这里字段二十多个、名字都很长，对象形式对一个"12 条就写一次"的
+   * 冷启动缓存来说太大（preferences 是整串读写）。数组形式能省掉一大半字节。
+   */
+  toJson(): Array<Object> {
+    return [
+      this.shortcode, this.isVideo, this.coverUrl, this.width, this.height,
+      this.likeCount, this.commentCount, this.displayUrl, this.imageUrls,
+      this.originalImageUrls, this.videoUrl, this.originalVideoUrl, this.caption,
+      this.ownerUsername, this.ownerAvatarUrl, this.ownerId, this.ownerFollowing,
+      this.takenAtMs, this.mediaId, this.imageAspectMin, this.repostCount,
+      this.liked, this.shareCount
+    ];
+  }
+
+  /** `toJson` 的逆过程（形状不对就给 null，缓存坏了当没有）。 */
+  static fromJson(raw: Object | null | undefined): ProfilePost | null {
+    if (raw === null || raw === undefined || !Array.isArray(raw)) {
+      return null;
+    }
+    const parts: Array<Object> = raw as Array<Object>;
+    if (parts.length < 7) {
+      return null;
+    }
+    const str: (index: number) => string = (index: number): string => {
+      const one: Object | undefined = parts[index];
+      return one === undefined || one === null ? '' : `${one}`;
+    };
+    const num: (index: number) => number = (index: number): number => {
+      const one: Object | undefined = parts[index];
+      return one === undefined || one === null ? 0 : Number(one);
+    };
+    const bool: (index: number) => boolean = (index: number): boolean => {
+      return parts[index] === true;
+    };
+    const list: (index: number) => Array<string> = (index: number): Array<string> => {
+      const one: Object | undefined = parts[index];
+      if (one === undefined || one === null || !Array.isArray(one)) {
+        return [];
+      }
+      const out: Array<string> = [];
+      const src: Array<Object> = one as Array<Object>;
+      for (let index2: number = 0; index2 < src.length; index2++) {
+        out.push(`${src[index2]}`);
+      }
+      return out;
+    };
+    return new ProfilePost(str(0), bool(1), str(2), num(3), num(4), num(5), num(6),
+      str(7), list(8), list(9), str(10), str(11), str(12), str(13), str(14), str(15),
+      bool(16), num(17), str(18), num(19), num(20), bool(21), num(22));
+  }
+
+  /**
    * 封面地址**能不能当图片用**。
    *
    * 两种不算：
@@ -442,6 +496,52 @@ export class ProfilePostsPage {
     this.posts = posts;
     this.endCursor = endCursor;
     this.hasMore = hasMore;
+  }
+
+  /** 落盘用（见 `core/ProfileCache`）：`{p:[…], c:"游标", m:1}`。 */
+  toJson(): string {
+    const rows: Array<Object> = [];
+    for (let index: number = 0; index < this.posts.length; index++) {
+      rows.push(this.posts[index].toJson());
+    }
+    const root: Record<string, Object> = {};
+    root['p'] = rows;
+    root['c'] = this.endCursor;
+    root['m'] = this.hasMore ? 1 : 0;
+    return JSON.stringify(root);
+  }
+
+  /** `toJson` 的逆过程；坏数据给 null。 */
+  static fromJson(raw: string): ProfilePostsPage | null {
+    if (raw.length < 2) {
+      return null;
+    }
+    let root: Record<string, Object>;
+    try {
+      root = JSON.parse(raw) as Record<string, Object>;
+    } catch (error) {
+      return null;
+    }
+    const rows: Object | undefined = root['p'];
+    if (rows === undefined || rows === null || !Array.isArray(rows)) {
+      return null;
+    }
+    const posts: Array<ProfilePost> = [];
+    const src: Array<Object> = rows as Array<Object>;
+    for (let index: number = 0; index < src.length; index++) {
+      const one: ProfilePost | null = ProfilePost.fromJson(src[index]);
+      if (one !== null) {
+        posts.push(one);
+      }
+    }
+    if (posts.length === 0) {
+      return null;
+    }
+    const cursor: Object | undefined = root['c'];
+    const more: Object | undefined = root['m'];
+    return new ProfilePostsPage(posts,
+      cursor === undefined || cursor === null ? '' : `${cursor}`,
+      more === 1 || more === '1' || more === true);
   }
 }
 
