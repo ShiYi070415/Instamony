@@ -143,11 +143,44 @@ export class WebLoginProbe {
     const challengeType: string = WebLoginProbe.fieldOf(json, 'challengeType');
     // 新版验证平台：`{"message":"checkpoint_required","checkpoint_url":"/auth_platform/?apc=…"}`
     const checkpointUrl: string = WebLoginProbe.fieldOf(json, 'checkpoint_url');
+    const errorType: string = WebLoginProbe.fieldOf(json, 'error_type');
+    const vetted: boolean = lower.indexOf('"is_vetted":true') >= 0;
+    const inactivated: boolean = lower.indexOf('"is_user_inactivated_error":true') >= 0;
     const detail: string = `native_flow=${nativeFlow ? 'true' : 'false'}`
       + ` api_path=${apiPath.length > 0 ? apiPath : '(无)'}`
       + ` challengeType=${challengeType.length > 0 ? challengeType : '(无)'}`
-      + ` error_type=${WebLoginProbe.fieldOf(json, 'error_type') || '(无)'}`
+      + ` error_type=${errorType.length > 0 ? errorType : '(无)'}`
+      + ` is_vetted=${vetted ? 'true' : 'false'}`
       + ` raw=${json.length > 900 ? json.substring(0, 900) + '…' : json}`;
+    // ---- 先认 IG 自己给的那些"假/门槛类"错误（它们比 message 字段更有信息量）----
+    if (inactivated) {
+      return new WebProbeResult('这个账号已被 IG 停用（is_user_inactivated_error），登录不了是正常结果',
+        false, challengeType, nativeFlow, apiPath, detail, checkpointUrl);
+    }
+    /*
+     * **`FakeIncorrectPassword` = IG 的「假密码错误」**。
+     *
+     * 2026-10-30 另一位用户的日志里就是它：
+     *   `{"message":"","user":true,"authenticated":false,"is_vetted":false,
+     *     "error_type":"FakeIncorrectPassword","status":"fail"}`
+     * 名字就写着 "Fake" —— IG 在**反脚本 / 设备未 vetted** 时故意回一句"密码错误"，
+     * 目的就是不让脚本知道真实原因（和 checkpoint 一样是挡箭牌）。所以看到它
+     * **不要**让用户去改密码，改了也没用。
+     */
+    if (errorType.indexOf('FakeIncorrectPassword') >= 0) {
+      return new WebProbeResult(
+        `IG 回的是「假密码错误」（error_type=FakeIncorrectPassword、is_vetted=${vetted ? 'true' : 'false'}）`
+          + '——这是反脚本/设备未受信时故意给的挡箭牌，不是密码问题。'
+          + '处理：用官方 App 在同一网络登录一次把这个账号/设备"养熟"，再等一段时间回来登录；VPN 先关掉。',
+        false, challengeType, nativeFlow, apiPath, detail, checkpointUrl);
+    }
+    if (errorType.indexOf('AuthPlatformAntiScriptingException') >= 0
+      || errorType.indexOf('AntiScripting') >= 0) {
+      const how: string = checkpointUrl.length > 0
+        ? '（可以在 App 内的验证网页里完成）' : '（需要人工在官方 App / 网页里完成）';
+      return new WebProbeResult(`IG 的反脚本检查点（${errorType}）${how}`,
+        true, challengeType, nativeFlow, apiPath, detail, checkpointUrl);
+    }
     if (lower.indexOf('"authenticated":true') >= 0) {
       return new WebProbeResult('IG 认可这组账号密码（网页接口直接给了会话）→ 问题在本机 CAA 链路',
         true, challengeType, nativeFlow, apiPath, detail, checkpointUrl);
