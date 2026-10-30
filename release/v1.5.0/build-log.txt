@@ -27,7 +27,7 @@
 > hvigor [32mUP-TO-DATE :entry:default@CacheNativeLibs...  [39m
 node : > hvigor [33mWARN: [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/Instagram
 CookieJar.ets:353:38
-At line:15 char:151
+At line:1 char:220
 + ... tudio\sdk'; node "C:\Program Files\Huawei\DevEco Studio\tools\hvigor\ ...
 +                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     + CategoryInfo          : NotSpecified: (> hvigor [33mW...eJar.ets:353:38:String) [], RemoteException
@@ -465,7 +465,7 @@ At line:15 char:151
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/PushCenter.ets:586:28
  Function may throw exceptions. Special handling is required.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileFbnsClient.ets:81:39
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileFbnsClient.ets:66:39
  Function may throw exceptions. Special handling is required.
 [39m[39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ImmersiveLight.ets:118:18
@@ -741,13 +741,13 @@ n is 6.0.0(20).
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/MediaActionButtons.ets:30:18
  'showToast' has been deprecated.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/FeedList.ets:1581:31
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/FeedList.ets:1561:31
  'px2vp' has been deprecated.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/FeedList.ets:1609:29
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/FeedList.ets:1589:29
  'px2vp' has been deprecated.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/FeedList.ets:2456:55
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/FeedList.ets:2436:55
  'px2vp' has been deprecated.
 [39m[39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/SettingsPanel.ets:541:14
@@ -895,48 +895,50 @@ n is 6.0.0(20).
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/ReelsPage.ets:2948:5
  'animateTo' has been deprecated.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:6934:14
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:6923:14
  The 'systemMaterial' API is supported since SDK version 26.0.0. However, the current compatible SDK version is 6.0.0(2
 0).
  It is recommended to use apiAvailable to safeguard API compatibility.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:6937:7
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:6926:7
  'AlertDialog' has been deprecated.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:6937:19
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:6926:19
  'show' has been deprecated.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7528:41
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7517:41
  'px2vp' has been deprecated.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7540:41
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7529:41
  'px2vp' has been deprecated.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7541:41
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7530:41
  'px2vp' has been deprecated.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7588:13
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7577:13
  The 'systemMaterialEffect' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version i
 s 6.0.0(20).
  It is recommended to use apiAvailable to safeguard API compatibility.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7657:13
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7646:13
  The 'systemMaterialEffect' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version i
 s 6.0.0(20).
  It is recommended to use apiAvailable to safeguard API compatibility.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7675:13
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7664:13
  The 'systemMaterialEffect' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version i
 s 6.0.0(20).
  It is recommended to use apiAvailable to safeguard API compatibility.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:9818:5
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:9807:5
  'animateTo' has been deprecated.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:9828:5
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:9817:5
  'animateTo' has been deprecated.
 [39m[39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/CreatePost.ets:68:13
+> hvigor [32mFinished :entry:default@CompileArkTS... after 10 s 554 ms [39m
+> hvigor [32mUP-TO-DATE :entry:default@GeneratePkgModuleJson...  [39m
  The 'systemMaterialEffect' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version i
 s 6.0.0(20).
  It is recommended to use apiAvailable to safeguard API compatibility.
@@ -961,9 +963,6 @@ s 6.0.0(20).
  It is recommended to use apiAvailable to safeguard API compatibility.
 [39m[39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/LinkIn.ets:75:23
-> hvigor [32mFinished :entry:default@CompileArkTS... after 5 s 831 ms [39m
-> hvigor [32mUP-TO-DATE :entry:default@GeneratePkgModuleJson...  [39m
-> hvigor [32mFinished :entry:default@ProcessCompiledResources... after 1 ms [39m
  The 'hdsMaterial' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(2
 0).
  It is recommended to use apiAvailable to safeguard API compatibility.
@@ -978,21 +977,22 @@ s 6.0.0(20).
  It is recommended to use apiAvailable to safeguard API compatibility.
 [39m[39m
 [39m
+> hvigor [32mFinished :entry:default@ProcessCompiledResources... after 1 ms [39m
 > hvigor [33mWARN: If obfuscation is needed, enable obfuscation settings in this build process; failing to do so may p
 revent future obfuscation. 
                Properly configure obfuscation rules to avoid runtime issues.[39m
-> hvigor [32mFinished :entry:default@PackageHap... after 335 ms [39m
-> hvigor [32mFinished :entry:default@PackingCheck... after 6 ms [39m
-> hvigor [32mFinished :entry:default@SignHap... after 1 s 490 ms [39m
+> hvigor [32mFinished :entry:default@PackageHap... after 338 ms [39m
+> hvigor [32mFinished :entry:default@PackingCheck... after 7 ms [39m
+> hvigor [32mFinished :entry:default@SignHap... after 1 s 483 ms [39m
 > hvigor [32mFinished :entry:default@CollectDebugSymbol... after 6 ms [39m
 > hvigor [32mFinished :entry:assembleHap... after 1 ms [39m
 > hvigor [32mUP-TO-DATE ::MakeProjectPackInfo...  [39m
 > hvigor [32mUP-TO-DATE ::ProcessProjectPrivacyProfile...  [39m
 > hvigor [32mUP-TO-DATE ::GeneratePackRes...  [39m
-> hvigor [32mFinished ::PackageApp... after 447 ms [39m
-> hvigor [32mFinished ::SignPackagesFromApp... after 2 ms [39m
-> hvigor [32mFinished ::SignApp... after 1 s 378 ms [39m
+> hvigor [32mFinished ::PackageApp... after 477 ms [39m
+> hvigor [32mFinished ::SignPackagesFromApp... after 3 ms [39m
+> hvigor [32mFinished ::SignApp... after 1 s 385 ms [39m
 > hvigor [32mFinished ::assembleApp... after 1 ms [39m
-> hvigor [32mBUILD SUCCESSFUL in 12 s 944 ms [39m
+> hvigor [32mBUILD SUCCESSFUL in 17 s 528 ms [39m
 
 42 tasks in total: 23 executed, 19 up-to-date

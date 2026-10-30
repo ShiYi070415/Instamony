@@ -8,8 +8,8 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { InstagramPageBridge } from '../bridge/PageBridge';
-import { AppConfig } from '../config/AppConfig';
-import { Reel, ReelMapper, ReelsDto, ReelsPage, ReelStreamVm } from '../model/Reel';
+
+import { Reel, ReelsPage, ReelStreamVm } from '../model/Reel';
 import {
   NativeReels,
   NativeReelsPage,

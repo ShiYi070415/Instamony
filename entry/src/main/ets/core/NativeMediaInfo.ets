@@ -21,7 +21,7 @@
  * 请求由 core/mobileapi 统一签名（App 身份 + 会话字段），不需要任何网页模板。
  */
 
-import { http } from '@kit.NetworkKit';
+
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { MediaQuality, PickedMedia } from './MediaQuality';
 import { MobileRequest, MobileResult, MobileOptions } from './mobileapi/MobileRequest';

@@ -22,7 +22,7 @@
  * **按钮上一直没有名字**且不补。走 AppStorage + `@StorageLink` 之后，值一变组件**自己**就重画。
  */
 
-import { FALLBACK_BLUR, FALLBACK_SURFACE, SurfaceModifier } from './MaterialSurface';
+import { SurfaceModifier } from './MaterialSurface';
 import { MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS } from '../core/AppSettings';
 import { AccountEntry } from '../core/AccountBook';
 import { curves } from '@kit.ArkUI';

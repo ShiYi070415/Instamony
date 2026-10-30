@@ -21,7 +21,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { MobileRequest, MobileResult, MobileOptions } from './mobileapi/MobileRequest';
 import { ApiThrottle } from './ApiThrottle';
 // 读头像字段用的 JSON 取值工具（`users/{id}/info/` 的响应体）。
-import { JsonRead } from './JsonRead';
+
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeUserInfo';

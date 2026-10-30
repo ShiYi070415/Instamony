@@ -349,7 +349,7 @@ export class NativeProfile {
    * 放在这里是为了让视图模型只依赖 NativeProfile 这一层。
    */
   static async highlights(userId: string): Promise<Array<ProfileHighlight>> {
-    return MobileProfile.highlights(userId, ApiThrottle.warm());
+    return MobileProfile.highlights(userId, ApiThrottle.interactive());
   }
 
   private static async headerWithCache(target: ProfileTarget): Promise<ProfileHeader | null> {
@@ -472,7 +472,8 @@ export class NativeProfile {
    * 模板回放那条退路已随模板机制删除：失败就如实回报，由界面提示重试。
    */
   static async fetchPosts(op: string, after: string,
-                          target: ProfileTarget = ProfileTarget.self()): Promise<ProfilePostsPage | null> {
+                          target: ProfileTarget = ProfileTarget.self(),
+                          priority: number = ApiThrottle.interactive()): Promise<ProfilePostsPage | null> {
     /*
      * **① 移动端优先**（四个分页各有对应端点，见 core/mobileapi/MobileProfile.tab）：
      *   帖子 `feed/user/{pk}/`、Reels `clips/user/`、被标注 `usertags/{pk}/feed/`、收藏 `feed/saved/`。
@@ -503,8 +504,7 @@ export class NativeProfile {
       NativeProfile.detail = 'no-user-id';
       return null;
     }
-    const page: MobileGridPage | null = await MobileProfile.tab(kind, uid, after, undefined,
-      ApiThrottle.interactive());
+    const page: MobileGridPage | null = await MobileProfile.tab(kind, uid, after, undefined, priority);
     if (page === null) {
       NativeProfile.detail = `tab-${kind}-fail`;
       hilog.warn(DOMAIN, TAG, 'tab failed kind=%{public}s uid=%{public}s', kind, uid);

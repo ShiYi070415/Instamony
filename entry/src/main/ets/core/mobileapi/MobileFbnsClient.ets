@@ -19,22 +19,7 @@ import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import {
-  FBNS_APP_ID,
-  FBNS_HOST,
-  FBNS_KEEPALIVE_S,
-  FBNS_PACKAGE,
-  FBNS_PORT,
-  FBNS_TOPIC_PUSH,
-  FBNS_TOPIC_REGISTER,
-  FBNS_TOPIC_REQUEST,
-  FBNS_UA,
-  FbnsAuth,
-  FbnsPacket,
-  FbnsThrift,
-  FbnsWire,
-  MobileFbns
-} from './MobileFbns';
+import { FBNS_APP_ID, FBNS_HOST, FBNS_KEEPALIVE_S, FBNS_PACKAGE, FBNS_PORT, FBNS_TOPIC_PUSH, FBNS_TOPIC_REGISTER, FBNS_TOPIC_REQUEST, FbnsAuth, FbnsPacket, FbnsThrift, FbnsWire, MobileFbns } from './MobileFbns';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'MobileFbnsClient';

@@ -27,8 +27,8 @@ import { SETTING_MATERIAL_THICKNESS, MATERIAL_THICKNESS_ULTRA_THIN } from '../co
 import { SurfaceModifier } from './MaterialSurface';
 // 键盘避让：监听 + 量自己的矩形（见 alignToKeyboard）。
 import { common } from '@kit.AbilityKit';
-import { curves, display, window, UIContext } from '@kit.ArkUI';
-import { ComponentUtils } from '@kit.ArkUI';
+import { display, window } from '@kit.ArkUI';
+
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 /** 玻璃条高度（vp）。 */

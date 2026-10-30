@@ -32,7 +32,7 @@ import { FollowState, FOLLOW_VERSION_KEY } from '../core/FollowState';
 import { SaveState } from '../core/SaveState';
 import { MaterialChipButton, MaterialIconButton, MaterialLabelButton } from './MaterialSurface';
 import { SEGMENT_SIDE, SEGMENT_MODE_USER } from './ProfileSegmentBar';
-import { ProfileViewModel, PROFILE_TAB_POSTS, PROFILE_TAB_REELS, PROFILE_TAB_SAVED, PROFILE_TAB_TAGGED } from '../viewmodel/ProfileViewModel';
+import { ProfileViewModel, PROFILE_TAB_POSTS, PROFILE_TAB_REELS, PROFILE_TAB_SAVED } from '../viewmodel/ProfileViewModel';
 import { ScrollDelta } from '../core/ScrollReport';
 import { PROFILE_TAB, TAB_TAP_PROFILE, TAB_TAP_TOP_EPSILON_VP, TAB_TAP_TOP_SCROLL_MS }
   from '../core/AppSettings';

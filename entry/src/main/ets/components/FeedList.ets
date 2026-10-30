@@ -38,28 +38,8 @@ import {
   CAPTION_COLLAPSED_MAX_LINES, CAPTION_LESS, CAPTION_MORE, CAPTION_TAIL_SAFETY_VP,
   CaptionFit
 } from '../core/CaptionFit';
-import {
-  holdsScroll,
-  immersiveMaterial,
-  MATERIAL_BUTTON_SIZE,
-  MATERIAL_PILL_HEIGHT,
-  MATERIAL_PILL_WIDTH,
-  MaterialIconButton,
-  MaterialLabelButton,
-  SurfaceModifier,
-  TONE_ACCENT,
-  trackMaterialTouch,
-  trackScrollTouch
-} from './MaterialSurface';
-import {
-  BURST_TOTAL_MS,
-  LikeBurst,
-  LikeBurstState,
-  LikeIcon,
-  playLikeBurst,
-  RepostIcon,
-  SaveIcon
-} from './AnimatedIcons';
+import { holdsScroll, MATERIAL_BUTTON_SIZE, MATERIAL_PILL_HEIGHT, MATERIAL_PILL_WIDTH, MaterialIconButton, MaterialLabelButton, SurfaceModifier, TONE_ACCENT, trackMaterialTouch, trackScrollTouch } from './MaterialSurface';
+import { LikeBurst, LikeBurstState, LikeIcon, playLikeBurst, RepostIcon, SaveIcon } from './AnimatedIcons';
 
 /**
  * 位置还原的重试时刻（毫秒）。

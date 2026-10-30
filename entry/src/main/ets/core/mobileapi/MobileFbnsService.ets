@@ -25,7 +25,7 @@ import { DirectRealtime } from '../DirectRealtime';
 import { MobileIdentity, MobileSession } from './MobileSession';
 import { MobileRequest, MobileResult } from './MobileRequest';
 import { MobileProfile, MobileUserBody } from './MobileProfile';
-import { FBNS_PACKAGE } from './MobileFbns';
+
 import { FbnsAuthStore, MobileFbnsClient } from './MobileFbnsClient';
 import { RealtimeEvent } from './MobileRealtime';
 

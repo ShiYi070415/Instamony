@@ -14,7 +14,7 @@
  */
 
 import { AbilityConstant, Configuration, ConfigurationConstant, errorManager, UIAbility, Want } from '@kit.AbilityKit';
-import { BusinessError } from '@kit.BasicServicesKit';
+
 import { hilog, hiAppEvent } from '@kit.PerformanceAnalysisKit';
 // 身份落盘（见 dumpIdentity）：设备字段 + 文件写入。
 import { deviceInfo } from '@kit.BasicServicesKit';

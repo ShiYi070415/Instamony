@@ -16,11 +16,11 @@ import { ApiThrottle } from './ApiThrottle';
 import { JsonRead } from './JsonRead';
 import { StoryItem, StoryReel, StoryTray, StoryTrayItem } from '../model/Story';
 import { MobileStories } from './mobileapi/MobileStories';
-import { MobileChallenge } from './mobileapi/MobileChallenge';
+
 // 托盘落盘缓存（每次成功都写一份，冷启动先画它，见 core/TrayCache）。
 import { TrayCache } from './TrayCache';
 // 「是不是我自己的快拍」要读当前会话的 `ds_user_id`（见 reelOf 里 selfReel 那一段）。
-import { NativeProfile } from './NativeProfile';
+
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeStories';

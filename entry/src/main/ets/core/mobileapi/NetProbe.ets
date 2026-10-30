@@ -19,7 +19,7 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { socket, webSocket } from '@kit.NetworkKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { promptAction } from '@kit.ArkUI';
+
 import { hexOf, utf8 } from './MobileSign';
 import { MobileIdentity, MobileSession } from './MobileSession';
 import { MobileMqtt } from './MobileMqtt';

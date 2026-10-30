@@ -36,7 +36,7 @@ import { MobileCrypto, PasswordKeys } from './MobileCrypto';
 // `MobileIdentity` 定义在 MobileSession（MobileRequest 只是转 import，并不导出）。
 import { MobileIdentity } from './MobileSession';
 import { MobileRequest } from './MobileRequest';
-import { base64, base64UrlNoPad, textOf, utf8 } from './MobileSign';
+import { base64, base64UrlNoPad, utf8 } from './MobileSign';
 import { WebLoginProbe, WebProbeResult } from './WebLoginProbe';
 import { MobileChallenge } from './MobileChallenge';
 

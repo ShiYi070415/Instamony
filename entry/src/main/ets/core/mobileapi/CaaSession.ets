@@ -26,7 +26,7 @@ import { CaaLogin, CaaResult, CaaStep, CaaUsdid } from './CaaLogin';
 import { MobileIdentity, MobileSession } from './MobileSession';
 import { base64, utf8 } from './MobileSign';
 // 自建 TLS 1.3 通道（见 tls13Probe：App 内唯一能"换 ClientHello 指纹"的手段）。
-import { Tls13Client } from '../net/Tls13Client';
+
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'CaaSession';

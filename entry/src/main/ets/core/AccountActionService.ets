@@ -17,7 +17,7 @@
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { preferences } from '@kit.ArkData';
+
 import { AccountBook } from './AccountBook';
 import { AccountScope } from './AccountScope';
 import { AppSettings } from './AppSettings';

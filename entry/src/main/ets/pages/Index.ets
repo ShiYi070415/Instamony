@@ -16,7 +16,7 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { SymbolGlyphModifier } from '@kit.ArkUI';
 import { common, Want } from '@kit.AbilityKit';
-import { pasteboard, BusinessError } from '@kit.BasicServicesKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 // curves：下沉收缩的补间用系统那套弹簧（springMotion，带过冲，比 EaseOut 更"弹"）。
 // uiMaterial：只用来读应用级沉浸光感开关的状态（见 aboutToAppear 的日志）。
 // display：量屏宽，底栏胶囊的左右留白按它反算。
@@ -41,10 +41,7 @@ import {
 } from '@kit.UIDesignKit';
 import { AppConfig } from '../config/AppConfig';
 import { InstagramPageBridge } from '../bridge/PageBridge';
-import {
-  PAGE_STATE_SCRIPT,
-  TIMELINE_PROBE_SCRIPT
-} from '../bridge/WebScripts';
+
 import { CommentsPanel, CommentsListController, COMMENTS_DRAG_ZONE_VP } from '../components/CommentsPanel';
 import { NotificationsPanel } from '../components/NotificationsPanel';
 import { FeedList } from '../components/FeedList';
@@ -53,7 +50,7 @@ import { FeedSkeleton } from '../components/FeedSkeleton';
 import { InstagramWebHost } from '../components/InstagramWebHost';
 import { WebChromeBar } from '../components/WebChromeBar';
 import { InstagramCookieJar, InstagramCookieSnapshot } from '../core/InstagramCookieJar';
-import { JsonRead } from '../core/JsonRead';
+
 import { MediaPrefetch } from '../core/MediaPrefetch';
 import { MediaDownloader } from '../core/MediaDownloader';
 import { NativeFollow, FollowResult } from '../core/NativeFollow';
@@ -106,19 +103,11 @@ import {
   AccountMenu,
   AccountSwitcher
 } from '../components/AccountSwitcher';
-import { CommentItem, CommentsPayload, LikePayload, SavePayload } from '../model/Comment';
+import { CommentItem, CommentsPayload, LikePayload } from '../model/Comment';
 import { FeedMapper } from '../model/FeedMapper';
 import { FeedStatus } from '../model/FeedStatus';
 import { MediaPost, MediaPostInit } from '../model/MediaPost';
-import {
-  FollowClickResult,
-  FollowOutcome,
-  FollowPageState,
-  NotificationsPayload,
-  NotifyGroup,
-  NotifyItem,
-  NotifyPayloadItem
-} from '../model/Notification';
+import { NotificationsPayload, NotifyGroup, NotifyItem, NotifyPayloadItem } from '../model/Notification';
 import { ProfilePage } from '../components/ProfilePage';
 import { ProfileSegmentBar, SEGMENT_MODE_REELS, SEGMENT_MODE_USER } from '../components/ProfileSegmentBar';
 import { DirectPage } from '../components/DirectPage';
@@ -140,7 +129,7 @@ import { CommentInputBar } from '../components/CommentInputBar';
 import { ProfileHeader, ProfileHighlight, ProfilePost, ProfileStreamPage } from '../model/Profile';
 import { DirectThread, DirectMessage } from '../model/Direct';
 import { SearchUser, SearchPost } from '../model/Search';
-import { EMPTY_REEL, StoryHeroRect, StoryItem, StoryReel, StoryTray, StoryTrayItem } from '../model/Story';
+import { EMPTY_REEL, StoryHeroRect, StoryReel, StoryTray, StoryTrayItem } from '../model/Story';
 import { NativeStories } from '../core/NativeStories';
 // 首页「为你推荐」复用搜索页那条探索流（见 loadHomeRecommended）。
 import { NativeSearch, SearchPostPage } from '../core/NativeSearch';
@@ -161,17 +150,17 @@ import { SessionService } from '../core/SessionService';
 // 时间线翻页参数探针（诊断开关 TIMELINE_PAGE_PROBE，见 core/mobileapi/TimelineProbe）。
 import { TimelineProbe } from '../core/mobileapi/TimelineProbe';
 // 换号时要清掉探索流的页级短缓存（见 forgetAccountMemory）。
-import { MobileDiscover } from '../core/mobileapi/MobileDiscover';
+
 import { EXPLORE_LANE_FEED } from '../core/mobileapi/ExploreLanes';
 // 换号时要清掉首页翻页的页级短缓存（同上）。
 import { NativeFeed } from '../core/NativeFeed';
 import { StoryCache } from '../core/StoryCache';
 import { AccountChange, AccountScope } from '../core/AccountScope';
 import { StoryDiag } from '../core/StoryDiag';
-import { PosterCache } from '../core/PosterCache';
+
 // 首页探索流第一页的落盘缓存（冷启动先画它，见 loadHomeRecommendedCached）。
 import { CachedRecommendedPage, FeedCache } from '../core/FeedCache';
-import { Translator } from '../core/Translator';
+
 import { MobileSession, MobileIdentity } from '../core/mobileapi/MobileSession';
 // 登录页的「登录」走 **App 协议登录（CAA）**（见 caaLogin / core/mobileapi/CaaSession）。
 import { CaaOutcome, CaaSession } from '../core/mobileapi/CaaSession';
@@ -179,8 +168,8 @@ import { CaaOutcome, CaaSession } from '../core/mobileapi/CaaSession';
 import { LoginLog } from '../core/LoginLog';
 import { WebLoginProbe, WebProbeResult } from '../core/mobileapi/WebLoginProbe';
 import { MobileProbe } from '../core/mobileapi/MobileProbe';
-import { MqttProbe } from '../core/mobileapi/MqttProbe';
-import { NetProbe } from '../core/mobileapi/NetProbe';
+
+
 // 实时通道（iris / MQTToT）：原生 TLS 直连，见 core/mobileapi/MobileRealtime 的文件头。
 import { IrisState, MobileRealtime, RealtimeEvent } from '../core/mobileapi/MobileRealtime';
 // 设备级会话的实时通道（FBNS；网页会话仍走上面的 MobileRealtime）

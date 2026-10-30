@@ -23,7 +23,7 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { InstagramPageBridge } from '../bridge/PageBridge';
 import { OWN_PROFILE_SCRIPT } from '../bridge/WebScripts';
-import { AppConfig } from '../config/AppConfig';
+
 import { NativeProfile, ProfileTarget } from '../core/NativeProfile';
 import { ProfileHeader, ProfileHighlight, ProfileMapper, ProfileMusic, ProfilePostsPage, ProfilePost } from '../model/Profile';
 import { MediaPost } from '../model/MediaPost';
@@ -957,9 +957,10 @@ export class ProfileViewModel {
    * @param tab 这一页属于哪一段（只用于日志与失败原因）。
    */
   private async fetchPage(op: string, cursor: string,
-                          tab: number = PROFILE_TAB_POSTS): Promise<ProfilePostsPage | null> {
+                          tab: number = PROFILE_TAB_POSTS,
+                          priority: number = ApiThrottle.interactive()): Promise<ProfilePostsPage | null> {
     const page: ProfilePostsPage | null =
-      await NativeProfile.fetchPosts(op, cursor, this.target);
+      await NativeProfile.fetchPosts(op, cursor, this.target, priority);
     if (page !== null) {
       this.diag = '-';
       hilog.info(DOMAIN, TAG, 'posts op=%{public}s tab=%{public}d n=%{public}d more=%{public}s',
@@ -1228,7 +1229,7 @@ export class ProfileViewModel {
     const gen: number = this.generation;
     state.loading = true;
     try {
-      const page: ProfilePostsPage | null = await this.fetchPage(op, '', tab);
+      const page: ProfilePostsPage | null = await this.fetchPage(op, '', tab, ApiThrottle.idle());
       if (page === null) {
         return;
       }

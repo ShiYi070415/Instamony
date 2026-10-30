@@ -22,7 +22,7 @@ import { FeedItemDto, FeedPayloadDto, PayloadState } from '../model/FeedDto';
 import { FeedStatus } from '../model/FeedStatus';
 import { FeedMapper, MergeResult } from '../model/FeedMapper';
 import { MediaPost } from '../model/MediaPost';
-import { NativeFeed, NativeFeedPage, NativeFetchResult } from '../core/NativeFeed';
+import { NativeFeed, NativeFeedPage } from '../core/NativeFeed';
 import { CachedFeedPage, FeedCache } from '../core/FeedCache';
 import { PosterCache } from '../core/PosterCache';
 import { MediaPrefetch } from '../core/MediaPrefetch';

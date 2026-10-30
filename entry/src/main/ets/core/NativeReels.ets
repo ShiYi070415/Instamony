@@ -12,7 +12,7 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { Reel } from '../model/Reel';
-import { IgCandidate, IgImageVersions, IgVideoVersion, IgFriendship, IgUser, IgCaption, IgCountEdge, IgSoundInfo, IgClipsMetadata, IgClipsMedia, IgClipsNode, IgClipsEdge, IgClipsPageInfo, IgClipsConnection, IgClipsResponse, ReelsPageRaw } from '../workers/ReelsParseModels';
+import { IgCandidate, IgVideoVersion, IgFriendship, IgUser, IgCountEdge, IgSoundInfo, IgClipsMetadata, IgClipsMedia, IgClipsNode, IgClipsEdge, IgClipsPageInfo, IgClipsConnection, IgClipsResponse, ReelsPageRaw } from '../workers/ReelsParseModels';
 import { MediaQuality, PickedMedia } from './MediaQuality';
 // 解析丢线程池（见 parseMobileAsync 与 workers/ReelsParseTask）。
 import { taskpool } from '@kit.ArkTS';

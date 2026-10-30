@@ -15,7 +15,7 @@ import { NativeDirect } from '../core/NativeDirect';
 // 新私信的本地通知（见 core/PushCenter）。
 import { PushCenter } from '../core/PushCenter';
 import { ApiThrottle } from '../core/ApiThrottle';
-import { DirectCache, CachedInbox } from '../core/DirectCache';
+import { DirectCache } from '../core/DirectCache';
 import { DirectMessage, DirectThread } from '../model/Direct';
 import { DirectInboxPage } from '../model/Direct';
 

@@ -46,7 +46,7 @@ import {
   SETTING_MATERIAL_THICKNESS,
   SETTING_VIDEO_QUALITY
 } from '../core/AppSettings';
-import { MATERIAL_PILL_HEIGHT, MaterialIconButton, SelectSurfaceModifier, SurfaceModifier } from './MaterialSurface';
+import { MATERIAL_PILL_HEIGHT, SelectSurfaceModifier, SurfaceModifier } from './MaterialSurface';
 // 半模态的系统材质（SheetOptions.systemMaterial，API 26+）。
 import { curves, LengthMetrics, uiMaterial } from '@kit.ArkUI';
 // 应用级代理（设置页的数据与生效逻辑，见 core/AppProxy）。

@@ -19,7 +19,7 @@
  * （`FINGERPRINT_ANALYSIS.md` 阶段一：少一条自动化痕迹更重的路）。
  */
 
-import { http } from '@kit.NetworkKit';
+
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { common } from '@kit.AbilityKit';
 import { JsonRead } from './JsonRead';
