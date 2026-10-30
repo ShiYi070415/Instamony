@@ -13,7 +13,8 @@
  * limitations under the License.
  */
 
-import { AbilityConstant, Configuration, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
+import { AbilityConstant, Configuration, ConfigurationConstant, errorManager, UIAbility, Want } from '@kit.AbilityKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 // 身份落盘（见 dumpIdentity）：设备字段 + 文件写入。
 import { deviceInfo } from '@kit.BasicServicesKit';
@@ -106,6 +107,29 @@ export default class EntryAbility extends UIAbility {
     AppSettings.init(this.context);
     // Reels 崩溃现场日志（同步写、只追加；见 core/ReelsCrashLog 的文件头）。
     ReelsCrashLog.init(this.context.filesDir);
+    /*
+     * **把未捕获异常也写进滚动日志**（reels 闪退的关键证据）。
+     *
+     * 现状：崩了之后只有"session ABORTED"这一行，说不出崩在哪个函数 —— 用户报"reels 还是
+     * 会 crash"时我们只能猜。`errorManager` 的 `globalErrorOccurred`（API 18 起）能拿到
+     * `name/message/stack`，落盘后下次「设置 → 诊断 → 导出诊断」就能带出来，崩溃点一眼可见。
+     *
+     * 注意：这里只**记录**，不改变崩溃行为。
+     */
+    try {
+      errorManager.on('globalErrorOccurred', (reason: errorManager.GlobalError): void => {
+        const name: string = reason !== null && reason !== undefined ? `${reason.name}` : 'Error';
+        const message: string = reason !== null && reason !== undefined ? `${reason.message}` : '';
+        const where: string = reason !== null && reason !== undefined
+          ? `${reason.instanceName}` : '-';
+        const stack: string = reason !== null && reason !== undefined && reason.stack !== undefined
+          ? `${reason.stack}` : '';
+        ReelsCrashLog.note(`uncaught ${name}: ${message} @${where} stack=${stack.substring(0, 1200)}`);
+      });
+    } catch (err) {
+      hilog.warn(DOMAIN, 'testTag', 'errorManager.on(globalErrorOccurred) failed: %{public}s',
+        (err as Error).message);
+    }
     // 私信收件箱的落盘快照（冷启动先铺一屏，网络回来再换）。
     DirectCache.init(this.context);
     // ---- 材质能力诊断（一次性）----
