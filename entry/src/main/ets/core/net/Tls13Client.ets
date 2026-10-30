@@ -26,6 +26,10 @@
  */
 
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
+// 系统 DNS：把"连域名"换成"连 IP"（真机实测直接 connect 域名偶发 Operation in progress）。
+import { connection } from '@kit.NetworkKit';
+// 自建通道连接层失败时的**兜底**（系统 HTTP 栈，走 VPN/代理/TLS1.2 都行）。
+import { http } from '@kit.NetworkKit';
 import { socket } from '@kit.NetworkKit';
 import { util } from '@kit.ArkTS';
 // 证书链校验（系统信任根）—— 自建通道必须验，否则等于把密码与会话交给中间人。
@@ -1461,14 +1465,7 @@ export class Tls13Client {
      * 所以 DoH 只换"去哪儿"，不改"连的是谁"。拿不到 IP（未启用 / 端点全失败）就用域名，
      * 交给系统 net stack —— DoH 是增强，不是依赖。
      */
-    const address: string = await Tls13Client.addressOf(host);
-    const tcp: socket.TCPSocket = socket.constructTCPSocketInstance();
-    const stream: TcpStream = new TcpStream(tcp);
-    stream.attach();
-    await tcp.connect({
-      address: { address: address, family: 1, port: port },
-      timeout: 15000
-    });
+    const stream: TcpStream = await Tls13Client.openStream(host, port);
     const connection: Tls13Connection = new Tls13Connection(stream);
     try {
       await connection.handshake(host);
@@ -1486,6 +1483,143 @@ export class Tls13Client {
    * 注意这只是"地址"：`handshake(host)` 里的 SNI 与证书校验**永远按域名** ——
    * 连 IP 不影响 TLS 身份（这也是 DoH 能安全接进来的前提）。
    */
+  /**
+   * **建一条到 `host:port` 的 TCP 连接**（带重试；返回已经 attach 好的 `TcpStream`）。
+   *
+   * ## 为什么要重试 / 为什么要先解析成 IP
+   * 用户反馈（Mate 70 Pro+ / HarmonyOS 7）：登录第一发直接报
+   * `登录请求异常：Operation in progress` —— 那是 `TCPSocket.connect()` 抛出来的（`EINPROGRESS`），
+   * 说明这一次 connect 没真正走完就返回了。两种应对一起上：
+   *   · 每次都**新建 socket** 重试（最多 3 次、间隔 400/900ms）；
+   *   · 连之前先做一次**系统 DNS 解析**，拿 IPv4 就按 IP 连（`connect` 走域名那条路要内部再解析，
+   *     正是最容易撞上 `EINPROGRESS` 的地方）。SNI / 证书校验仍然按域名，见 handshake(host)。
+   *
+   * DoH 开着时优先用 DoH 的 IP（更隐私），拿不到再退回系统解析。
+   */
+  private static async openStream(host: string, port: number): Promise<TcpStream> {
+    const address: string = await Tls13Client.connectAddress(host);
+    let lastError: string = '';
+    const waits: Array<number> = [0, 400, 900];
+    for (let attempt: number = 0; attempt < waits.length; attempt++) {
+      if (waits[attempt] > 0) {
+        await Tls13Client.pause(waits[attempt]);
+      }
+      const tcp: socket.TCPSocket = socket.constructTCPSocketInstance();
+      const stream: TcpStream = new TcpStream(tcp);
+      stream.attach();
+      try {
+        await tcp.connect({
+          address: { address: address, family: 1, port: port },
+          timeout: 12000
+        });
+        if (attempt > 0) {
+          hilog.info(DOMAIN, TAG, 'connect ok after %{public}d retries host=%{public}s addr=%{public}s',
+            attempt, host, address);
+        }
+        return stream;
+      } catch (error) {
+        lastError = Tls13Client.errorText(error);
+        hilog.warn(DOMAIN, TAG, 'connect failed #%{public}d host=%{public}s addr=%{public}s (%{public}s)',
+          attempt + 1, host, address, lastError);
+        await stream.close();
+      }
+    }
+    throw new Error(`连接失败：${lastError}（host=${host} addr=${address}，已重试 ${waits.length} 次）`);
+  }
+
+  /** 连哪个地址：DoH（若开）→ 系统 DNS 的 IPv4 → 域名本身。 */
+  private static async connectAddress(host: string): Promise<string> {
+    const doh: string = await Tls13Client.addressOf(host);
+    if (doh !== host && doh.length > 0) {
+      return doh;
+    }
+    const ip: string = await Tls13Client.resolveIpv4(host);
+    if (ip.length > 0) {
+      hilog.info(DOMAIN, TAG, 'connect by system dns host=%{public}s ip=%{public}s', host, ip);
+      return ip;
+    }
+    return host;
+  }
+
+  /** 系统 DNS 解析出一个 IPv4（失败/拿不到就给空串）。 */
+  private static async resolveIpv4(host: string): Promise<string> {
+    if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+      return host;
+    }
+    try {
+      const list: Array<connection.NetAddress> = await connection.getAddressesByName(host);
+      for (let index: number = 0; index < list.length; index++) {
+        const one: connection.NetAddress = list[index];
+        if (`${one.family}` === '1' && `${one.address}`.length > 0) {
+          return `${one.address}`;
+        }
+      }
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'system dns failed host=%{public}s (%{public}s)',
+        host, Tls13Client.errorText(error));
+    }
+    return '';
+  }
+
+  /** `BusinessError` 的 message + code（自建通道的错误经常只有一句英文，带 code 才好定位）。 */
+  static errorText(error: Object): string {
+    const message: string = (error as Error).message ?? `${error}`;
+    const code: Object | undefined = (error as Record<string, Object>)['code'];
+    return code === undefined || code === null ? message : `${message} (code=${code})`;
+  }
+
+  /** 等一会儿（重试用）。 */
+  private static pause(ms: number): Promise<void> {
+    return new Promise<void>((resolve: () => void): void => {
+      setTimeout((): void => {
+        resolve();
+      }, ms);
+    });
+  }
+
+  /**
+   * **用系统 HTTP 栈把同一发再发一次**（连接层失败时的兜底）。
+   *
+   * 为什么需要：自建 TLS 只有一条路（裸 TCP + 手拼 ClientHello），在 VPN / 企业代理 /
+   * 受限网络里可能**连都连不上**（真机：`Operation in progress`）。系统栈会走系统代理、
+   * 也支持 TLS 1.2，至少能把这一发发出去；发不成也会给出更贴切的错误。
+   *
+   * 只用在这几类失败之后（连接层 / 协议不匹配）：证书链与钉住校验失败**不回退** ——
+   * 那可能是中间人，换成系统栈正好把校验让给了别人。
+   */
+  static async requestViaSystem(host: string, port: number, method: string, path: string,
+                                headers: Record<string, string>, body: string): Promise<TlsHttpReply> {
+    const url: string = port === 443 ? `https://${host}${path}` : `https://${host}:${port}${path}`;
+    const request: http.HttpRequest = http.createHttp();
+    try {
+      const response: http.HttpResponse = await request.request(url, {
+        method: method === 'POST' ? http.RequestMethod.POST : http.RequestMethod.GET,
+        header: headers,
+        extraData: method === 'POST' ? body : undefined,
+        connectTimeout: 15000,
+        readTimeout: 30000,
+        expectDataType: http.HttpDataType.STRING
+      });
+      const text: string = typeof response.result === 'string'
+        ? response.result as string : JSON.stringify(response.result);
+      const head: Record<string, string> | null = (response.header ?? null) as Record<string, string> | null;
+      const lines: Array<string> = [`HTTP/1.1 ${response.responseCode} OK`];
+      if (head !== null) {
+        const names: Array<string> = Object.keys(head);
+        for (let index: number = 0; index < names.length; index++) {
+          lines.push(`${names[index]}: ${head[names[index]]}`);
+        }
+      }
+      hilog.info(DOMAIN, TAG, 'system http fallback %{public}s %{public}d %{public}s',
+        host, response.responseCode, path);
+      return new TlsHttpReply(lines.join('\r\n'), text);
+    } catch (error) {
+      throw new Error(`系统 HTTP 栈也失败：${Tls13Client.errorText(error)}`);
+    } finally {
+      request.destroy();
+    }
+  }
+
   private static async addressOf(host: string): Promise<string> {
     try {
       const ip: string = await DoHResolver.addressFor(host);
@@ -1507,15 +1641,8 @@ export class Tls13Client {
   }
 
   static async probe(host: string, port: number, requestText: string): Promise<string> {
-    // 与 request 同一条规则：DoH 开了就按解析出的 IP 连，握手仍按域名。
-    const address: string = await Tls13Client.addressOf(host);
-    const tcp: socket.TCPSocket = socket.constructTCPSocketInstance();
-    const stream: TcpStream = new TcpStream(tcp);
-    stream.attach();
-    await tcp.connect({
-      address: { address: address, family: 1, port: port },
-      timeout: 15000
-    });
+    // 与 request 同一条规则（含重试与 IP 解析，见 openStream）。
+    const stream: TcpStream = await Tls13Client.openStream(host, port);
     const connection: Tls13Connection = new Tls13Connection(stream);
     try {
       const handshake: string = await connection.handshake(host);

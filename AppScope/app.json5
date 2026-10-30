@@ -2,8 +2,8 @@
   "app": {
     "bundleName": "com.oneleaf.instamony",
     "vendor": "oneleaf",
-    "versionCode": 1005001,
-    "versionName": "1.5.1",
+    "versionCode": 1005002,
+    "versionName": "1.5.2",
     "icon": "$media:layered_image",
     "label": "$string:app_name"
   }

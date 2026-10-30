@@ -955,6 +955,26 @@ export class CaaLogin {
    * `send_login_request` 上被 IG 的 edge 回 429，而同一份请求用"自己拼的 ClientHello"
    * （JA3 对齐上游 instagrapi 社区那套能过的指纹）发出去是 **200**（真机验证过）。
    */
+  /**
+   * 这条失败原因**能不能**换系统 HTTP 栈重发（见 post 里的说明）。
+   *
+   * 只有"连接/协议"这类**与环境有关**的失败才回退；证书与钉住校验失败一律不退回 ——
+   * 那是身份问题，换一套栈只会把校验让给别人。
+   */
+  private static canFallbackToSystem(reason: string): boolean {
+    const lower: string = reason.toLowerCase();
+    if (lower.indexOf('证书') >= 0 || lower.indexOf('spki') >= 0
+      || lower.indexOf('san') >= 0 || lower.indexOf('中间人') >= 0) {
+      return false;
+    }
+    return reason.indexOf('连接失败') >= 0 || lower.indexOf('operation in progress') >= 0
+      || lower.indexOf('timeout') >= 0 || lower.indexOf('timed out') >= 0
+      || lower.indexOf('refused') >= 0 || lower.indexOf('unreachable') >= 0
+      || lower.indexOf('network') >= 0 || lower.indexOf('reset') >= 0
+      || reason.indexOf('服务端没选 TLS1.3') >= 0 || reason.indexOf('别的套件') >= 0
+      || reason.indexOf('key_share') >= 0 || reason.indexOf('握手') >= 0;
+  }
+
   private static async post(host: string, path: string, body: string,
                             headers: Record<string, string>): Promise<CaaHttpReply> {
     const all: Record<string, string> = {};
@@ -962,8 +982,30 @@ export class CaaLogin {
       all[key] = headers[key];
     }
     all['Content-Length'] = `${utf8(body).length}`;
-    const reply3: TlsHttpReply = await Tls13Client.request(host, 443,
-      body.length > 0 ? 'POST' : 'GET', path, all, body);
+    /*
+     * **自建通道失败时的兜底**（真机反馈：Mate 70 Pro+ / HarmonyOS 7 上第一发直接
+     * `登录请求异常：Operation in progress` —— 那是 `TCPSocket.connect()` 没走完就返回）。
+     *
+     * 分两类处理：
+     *   · **连接层 / 协议不匹配**（连不上、只给 TLS 1.2、套件/曲线不对）→ 用**系统 HTTP 栈**
+     *     把这一发重发一次（系统栈会走系统代理，VPN/企业代理环境下才发得出去）；
+     *   · **证书链 / 钉住校验失败** → **不回退**，原样抛出去：那可能是中间人，
+     *     换系统栈等于把校验交给别人。
+     */
+    let reply3: TlsHttpReply;
+    try {
+      reply3 = await Tls13Client.request(host, 443,
+        body.length > 0 ? 'POST' : 'GET', path, all, body);
+    } catch (error) {
+      const reason: string = Tls13Client.errorText(error);
+      if (!CaaLogin.canFallbackToSystem(reason)) {
+        throw new Error(reason);
+      }
+      hilog.warn(DOMAIN, TAG, 'tls path failed (%{public}s) → system http fallback', reason);
+      CaaLogin.steps.push(new CaaStep('sysfallback', 0, host));
+      reply3 = await Tls13Client.requestViaSystem(host, 443,
+        body.length > 0 ? 'POST' : 'GET', path, all, body);
+    }
     const text: string = reply3.bodyText;
     const reply: CaaHttpReply = new CaaHttpReply(reply3.statusCode(), text, host);
     /*
