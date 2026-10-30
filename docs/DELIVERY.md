@@ -11,8 +11,21 @@
 
 ## 2. 图床顺序（按可用性）
 
+**首选 jsDelivr（2026-10-30 起）**：仓库里的 `release/<ver>/*.app` 本身就是已提交的文件，
+jsDelivr 能原样按 `.app` 后缀直出，且国内可达、走 CDN、支持断点：
+
+```
+https://cdn.jsdelivr.net/gh/ShiYi070415/Instamony@<commit-sha>/release/v1.5.0/Instamony-1.5.0.app
+```
+
+（同一份文件还有 `gcore.jsdelivr.net` / `fastly.jsdelivr.net` 两个节点，挂着哪个用哪个。
+`sah` 必须写**具体 commit**，写 `@main` 会有 CDN 缓存延迟。
+验证过 `Content-Type: application/octet-stream` + 字节数与本地一致。）
+
+其余备选：
+
 1. `catbox`：`curl -F "reqtype=fileupload" -F "fileToUpload=@<file>" https://catbox.moe/user/api.php`
-   —— 会间歇性 500/502，失败就换下一个；
+   —— 会间歇性 500/502，还会把新上传存成 **0 字节**（用户点了就 404）。换内容重签一次通常会好；
 2. `tmpfiles`：`curl -F "file=@<file>" https://tmpfiles.org/api/v1/upload`
    —— 直链要把 `/` 改成 `/dl/`，约 1 小时后失效，只当备用；
 3. `litterbox`：同上家族，也会 500。
@@ -21,6 +34,7 @@
 ## 3. 随包一起给的东西
 
 - **MeoW 推送链接**（`https://api.chuckfang.com/Yijin/Instamony/app-<字节>B?url=<urlencoded>`）；
+  **本机常年 429**，所以要把它作为"可点链接"给用户自己点，并且附上直链。
 - 说明本次改了什么（中文，按"新增功能 / UI / 修复 / 待办"或用户当次要求的结构）。
 
 ## 4. 已知不可用/受限
