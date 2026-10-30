@@ -1447,15 +1447,24 @@ export struct SettingsPanel {
    * 推送失败退回"存成 txt"（复用登录日志那条落盘路径的提示）。
    */
   private async pushReelsCrashLog(): Promise<void> {
-    const text: string = ReelsCrashLog.read();
-    if (text.trim().length === 0) {
+    const raw: string = ReelsCrashLog.read();
+    if (raw.trim().length === 0) {
       this.toast('还没有 reels 崩溃日志（没进过 reels，或日志已被清掉）');
       return;
     }
-    const header: string = `Instamony reels 崩溃日志（${text.length} 字）\n`
+    /*
+     * **只推末尾 3000 字**（2026-10-30 教训：MeoW 单条 3500 字上限把日志尾巴截掉了，
+     * 而崩溃现场永远在尾巴上 —— 那次正好把 `play begin` 之后的内容切没了）。
+     */
+    const budget: number = 3000;
+    const omitted: number = raw.length > budget ? raw.length - budget : 0;
+    const body: string = omitted > 0
+      ? `…（前 ${omitted} 字省略，只保留最近的现场）\n${raw.substring(omitted)}`
+      : raw;
+    const header: string = `Instamony reels 崩溃日志（共 ${raw.length} 字）\n`
       + `（设备与版本：${this.appVersionText()}）\n\n`;
     this.toast('正在推送 reels 崩溃日志到 MeoW…');
-    const result: string = await MeoW.pushLog(header + text);
+    const result: string = await MeoW.pushLog(header + body);
     hilog.info(DOMAIN, TAG, 'reels crash push: %{public}s', result.substring(0, 120));
     this.toast(result);
   }

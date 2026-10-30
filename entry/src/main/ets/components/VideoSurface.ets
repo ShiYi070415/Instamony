@@ -478,6 +478,9 @@ export struct VideoSurface {
         hilog.info(DOMAIN, TAG, 'first frame play+%{public}dms prepare+%{public}dms url=%{public}s',
           this.playRequestedMs > 0 ? now - this.playRequestedMs : -1,
           now - this.prepareStartedMs, this.shortUrl());
+        // 首帧到达 = 解码 + 渲染这条链路真的跑通了。崩溃若发生在它之后就与"起播"无关。
+        ReelsCrashLog.noteNow(`first frame seg=${this.segment}/${this.activeSegment} `
+          + `play+${this.playRequestedMs > 0 ? now - this.playRequestedMs : -1}ms`);
         this.onFirstFrame();
       }
     } else if (state === 'paused' || state === 'stopped' || state === 'completed') {
@@ -878,6 +881,7 @@ export struct VideoSurface {
     this.watchPromise(player.play(), (error: BusinessError): void => {
       hilog.warn(DOMAIN, TAG, 'play failed: %{public}s', error.message);
     });
+    ReelsCrashLog.noteNow(`play issued seg=${this.segment}/${this.activeSegment}`);
   }
 
   /** 地址变了（列表复用同一组件实例时必须重新设源）。setMediaSource 只允许 idle 调。 */

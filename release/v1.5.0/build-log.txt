@@ -23,11 +23,11 @@
 > hvigor [32mUP-TO-DATE :entry:default@ProcessLibs...  [39m
 > hvigor [32mUP-TO-DATE :entry:default@CompileResource...  [39m
 > hvigor [32mUP-TO-DATE :entry:default@DoNativeStrip...  [39m
-> hvigor [32mFinished :entry:default@BuildJS... after 3 ms [39m
+> hvigor [32mFinished :entry:default@BuildJS... after 4 ms [39m
 > hvigor [32mUP-TO-DATE :entry:default@CacheNativeLibs...  [39m
 node : > hvigor [33mWARN: [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/Instagram
 CookieJar.ets:353:38
-At line:17 char:143
+At line:1 char:220
 + ... tudio\sdk'; node "C:\Program Files\Huawei\DevEco Studio\tools\hvigor\ ...
 +                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     + CategoryInfo          : NotSpecified: (> hvigor [33mW...eJar.ets:353:38:String) [], RemoteException
@@ -690,28 +690,28 @@ n is 6.0.0(20).
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:461:38
  The system capacity of this api 'media' is not supported on all devices
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:518:11
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:521:11
  The system capacity of this api 'media' is not supported on all devices
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:519:11
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:522:11
  The system capacity of this api 'media' is not supported on all devices
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:604:27
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:607:27
  The system capacity of this api 'media' is not supported on all devices
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:636:9
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:639:9
  The system capacity of this api 'media' is not supported on all devices
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:637:40
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:640:40
  The system capacity of this api 'media' is not supported on all devices
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:700:30
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:703:30
  Function may throw exceptions. Special handling is required.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:878:30
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:881:30
  Function may throw exceptions. Special handling is required.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:911:41
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/VideoSurface.ets:915:41
  The system capacity of this api 'media' is not supported on all devices
 [39m[39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/MediaDownloader.ets:82:46
@@ -783,7 +783,7 @@ n is 6.0.0(20).
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/SettingsPanel.ets:1296:20
  'showToast' has been deprecated.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/SettingsPanel.ets:1743:32
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/SettingsPanel.ets:1752:32
  'px2vp' has been deprecated.
 [39m[39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/components/ProfilePage.ets:829:44
@@ -929,11 +929,12 @@ s 6.0.0(20).
  The 'systemMaterialEffect' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version i
 s 6.0.0(20).
  It is recommended to use apiAvailable to safeguard API compatibility.
-> hvigor [32mFinished :entry:default@CompileArkTS... after 5 s 958 ms [39m
 [39m[39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:9818:5
  'animateTo' has been deprecated.
 [39m[39m
+> hvigor [32mFinished :entry:default@CompileArkTS... after 7 s 467 ms [39m
+> hvigor [32mUP-TO-DATE :entry:default@GeneratePkgModuleJson...  [39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:9828:5
  'animateTo' has been deprecated.
 [39m[39m
@@ -976,23 +977,22 @@ s 6.0.0(20).
  It is recommended to use apiAvailable to safeguard API compatibility.
 [39m[39m
 [39m
-> hvigor [32mUP-TO-DATE :entry:default@GeneratePkgModuleJson...  [39m
 > hvigor [32mFinished :entry:default@ProcessCompiledResources... after 1 ms [39m
 > hvigor [33mWARN: If obfuscation is needed, enable obfuscation settings in this build process; failing to do so may p
 revent future obfuscation. 
                Properly configure obfuscation rules to avoid runtime issues.[39m
 > hvigor [32mFinished :entry:default@PackageHap... after 335 ms [39m
-> hvigor [32mFinished :entry:default@PackingCheck... after 7 ms [39m
-> hvigor [32mFinished :entry:default@SignHap... after 1 s 467 ms [39m
-> hvigor [32mFinished :entry:default@CollectDebugSymbol... after 7 ms [39m
+> hvigor [32mFinished :entry:default@PackingCheck... after 5 ms [39m
+> hvigor [32mFinished :entry:default@SignHap... after 1 s 445 ms [39m
+> hvigor [32mFinished :entry:default@CollectDebugSymbol... after 5 ms [39m
 > hvigor [32mFinished :entry:assembleHap... after 1 ms [39m
 > hvigor [32mUP-TO-DATE ::MakeProjectPackInfo...  [39m
 > hvigor [32mUP-TO-DATE ::ProcessProjectPrivacyProfile...  [39m
 > hvigor [32mUP-TO-DATE ::GeneratePackRes...  [39m
-> hvigor [32mFinished ::PackageApp... after 448 ms [39m
-> hvigor [32mFinished ::SignPackagesFromApp... after 2 ms [39m
-> hvigor [32mFinished ::SignApp... after 1 s 388 ms [39m
+> hvigor [32mFinished ::PackageApp... after 454 ms [39m
+> hvigor [32mFinished ::SignPackagesFromApp... after 3 ms [39m
+> hvigor [32mFinished ::SignApp... after 1 s 390 ms [39m
 > hvigor [32mFinished ::assembleApp... after 1 ms [39m
-> hvigor [32mBUILD SUCCESSFUL in 12 s 985 ms [39m
+> hvigor [32mBUILD SUCCESSFUL in 14 s 508 ms [39m
 
 42 tasks in total: 23 executed, 19 up-to-date
