@@ -171,7 +171,8 @@ export class WebLoginProbe {
       return new WebProbeResult(
         `IG 回的是「假密码错误」（error_type=FakeIncorrectPassword、is_vetted=${vetted ? 'true' : 'false'}）`
           + '——这是反脚本/设备未受信时故意给的挡箭牌，不是密码问题。'
-          + '处理：用官方 App 在同一网络登录一次把这个账号/设备"养熟"，再等一段时间回来登录；VPN 先关掉。',
+          + '处理：**换个机场节点**再登（实测换节点就能进），或关掉 VPN 换家宽；'
+          + '实在不行用官方 App 在同一网络登录一次把这个账号"养熟"。',
         false, challengeType, nativeFlow, apiPath, detail, checkpointUrl);
     }
     if (errorType.indexOf('AuthPlatformAntiScriptingException') >= 0

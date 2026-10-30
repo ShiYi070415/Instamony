@@ -66,6 +66,7 @@ import { PushTokenReporter } from '../core/PushTokenReporter';
 import { CaaSession } from '../core/mobileapi/CaaSession';
 // 登录日志（登录失败时让用户自己把现场带出来，见 core/LoginLog）。
 import { LoginLog } from '../core/LoginLog';
+import { NetQuality, NodeReport } from '../core/NetQuality';
 import { MobileSession } from '../core/mobileapi/MobileSession';
 import { fileIo, picker } from '@kit.CoreFileKit';
 import { pasteboard, BusinessError } from '@kit.BasicServicesKit';
@@ -211,6 +212,8 @@ export struct SettingsPanel {
   @State private proxyOn: boolean = false;
   /** DoH（见 core/net/DoHResolver）：开关 + 一行现场（最近一次解析 / 降级原因）。 */
   @State private dohOn: boolean = false;
+  /** 网络节点体检的结论（出口 IP / 是否机房，见 core/NetQuality）。 */
+  @State private nodeText: string = '';
   @State private dohStatus: string = '';  @State private proxyNames: Array<string> = [];
   @State private proxyActive: number = -1;
   /**
@@ -1364,7 +1367,8 @@ export struct SettingsPanel {
   @Builder
   loginLogHintRow() {
     Text('登录失败时：先点「登录通道自检」，再点「复制登录日志」把内容发我。\n'
-      + '自检：' + LoginLog.probeSummary())
+      + '自检：' + LoginLog.probeSummary()
+      + '\n节点：' + (this.nodeText.length > 0 ? this.nodeText : LoginLog.nodeSummary()))
       .fontSize(12)
       .lineHeight(18)
       .fontColor($r('app.color.secondary_text'))
@@ -1377,6 +1381,21 @@ export struct SettingsPanel {
     this.toast('正在自检登录通道（最多 15 秒）…');
     const result: string = await LoginLog.runProbe();
     this.toast(result.length > 90 ? result.substring(0, 90) + '…' : result);
+  }
+
+  /**
+   * **网络节点体检**：查当前出口 IP 的归属，判断是不是机房/代理 IP。
+   *
+   * 为什么加这个：真机反馈证明登录成不成**主要看出口 IP**（换一个机场节点就登进去了），
+   * 而用户手里往往只有"机房 IP"的线路，又没法判断。这一行给出 IP + 归属 + 判定，
+   * 换节点时能当场对比哪条线路更像家宽。
+   */
+  private async runNodeCheck(): Promise<void> {
+    this.toast('正在查出口 IP（最多 10 秒）…');
+    const report: NodeReport = await NetQuality.check();
+    this.nodeText = report.text;
+    LoginLog.rememberNode(report.text);
+    this.toast(report.datacenter ? '这是机房 IP，建议换节点再试' : '这条线路看着正常');
   }
 
   /** 复制登录日志到剪贴板（粘到聊天窗口发给开发者）。 */
@@ -2191,6 +2210,10 @@ export struct SettingsPanel {
           this.cardDivider()
           this.actionRow($r('app.string.settings_copy_diag'), (): void => {
             this.copyDiag();
+          })
+          this.cardDivider()
+          this.actionRow('网络节点体检（出口 IP / 是否机房）', (): void => {
+            this.runNodeCheck();
           })
           this.cardDivider()
           this.actionRow('登录通道自检（连接 / TLS / HTTP）', (): void => {

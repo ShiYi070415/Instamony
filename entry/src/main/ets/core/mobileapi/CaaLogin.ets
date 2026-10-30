@@ -1641,7 +1641,8 @@ export class CaaLogin {
       }
     }
     const advice: string = credential
-      ? `（网页接口的结论：${probeNote.length > 0 ? probeNote : '没能核对'}）` : '';
+      ? `（网页接口的结论：${probeNote.length > 0 ? probeNote : '没能核对'}）`
+        + '；若 IG 只是挡着不给进，**换个机场节点**再登（实测有效），设置 → 诊断里可先做「网络节点体检」' : '';
     const failed: CaaResult = new CaaResult(false, error.length > 0
       ? `登录失败：${error}${advice}` : '响应里没找到登录结果（布局形状可能变了）');
     /*

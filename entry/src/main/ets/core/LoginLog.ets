@@ -53,6 +53,29 @@ export class LoginLog {
   private static probeText: string = '';
   private static probeAtMs: number = 0;
   /**
+   * 最近一次「节点体检」的结论（出口 IP / 是否机房，见 core/NetQuality）。
+   *
+   * 为什么进日志：2026-10-30 的实测证明登录成不成**主要看出口 IP**（换节点就通了），
+   * 而用户报"登录失败"时我们最想知道的正是"他当时用的什么线路"。
+   */
+  private static nodeText: string = '';
+  private static nodeAtMs: number = 0;
+
+  /** 记一条节点体检结论。 */
+  static rememberNode(text: string): void {
+    LoginLog.nodeText = text.length > 0 ? text : '(空)';
+    LoginLog.nodeAtMs = Date.now();
+  }
+
+  /** 节点体检的单行摘要（面板上显示用）。 */
+  static nodeSummary(): string {
+    if (LoginLog.nodeText.length === 0) {
+      return '还没体检过（点上面「网络节点体检」）';
+    }
+    const age: number = Math.floor((Date.now() - LoginLog.nodeAtMs) / 1000);
+    return `${LoginLog.nodeText}（${age} 秒前）`;
+  }
+  /**
    * 最近一次「网页接口核对账号密码」的结论（见 core/mobileapi/WebLoginProbe）。
    *
    * 这一条必须进日志：它决定"是密码真的不对"还是"IG 对我们这条链路的判定"，
@@ -202,6 +225,12 @@ export class LoginLog {
     lines.push('[登录通道自检：TCP → TLS 1.3 → 一行 GET]');
     lines.push(LoginLog.probeText.length > 0
       ? `${LoginLog.stamp(LoginLog.probeAtMs)}：${LoginLog.probeText}` : '（还没跑过：设置 → 诊断 → 登录通道自检）');
+    lines.push('');
+    // ---- 节点体检（出口 IP）----
+    lines.push('[网络节点体检：出口 IP / 是否机房]');
+    lines.push(LoginLog.nodeAtMs > 0
+      ? `${LoginLog.stamp(LoginLog.nodeAtMs)}：${LoginLog.nodeText}`
+      : '（还没体检过：设置 → 诊断 → 网络节点体检）');
     lines.push('');
     // ---- 原始现场（脱敏 + 截断）----
     const request: string = CaaSession.lastRequestText();
