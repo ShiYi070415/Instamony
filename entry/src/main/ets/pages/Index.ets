@@ -175,6 +175,8 @@ import { Translator } from '../core/Translator';
 import { MobileSession, MobileIdentity } from '../core/mobileapi/MobileSession';
 // 登录页的「登录」走 **App 协议登录（CAA）**（见 caaLogin / core/mobileapi/CaaSession）。
 import { CaaOutcome, CaaSession } from '../core/mobileapi/CaaSession';
+// 登录日志（设置页「复制/导出登录日志」用，见 core/LoginLog）。
+import { LoginLog } from '../core/LoginLog';
 import { MobileProbe } from '../core/mobileapi/MobileProbe';
 import { MqttProbe } from '../core/mobileapi/MqttProbe';
 import { NetProbe } from '../core/mobileapi/NetProbe';
@@ -4081,6 +4083,9 @@ struct Index {
     const outcome: CaaOutcome = await CaaSession.login(username, password);
     hilog.info(DOMAIN, TAG, 'caa login ok=%{public}s needsCode=%{public}s reason=%{public}s',
       outcome.ok ? 'y' : 'n', outcome.needsCode ? 'y' : 'n', outcome.reason);
+    // 登录日志：把"用户会看到的那一句"记下来（见 core/LoginLog 的文件头）。
+    LoginLog.remember(outcome.ok ? '登录成功'
+      : (outcome.needsCode ? '账号密码通过，需要两步验证' : outcome.reason));
     if (outcome.ok) {
       return '';
     }
@@ -4096,6 +4101,8 @@ struct Index {
     const outcome: CaaOutcome = await CaaSession.submitCode(code);
     hilog.info(DOMAIN, TAG, 'caa verify ok=%{public}s reason=%{public}s',
       outcome.ok ? 'y' : 'n', outcome.reason);
+    LoginLog.remember(outcome.ok ? '两步验证通过，登录成功'
+      : '两步验证失败：' + outcome.reason);
     return outcome.ok ? '' : outcome.reason;
   }
 

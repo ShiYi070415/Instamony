@@ -64,12 +64,14 @@ import { PushCenter } from '../core/PushCenter';
 import { PushTokenReporter } from '../core/PushTokenReporter';
 // 「清除设备认证」要动两处设备身份（见 clearDeviceAuth）。
 import { CaaSession } from '../core/mobileapi/CaaSession';
+// 登录日志（登录失败时让用户自己把现场带出来，见 core/LoginLog）。
+import { LoginLog } from '../core/LoginLog';
 import { MobileSession } from '../core/mobileapi/MobileSession';
 import { fileIo, picker } from '@kit.CoreFileKit';
 import { pasteboard, BusinessError } from '@kit.BasicServicesKit';
 import { promptAction } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { common } from '@kit.AbilityKit';
+import { bundleManager, common } from '@kit.AbilityKit';
 
 /** 导出时接在诊断报告后面的分隔行（见 exportDiag）。 */
 const REELS_LOG_SEPARATOR: string = '\n\n===== Reels 崩溃现场日志（Instamony_reels.log）=====\n';
@@ -1354,6 +1356,91 @@ export struct SettingsPanel {
   }
 
   /**
+   * 「登录日志」那三行的说明（会跟着自检状态变：还没跑 / 通了 / 失败原因）。
+   *
+   * 为什么要把自检结果直接摆出来：登录失败的用户多半在 VPN/代理环境下，
+   * "握不握手得通"这一条比任何日志都直观 —— 他们看这一行就知道该不该换个节点再试。
+   */
+  @Builder
+  loginLogHintRow() {
+    Text('登录失败时：先点「登录通道自检」，再点「复制登录日志」把内容发我。\n'
+      + '自检：' + LoginLog.probeSummary())
+      .fontSize(12)
+      .lineHeight(18)
+      .fontColor($r('app.color.secondary_text'))
+      .width('100%')
+      .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING, top: 8, bottom: 10 })
+  }
+
+  /** 跑一次登录通道自检（TCP → TLS 1.3 → 一行 GET），结果进日志。 */
+  private async runLoginProbe(): Promise<void> {
+    this.toast('正在自检登录通道（最多 15 秒）…');
+    const result: string = await LoginLog.runProbe();
+    this.toast(result.length > 90 ? result.substring(0, 90) + '…' : result);
+  }
+
+  /** 复制登录日志到剪贴板（粘到聊天窗口发给开发者）。 */
+  private async copyLoginLog(): Promise<void> {
+    const text: string = await LoginLog.compose(this.appVersionText());
+    try {
+      const data: pasteboard.PasteData =
+        pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text);
+      pasteboard.getSystemPasteboard().setData(data, (err: BusinessError | undefined) => {
+        if (err !== undefined && err !== null) {
+          hilog.warn(DOMAIN, TAG, 'login log copy failed: %{public}s', err.message);
+          this.toast($r('app.string.diag_export_failed', err.message));
+          return;
+        }
+        this.toast('登录日志已复制（粘贴发给开发者）');
+      });
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'login log copy threw: %{public}s', (error as Error).message);
+      this.toast($r('app.string.diag_export_failed', (error as Error).message));
+    }
+  }
+
+  /** 导出登录日志成一个 txt（系统文件选择器，不需要任何存储权限）。 */
+  private async exportLoginLog(): Promise<void> {
+    const text: string = await LoginLog.compose(this.appVersionText());
+    const name: string = LoginLog.fileName();
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const options: picker.DocumentSaveOptions = new picker.DocumentSaveOptions();
+      options.newFileNames = [name];
+      const documentPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker(context);
+      const uris: Array<string> = await documentPicker.save(options);
+      if (uris.length === 0) {
+        return;
+      }
+      const file: fileIo.File = fileIo.openSync(uris[0],
+        fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
+      try {
+        fileIo.writeSync(file.fd, text);
+      } finally {
+        fileIo.closeSync(file);
+      }
+      hilog.info(DOMAIN, TAG, 'login log exported %{public}s len=%{public}d', name, text.length);
+      this.toast($r('app.string.diag_exported', name));
+    } catch (error) {
+      const message: string = (error as BusinessError).message ?? 'export-failed';
+      hilog.warn(DOMAIN, TAG, 'login log export failed: %{public}s', message);
+      this.toast($r('app.string.diag_export_failed', message));
+    }
+  }
+
+  /** 版本号一行（`1.5.0 (1005000)`；读不到就给 `-`）。 */
+  private appVersionText(): string {
+    try {
+      const info: bundleManager.BundleInfo = bundleManager.getBundleInfoForSelfSync(
+        bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT);
+      return `${info.versionName} (${info.versionCode})`;
+    } catch (error) {
+      return '-';
+    }
+  }
+
+  /**
    * **复制诊断摘要**：一行都存不了时的兜底（剪贴板不需要任何权限）。
    *
    * 只复制**精简版**（见 StoryDiag.exportBrief）：整份带 142 条托盘形状 + 80 条原始条目，
@@ -2105,6 +2192,20 @@ export struct SettingsPanel {
           this.actionRow($r('app.string.settings_copy_diag'), (): void => {
             this.copyDiag();
           })
+          this.cardDivider()
+          this.actionRow('登录通道自检（连接 / TLS / HTTP）', (): void => {
+            this.runLoginProbe();
+          })
+          this.cardDivider()
+          this.actionRow('复制登录日志', (): void => {
+            this.copyLoginLog();
+          })
+          this.cardDivider()
+          this.actionRow('导出登录日志', (): void => {
+            this.exportLoginLog();
+          })
+          this.cardDivider()
+          this.loginLogHintRow()
           this.cardDivider()
           this.groupHint($r('app.string.settings_diag_hint'))
         }

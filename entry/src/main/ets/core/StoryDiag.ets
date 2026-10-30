@@ -37,7 +37,7 @@ const MAX_RAW_ENTRIES: number = 40;
  * 只用于**文件名可读**（测试者手上可能同时有好几版）：真要核对版本时看 `AppScope/app.json5`
  * 的 `versionName`，改版本号时这里一起改（两处都在版本相关的提交里）。
  */
-const APP_VERSION: string = '0.8.1';
+const APP_VERSION: string = '1.5.1';
 
 export class StoryDiag {
   /** 最近的失败记录（新的在前）。 */
