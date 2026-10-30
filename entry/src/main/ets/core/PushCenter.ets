@@ -43,13 +43,6 @@ const TAG: string = 'PushCenter';
 
 /** 兜底包名（拿不到系统信息时用；和 AppScope/app.json5 保持一致）。 */
 const FALLBACK_BUNDLE: string = 'com.oneleaf.instamony';
-/**
- * 私信通知在 want 里带的参数名。
- *
- * **必须**和 `core/NotifyRoute.NOTIFY_THREAD_KEY` 是同一个字符串：那边负责读，
- * 这里负责写。为了只留一份真源，这里直接引用它（原来两边各写一份字面量，容易写歪）。
- */
-export const NOTIFY_KEY_THREAD: string = NOTIFY_THREAD_KEY;
 
 /** 上一次的未读总数（按 kind 分开）：只有**变多**才弹通知。 */
 class UnreadMark {
@@ -614,3 +607,4 @@ export class PushCenter {
     }
   }
 }
+

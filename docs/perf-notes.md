@@ -57,9 +57,35 @@
 - 头部有落盘快照先画（`AppSettings.saveProfileHeader` → `paintHeaderSnapshot`）；
 - 高光有内存缓存（`ProfileViewModel.highlightCache`，命中当帧出图）。
 
-## 5. 还没做（候选）
+## 5. 主页图片预热：只留"界面真吃得到"的那一条
 
-1. **高光封面预热**：拿到高光列表后先把前 N 张解出来（PosterCache 那套）——消掉"一圈灰底慢慢出图"；
-2. **翻页结果复用**：`nextPages` 队列已有，可把"预取到的下一页"在滚动接近触底时提前 apply；
-3. **HTTP/2**：IG 支持 h2，多路复用能进一步减少往返（改动大，需要重写帧层）；
-4. 未使用导出 / 私有方法的清理（比导入更保守，需要逐条确认）。
+`ProfileViewModel.precacheTabMedia` 原来同时调了 `PosterCache.warm(...)` 和 `MediaPrefetch.prefetch(...)`。
+2026-10-30 核对发现：**`PosterCache` 的 PixelMap 只有 `FeedList` / `MediaCarousel` 在读**
+（`PosterCache.pixel(...)`），而个人主页的格子 / 高光 / 头像全是普通 `Image(url)` ——
+也就是说这里原来最多 96 次"自己发 HTTP 下缩略图 + 解码成 PixelMap"完全没人用，纯烧流量和 CPU。
+
+**已改**：
+
+- `precacheTabMedia` 去掉 `PosterCache.warm`，只留 `MediaPrefetch.prefetch`
+  （它走系统的 `cacheDownload`，`Image` 组件命中它，才是主页真正吃得到的预热）；
+- 新增 `ProfileViewModel.prefetchHighlightCovers`：高光列表拿到（或缓存命中）时，
+  把前 6 张封面丢进同一个系统图片缓存 —— 消掉"那一排灰底慢慢出图"。
+
+## 6. 死代码清理（2026-10-30，净 -817 行）
+
+用两个脚本扫全项目（171 个 ets/ts）：
+
+1. **未使用的具名导入**：43 个，已全部删除；
+2. **零引用导出**（其他文件从不引用，且本文件里也只有声明那一行）：31 个，删除 859 行。
+
+其中最大的一块是 `bridge/WebScripts.ets` 的 15 个网页注入脚本常量（655 行）——
+那些是"登录/信息流还走 WebView"时代的遗留，改成全原生后早就不用了。
+
+删除后 `BUILD SUCCESSFUL`，且没有新增告警；被删的都验证过"全项目零引用"。
+
+## 7. 还没做（候选）
+
+1. **翻页结果复用**：`nextPages` 队列已有，可把"预取到的下一页"在滚动接近触底时提前 apply；
+2. **HTTP/2**：IG 支持 h2，多路复用能进一步减少往返（改动大，需要重写帧层）；
+3. **preconnect**：进入主页前先对 `i.instagram.com` 预热一条连接（配合已实现的连接池）；
+4. 剩余 20 个"外部零引用但本文件内有用"的导出 → 可以去掉 `export` 关键字（纯整洁，收益小）。

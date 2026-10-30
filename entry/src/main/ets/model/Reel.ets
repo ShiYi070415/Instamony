@@ -313,34 +313,4 @@ export interface ReelStreamVm {
   reset(): void;
 }
 
-/** small JSON → 模型；拿不到必要字段就返回 null。 */
-export class ReelMapper {
-  static pageFromJson(raw: string): ReelsPage | null {
-    let dto: ReelsDto;
-    try {
-      dto = JSON.parse(raw) as ReelsDto;
-    } catch (error) {
-      return null;
-    }
-    if (dto.state !== 'ok') {
-      return null;
-    }
-    const items: Array<ReelDto> = dto.items ?? [];
-    const reels: Array<Reel> = [];
-    for (let index: number = 0; index < items.length; index++) {
-      const item: ReelDto = items[index];
-      const code: string = item.code ?? '';
-      // 只收有视频地址的：reels 流的本职就是播视频（封面兜底留给别的页面）。
-      if (code.length === 0) {
-        continue;
-      }
-      reels.push(new Reel(code, item.url ?? '', item.cover ?? '', item.w ?? 0, item.h ?? 0,
-        item.author ?? '', item.avatar ?? '', item.verified === true, item.music ?? '',
-        item.likes ?? 0, item.comments ?? 0, item.origUrl ?? '', item.id ?? '',
-        item.uid ?? '', item.caption ?? '', item.liked === true, false, item.reposts ?? 0,
-        item.following === true, item.following !== undefined, item.saved === true,
-        item.takenAt ?? 0, item.shares ?? 0, item.saves ?? 0));
-    }
-    return new ReelsPage(reels, dto.cursor ?? '', dto.more === true);
-  }
-}
+

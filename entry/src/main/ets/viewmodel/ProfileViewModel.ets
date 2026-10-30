@@ -28,7 +28,6 @@ import { NativeProfile, ProfileTarget } from '../core/NativeProfile';
 import { ProfileHeader, ProfileHighlight, ProfileMapper, ProfileMusic, ProfilePostsPage, ProfilePost } from '../model/Profile';
 import { MediaPost } from '../model/MediaPost';
 import { MediaPrefetch } from '../core/MediaPrefetch';
-import { PosterCache } from '../core/PosterCache';
 import { MediaDetail, NativeMediaInfo } from '../core/NativeMediaInfo';
 import { ApiThrottle } from '../core/ApiThrottle';
 // 头部落盘快照（见 AppSettings.saveProfileHeader 与 load 里的 paintHeaderSnapshot）。
@@ -61,6 +60,8 @@ const PREFETCH_DEPTH: number = 2;
 const PRECACHE_POSTS_PER_TAB: number = 12;
 /** 多图帖**只预加载两张**（需求："多图片只需预加载两张"）。 */
 const PRECACHE_IMAGES_PER_POST: number = 2;
+/** 高光封面预热几张（一屏大概 4~5 颗）。 */
+const HIGHLIGHT_PREWARM: number = 6;
 /**
  * 视频封面回填看**前几条**（见 backfillVideoCovers）。
  *
@@ -1075,13 +1076,11 @@ export class ProfileViewModel {
       return;
     }
     // 顺手把"没有封面的视频"补上（见 backfillVideoCovers）——放在这里是因为它天然就是
-    // "进「我的」时把四段都过一遍"的那个时机，和封面预解码同一个循环。
+    // "进「我的」时把四段都过一遍"的那个时机，和封面预加载同一个循环。
     this.backfillVideoCovers(tab);
-    const mapped: Array<MediaPost> = [];
     const urls: Array<string> = [];
     for (let index: number = 0; index < posts.length && index < PRECACHE_POSTS_PER_TAB; index++) {
       const post: MediaPost = ProfileMapper.toMediaPost(posts[index]);
-      mapped.push(post);
       // 多图帖**只预加载两张**（需求）：滑到前两张时不白。
       for (let at: number = 0; at < post.imageUrls.length && at < PRECACHE_IMAGES_PER_POST; at++) {
         const url: string = post.imageUrls[at];
@@ -1090,13 +1089,23 @@ export class ProfileViewModel {
         }
       }
     }
-    if (mapped.length === 0) {
+    if (urls.length === 0) {
       return;
     }
-    PosterCache.warm(mapped, PRECACHE_POSTS_PER_TAB);
+    /*
+     * **只用 MediaPrefetch（系统图片缓存），不再调 PosterCache.warm**。
+     *
+     * 2026-10-30 核对：`PosterCache` 的 PixelMap 只有 `components/FeedList` 和
+     * `components/MediaCarousel` 在读（`PosterCache.pixel(...)`），**个人主页的格子/高光/头像
+     * 全是普通 `Image(url)`** —— 也就是说这里原来那 12 条 × 最多 2 张 = 最多 96 次
+     * "自己发 HTTP 下缩略图 + 解码成 PixelMap"，结果一张都没被界面用过，纯属白烧流量和 CPU。
+     *
+     * `MediaPrefetch` 走的是系统的 `cacheDownload`，`Image` 组件命中它 —— 这才是主页真正吃得到的预热。
+     * （如果以后要让主页也用 `PosterCache`，再把它接回来，并同步检查 ProfilePage 的读取点。）
+     */
     const started: number = MediaPrefetch.prefetch(urls);
     hilog.info(DOMAIN, TAG, 'precache media tab=%{public}d posts=%{public}d imgs=%{public}d/%{public}d',
-      tab, mapped.length, started, urls.length);
+      tab, posts.length, started, urls.length);
   }
 
   /**
@@ -1481,6 +1490,7 @@ export class ProfileViewModel {
     const cached: Array<ProfileHighlight> | undefined = ProfileViewModel.highlightCache.get(uid);
     if (cached !== undefined) {
       this.highlightItems = cached;
+      ProfileViewModel.prefetchHighlightCovers(cached);
       this.onHighlights(cached);
       // 有缓存就不必每次重发：只有"上次没拉到"时才补一发（见下面的空结果分支）。
       if (cached.length > 0) {
@@ -1500,9 +1510,33 @@ export class ProfileViewModel {
       // 写进缓存（空结果也写：下次进来当帧就知道"这里没有高光"，不必再等 2 秒空白）。
       ProfileViewModel.highlightCache.set(uid, list);
       hilog.info(DOMAIN, TAG, 'highlights n=%{public}d', list.length);
+      // 封面预热（系统图片缓存，Image 组件命中它）：别让那一排"灰底慢慢出图"。
+      ProfileViewModel.prefetchHighlightCovers(list);
       this.onHighlights(list);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'highlights failed: %{public}s', (error as Error).message);
+    }
+  }
+
+  /**
+   * 把高光封面丢进**系统图片缓存**（`MediaPrefetch` → `cacheDownload`，`Image` 组件命中它）。
+   *
+   * 只预热前 `HIGHLIGHT_PREWARM` 张：一屏大概 4~5 颗，再多等于跟正在看的那几张抢带宽。
+   * 预热只是加速 —— 失败不影响任何显示路径。
+   */
+  private static prefetchHighlightCovers(list: Array<ProfileHighlight>): void {
+    if (list.length === 0) {
+      return;
+    }
+    const urls: Array<string> = [];
+    for (let index: number = 0; index < list.length && index < HIGHLIGHT_PREWARM; index++) {
+      const url: string = list[index].coverUrl;
+      if (url.length > 0) {
+        urls.push(url);
+      }
+    }
+    if (urls.length > 0) {
+      MediaPrefetch.prefetch(urls);
     }
   }
 

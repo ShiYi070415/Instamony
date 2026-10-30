@@ -21,11 +21,6 @@ import { MobileEngage } from './mobileapi/MobileEngage';
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NativeEngage';
 
-/** 四个操作的模板名片段（就是 IG 自己的 fb_api_req_friendly_name）。 */
-export const LIKE_OP: string = 'usePolarisLikeMediaXIGLikeMutation';
-export const UNLIKE_OP: string = 'usePolarisLikeMediaXIGUnlikeMutation';
-export const REPOST_OP: string = 'usePolarisCreateMediaRepostMutation';
-export const UNREPOST_OP: string = 'usePolarisDeleteMediaRepostMutation';
 
 /** 一次点赞/转发的结果（不抛异常）。 */
 export class EngageResult {

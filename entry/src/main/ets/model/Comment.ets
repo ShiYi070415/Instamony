@@ -107,54 +107,5 @@ export interface LikePayload {
   message?: string;
 }
 
-/**
- * 收藏（书签）结果 —— **网页驱动**那条路的回报（见 bridge/WebScripts 的
- * saveOnPostPageScript 与 pages/Index.saveReelByWeb）。
- *
- * state:
- *   ok        —— 点完之后的按钮文案就是想要的那一边（already = 本来就已是目标状态，没点）；
- *   assumed   —— 点到了，但网页的文案没翻（有的版本两个方向共用一套文案）：
- *                调用方保留自己的乐观结果，别把用户刚做的操作弹回去；
- *   not-found —— 当前页面不是这条帖子（脚本核对 URL 失败，安全兜底）；
- *   no-button —— 页面上找不到书签按钮；
- *   error     —— 注入/点击抛异常。
- */
-export interface SavePayload {
-  state: string;
-  saved?: boolean;
-  already?: boolean;
-  assumed?: boolean;
-  message?: string;
-}
 
-/**
- * 转发结果。
- *
- * state: reposted / unreposted（这一次点完之后的**新状态**，不是点了哪一边）/
- * assumed（点到了，但网页的文案没翻，方向读不出来 —— 调用方保留自己的乐观翻转结果）/
- * not-found（网页当前信息流里没有这条帖子）/ no-button（帖子里和「更多」菜单里都没有
- * 转发入口）/ error。
- *
- * 为什么要有 unreposted 和 assumed：网页上「取消转发」就是**再点一次同一个按钮**，
- * 同一个脚本要能同时报告两个方向；而有的版本两个方向共用同一套文案，这时宁可说
- * "我不知道方向"（assumed），也不能猜 —— 猜反了表现就是"点了取消却还显示已转发"。
- * via 说明是从哪儿点到的（button = 帖子里的直接按钮，menu = 「更多」菜单里的条目）。
- * label / labelAfter 是点击前后那个控件的无障碍文案，带上它才能一眼看出网页用哪套命名
- * （hilog 里能看到），命名一变就不用猜。
- * cnt 是点击前帖子里「转发」文案控件的个数：未转发是 1、已转发是 2（第二个是帖子头部那个
- * "已转发标记"，实测就是靠它读出状态的）。
- * cands / toast 是排查用的：前者把每个"转发"候选的标签/role/class/是否在动作区描述出来，
- * 后者是页面上 status/alert 提示条的文案。
- * seen 只在 no-button 时带上：帖子内可点控件的 aria-label 摘要。
- */
-export interface RepostPayload {
-  state: string;
-  via?: string;
-  label?: string;
-  labelAfter?: string;
-  cnt?: number;
-  cands?: string;
-  toast?: string;
-  seen?: string;
-  message?: string;
-}
+

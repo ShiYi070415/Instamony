@@ -37,18 +37,6 @@ const SITE: string = 'https://www.instagram.com';
  */
 const POSTS_CONN: string = 'xdt_api__v1__feed__user_timeline_graphql_connection';
 
-/** 一次原生请求的结果（不抛异常，失败用 ok=false + detail 表达）。 */
-export class NativeProfileResult {
-  readonly ok: boolean;
-  readonly text: string;
-  readonly detail: string;
-
-  constructor(ok: boolean, text: string, detail: string) {
-    this.ok = ok;
-    this.text = text;
-    this.detail = detail;
-  }
-}
 
 /**
  * 媒体节点外面套的那几层键（各分页包装层数不一样）。
@@ -1195,3 +1183,4 @@ export class NativeProfile {
     return JsonRead.boolOf(host, key);
   }
 }
+

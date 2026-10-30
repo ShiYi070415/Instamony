@@ -228,29 +228,4 @@ interface SearchResultDto {
   err?: string;
 }
 
-/** small JSON → 模型。state 不是 ok 就返回 null（由视图模型决定怎么提示）。 */
-export class SearchMapper {
-  static resultFromJson(raw: string): SearchResultPage | null {
-    let dto: SearchResultDto;
-    try {
-      dto = JSON.parse(raw) as SearchResultDto;
-    } catch (error) {
-      return null;
-    }
-    if (dto.state !== 'ok') {
-      return null;
-    }
-    const items: Array<SearchUserDto> = dto.items ?? [];
-    const users: Array<SearchUser> = [];
-    for (let index: number = 0; index < items.length; index++) {
-      const item: SearchUserDto = items[index];
-      const username: string = item.u ?? '';
-      if (username.length === 0) {
-        continue;
-      }
-      users.push(new SearchUser(username, item.name ?? '', item.avatar ?? '',
-        item.verified === true, item.priv === true));
-    }
-    return new SearchResultPage(users);
-  }
-}
+

@@ -23,11 +23,11 @@
 > hvigor [32mUP-TO-DATE :entry:default@ProcessLibs...  [39m
 > hvigor [32mUP-TO-DATE :entry:default@CompileResource...  [39m
 > hvigor [32mUP-TO-DATE :entry:default@DoNativeStrip...  [39m
-> hvigor [32mFinished :entry:default@BuildJS... after 4 ms [39m
+> hvigor [32mFinished :entry:default@BuildJS... after 3 ms [39m
 > hvigor [32mUP-TO-DATE :entry:default@CacheNativeLibs...  [39m
 node : > hvigor [33mWARN: [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/Instagram
 CookieJar.ets:353:38
-At line:24 char:149
+At line:1 char:220
 + ... tudio\sdk'; node "C:\Program Files\Huawei\DevEco Studio\tools\hvigor\ ...
 +                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     + CategoryInfo          : NotSpecified: (> hvigor [33mW...eJar.ets:353:38:String) [], RemoteException
@@ -459,10 +459,10 @@ At line:24 char:149
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/ReelsCrashLog.ets:170:12
  Function may throw exceptions. Special handling is required.
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/PushCenter.ets:208:19
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/PushCenter.ets:201:19
  This API is unavailable to phone(earlier than API level 23), tablet(earlier than API level 23).
 [39m[39m
-[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/PushCenter.ets:586:28
+[33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/PushCenter.ets:579:28
  Function may throw exceptions. Special handling is required.
 [39m[39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/mobileapi/MobileFbnsClient.ets:66:39
@@ -961,6 +961,8 @@ s 6.0.0(20).
  It is recommended to use apiAvailable to safeguard API compatibility.
 [39m[39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/LinkIn.ets:75:23
+> hvigor [32mFinished :entry:default@CompileArkTS... after 9 s 518 ms [39m
+> hvigor [32mUP-TO-DATE :entry:default@GeneratePkgModuleJson...  [39m
  The 'hdsMaterial' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(2
 0).
  It is recommended to use apiAvailable to safeguard API compatibility.
@@ -972,8 +974,6 @@ s 6.0.0(20).
 [39m[39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/LinkIn.ets:75:48
  The 'ADAPTIVE' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version is 6.0.0(20).
-> hvigor [32mFinished :entry:default@CompileArkTS... after 5 s 296 ms [39m
-> hvigor [32mUP-TO-DATE :entry:default@GeneratePkgModuleJson...  [39m
  It is recommended to use apiAvailable to safeguard API compatibility.
 [39m[39m
 [39m
@@ -981,18 +981,18 @@ s 6.0.0(20).
 > hvigor [33mWARN: If obfuscation is needed, enable obfuscation settings in this build process; failing to do so may p
 revent future obfuscation. 
                Properly configure obfuscation rules to avoid runtime issues.[39m
-> hvigor [32mFinished :entry:default@PackageHap... after 332 ms [39m
-> hvigor [32mFinished :entry:default@PackingCheck... after 6 ms [39m
-> hvigor [32mFinished :entry:default@SignHap... after 1 s 455 ms [39m
-> hvigor [32mFinished :entry:default@CollectDebugSymbol... after 6 ms [39m
+> hvigor [32mFinished :entry:default@PackageHap... after 327 ms [39m
+> hvigor [32mFinished :entry:default@PackingCheck... after 4 ms [39m
+> hvigor [32mFinished :entry:default@SignHap... after 1 s 449 ms [39m
+> hvigor [32mFinished :entry:default@CollectDebugSymbol... after 5 ms [39m
 > hvigor [32mFinished :entry:assembleHap... after 1 ms [39m
 > hvigor [32mUP-TO-DATE ::MakeProjectPackInfo...  [39m
 > hvigor [32mUP-TO-DATE ::ProcessProjectPrivacyProfile...  [39m
 > hvigor [32mUP-TO-DATE ::GeneratePackRes...  [39m
-> hvigor [32mFinished ::PackageApp... after 461 ms [39m
+> hvigor [32mFinished ::PackageApp... after 447 ms [39m
 > hvigor [32mFinished ::SignPackagesFromApp... after 2 ms [39m
-> hvigor [32mFinished ::SignApp... after 1 s 419 ms [39m
+> hvigor [32mFinished ::SignApp... after 1 s 385 ms [39m
 > hvigor [32mFinished ::assembleApp... after 1 ms [39m
-> hvigor [32mBUILD SUCCESSFUL in 12 s 406 ms [39m
+> hvigor [32mBUILD SUCCESSFUL in 16 s 394 ms [39m
 
 42 tasks in total: 23 executed, 19 up-to-date

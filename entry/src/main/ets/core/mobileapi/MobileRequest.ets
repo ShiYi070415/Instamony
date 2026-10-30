@@ -61,14 +61,8 @@ export const MOBILE_BAD_REQUEST: string = 'bad_request_400';
 export const MOBILE_SERVER_ERROR: string = 'server_5xx';
 export const MOBILE_NON_JSON: string = 'non-json';
 export const MOBILE_NO_SESSION: string = 'no-session';
-export const MOBILE_NO_TEMPLATE: string = 'no-template';
 export const MOBILE_THREW: string = 'threw';
 
-/** 请求方法（instagrapi 只用到这两个）。 */
-export enum MobileMethod {
-  GET = 0,
-  POST = 1
-}
 
 /**
  * 一发的"排队策略"：**家族**（限流退避按它记）+ **优先级**（闸门按它插队）。
@@ -663,3 +657,4 @@ export class MobileRequest {
     return min + Math.floor(Math.random() * (max - min + 1));
   }
 }
+
