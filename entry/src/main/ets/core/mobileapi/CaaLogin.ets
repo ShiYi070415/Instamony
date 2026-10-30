@@ -435,7 +435,13 @@ export function humanHints(text: string): Array<string> {
   ];
   const strong: Array<string> = [];
   const weak: Array<string> = [];
-  const plain: string = unescapeText(text);
+  /*
+   * 转义解**两遍**：登录日志里那份是 `JSON.stringify(payload)` 的结果，本来就带一层
+   * 转义（`\\u5bc6`）。只解一遍会留下 `\u5bc6` 这种残留文本 —— 中文永远命中不了，
+   * 日志里就会出现「响应里像人话的句子：Deploy: Not in Experiment」这种笑话。
+   * 已经解开的纯文本再过一遍是空操作，所以两遍是安全的。
+   */
+  const plain: string = unescapeText(unescapeText(text));
   const found: RegExpMatchArray | null = plain.match(/"[^"]{4,200}"/g);
   if (found === null) {
     return weak;

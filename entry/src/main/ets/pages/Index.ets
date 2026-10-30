@@ -7254,7 +7254,11 @@ struct Index {
          * 还是 IG 对我们这条 App 协议链路的判定。不改任何登录状态。
          */
         onWebProbe: (username: string, password: string): Promise<WebProbeResult> => {
-          return WebLoginProbe.probe(username, password);
+          return WebLoginProbe.probe(username, password).then((result: WebProbeResult): WebProbeResult => {
+            // 结论同步进登录日志：用户点完不用再抄一遍，导出日志就带着。
+            LoginLog.rememberWebProbe(result.text, result.credentialsOk);
+            return result;
+          });
         },
         /*
          * **"在另一台设备上同意"的轮询**（需求："2FA 过程中可以在官方客户端同意本次登录，

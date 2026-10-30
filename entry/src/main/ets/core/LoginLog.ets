@@ -52,6 +52,23 @@ export class LoginLog {
   /** 最近一次"登录通道自检"的结论（成功是"握手：… / HTTP 200"，失败是原因 + 现场）。 */
   private static probeText: string = '';
   private static probeAtMs: number = 0;
+  /**
+   * 最近一次「网页接口核对账号密码」的结论（见 core/mobileapi/WebLoginProbe）。
+   *
+   * 这一条必须进日志：它决定"是密码真的不对"还是"IG 对我们这条链路的判定"，
+   * 而用户在界面上点完就忘了抄给开发者 —— 让它跟着日志一起被导出，省一轮往返。
+   */
+  private static webProbeText: string = '';
+  private static webProbeOk: boolean = false;
+  private static webProbeAtMs: number = 0;
+
+  /** 记一条网页接口核对的结论。 */
+  static rememberWebProbe(text: string, credentialsOk: boolean): void {
+    LoginLog.webProbeText = text.length > 0 ? text : '(空)';
+    LoginLog.webProbeOk = credentialsOk;
+    LoginLog.webProbeAtMs = Date.now();
+    hilog.info(DOMAIN, TAG, 'web probe: %{public}s', text.substring(0, 120));
+  }
 
   /**
    * 记一条登录结果（界面显示什么就记什么）。
@@ -162,6 +179,13 @@ export class LoginLog {
     const steps: string = CaaSession.stepsText();
     lines.push('[CAA 登录链路（每一发的域名与状态）]');
     lines.push(steps.length > 0 ? steps : '（没有记录）');
+    lines.push('');
+    // ---- 账号密码核对（网页接口）----
+    lines.push('[账号密码核对：IG 网页登录接口]');
+    lines.push(LoginLog.webProbeAtMs > 0
+      ? `${LoginLog.stamp(LoginLog.webProbeAtMs)}：${LoginLog.webProbeOk ? '密码被认可' : '未通过'}`
+        + `｜${LoginLog.webProbeText}`
+      : '（还没核对过：登录失败后点提示下面那行小字「账号密码对不对？」）');
     lines.push('');
     // ---- 通道自检 ----
     lines.push('[登录通道自检：TCP → TLS 1.3 → 一行 GET]');
