@@ -3163,15 +3163,14 @@ export struct ReelsPage {
           hostHold: this.pageHold,
           hostSpeed: this.pageSpeed,
           /*
-           * **提前备好"下两条"**（用户报的"第三条视频要等很久才刷新"）。
+           * **只提前备好"下一条"**（原来备了两条）。
            *
-           * 原来只 preload `activeIndex + 1`：看到第 1 条时第 2 条已经 prepare 好了，但第 3 条
-           * 连播放器都没建 —— 1→2→3 连翻过去时，第 3 条要现建 XComponent 表面、现 prepare、
-           * 现等首帧，那几秒就是用户看到的"卡在封面"。
-           * Swiper 的 `cachedCount(2)` 已经把 ±2 页都建出来了（XComponent 有布局才有 surface），
-           * 所以这里多挂一条的代价只是"多准备一个播放器"，比翻过去再等划算得多。
+           * 为什么退回来（2026-10-30 真机）：真机上 reels 一进来就并发建出 **3 个 AVPlayer**，
+           * 播到第 4 秒整进程 ABORTED（无 JS 异常、无系统 fault），而**信息流只挂 1 个播放器就不崩**。
+           * 三路解码器 + 三块 XComponent 表面在这类机型上顶不住 —— "第三条少等两秒"不值得一次闪退。
+           * `VideoSurface.createPlayer` 那边还有预算/串行化闸门兜底（见 MAX_ALIVE_FOR_PRELOAD）。
            */
-          preload: index === this.activeIndex + 1 || index === this.activeIndex + 2,
+          preload: index === this.activeIndex + 1,
           // 静音开关是全局的（媒体区那颗喇叭键），见 AppSettings.SETTING_VIDEO_MUTED。
           muted: this.videoMuted,
           /*

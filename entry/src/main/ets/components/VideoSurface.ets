@@ -200,6 +200,10 @@ export struct VideoSurface {
    * 会再走一次 createPlayer，那时才允许创建。
    */
   private static readonly MAX_ALIVE_FOR_PRELOAD: number = 2;
+  /** 正在创建（createAVPlayer 还没回来）的数量 —— 也算进预算，见 createPlayer 的闸门。 */
+  private static pendingCreates: number = 0;
+  /** 全局串行：同一时刻只允许一个 createAVPlayer 在飞。 */
+  private static creatingAny: boolean = false;
 
   /** 建好一个播放器时的计数与打点。 */
   private static notePlayerCreated(url: string): void {
@@ -313,16 +317,36 @@ export struct VideoSurface {
       return;
     }
     /*
-     * **预加载闸门**（见 MAX_ALIVE_FOR_PRELOAD 的说明）：只播不看的那些玩家，
-     * 在已经有 2 个播放器时就不建了 —— 多建一个解码器换来的"提前量"，
-     * 远不如一次原生闪退的代价大。
+     * **预加载闸门 + 串行化**（见 MAX_ALIVE_FOR_PRELOAD 的说明）。
+     *
+     * 2026-10-30 真机（18:03 段）：reels 一进来就在 300ms 内**并发**建了 3 个 AVPlayer
+     * （`player create begin alive=1` 连出两次、随后 `create ok alive=3`）——
+     * 上一版的闸门只看 `alivePlayers`，而当时三个都还在"创建中"（alive 还是 1），
+     * 所以一个都没拦住。现在：
+     *   · 预算 = 已建好 + **创建中**（pendingCreates）；
+     *   · 预加载玩家在预算 >= 2 时不建；
+     *   · 全局同一时刻只允许一个 createAVPlayer 在飞（并发创建解码器本身就是崩因嫌疑）。
      */
     const preloadOnly: boolean = this.preload && !this.playing;
-    if (preloadOnly && VideoSurface.alivePlayers >= VideoSurface.MAX_ALIVE_FOR_PRELOAD) {
-      ReelsCrashLog.note(`skip preload player alive=${VideoSurface.alivePlayers}`);
+    const budget: number = VideoSurface.alivePlayers + VideoSurface.pendingCreates;
+    if (preloadOnly && budget >= VideoSurface.MAX_ALIVE_FOR_PRELOAD) {
+      ReelsCrashLog.note(`skip preload player budget=${budget} `
+        + `(alive=${VideoSurface.alivePlayers} pending=${VideoSurface.pendingCreates})`);
+      return;
+    }
+    if (VideoSurface.creatingAny) {
+      // 另一个实例正在建：等它落定再来（150ms 后重试，仍然要走上面的闸门）。
+      this.creating = false;
+      setTimeout((): void => {
+        if (!this.destroyed && this.player === null) {
+          this.createPlayer();
+        }
+      }, 150);
       return;
     }
     this.creating = true;
+    VideoSurface.creatingAny = true;
+    VideoSurface.pendingCreates++;
     /*
      * **创建播放器这一发也要进滚动日志**（每次都记，不只 >=3 时记）。
      *
@@ -332,9 +356,12 @@ export struct VideoSurface {
      * 把每一发都记下来，才能判断是不是"切条时播放器创建/释放交错"导致的硬崩。
      */
     ReelsCrashLog.note(`player create begin alive=${VideoSurface.alivePlayers} `
+      + `pending=${VideoSurface.pendingCreates} `
       + `seg=${this.segment}/${this.activeSegment} preload=${this.preload ? 'y' : 'n'}`);
     media.createAVPlayer().then((player: media.AVPlayer): void => {
       this.creating = false;
+      VideoSurface.creatingAny = false;
+      VideoSurface.pendingCreates--;
       // 等播放器创出来的这段时间里，属性可能已经变了（用户滑走了）：那就当场释放，
       // 不要留下一个没人管的播放器（它会自己去缓冲，占带宽还占解码器）。
       if (this.destroyed || !this.wanted()) {
@@ -379,6 +406,8 @@ export struct VideoSurface {
       this.applyUrl();
     }).catch((error: BusinessError): void => {
       this.creating = false;
+      VideoSurface.creatingAny = false;
+      VideoSurface.pendingCreates--;
       this.reportError(`createAVPlayer failed code=${error.code} msg=${error.message}`);
     });
   }
