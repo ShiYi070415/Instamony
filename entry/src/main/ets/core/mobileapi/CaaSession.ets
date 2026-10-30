@@ -193,6 +193,19 @@ export class CaaSession {
     } catch (error) {
       hilog.info(DOMAIN, TAG, 'seed caa cookies skipped: %{public}s', (error as Error).message);
     }
+    /*
+     * 网页罐也空的时候（新装/刚清过缓存），**自己去拿一次设备级 Cookie**：
+     * `GET www.instagram.com/` 会给 `csrftoken` + `mid`。官方客户端登录时必带这两颗，
+     * 没有它们的请求就是"零 Cookie 客户端"，很容易被 IG 判成脚本。
+     */
+    if (!CaaLogin.hasCookie('mid') || !CaaLogin.hasCookie('csrftoken')) {
+      const boot: string = await CaaLogin.bootstrapCookies();
+      hilog.info(DOMAIN, TAG, 'caa cookie bootstrap: %{public}s', boot);
+      // 服务端下发的 machine id 也补进 Cookie（和请求头里的 X-MID 同源）。
+      if (!CaaLogin.hasCookie('mid') && identity.mid.length > 0) {
+        CaaLogin.setCookie('mid', identity.mid);
+      }
+    }
     try {
       result = await CaaLogin.login(identity, user, password, device, null);
     } catch (error) {

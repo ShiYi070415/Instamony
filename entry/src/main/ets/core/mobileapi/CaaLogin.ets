@@ -42,6 +42,14 @@ import { MobileChallenge } from './MobileChallenge';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'CaaLogin';
+/**
+ * 自举 Cookie 时用的 UA：必须是**网页** UA。
+ *
+ * 用 Android App 的 UA 打 `www.instagram.com/` 拿不到 `csrftoken`/`mid`（那是网页入口才发的），
+ * 而这两颗正是官方客户端登录时必带的设备级 Cookie。
+ */
+const WEB_UA: string = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+  + '(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
 
 /** USDID 注册用的 GraphQL 文档 id（Android 428 档，instagrapi 同源）。 */
 const USDID_CLIENT_DOC_ID: string = '124930351917786857261002920888';
@@ -695,6 +703,73 @@ export class CaaLogin {
   /** Cookie 罐里现在有哪些名字（诊断用：只有名字，没有值）。 */
   static cookieNames(): string {
     return Array.from(CaaLogin.cookieJar.keys()).join(',');
+  }
+
+  /**
+   * **自举设备级 Cookie**（`csrftoken` / `mid`）。
+   *
+   * 官方客户端发起登录时，请求头里一定带这两颗；我们以前一条都没有（真机日志 `cookie=(空)`），
+   * 在 IG 眼里就是"没有会话绑定的客户端"，正好落进 `FakeIncorrectPassword` / 反脚本那一档。
+   *
+   * 拿法很便宜：`GET https://www.instagram.com/` 实测 200 + `Set-Cookie: csrftoken=…; mid=…`
+   * （用**网页 UA** 才有，Android App 的 UA 打这个入口不给）。
+   *
+   * @returns 一行现场（进日志用）
+   */
+  static async bootstrapCookies(): Promise<string> {
+    if (CaaLogin.hasCookie('mid') && CaaLogin.hasCookie('csrftoken')) {
+      return `cookie 已有（${CaaLogin.cookieNames()}）`;
+    }
+    const request: http.HttpRequest = http.createHttp();
+    try {
+      const response: http.HttpResponse = await request.request('https://www.instagram.com/', {
+        method: http.RequestMethod.GET,
+        header: {
+          'User-Agent': WEB_UA,
+          'Accept': 'text/html,application/xhtml+xml',
+          'Accept-Language': 'en-US,en;q=0.9'
+        },
+        connectTimeout: 12000,
+        readTimeout: 12000,
+        expectDataType: http.HttpDataType.STRING
+      });
+      const raw: ESObject = response.header as ESObject;
+      let joined: string = '';
+      if (raw !== null && raw !== undefined) {
+        const record: Record<string, ESObject> = raw as Record<string, ESObject>;
+        for (const key of Object.keys(record)) {
+          if (key.toLowerCase() !== 'set-cookie') {
+            continue;
+          }
+          const value: ESObject = record[key];
+          const one: string = Array.isArray(value)
+            ? (value as Array<string>).join('\n') : `${value}`;
+          joined += `${one}\n`;
+        }
+      }
+      CaaLogin.absorbCookieText(joined);
+      return `www.instagram.com status=${response.responseCode} cookie=${CaaLogin.cookieNames()}`;
+    } catch (error) {
+      return `www.instagram.com 取 Cookie 失败：${(error as Error).message}`;
+    } finally {
+      try {
+        request.destroy();
+      } catch (error) {
+      }
+    }
+  }
+
+  /** 罐子里有没有这颗 Cookie。 */
+  static hasCookie(name: string): boolean {
+    const value: string = CaaLogin.cookieJar.get(name) ?? '';
+    return value.length > 0;
+  }
+
+  /** 直接塞一颗 Cookie（例如把服务端下发的 `mid` 也放进请求头）。 */
+  static setCookie(name: string, value: string): void {
+    if (name.length > 0 && value.length > 0) {
+      CaaLogin.cookieJar.set(name, value);
+    }
   }
 
   /** 现在该带的 `Cookie` 头（空串 = 罐子是空的，那就不带）。 */
