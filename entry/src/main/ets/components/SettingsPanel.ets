@@ -1439,6 +1439,27 @@ export struct SettingsPanel {
     await this.saveLoginLogFile(text);
   }
 
+  /**
+   * **推送 reels 崩溃日志到 MeoW**（需求：reels 闪退时把现场直接推给开发者）。
+   *
+   * 内容就是 `ReelsCrashLog.read()` 那份滚动日志：`session start` / 翻页与切条记录 /
+   * 上一次是否 ABORTED / 以及这版新加的 `uncaught … stack=…`。
+   * 推送失败退回"存成 txt"（复用登录日志那条落盘路径的提示）。
+   */
+  private async pushReelsCrashLog(): Promise<void> {
+    const text: string = ReelsCrashLog.read();
+    if (text.trim().length === 0) {
+      this.toast('还没有 reels 崩溃日志（没进过 reels，或日志已被清掉）');
+      return;
+    }
+    const header: string = `Instamony reels 崩溃日志（${text.length} 字）\n`
+      + `（设备与版本：${this.appVersionText()}）\n\n`;
+    this.toast('正在推送 reels 崩溃日志到 MeoW…');
+    const result: string = await MeoW.pushLog(header + text);
+    hilog.info(DOMAIN, TAG, 'reels crash push: %{public}s', result.substring(0, 120));
+    this.toast(result);
+  }
+
   /** 把日志存成 txt（系统文件选择器，不需要任何存储权限）。 */
   private async saveLoginLogFile(text: string): Promise<void> {
     const name: string = LoginLog.fileName();
@@ -2246,6 +2267,10 @@ export struct SettingsPanel {
           this.cardDivider()
           this.actionRow('推送登录日志（MeoW）', (): void => {
             this.exportLoginLog();
+          })
+          this.cardDivider()
+          this.actionRow('推送 reels 崩溃日志（MeoW）', (): void => {
+            this.pushReelsCrashLog();
           })
           this.cardDivider()
           this.loginLogHintRow()
