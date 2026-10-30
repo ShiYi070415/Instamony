@@ -478,7 +478,7 @@ export struct VideoSurface {
     if (player === null) {
       return;
     }
-    ReelsCrashLog.noteNow(`state=${state} seg=${this.segment}/${this.activeSegment}`);
+    ReelsCrashLog.note(`state=${state} seg=${this.segment}/${this.activeSegment}`);
     if (state === 'initialized') {
       // 有表面就先挂上；**没有表面则把 prepare 挂起**（等 onLoad 补一次）。
       //
@@ -604,7 +604,7 @@ export struct VideoSurface {
      */
     if (now - this.lastProbeMs >= 5000) {
       this.lastProbeMs = now;
-      ReelsCrashLog.noteNow(`progress=${Math.floor(positionMs / 1000)}s `
+      ReelsCrashLog.note(`progress=${Math.floor(positionMs / 1000)}s `
         + `seg=${this.segment}/${this.activeSegment}`);
     }
     const total: number = this.playerDurationMs();
