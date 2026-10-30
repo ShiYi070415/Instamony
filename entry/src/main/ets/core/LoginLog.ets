@@ -61,12 +61,15 @@ export class LoginLog {
   private static webProbeText: string = '';
   private static webProbeOk: boolean = false;
   private static webProbeAtMs: number = 0;
+  /** 网页接口核对的现场（challenge 类型 / native_flow / api_path / 原始 JSON 片段）。 */
+  private static webProbeDetail: string = '';
 
   /** 记一条网页接口核对的结论。 */
-  static rememberWebProbe(text: string, credentialsOk: boolean): void {
+  static rememberWebProbe(text: string, credentialsOk: boolean, detail: string = ''): void {
     LoginLog.webProbeText = text.length > 0 ? text : '(空)';
     LoginLog.webProbeOk = credentialsOk;
     LoginLog.webProbeAtMs = Date.now();
+    LoginLog.webProbeDetail = detail;
     hilog.info(DOMAIN, TAG, 'web probe: %{public}s', text.substring(0, 120));
   }
 
@@ -188,6 +191,11 @@ export class LoginLog {
       : '（还没核对过：登录失败后点提示下面那行小字「账号密码对不对？」）');
     if (CaaLogin.lastWebProbeNote.length > 0) {
       lines.push(`（上次登录失败时自动核对：${CaaLogin.lastWebProbeNote}）`);
+    }
+    const detail: string = LoginLog.webProbeDetail.length > 0
+      ? LoginLog.webProbeDetail : CaaLogin.lastWebProbeDetail;
+    if (detail.length > 0) {
+      lines.push(`现场：${detail}`);
     }
     lines.push('');
     // ---- 通道自检 ----

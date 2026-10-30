@@ -7256,7 +7256,7 @@ struct Index {
         onWebProbe: (username: string, password: string): Promise<WebProbeResult> => {
           return WebLoginProbe.probe(username, password).then((result: WebProbeResult): WebProbeResult => {
             // 结论同步进登录日志：用户点完不用再抄一遍，导出日志就带着。
-            LoginLog.rememberWebProbe(result.text, result.credentialsOk);
+            LoginLog.rememberWebProbe(result.text, result.credentialsOk, result.detailNote);
             return result;
           });
         },

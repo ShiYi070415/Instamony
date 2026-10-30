@@ -663,6 +663,8 @@ export class CaaLogin {
   static lastPasswordKeysNote: string = '';
   /** 最近一次 CAA 登录失败时，网页接口核对账号密码的结论（登录日志会带出来）。 */
   static lastWebProbeNote: string = '';
+  /** 上面那条的现场（challenge 类型 / native_flow / api_path / 原始 JSON 片段）。 */
+  static lastWebProbeDetail: string = '';
   /** 这一次提交的密码里有没有非 ASCII 字符（`password_contains_non_ascii` 用）。 */
   private static passwordNonAscii: string = 'false';
 
@@ -1611,12 +1613,15 @@ export class CaaLogin {
     if (credential) {
       const probed: WebProbeResult = await WebLoginProbe.probe(username, password);
       CaaLogin.lastWebProbeNote = probed.text;
+      CaaLogin.lastWebProbeDetail = probed.detailNote;
       probeNote = probed.text;
       if (probed.credentialsOk) {
+        const how: string = probed.nativeFlow
+          ? '这一步是 IG 的 native_flow checkpoint：只能在官方 App / 受信设备上完成，第三方客户端拿不到可提交的步骤。'
+          : '请先在 Instagram 官方 App 或网页版用同一账号登录，把"确认是你"那一步做完，再回来登录。';
         const blocked: CaaResult = new CaaResult(false,
           `登录失败：IG 要求先完成账号安全验证（checkpoint）——`
-            + `密码是对的（网页接口已确认：${probed.text}）。`
-            + `请先在 Instagram 官方 App 或网页版用同一账号登录，把"确认是你"那一步做完，再回来登录。`);
+            + `密码是对的（网页接口已确认：${probed.text}）。${how}`);
         blocked.aac = aac;
         try {
           blocked.raw = JSON.stringify(payload).substring(0, 100000);

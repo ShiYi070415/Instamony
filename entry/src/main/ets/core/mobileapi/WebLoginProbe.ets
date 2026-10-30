@@ -32,10 +32,29 @@ export class WebProbeResult {
   readonly text: string;
   /** 账号密码是否**被 IG 认可**（true = 密码没问题）。 */
   readonly credentialsOk: boolean;
+  /**
+   * IG 这次要求的验证是哪一种（`challengeType`），例如 `VerifyEmailCodeForm` /
+   * `SelectContactPointRecoveryForm` / `RecaptchaChallengeForm`；空串 = 没读到。
+   */
+  readonly challengeType: string;
+  /**
+   * **原生流程**（`challenge.native_flow = true`）：这种 checkpoint 只暴露给官方 App / 受信设备，
+   * 第三方客户端拿不到可提交的步骤（见 instagrapi 的处理：直接抛 ChallengeRequired 让人工处理）。
+   */
+  readonly nativeFlow: boolean;
+  /** `/challenge/<uid>/<nonce>/` 这类 api_path（有的话）。 */
+  readonly apiPath: string;
+  /** 脱敏后的现场摘要（进登录日志）。 */
+  readonly detailNote: string;
 
-  constructor(text: string, credentialsOk: boolean) {
+  constructor(text: string, credentialsOk: boolean, challengeType: string = '',
+              nativeFlow: boolean = false, apiPath: string = '', detailNote: string = '') {
     this.text = text;
     this.credentialsOk = credentialsOk;
+    this.challengeType = challengeType;
+    this.nativeFlow = nativeFlow;
+    this.apiPath = apiPath;
+    this.detailNote = detailNote;
   }
 }
 
@@ -103,28 +122,65 @@ export class WebLoginProbe {
    *
    * 字段按 IG 实际返回处理（2026-10-30 实测：随便一个不存在的用户名回
    * `{"user":true,"authenticated":false,"status":"ok"}`，HTTP 200）。
+   *
+   * 除了"密码对不对"，这里还要把**是哪一种验证**捞出来 —— 这决定我们能不能自己走完：
+   *   · `challenge.native_flow = true` + `/challenge/...` → **只能在官方 App / 受信设备完成**
+   *     （instagrapi 也是直接抛 ChallengeRequired 让人工处理）；
+   *   · 老的 contact-form（Email/SMS 验证码）→ 第三方客户端有办法自己提交验证码。
    */
   private static verdict(json: string, status: number): WebProbeResult {
     const lower: string = json.toLowerCase();
+    const nativeFlow: boolean = lower.indexOf('"native_flow":true') >= 0
+      || lower.indexOf('"native_flow": true') >= 0;
+    const apiPath: string = WebLoginProbe.fieldOf(json, 'api_path');
+    const challengeType: string = WebLoginProbe.fieldOf(json, 'challengeType');
+    const detail: string = `native_flow=${nativeFlow ? 'true' : 'false'}`
+      + ` api_path=${apiPath.length > 0 ? apiPath : '(无)'}`
+      + ` challengeType=${challengeType.length > 0 ? challengeType : '(无)'}`
+      + ` raw=${json.length > 900 ? json.substring(0, 900) + '…' : json}`;
     if (lower.indexOf('"authenticated":true') >= 0) {
-      return new WebProbeResult('IG 认可这组账号密码（网页接口直接给了会话）→ 问题在本机 CAA 链路', true);
+      return new WebProbeResult('IG 认可这组账号密码（网页接口直接给了会话）→ 问题在本机 CAA 链路',
+        true, challengeType, nativeFlow, apiPath, detail);
     }
     if (lower.indexOf('two_factor_required') >= 0 || lower.indexOf('two_factor') >= 0) {
-      return new WebProbeResult('密码是对的，IG 要两步验证（网页接口也这么要求）', true);
+      return new WebProbeResult('密码是对的，IG 要两步验证（网页接口也这么要求）',
+        true, challengeType, nativeFlow, apiPath, detail);
     }
     if (lower.indexOf('challenge') >= 0 || lower.indexOf('checkpoint') >= 0
       || lower.indexOf('consent') >= 0) {
-      return new WebProbeResult('密码是对的，IG 要求安全验证（checkpoint/consent）', true);
+      const how: string = nativeFlow
+        ? '（这是 native_flow：只能在官方 App / 受信设备上完成，第三方客户端拿不到可提交的步骤）'
+        : (challengeType.length > 0 ? `（类型 ${challengeType}）` : '');
+      return new WebProbeResult(`密码是对的，IG 要求安全验证（checkpoint）${how}`,
+        true, challengeType, nativeFlow, apiPath, detail);
     }
     if (lower.indexOf('bad_password') >= 0 || lower.indexOf('"authenticated":false') >= 0) {
-      return new WebProbeResult('网页接口也不认这组账号密码（IG 两个面结论一致）', false);
+      return new WebProbeResult('网页接口也不认这组账号密码（IG 两个面结论一致）',
+        false, challengeType, nativeFlow, apiPath, detail);
     }
     if (lower.indexOf('wait') >= 0 || lower.indexOf('too many') >= 0
       || lower.indexOf('rate') >= 0 || status === 429) {
-      return new WebProbeResult('被 IG 限流了（先等 30 分钟再试）', false);
+      return new WebProbeResult('被 IG 限流了（先等 30 分钟再试）', false, challengeType,
+        nativeFlow, apiPath, detail);
     }
     const snippet: string = json.length > 160 ? `${json.substring(0, 160)}…` : json;
-    return new WebProbeResult(`网页接口回了意料之外的东西（HTTP ${status}）：${snippet}`, false);
+    return new WebProbeResult(`网页接口回了意料之外的东西（HTTP ${status}）：${snippet}`,
+      false, challengeType, nativeFlow, apiPath, detail);
+  }
+
+  /** 从 JSON 文本里取一个字符串字段（值里不能再有引号，够用且不依赖解析器）。 */
+  private static fieldOf(json: string, name: string): string {
+    const marker: string = `"${name}":"`;
+    const at: number = json.indexOf(marker);
+    if (at < 0) {
+      return '';
+    }
+    const from: number = at + marker.length;
+    const end: number = json.indexOf('"', from);
+    if (end < 0) {
+      return '';
+    }
+    return json.substring(from, end);
   }
 
   /** 取一个 `csrftoken`（IG 主页的 set-cookie）。 */
