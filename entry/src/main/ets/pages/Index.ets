@@ -41,8 +41,8 @@ import {
 } from '@kit.UIDesignKit';
 import { AppConfig } from '../config/AppConfig';
 import { InstagramPageBridge } from '../bridge/PageBridge';
-import {
-  PAGE_STATE_SCRIPT,
+import {
+  PAGE_STATE_SCRIPT,
   TIMELINE_PROBE_SCRIPT
 } from '../bridge/WebScripts';
 import { CommentsPanel, CommentsListController, COMMENTS_DRAG_ZONE_VP } from '../components/CommentsPanel';
@@ -177,6 +177,7 @@ import { MobileSession, MobileIdentity } from '../core/mobileapi/MobileSession';
 import { CaaOutcome, CaaSession } from '../core/mobileapi/CaaSession';
 // 登录日志（设置页「复制/导出登录日志」用，见 core/LoginLog）。
 import { LoginLog } from '../core/LoginLog';
+import { WebLoginProbe, WebProbeResult } from '../core/mobileapi/WebLoginProbe';
 import { MobileProbe } from '../core/mobileapi/MobileProbe';
 import { MqttProbe } from '../core/mobileapi/MqttProbe';
 import { NetProbe } from '../core/mobileapi/NetProbe';
@@ -7245,6 +7246,15 @@ struct Index {
          */
         onCaaVerify: (code: string): Promise<string> => {
           return this.caaVerify(code);
+        },
+        /*
+         * **网页接口核对账号密码**（见 core/mobileapi/WebLoginProbe）。
+         *
+         * CAA 回「密码错误」时，用它从 IG 的另一个面确认一次：是密码真不对，
+         * 还是 IG 对我们这条 App 协议链路的判定。不改任何登录状态。
+         */
+        onWebProbe: (username: string, password: string): Promise<WebProbeResult> => {
+          return WebLoginProbe.probe(username, password);
         },
         /*
          * **"在另一台设备上同意"的轮询**（需求："2FA 过程中可以在官方客户端同意本次登录，

@@ -51,6 +51,7 @@ import {
   SETTING_MATERIAL_THICKNESS
 } from '../core/AppSettings';
 import { PlatformCap } from '../core/PlatformCap';
+import { WebProbeResult } from '../core/mobileapi/WebLoginProbe';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const DOMAIN: number = 0xFF00;
@@ -97,6 +98,15 @@ export struct LoginPage {
     (code: string): Promise<string> => {
       return Promise.resolve('验证码提交未接入');
     };
+  /**
+   * 用 **IG 网页登录接口**核对一次账号密码（见 core/mobileapi/WebLoginProbe）。
+   *
+   * 只用来分辨"密码真的不对"还是"IG 对我们这条 CAA 链路的判定"，不改任何登录状态。
+   */
+  onWebProbe: (username: string, password: string) => Promise<WebProbeResult> =
+    (username: string, password: string): Promise<WebProbeResult> => {
+      return Promise.resolve(new WebProbeResult('核对功能未接入', false));
+    };
   /** 材质厚度：跟随设置页那一档（@StorageLink 与其它页面同源）。 */
   @StorageLink(SETTING_MATERIAL_THICKNESS) materialThickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
 
@@ -122,6 +132,9 @@ export struct LoginPage {
   @State private verifyCode: string = '';
   @State private verifyError: string = '';
   @State private verifyBusy: boolean = false;
+  /** 网页接口核对：有没有在跑、结论是什么。 */
+  @State private probeBusy: boolean = false;
+  @State private probeText: string = '';
 
   /**
    * 面板要不要用**系统沉浸光感材质**（API 26 起；不支持的机器退回玻璃底）。
@@ -434,6 +447,66 @@ export struct LoginPage {
     return $r('app.string.login_page_action');
   }
 
+  /**
+   * 失败提示下面那一行**「核对账号密码」**。
+   *
+   * 为什么要它：CAA 失败时界面只能转述 IG 的原话，而「密码错误」既可能是密码真不对，
+   * 也可能是 IG 对这条链路的判定 —— 用户没法分辨，只能一遍遍重试（越试越像被锁）。
+   * 点这一行会用**另一个面**（网页登录接口）核对一次，直接给出"密码是否被 IG 认可"。
+   * 密码只在内存里用一次，不落盘、不进日志。
+   */
+  @Builder
+  probeRow() {
+    Column({ space: 6 }) {
+      Row({ space: 6 }) {
+        Text(this.probeBusy ? '正在核对…' : '账号密码对不对？点这里用 IG 网页接口核对一次')
+          .fontSize(11)
+          .lineHeight(16)
+          .fontColor(this.probeBusy ? $r('app.color.secondary_text') : $r('app.color.brand_blue'))
+          .layoutWeight(1)
+          .onClick((): void => {
+            this.runWebProbe();
+          })
+      }
+      .width('100%')
+
+      if (this.probeText.length > 0) {
+        Text(this.probeText)
+          .fontSize(11)
+          .lineHeight(16)
+          .fontColor($r('app.color.secondary_text'))
+          .width('100%')
+      }
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding({ left: 6, top: 4 })
+  }
+
+  /** 跑一次网页接口核对（用输入框里当前这组账号密码）。 */
+  private runWebProbe(): void {
+    if (this.probeBusy) {
+      return;
+    }
+    const name: string = this.username.trim();
+    const typed: string = this.password;
+    if (name.length === 0 || typed.length === 0) {
+      this.probeText = '先填账号和密码';
+      return;
+    }
+    this.probeBusy = true;
+    this.probeText = '';
+    this.onWebProbe(name, typed)
+      .then((result: WebProbeResult): void => {
+        this.probeBusy = false;
+        this.probeText = result.text;
+      })
+      .catch((error: Error): void => {
+        this.probeBusy = false;
+        this.probeText = `核对失败：${error.message}`;
+      });
+  }
+
   /** 密码框之上那段错误提示（有错才画）。 */
   @Builder
   errorRow() {
@@ -543,6 +616,7 @@ export struct LoginPage {
 
           if (this.error.length > 0) {
             this.errorRow()
+            this.probeRow()
           } else {
             /*
              * 常驻一行说明：登录全程不显示网页，走的是 App 自己的登录协议；
@@ -616,6 +690,7 @@ export struct LoginPage {
       return;
     }
     this.error = '';
+    this.probeText = '';
     this.busy = true;
     /*
      * **密码不清**（需求："登录页点击登录时密码不清除"）。
