@@ -352,37 +352,98 @@ export function bloksNeedsTwoStep(payload: ESObject): boolean {
 }
 
 /**
+ * 把 `\u5bc6` 这类转义还原成字符。
+ *
+ * 为什么需要：IG 的 CAA 响应里，界面文案是**被转义过**塞进 bloks 字符串的
+ * （`\u5bc6\u7801\u9519\u8bef` 就是"密码错误"）。不解开的话，任何按中文找文案的
+ * 规则都命中不了 —— 上一版就是这样把 `(e25 1)) (dps (dn3 …` 当成提示语贴给了用户。
+ */
+function unescapeText(text: string): string {
+  let out: string = '';
+  let at: number = 0;
+  while (at < text.length) {
+    const ch: string = text.charAt(at);
+    if (ch !== '\\' || at + 1 >= text.length) {
+      out += ch;
+      at++;
+      continue;
+    }
+    const next: string = text.charAt(at + 1);
+    if (next === 'u' && at + 6 <= text.length) {
+      const hex: string = text.substring(at + 2, at + 6);
+      if (/^[0-9a-fA-F]{4}$/.test(hex)) {
+        out += String.fromCharCode(Number.parseInt(hex, 16));
+        at += 6;
+        continue;
+      }
+    }
+    if (next === 'n' || next === 'r' || next === 't') {
+      out += ' ';
+      at += 2;
+      continue;
+    }
+    if (next === '"') {
+      out += '"';
+      at += 2;
+      continue;
+    }
+    if (next === '/' || next === '\\') {
+      out += next;
+      at += 2;
+      continue;
+    }
+    out += next;
+    at += 2;
+  }
+  return out;
+}
+
+/** 这条字符串**像不像一句给人看的文案**（布局树里的字段名/埋点/代码都不算）。 */
+function humanSentence(body: string): boolean {
+  if (body.length < 4 || body.length > 200) {
+    return false;
+  }
+  // 代码/布局表达式里这些符号很常见，人话里基本没有。
+  if (body.indexOf('(') >= 0 || body.indexOf(')') >= 0 || body.indexOf('{') >= 0
+    || body.indexOf('}') >= 0 || body.indexOf('<') >= 0 || body.indexOf('>') >= 0
+    || body.indexOf('"') >= 0 || body.indexOf('\\') >= 0 || body.indexOf('_') >= 0
+    || body.indexOf('=') >= 0 || body.indexOf('/') >= 0 || body.indexOf('#') >= 0) {
+    return false;
+  }
+  if (/[\u4e00-\u9fff]/.test(body)) {
+    return true;
+  }
+  return /^[A-Za-z0-9 ,.'!?%&:;\-]+$/.test(body) && body.indexOf(' ') > 0;
+}
+
+/**
  * 从一段（响应）文本里挑出**像人话**的句子。
  *
- * 为什么要这么干：CAA 的响应是一棵 bloks 布局树，IG 的提示文案（"密码不对"、"要验证码"、
- * "这次请求没被接受"…）**没有任何标准字段**，就写在其中某一个引号串里。2026-10-30 真机上
- * `send_login_request` 回了 200、body 是几万字布局树，`bloksErrorText` 里那几条固定短语
- * 一条都没命中，用户看到的只是"响应里没找到登录结果（布局形状可能变了）"——等于没说。
+ * 为什么要这么干：CAA 的响应是一棵 bloks 布局树，IG 的提示文案（"密码错误"、
+ * "你输入的密码有误，请重新输入。"…）**没有任何标准字段**，就写在其中某一个引号串里。
  *
- * 规则：长度 12~140、含空格、只由常见 ASCII 字母数字与标点组成、不含 `_` `=` `/`
- * （带下划线/等号的多半是字段名或埋点名）。**含提示词的排前面**（sorry / incorrect / verify …）。
+ * 2026-10-30 真机实测（Mate 70 Pro+）：`send_login_request` 回 200，body 7549 字，
+ * 结尾是 `(fom 13799 40 "\u5bc6\u7801\u9519\u8bef" 35 "\u4f60\u8f93\u5165\u7684…")`
+ * —— 也就是 IG 明说"你输入的密码有误，请重新输入。"。上一版没解开转义、也没认中文，
+ * 于是把布局代码片段当成了提示语。现在：先解转义，再按"人话"规则筛，**含提示词的排前面**。
  */
 export function humanHints(text: string): Array<string> {
   const keywords: Array<string> = [
+    '密码', '有误', '错误', '验证', '账号', '稍后', '太多', '不存在', '限制', '封禁', '重试',
     'sorry', 'incorrect', 'wrong', 'unable', 'unfortunately', 'try again', 'verify',
     'confirm', 'blocked', 'suspicious', 'unusual', 'wait', 'code', 'help'
   ];
   const strong: Array<string> = [];
   const weak: Array<string> = [];
-  const found: RegExpMatchArray | null = text.match(/"[^"\\]{12,140}"/g);
+  const plain: string = unescapeText(text);
+  const found: RegExpMatchArray | null = plain.match(/"[^"]{4,200}"/g);
   if (found === null) {
     return weak;
   }
   for (let index: number = 0; index < found.length; index++) {
     const item: string = found[index];
     const body: string = item.substring(1, item.length - 1);
-    if (body.indexOf(' ') < 0) {
-      continue;
-    }
-    if (!/^[A-Za-z0-9 ,.'!?%&()\-:;]+$/.test(body)) {
-      continue;
-    }
-    if (body.indexOf('_') >= 0 || body.indexOf('=') >= 0 || body.indexOf('/') >= 0) {
+    if (!humanSentence(body)) {
       continue;
     }
     const lower: string = body.toLowerCase();
@@ -393,6 +454,7 @@ export function humanHints(text: string): Array<string> {
         break;
       }
     }
+    // 短的（标题/按钮）优先：`密码错误` 比整段弹窗正文更适合当界面提示。
     const bucket: Array<string> = matched ? strong : weak;
     let duplicate: boolean = false;
     for (let seen: number = 0; seen < bucket.length; seen++) {
@@ -409,6 +471,7 @@ export function humanHints(text: string): Array<string> {
       break;
     }
   }
+  strong.sort((left: string, right: string): number => left.length - right.length);
   const out: Array<string> = strong;
   for (let index: number = 0; index < weak.length; index++) {
     out.push(weak[index]);
@@ -418,7 +481,8 @@ export function humanHints(text: string): Array<string> {
 
 /** 从失败响应里挑出给人看的文案（IG 把它写在 UI 文本里）。 */
 export function bloksErrorText(payload: ESObject): string {
-  const text: string = bloksAllText(payload);
+  // 文案在布局里是**转义后**的（`\u5bc6\u7801…`），不先解开就连英文短语也匹配不到。
+  const text: string = unescapeText(bloksAllText(payload));
   const phrases: Array<string> = [
     'Can\'t find account', 'We can\'t find', 'password you entered', 'incorrect',
     'too many', 'wait a few minutes', 'suspended', 'checkpoint'
@@ -429,9 +493,17 @@ export function bloksErrorText(payload: ESObject): string {
       return text.substring(index, Math.min(index + 120, text.length)).replace(/\s+/g, ' ');
     }
   }
-  // 固定短语一条都没命中：退一步，把响应里第一句"人话"当成 IG 的说法交出去。
+  // 固定短语一条都没命中：退一步，把响应里挑出来的"人话"当成 IG 的说法交出去。
+  // 挑出来的是「短标题 + 正文」两段（`密码错误` / `你输入的密码有误，请重新输入。`），
+  // 拼成一句给用户看，比只给标题更容易照做。
   const hints: Array<string> = humanHints(text);
-  return hints.length > 0 ? hints[0] : '';
+  if (hints.length === 0) {
+    return '';
+  }
+  if (hints.length === 1) {
+    return hints[0];
+  }
+  return `${hints[0]}：${hints[1]}`;
 }
 
 /* ---------------------------------------------------------------- USDID */
@@ -582,6 +654,8 @@ export class CaaLogin {
   static lastSendHeaderMap: Record<string, string> = {};
   /** 最近一次 `qe/sync`（取密码加密公钥）的现场，失败时拼进提示里。 */
   static lastPasswordKeysNote: string = '';
+  /** 这一次提交的密码里有没有非 ASCII 字符（`password_contains_non_ascii` 用）。 */
+  private static passwordNonAscii: string = 'false';
 
   /**
    * **CAA 链路的 Cookie 罐**（进程内，一次登录的一串请求共用）。
@@ -1337,6 +1411,8 @@ export class CaaLogin {
         `拿不到密码加密公钥（qe/sync 没回头发公钥）｜${CaaLogin.lastPasswordKeysNote}`);
     }
     const encrypted: string = await MobileCrypto.encryptPassword(password, keys);
+    // IG 会看这个字段：密码里有非 ASCII 字符时真实客户端会置 true（以前写死 false）。
+    CaaLogin.passwordNonAscii = /[^\x00-\x7F]/.test(password) ? 'true' : 'false';
     /*
      * 输入框 id 的形状必须和真机一致：**4 位十六进制 + `ig`**（instagrapi 3.2.2 的注释说得更狠：
      * 纯十六进制/UUID 前缀虽然能被 VM 接受，但可能回"空载荷 + 404"）。所以别用随机字节
@@ -2681,7 +2757,7 @@ export class CaaLogin {
       'ig_vetted_device_nonces': null,
       'cloud_trust_token': null,
       'event_flow': 'login_manual',
-      'password_contains_non_ascii': 'false',
+      'password_contains_non_ascii': CaaLogin.passwordNonAscii,
       'client_known_key_hash': '',
       'sso_accounts_auth_data': [],
       'encrypted_msisdn': '',
