@@ -47,16 +47,36 @@ export class MobileCrypto {
   private static readonly IV_BYTES: number = 12;
   private static readonly KEY_BYTES: number = 32;
   private static readonly TAG_BYTES: number = 16;
+  /**
+   * 最近一次密码加密的现场（登录日志会原样带出来）。
+   *
+   * 为什么必须留：`encryptPassword` 失败时返回空串，而**空串以前照样被当密码提交**，
+   * IG 的回应就是"密码错误"—— 用户明明输对了却被告知错了，查起来毫无线索。
+   * 这条 note 把 keyId / RSA 字节数 / 载荷长度 / 密码字节数都记下来，一眼能分出
+   * "加密根本没做成" 和 "IG 真的判密码不对"。
+   */
+  static lastEncryptNote: string = '';
+  /** RSA 那一步失败的原因（拼进 `lastEncryptNote`）。 */
+  private static lastRsaNote: string = '';
 
   /**
    * 生成 `enc_password`（`#PWD_INSTAGRAM:4:<ts>:<base64>`）。
    *
-   * @returns 空串 = 这一步失败（调用方据此提示"密码加密失败"，不要退回明文发密码）
+   * @returns 空串 = 这一步失败（调用方**必须**据此报错，不能拿空串去提交）
    */
   static async encryptPassword(password: string, keys: PasswordKeys): Promise<string> {
-    if (password.length === 0 || !keys.isUsable()) {
+    MobileCrypto.lastEncryptNote = '';
+    MobileCrypto.lastRsaNote = '';
+    if (password.length === 0) {
+      MobileCrypto.lastEncryptNote = '密码为空';
       return '';
     }
+    if (!keys.isUsable()) {
+      MobileCrypto.lastEncryptNote = `加密公钥不可用（keyId=${keys.keyId}, `
+        + `pubKey=${keys.publicKeyBase64.length} 字符）`;
+      return '';
+    }
+    const passwordBytes: number = new util.TextEncoder().encodeInto(password).length;
     try {
       const sessionKey: Uint8Array = MobileCrypto.randomBytes(MobileCrypto.KEY_BYTES);
       const iv: Uint8Array = MobileCrypto.randomBytes(MobileCrypto.IV_BYTES);
@@ -64,11 +84,14 @@ export class MobileCrypto {
       const rsaEncrypted: Uint8Array | null =
         await MobileCrypto.rsaEncrypt(sessionKey, keys.publicKeyBase64);
       if (rsaEncrypted === null) {
+        MobileCrypto.lastEncryptNote = `RSA 加密失败（keyId=${keys.keyId}）：`
+          + `${MobileCrypto.lastRsaNote}`;
         return '';
       }
       const aes: CryptoBox | null =
         await MobileCrypto.aesGcmEncrypt(password, sessionKey, iv, timestamp);
       if (aes === null) {
+        MobileCrypto.lastEncryptNote = `AES-GCM 加密失败（keyId=${keys.keyId}）`;
         return '';
       }
       // 拼包：0x01 | keyId(1B BE) | iv(12) | len(rsa)(2B LE) | rsa | tag(16) | cipher
@@ -88,10 +111,13 @@ export class MobileCrypto {
       at += aes.tag.length;
       out.set(aes.cipher, at);
       const base64: string = new util.Base64Helper().encodeToStringSync(out);
+      MobileCrypto.lastEncryptNote = `keyId=${keys.keyId} rsa=${rsaEncrypted.length}B `
+        + `payload=${total}B pwd=${passwordBytes}B ascii=${passwordBytes === password.length ? 'yes' : 'no'}`;
       hilog.info(DOMAIN, TAG, 'enc_password ok keyId=%{public}d rsa=%{public}d total=%{public}d',
         keys.keyId, rsaEncrypted.length, total);
       return `#PWD_INSTAGRAM:4:${timestamp}:${base64}`;
     } catch (error) {
+      MobileCrypto.lastEncryptNote = `加密异常（keyId=${keys.keyId}）：${(error as Error).message}`;
       hilog.warn(DOMAIN, TAG, 'encryptPassword threw: %{public}s', (error as Error).message);
       return '';
     }
@@ -108,12 +134,20 @@ export class MobileCrypto {
   private static async rsaEncrypt(data: Uint8Array, publicKeyBase64: string): Promise<Uint8Array | null> {
     const der: Uint8Array | null = MobileCrypto.derFromPublicKey(publicKeyBase64);
     if (der === null) {
+      MobileCrypto.lastRsaNote = `公钥解不开（${publicKeyBase64.length} 字符，pem/der 都不认）`;
       hilog.warn(DOMAIN, TAG, 'public key decode failed');
       return null;
     }
-    // IG 现在的密钥是 **2048 位**（key id 176），旧版本见过 1024。两档都试，别因为换密钥就整条登录挂掉。
-    const algs: Array<string> = ['RSA2048|PKCS1', 'RSA1024|PKCS1'];
-    const generators: Array<string> = ['RSA2048', 'RSA1024'];
+    /*
+     * IG 现在的密钥是 **2048 位**（keyId 183），旧版本见过 1024。两档都试，
+     * 但**先试对的那一档**：2048 位的 SPKI 约 294B、1024 位约 162B。
+     * 以前固定先试 2048，一旦设备上那档不可用就白试一轮，还容易把错误吞掉。
+     */
+    const pref2048: boolean = der.length > 200;
+    const algs: Array<string> = pref2048
+      ? ['RSA2048|PKCS1', 'RSA1024|PKCS1'] : ['RSA1024|PKCS1', 'RSA2048|PKCS1'];
+    const generators: Array<string> = pref2048 ? ['RSA2048', 'RSA1024'] : ['RSA1024', 'RSA2048'];
+    let notes: string = '';
     for (let index: number = 0; index < algs.length; index++) {
       try {
         const generator: cryptoFramework.AsyKeyGenerator =
@@ -123,14 +157,20 @@ export class MobileCrypto {
         const cipher: cryptoFramework.Cipher = cryptoFramework.createCipher(algs[index]);
         await cipher.init(cryptoFramework.CryptoMode.ENCRYPT_MODE, pair.pubKey, null);
         const encrypted: cryptoFramework.DataBlob = await cipher.doFinal({ data: data });
+        if (encrypted.data.length !== 128 && encrypted.data.length !== 256) {
+          notes += `${algs[index]} 输出 ${encrypted.data.length}B 不合理；`;
+          continue;
+        }
         hilog.info(DOMAIN, TAG, 'rsa %{public}s ok %{public}d→%{public}d',
           algs[index], data.length, encrypted.data.length);
         return encrypted.data;
       } catch (error) {
+        notes += `${algs[index]}: ${(error as Error).message}；`;
         hilog.info(DOMAIN, TAG, 'rsa with %{public}s failed: %{public}s',
           algs[index], (error as Error).message);
       }
     }
+    MobileCrypto.lastRsaNote = notes.length > 0 ? notes : `DER ${der.length}B 两档都不成`;
     return null;
   }
 

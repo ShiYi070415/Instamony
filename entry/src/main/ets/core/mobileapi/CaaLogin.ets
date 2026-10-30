@@ -1414,6 +1414,20 @@ export class CaaLogin {
     // IG 会看这个字段：密码里有非 ASCII 字符时真实客户端会置 true（以前写死 false）。
     CaaLogin.passwordNonAscii = /[^\x00-\x7F]/.test(password) ? 'true' : 'false';
     /*
+     * **加密失败就不要提交**。
+     *
+     * 真机反馈（2026-10-30）：用户确认密码是对的，IG 却回「你输入的密码有误」。
+     * 这中间有个静默的坑：`encryptPassword` 失败时返回空串，旧代码**照样把空串当密码发出去**，
+     * IG 自然判"密码错误"，而界面把 IG 的原话转给用户 —— 于是看起来像"密码没输对"。
+     * 现在：空串直接判失败并说明是哪一步没做成，同时把现场记进步骤。
+     */
+    CaaLogin.steps.push(new CaaStep('enc_password', 0,
+      `${MobileCrypto.lastEncryptNote}｜qe/sync ${CaaLogin.lastPasswordKeysNote}`));
+    if (encrypted.length === 0) {
+      return new CaaResult(false,
+        `密码加密失败，没有提交（否则 IG 会当成密码错误）｜${MobileCrypto.lastEncryptNote}`);
+    }
+    /*
      * 输入框 id 的形状必须和真机一致：**4 位十六进制 + `ig`**（instagrapi 3.2.2 的注释说得更狠：
      * 纯十六进制/UUID 前缀虽然能被 VM 接受，但可能回"空载荷 + 404"）。所以别用随机字节
      * 直接 toString（那会拼成 `12,34`）。
