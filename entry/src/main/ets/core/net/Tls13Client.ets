@@ -1735,68 +1735,118 @@ export class Tls13Client {
    * DoH 开着时优先用 DoH 的 IP（更隐私），拿不到再退回系统解析。
    */
   private static async openStream(host: string, port: number): Promise<TcpStream> {
-    const address: string = await Tls13Client.connectAddress(host);
+    /*
+     * **多个地址轮着试**，而不是"只认第一个 IP"。
+     *
+     * 2026-10-30 真机（Mate 80 Pro / SGT-AL00）：系统 DNS 给的是 `104.244.45.246`，
+     * 三次 connect 全部 `Operation in progress`（37 秒后才放弃），而用户换个节点就正常 ——
+     * 说明**单个 IP 被丢包**是常态。IG 的域名背后有多组 anycast 地址，换一个往往就通了。
+     */
+    const addresses: Array<string> = await Tls13Client.connectAddresses(host);
+    const waits: Array<number> = [0, 400];
+    /* 总预算 20 秒：地址再多也不能让用户等着（上一版 3 次 × 12 秒 = 37 秒才报错，太久了）。 */
+    const deadline: number = Date.now() + 20000;
     let lastError: string = '';
-    const waits: Array<number> = [0, 400, 900];
-    for (let attempt: number = 0; attempt < waits.length; attempt++) {
-      if (waits[attempt] > 0) {
-        await Tls13Client.pause(waits[attempt]);
+    const tried: Array<string> = [];
+    for (let index: number = 0; index < addresses.length; index++) {
+      const address: string = addresses[index];
+      if (tried.indexOf(address) >= 0) {
+        continue;
       }
-      const tcp: socket.TCPSocket = socket.constructTCPSocketInstance();
-      const stream: TcpStream = new TcpStream(tcp);
-      stream.attach();
-      try {
-        await tcp.connect({
-          address: { address: address, family: 1, port: port },
-          timeout: 12000
-        });
-        if (attempt > 0) {
-          hilog.info(DOMAIN, TAG, 'connect ok after %{public}d retries host=%{public}s addr=%{public}s',
-            attempt, host, address);
+      tried.push(address);
+      for (let attempt: number = 0; attempt < waits.length; attempt++) {
+        const left: number = deadline - Date.now();
+        if (left <= 500) {
+          break;
         }
-        return stream;
-      } catch (error) {
-        lastError = Tls13Client.errorText(error);
-        hilog.warn(DOMAIN, TAG, 'connect failed #%{public}d host=%{public}s addr=%{public}s (%{public}s)',
-          attempt + 1, host, address, lastError);
-        await stream.close();
+        if (waits[attempt] > 0) {
+          await Tls13Client.pause(Math.min(waits[attempt], left));
+        }
+        const tcp: socket.TCPSocket = socket.constructTCPSocketInstance();
+        const stream: TcpStream = new TcpStream(tcp);
+        stream.attach();
+        try {
+          await tcp.connect({
+            address: { address: address, family: 1, port: port },
+            timeout: Math.min(6000, Math.max(1000, deadline - Date.now()))
+          });
+          if (tried.length > 1 || attempt > 0) {
+            hilog.info(DOMAIN, TAG, 'connect ok addr=%{public}s (第 %{public}d 个地址, 第 %{public}d 次)',
+              address, tried.length, attempt + 1);
+          }
+          return stream;
+        } catch (error) {
+          lastError = Tls13Client.errorText(error);
+          hilog.warn(DOMAIN, TAG,
+            'connect failed addr=%{public}s attempt=%{public}d (%{public}s)',
+            address, attempt + 1, lastError);
+          await stream.close();
+        }
+      }
+      // 只剩一个地址且已经试满：别再排队等下一个（地址越试越慢，用户等不起）。
+      if (tried.length >= 4) {
+        break;
       }
     }
-    throw new Error(`连接失败：${lastError}（host=${host} addr=${address}，已重试 ${waits.length} 次）`);
+    throw new Error(`连接失败：${lastError}（host=${host} 试过 ${tried.join('/')}）`);
   }
 
-  /** 连哪个地址：DoH（若开）→ 系统 DNS 的 IPv4 → 域名本身。 */
-  private static async connectAddress(host: string): Promise<string> {
+  /**
+   * 候选地址：DoH（若开）→ 系统 DNS 的**全部** IPv4（最多 4 个）→ 域名本身。
+   *
+   * 顺序有讲究：DoH 的地址通常更"新鲜"（系统 DNS 在有 VPN 时容易拿到被污染/被丢包的 IP）。
+   */
+  private static async connectAddresses(host: string): Promise<Array<string>> {
+    const out: Array<string> = [];
     const doh: string = await Tls13Client.addressOf(host);
-    if (doh !== host && doh.length > 0) {
-      return doh;
+    if (doh.length > 0) {
+      out.push(doh);
     }
-    const ip: string = await Tls13Client.resolveIpv4(host);
-    if (ip.length > 0) {
-      hilog.info(DOMAIN, TAG, 'connect by system dns host=%{public}s ip=%{public}s', host, ip);
-      return ip;
+    const list: Array<string> = await Tls13Client.resolveIpv4All(host);
+    for (let index: number = 0; index < list.length; index++) {
+      if (out.indexOf(list[index]) < 0) {
+        out.push(list[index]);
+      }
+      if (out.length >= 4) {
+        break;
+      }
     }
-    return host;
+    if (out.length === 0) {
+      out.push(host);
+    }
+    return out;
   }
 
-  /** 系统 DNS 解析出一个 IPv4（失败/拿不到就给空串）。 */
-  private static async resolveIpv4(host: string): Promise<string> {
+  /** 连哪个地址（保留旧接口：给诊断用的单值版本）。 */
+  private static async connectAddress(host: string): Promise<string> {
+    const list: Array<string> = await Tls13Client.connectAddresses(host);
+    return list[0];
+  }
+
+  /** 系统 DNS 解析出的**全部** IPv4（去重、最多 6 个）。 */
+  private static async resolveIpv4All(host: string): Promise<Array<string>> {
+    const out: Array<string> = [];
     if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
-      return host;
+      out.push(host);
+      return out;
     }
     try {
       const list: Array<connection.NetAddress> = await connection.getAddressesByName(host);
       for (let index: number = 0; index < list.length; index++) {
         const one: connection.NetAddress = list[index];
-        if (`${one.family}` === '1' && `${one.address}`.length > 0) {
-          return `${one.address}`;
+        const ip: string = `${one.address}`;
+        if (`${one.family}` === '1' && ip.length > 0 && out.indexOf(ip) < 0) {
+          out.push(ip);
+        }
+        if (out.length >= 6) {
+          break;
         }
       }
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'system dns failed host=%{public}s (%{public}s)',
         host, Tls13Client.errorText(error));
     }
-    return '';
+    return out;
   }
 
   /** `BusinessError` 的 message + code（自建通道的错误经常只有一句英文，带 code 才好定位）。 */

@@ -1272,8 +1272,19 @@ export class CaaLogin {
       }
       hilog.warn(DOMAIN, TAG, 'tls path failed (%{public}s) → system http fallback', reason);
       CaaLogin.steps.push(new CaaStep('sysfallback', 0, host));
-      reply3 = await Tls13Client.requestViaSystem(host, 443,
-        body.length > 0 ? 'POST' : 'GET', path, all, body);
+      try {
+        reply3 = await Tls13Client.requestViaSystem(host, 443,
+          body.length > 0 ? 'POST' : 'GET', path, all, body);
+      } catch (systemError) {
+        /*
+         * **两条路都连不上 = 网络层问题**（2026-10-30 Mate 80 Pro 真机：自建通道
+         * `Operation in progress`、系统栈 `Operation timeout`，自检同一条地址连三次全失败，
+         * 用户换个节点立刻正常）。这种情况必须给一句能照做的话，而不是把英文错误码丢给用户。
+         */
+        const detail: string = Tls13Client.errorText(systemError);
+        throw new Error(`连不上 Instagram（网络层）：自建通道「${reason}」，系统栈「${detail}」`
+          + '　→ 换一个节点/关掉 VPN 再试；设置 → 诊断 → 「网络节点体检」可以先看这条线路是不是机房 IP');
+      }
     }
     const text: string = reply3.bodyText;
     const reply: CaaHttpReply = new CaaHttpReply(reply3.statusCode(), text, host);
