@@ -178,6 +178,21 @@ export class CaaSession {
     // 这样登录出来的会话在 `MobileSession` 里就是"同一个客户端"。
     const identity: MobileIdentity = MobileSession.seedIdentity();
     let result: CaaResult;
+    /*
+     * **把网页那份 Cookie 先喂给 CAA 请求**（真机反馈：CAA 五发全程 `cookie=` 为空、
+     * `csrf=no`，而 IG 的官方客户端在登录时一定带着 `csrftoken`/`mid`/`ig_did`/`datr`
+     * 这些设备级 Cookie）。2026-10-30 的日志里那位用户网页已经拿到 9 条 Cookie
+     * （含 `rd_challenge`），但 CAA 一条都没带 —— 在 IG 眼里这就是"没有会话绑定的客户端"，
+     * 正好落进它 `FakeIncorrectPassword` / 反脚本那一档。
+     *
+     * 只搬**设备级**那几颗：`sessionid` / `ds_user_id` 这类会话材料不搬（登录本来就还没有）。
+     */
+    try {
+      const web: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
+      CaaLogin.seedCookies(web.cookie);
+    } catch (error) {
+      hilog.info(DOMAIN, TAG, 'seed caa cookies skipped: %{public}s', (error as Error).message);
+    }
     try {
       result = await CaaLogin.login(identity, user, password, device, null);
     } catch (error) {

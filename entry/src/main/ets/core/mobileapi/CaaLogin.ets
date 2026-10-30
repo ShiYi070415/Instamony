@@ -709,6 +709,41 @@ export class CaaLogin {
     return parts.join('; ');
   }
 
+  /**
+   * 把**网页那份 Cookie**（`InstagramCookieJar`）里设备级的那几颗搬进 CAA 罐子。
+   *
+   * 为什么必须搬：官方客户端登录时一定带着 `csrftoken` / `mid` / `ig_did` / `datr` 这些
+   * 设备级 Cookie；我们以前 CAA 五发全程 `cookie=` 为空、`csrf=no`（真机日志可见），
+   * 在 IG 眼里就是"没有会话绑定的客户端"，正好落进 `FakeIncorrectPassword` / 反脚本那一档。
+   *
+   * 只搬设备级：`sessionid` / `ds_user_id` / `ig-u-*` 是**会话材料**，登录阶段本来就没有，
+   * 有也不该往 CAA 请求里塞（那是"已登录"的状态，塞进去反而像在冒用别的会话）。
+   */
+  static seedCookies(cookieText: string): void {
+    if (cookieText.length === 0) {
+      return;
+    }
+    const skip: Array<string> = ['sessionid', 'ds_user_id', 'ig-u-rur', 'ig-u-ds-user-id',
+      'ig-u-shbid', 'ig-u-shbts', 'ig-u-ig-direct-region-hint', 'rur', 'urlgen'];
+    const pairs: Array<string> = cookieText.split(';');
+    for (let index: number = 0; index < pairs.length; index++) {
+      const pair: string = pairs[index].trim();
+      const at: number = pair.indexOf('=');
+      if (at <= 0) {
+        continue;
+      }
+      const name: string = pair.substring(0, at).trim();
+      const value: string = pair.substring(at + 1).trim();
+      if (name.length === 0 || value.length === 0) {
+        continue;
+      }
+      if (skip.indexOf(name.toLowerCase()) >= 0) {
+        continue;
+      }
+      CaaLogin.cookieJar.set(name, value);
+    }
+  }
+
   /** 罐子里的 `csrftoken`（要同时作为 `X-CSRFToken` 头发出去，instagrapi 就是这么做）。 */
   private static csrfToken(): string {
     return CaaLogin.cookieJar.get('csrftoken') ?? '';
