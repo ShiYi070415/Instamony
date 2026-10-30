@@ -173,7 +173,7 @@ class CaaPending {
  * 移植自 instagrapi 的 `_bloks_parenthesized_expression`：只能按字符扫，
  * 正则做不到（引号里的括号不能算层级）。
  */
-export function bloksParenthesized(value: string, start: number): string {
+function bloksParenthesized(value: string, start: number): string {
   let depth: number = 0;
   let inString: boolean = false;
   let escaped: boolean = false;
@@ -204,7 +204,7 @@ export function bloksParenthesized(value: string, start: number): string {
 }
 
 /** 读表达式的直接操作数（不展开嵌套表达式）。 */
-export function bloksExpressionItems(value: string): Array<string> {
+function bloksExpressionItems(value: string): Array<string> {
   const items: Array<string> = [];
   if (!value.startsWith('(') || !value.endsWith(')')) {
     return items;
@@ -261,7 +261,7 @@ export function bloksExpressionItems(value: string): Array<string> {
 }
 
 /** 收集 JSON 里所有字符串（Bloks 把上下文藏在 lispy 字符串里）。 */
-export function collectStrings(value: ESObject, output: Array<string>): void {
+function collectStrings(value: ESObject, output: Array<string>): void {
   if (typeof value === 'string') {
     output.push(value as string);
     return;
@@ -288,7 +288,7 @@ export function collectStrings(value: ESObject, output: Array<string>): void {
  * 这是两步验证链唯一的通行证：布局里那段 lispy 把键值成对放在 `(dkc …)` 里，
  * 找到目标 app id 附近的第一处 `(f4i …)`，按 key/value 对齐后取 `context_data`。
  */
-export function bloksContextValue(payload: ESObject, appId: string, contextKey: string): string {
+function bloksContextValue(payload: ESObject, appId: string, contextKey: string): string {
   const strings: Array<string> = [];
   collectStrings(payload, strings);
   const anchor: string = `"${appId}"`;
@@ -350,14 +350,14 @@ export function bloksContextValue(payload: ESObject, appId: string, contextKey: 
 }
 
 /** 布局里所有字符串拼起来（判"是否两步验证"、"错误文案"都用它）。 */
-export function bloksAllText(payload: ESObject): string {
+function bloksAllText(payload: ESObject): string {
   const strings: Array<string> = [];
   collectStrings(payload, strings);
   return strings.join('\n');
 }
 
 /** 是否要求两步验证。 */
-export function bloksNeedsTwoStep(payload: ESObject): boolean {
+function bloksNeedsTwoStep(payload: ESObject): boolean {
   return bloksAllText(payload).indexOf(AP_2SV_ENTRYPOINT) >= 0;
 }
 
@@ -496,7 +496,7 @@ export function humanHints(text: string): Array<string> {
 }
 
 /** 从失败响应里挑出给人看的文案（IG 把它写在 UI 文本里）。 */
-export function bloksErrorText(payload: ESObject): string {
+function bloksErrorText(payload: ESObject): string {
   // 文案在布局里是**转义后**的（`\u5bc6\u7801…`），不先解开就连英文短语也匹配不到。
   const text: string = unescapeText(bloksAllText(payload));
   const phrases: Array<string> = [
@@ -3107,7 +3107,7 @@ class CaaLoginPayload {
 }
 
 /** 布局里一对键值（值可能是字面量，也可能是嵌套表达式）。 */
-export class CaaMapEntry {
+class CaaMapEntry {
   readonly key: string;
   readonly value: string;
 
@@ -3118,7 +3118,7 @@ export class CaaMapEntry {
 }
 
 /** IG 在布局里给出的"下一步调用规范"：调哪个 app、带什么参数。 */
-export class CaaCallSpec {
+class CaaCallSpec {
   readonly appId: string;
   readonly serverParams: Record<string, string>;
   readonly clientParams: Record<string, string>;

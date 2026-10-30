@@ -697,57 +697,6 @@ const FOLLOW_BUTTON_JS: string = 'var OFF=/^(关注|回关|Follow|Follow back|�
     'var herePath=function(){' +
     'return String(location.pathname||"").replace(/^\\//,"").replace(/\\/$/,"");};';
 /**
- * 读一次对方主页头部的关注状态（只读，不点任何东西）。
- *
- * **刻意写成短脚本**：里面一次 await 都没有。主页脚本里长时间 await 很容易因为页面
- * 自己的一次重载/路由跳转，把执行上下文连同回调一起丢掉，原生那边就只能等到超时
- * （实测就是这么挂的，脚本跑了满 20 秒没有任何回报）。
- * 所以「等按钮渲染出来」改由原生侧轮询，这里只负责看一眼当前是什么。
- *
- * 返回 state：ok / no-button / error，附带 path（URL 里的人名）和 seen（页面上按钮文案样本）。
- */
-export function followStateScript(username: string): string {
-    const nameLiteral: string = JSON.stringify(username);
-    return '(function(){try{' +
-        'var NAME=' + nameLiteral + ';' +
-        FOLLOW_BUTTON_JS +
-        'var path=herePath();' +
-        'var hit=pick();' +
-        'return JSON.stringify({state:hit?"ok":"no-button",path:path,label:hit?hit.label:"",' +
-        'following:hit?ON.test(hit.label):false,seen:seenLabels()});' +
-        '}catch(e){return JSON.stringify({state:"error",message:String(e).slice(0,160)});}})()';
-}
-/**
- * 点一下对方主页头部的关注按钮（原生侧已经真的导航到了该用户主页）。
- *
- * 和点赞同一套思路：不构造任何请求，只是让网页去点它自己的按钮，写操作由页面用它
- * 自己的会话与 csrf 完成。**同样不做长等待**：点完立刻回报，等页面确认交给原生侧。
- *
- * 只做关注这一个方向 —— 反方向（点「已关注」取关）在网页侧要点一个二次确认菜单，
- * 而那个菜单只认真实用户的触摸手势，脚本点不开（实测：怎么合成点击都不弹，
- * 整页文字里根本没有"取消关注"）。所以调用方也只会拿它来关注。
- *
- * 返回 state：clicked / already（本来就是已关注）/ no-button / wrong-page / error。
- */
-export function followClickScript(username: string): string {
-    const nameLiteral: string = JSON.stringify(username);
-    return '(function(){try{' +
-        'var NAME=' + nameLiteral + ';' +
-        FOLLOW_BUTTON_JS +
-        // URL 必须是这个人的主页，否则不动手（读状态那支不点东西，所以这道闸放在这里）。
-        'var path=herePath();' +
-        'if(path.toLowerCase()!==NAME.toLowerCase()){' +
-        'return JSON.stringify({state:"wrong-page",path:path});}' +
-        'var hit=pick();' +
-        'if(!hit)return JSON.stringify({state:"no-button",path:path,seen:seenLabels()});' +
-        'var before=hit.label;' +
-        'if(ON.test(before))return JSON.stringify({state:"already",before:before,path:path});' +
-        'var ok=fireClick(hit.node);' +
-        'if(!ok)return JSON.stringify({state:"error",message:"click failed"});' +
-        'return JSON.stringify({state:"clicked",before:before,path:path,node:tagOf(hit.node)});' +
-        '}catch(e){return JSON.stringify({state:"error",message:String(e).slice(0,160)});}})()';
-}
-/**
  * 生成「在帖子 / Reels 页面上点一下**收藏（书签）**按钮」的脚本。
  *
  * 需求："reels 页面添加收藏按钮……收藏按钮实现一下功能，用 http 请求"。
@@ -819,7 +768,7 @@ export function saveOnPostPageScript(shortcode: string, want: boolean): string {
  * 那个点赞按钮时才点** —— 帖子页下面常挂着相关推荐，点错就是给别的帖子点赞。
  * 判据是「第一个 main article 里的按钮」；找不到时只有全页仅一个点赞按钮才敢用。
  */
-export function likeOnPostPageScript(shortcode: string): string {
+function likeOnPostPageScript(shortcode: string): string {
     const codeLiteral: string = JSON.stringify(shortcode);
     return '(async function(){try{' +
         'var CODE=' + codeLiteral + ';' +
@@ -1289,7 +1238,7 @@ export const NETWORK_WATCHER: string = '(function(){try{' +
  * 是纯粹的常驻开销 —— 所以默认关掉，只有真要看探针报告时才打开。
  * 注意它挂在当前文档上，页面重载后要重新注入（探针面板每次打开都会注入）。
  */
-export const PROBE_WATCH_ON_SCRIPT: string = '(function(){try{window.__ogProbeOn=true;return "probe-on";}catch(e){return "probe-error";}})()';
+const PROBE_WATCH_ON_SCRIPT: string = '(function(){try{window.__ogProbeOn=true;return "probe-on";}catch(e){return "probe-error";}})()';
 /* ==========================================================================
 
 /* ==========================================================================
@@ -1381,7 +1330,7 @@ const GRAPHQL_VARS_JS: string = 'var mergeVars=function(body,patch){try{' +    '
  * 一轮页面几十条请求，带体过桥是纯开销（探针的响应上报默认关掉就是这个原因）。
  * 变量名是关键 —— 它告诉原生「这条接口有哪些旋钮可调」（游标、first、media_id…）。
  */
-export const REPLAY_INDEX_SCRIPT: string = '(function(){try{' +
+const REPLAY_INDEX_SCRIPT: string = '(function(){try{' +
     'var rep=window.__ogReplay||{};var ks=Object.keys(rep);' +
     'var items=[];' +
     'for(var i=0;i<ks.length&&items.length<40;i++){' +
@@ -1413,7 +1362,7 @@ export const REPLAY_INDEX_SCRIPT: string = '(function(){try{' +
  * @param varsJson JSON 对象字符串：要覆盖/补进 variables 的键值。
  * @param maxBytes 响应体回传上限（0 用默认 200000）。
  */
-export function replayApiScript(op: string, varsJson: string, maxBytes: number): string {
+function replayApiScript(op: string, varsJson: string, maxBytes: number): string {
     const opLiteral: string = JSON.stringify(op);
     const varsLiteral: string = JSON.stringify(varsJson);
     const cap: number = maxBytes > 0 ? maxBytes : 200000;
@@ -1511,7 +1460,7 @@ export function commentsByReplayScript(shortcode: string, mediaId: string, first
  * 只回匹配的少数几条、请求体按 maxBody 截断：这是少数几次"带体过桥"，别把整页几十条都
  * 拖过去。返回每条 {n,u,m,h,b,trunc} + have（当前页认得的所有操作名，便于排查）。
  */
-export function replayTemplatesScript(filter: string, maxItems: number, maxBody: number): string {
+function replayTemplatesScript(filter: string, maxItems: number, maxBody: number): string {
   const filterLiteral: string = JSON.stringify(filter);
   const items: number = maxItems > 0 ? maxItems : 4;
   const cap: number = maxBody > 0 ? maxBody : 6000;
@@ -1548,7 +1497,7 @@ export function replayTemplatesScript(filter: string, maxItems: number, maxBody:
  * @param cfgJson 模板 JSON：`{u,m,h:[[name,value],...],b}`（原生侧已去掉 cookie 一类禁改头）。
  * @param varsJson JSON 对象字符串：要覆盖/补进 variables 的键值（null = 删掉该键）。
  */
-export function replayStoredApiScript(cfgJson: string, varsJson: string, maxBytes: number): string {
+function replayStoredApiScript(cfgJson: string, varsJson: string, maxBytes: number): string {
   const cfgLiteral: string = JSON.stringify(cfgJson);
   const varsLiteral: string = JSON.stringify(varsJson);
   const cap: number = maxBytes > 0 ? maxBytes : 200000;
@@ -1980,4 +1929,5 @@ export function commentsByStoredCfgScript(cfgJson: string, shortcode: string,
     '+" keys="+keys.slice(0,4).join("|")});' +
     '}catch(e){return JSON.stringify({state:"error",message:String(e).slice(0,160)});}})()';
 }
+
 

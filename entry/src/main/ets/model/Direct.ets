@@ -208,7 +208,7 @@ export class DirectMessage {
 }
 
 /** 会话 `users[]` 里的一位参与者（群聊里按 user_id 把每条消息对上人）。 */
-export class DirectPerson {
+class DirectPerson {
   /** `pk`（可能 19~20 位，走 big-id 解析，见 JsonRead.parseWithBigIds）。 */
   pk: string = '';
   /** 账号名（`username`，例如 `ken24624`）—— 用于分组建模，不直接上屏。 */
@@ -225,7 +225,7 @@ export class DirectPerson {
 }
 
 /** 按 `pk` 在参与者里找人（找不到给 null；1:1 会话里常常只有对方一个人）。 */
-export function personOf(people: Array<DirectPerson>, pk: string): DirectPerson | null {
+function personOf(people: Array<DirectPerson>, pk: string): DirectPerson | null {
   if (pk.length === 0) {
     return null;
   }
@@ -238,7 +238,7 @@ export function personOf(people: Array<DirectPerson>, pk: string): DirectPerson 
 }
 
 /** 分享卡片要的字段（由 DirectMapper.shareCardOf 从载荷里抠出来）。 */
-export class ShareCard {
+class ShareCard {
   /** `post` / `video` / `link` / 空串（不是分享）。 */
   kind: string = '';
   cover: string = '';

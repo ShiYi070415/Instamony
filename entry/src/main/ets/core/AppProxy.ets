@@ -26,17 +26,17 @@ const TAG: string = 'AppProxy';
 const STORE_NAME: string = 'instarmony_proxy';
 
 /** 旧（单份）配置的持久键。 */
-export const PROXY_HOST: string = 'proxy_host';
-export const PROXY_PORT: string = 'proxy_port';
-export const PROXY_USER: string = 'proxy_user';
-export const PROXY_PASS: string = 'proxy_pass';
+const PROXY_HOST: string = 'proxy_host';
+const PROXY_PORT: string = 'proxy_port';
+const PROXY_USER: string = 'proxy_user';
+const PROXY_PASS: string = 'proxy_pass';
 /** 新（多份）列表的持久键：JSON 串 + 选中下标 + 总开关。 */
-export const PROXY_LIST: string = 'proxy_list_json';
-export const PROXY_ACTIVE: string = 'proxy_active_index';
-export const PROXY_ON: string = 'proxy_enabled';
+const PROXY_LIST: string = 'proxy_list_json';
+const PROXY_ACTIVE: string = 'proxy_active_index';
+const PROXY_ON: string = 'proxy_enabled';
 
 /** 旧形状：一份代理（空 host = 未启用）。 */
-export class AppProxyConfig {
+class AppProxyConfig {
   host: string = '';
   port: number = 0;
   username: string = '';

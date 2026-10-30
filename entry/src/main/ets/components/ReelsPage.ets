@@ -211,15 +211,15 @@ const INFO_BOTTOM: number = 112;
  * 见 VideoSurface 的说明）：字符串常量写在一处，别的地方 import 它，避免打错字导致"点了没反应"。
  */
 /** 横滑 seek 的指令通道：cmd（1 开始 / 2 拖动 / 3 松手 / 4 取消）与 dx（vp）。 */
-export const REELS_SEEK_CMD: string = 'reels_seek_cmd';
-export const REELS_SEEK_DX: string = 'reels_seek_dx';
+const REELS_SEEK_CMD: string = 'reels_seek_cmd';
+const REELS_SEEK_DX: string = 'reels_seek_dx';
 /** 松手时要跳到的位置（毫秒）。直连播放器用，见 VideoSurface 的 seekTarget。 */
-export const REELS_SEEK_TARGET: string = 'reels_seek_target';
+const REELS_SEEK_TARGET: string = 'reels_seek_target';
 /** 点正中"继续"按钮时递增的计数（见 ReelSlide.pauseButton）。 */
-export const REELS_RESUME_TICK: string = 'reels_resume_tick';
+const REELS_RESUME_TICK: string = 'reels_resume_tick';
 /** 单击画面切换暂停：tick 触发 + wanted 目标值（**只有当前这一条**消费它）。 */
-export const REELS_PAUSE_TICK: string = 'reels_pause_tick';
-export const REELS_PAUSED: string = 'reels_paused';
+const REELS_PAUSE_TICK: string = 'reels_pause_tick';
+const REELS_PAUSED: string = 'reels_paused';
 export const REELS_CHROME_HIDDEN: string = 'reels_chrome_hidden';
 
 /**
@@ -322,7 +322,7 @@ const HOLD_TAP_GUARD_MS: number = 2000;
  * ReelSlide 的 speedBoost/holdPaused 两处。用一个小静态类传这一个时间戳，
  * 比在组件之间加回调省事、也不会漏掉某一条路径。
  */
-export class ReelHoldGate {
+class ReelHoldGate {
   static lastEndMs: number = 0;
   /**
    * **还有一次"长按补出来的 Tap"没被吞掉**。

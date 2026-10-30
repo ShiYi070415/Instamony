@@ -129,9 +129,29 @@
 即使它们已经是 `idle` 优先级，**带宽仍然共用**。现在由 `schedulePrefetchOthers(2000)` 延迟启动
 （幂等：已排/正在跑都不再排），用户真正切过去时再补（切段本身也会触发 `loadTabInBackground`）。
 
-## 9. 还没做（候选）
+## 9. 收尾：导出面收窄 + 静态检查归零（2026-10-30，第 5 轮）
+
+- **73 个"只在本文件内使用"的导出**去掉了 `export` 关键字（常量 / 内部类 / 内部工具函数），
+  导出面收窄后模块依赖关系更清晰，也减少"以为别人在用其实没人用"的误判；
+- 又删掉 **4 个残留的死导出**（`WebScripts.followStateScript` / `followClickScript`、
+  `Reel.ReelsDto`、`Search.SearchResultPage`），共 72 行；
+- 两个静态扫描现在都是 0：
+  - 未使用的具名导入：**0**
+  - 全项目零引用的导出：**0**
+
+累计（本次优化全程）：净减 **约 950 行**代码，包体 1,298,676 → 1,288,6xx B。
+
+## 10. 回退开关（出问题先看这里）
+
+| 症状 | 要改回去的地方 |
+|---|---|
+| 出现 429 / 某个分段一直转圈 | `core/ApiThrottle.ets` 顶部：`MAX_IN_FLIGHT` 3→2、`PACE_MIN_INTERACTIVE_MS` 400→600、`PACE_JITTER_INTERACTIVE_MS` 400→600 |
+| 翻页后列表错位 / 少一行 | `components/ProfilePage.ets` 的 `ProfileRowSource.apply()`：把 `onDataAdd/onDataChange` 分支改回统一 `onDataReloaded()` |
+| 切段时那一段要等更久（因为不再进门预取） | `viewmodel/ProfileViewModel.ets` 的 `schedulePrefetchOthers(2000)`：把 2000 改成 0 |
+| 登录偶发失败（连接复用相关） | `core/net/Tls13Client.ets`：`httpExchange` 里 `Connection: keep-alive` 改回 `close`（并停用 `recycle`） |
+
+## 11. 还没做（候选）
 
 1. **HTTP/2**：IG 支持 h2，多路复用能进一步减少往返（改动大，需要重写帧层）；
-2. 图片：给网格换成更小的候选档（当前 COVER_WIDTH=360 已按格子宽度取，基本到位）；
-3. 剩余"外部零引用但本文件内有用"的导出 → 去掉 `export` 关键字（纯整洁，收益小）；
-4. 一些**历史遗留的 GBK 乱码注释**（`Tls13Client` 里两处）可以顺手修正（纯文档）。
+2. 图片：给网格试更小的候选档（当前 COVER_WIDTH=360 已按格子宽度取）；
+3. 历史遗留的 GBK 乱码注释（`Tls13Client` 里两处）可顺手修正（纯文档）。

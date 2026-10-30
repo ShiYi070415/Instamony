@@ -24,7 +24,7 @@ const MAX_KEYS: number = 400;
 const MAX_URL: number = 160;
 
 /** 一个被观测到的接口。 */
-export class ProbeCall {
+class ProbeCall {
   readonly key: string;
   method: string = 'GET';
   /** 去掉查询串的路径，用于归类。 */

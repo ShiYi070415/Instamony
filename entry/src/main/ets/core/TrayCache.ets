@@ -59,7 +59,7 @@ interface StoredTray {
 }
 
 /** 读回来的一份托盘（已通过版本与时效校验）。 */
-export class CachedTray {
+class CachedTray {
   readonly items: Array<StoryTrayItem>;
   readonly ageMs: number;
 

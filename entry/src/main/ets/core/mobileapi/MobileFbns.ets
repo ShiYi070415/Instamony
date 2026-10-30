@@ -38,7 +38,7 @@ export const FBNS_KEEPALIVE_S: number = 60;
  * FBNS 那条连接是独立客户端，relay 用这一份实测能连上、能拿到 token。改成本机机型等于
  * 让"同一条链路的两个客户端"用不同身份，出问题时无从对比（离线对拍也会立刻红）。
  */
-export const FBNS_UA: string =
+const FBNS_UA: string =
   'Instagram 449.0.0.52.84 Android (34/14; 480dpi; 1080x2400; samsung; SM-G991B; o1s; '
     + 'exynos2100; en_US; 1079242191)';
 
@@ -498,7 +498,7 @@ export class MobileFbns {
  * 状态放 `state`（`[pos, bit]`），不搞闭包/实例 —— 离线测试能把源码原样摘出来跑，
  * 与 Node 的 `zlib.deflateSync` 对拍（见 `tools/relay/test-fbns-arkts.js`）。
  */
-export class FbnsInflate {
+class FbnsInflate {
   static bits(src: Uint8Array, state: Array<number>, count: number): number {
     let value: number = 0;
     for (let index: number = 0; index < count; index++) {

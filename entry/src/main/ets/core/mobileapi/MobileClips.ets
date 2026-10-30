@@ -44,8 +44,8 @@ const DOMAIN: number = 0xFF00;
 const TAG: string = 'MobileClips';
 
 /** 端点（与 instagrapi `reels_timeline_media` 的表一致）。 */
-export const CLIPS_DISCOVER: string = 'clips/discover/';
-export const CLIPS_CONNECTED: string = 'clips/connected/';
+const CLIPS_DISCOVER: string = 'clips/discover/';
+const CLIPS_CONNECTED: string = 'clips/connected/';
 
 export class MobileClips {
   private static lastDetail: string = '-';

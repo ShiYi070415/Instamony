@@ -32,7 +32,7 @@ const BURST_TO: number = 1.15;
 const BURST_STEP_MS: number = 420;
 const BURST_ICON_SIZE: number = 118;
 /** 爱心整个动画（两步）的时长：宿主用它决定什么时候把 key 清掉。 */
-export const BURST_TOTAL_MS: number = BURST_STEP_MS + 90;
+const BURST_TOTAL_MS: number = BURST_STEP_MS + 90;
 
 /** 点赞图标弹一下：起点缩小比例与时长（毫秒）。 */
 const POP_FROM: number = 0.72;

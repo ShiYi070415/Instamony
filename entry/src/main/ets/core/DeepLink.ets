@@ -28,8 +28,8 @@
  */
 
 /** 深链的 scheme 与 host：**必须**和 module.json5 里 skills.uris 保持一致。 */
-export const DEEPLINK_SCHEME: string = 'instarmony';
-export const DEEPLINK_HOST: string = 'open';
+const DEEPLINK_SCHEME: string = 'instarmony';
+const DEEPLINK_HOST: string = 'open';
 /** 完整前缀，用来快速判断一个 Want.uri 是不是我们的深链。 */
 export const DEEPLINK_PREFIX: string = `${DEEPLINK_SCHEME}://${DEEPLINK_HOST}`;
 

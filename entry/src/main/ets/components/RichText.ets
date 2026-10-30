@@ -11,7 +11,7 @@
  */
 
 /** 一段文本里的一个片段。 */
-export class RichTextSeg {
+class RichTextSeg {
   /** 原样要显示的文本（含 `@` / `#` 前缀）。 */
   text: string = '';
   /** `text` = 普通文字 / `mention` = @用户 / `hashtag` = #话题。 */

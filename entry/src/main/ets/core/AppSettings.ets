@@ -120,7 +120,7 @@ export const SETTING_DOH: string = 'dohEnabled';
  * （见 pages/Index 的 titleBarBottom）—— 标题栏和页面是两棵互不相识的子树，只有全局这份
  * 事实能把它们连起来。注意它**不是用户设置**，不落盘、不参与 AppSettings.init。
  */
-export const PROFILE_BAR_PINNED: string = 'profileBarPinned';
+const PROFILE_BAR_PINNED: string = 'profileBarPinned';
 /**
  * AppStorage 键：**「我的」页当前分页**（0..3，由 ProfilePage 在切页时写）。
  *
@@ -196,14 +196,14 @@ export const FEED_POSTER_READY: string = 'feedPosterReady';
  *
  * 形如 `http://192.168.1.5:8787`（写不写 `/token` 都行，报的时候会补齐）。
  */
-export const SETTING_RELAY_URL: string = 'relayReportUrl';
+const SETTING_RELAY_URL: string = 'relayReportUrl';
 /**
  * AppStorage 键：**中转上报的共享密钥**（对应 relay 的 `listen.key` / `--key`）。
  *
  * 这个端口能改"往哪台设备推送"，所以不能裸奔：留空也能报（relay 只在配了 key 时才校验），
  * 但同一内网里谁知道地址谁就能改。填一串随机字符更稳。
  */
-export const SETTING_RELAY_KEY: string = 'relayReportKey';
+const SETTING_RELAY_KEY: string = 'relayReportKey';
 
 /**
  * 沉浸光感的材质等级。四个取值对应 HDS 的 `hdsMaterial.MaterialLevel`，**三档 + 一档自适应**

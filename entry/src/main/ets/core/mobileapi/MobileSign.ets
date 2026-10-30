@@ -214,7 +214,7 @@ export function hexOf(bytes: Uint8Array): string {
  * 针对本例的输入（`JSON.stringify` 出来的体）做等价即可：默认 safe 字符集
  * 与 quote_plus 一致，只有 `~` 与空格两处差异。
  */
-export function quotePlus(text: string): string {
+function quotePlus(text: string): string {
   return encodeURIComponent(text).replace(/~/g, '%7E').replace(/%20/g, '+');
 }
 

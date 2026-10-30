@@ -27,7 +27,7 @@
 > hvigor [32mUP-TO-DATE :entry:default@CacheNativeLibs...  [39m
 node : > hvigor [33mWARN: [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/core/Instagram
 CookieJar.ets:353:38
-At line:1 char:220
+At line:53 char:147
 + ... tudio\sdk'; node "C:\Program Files\Huawei\DevEco Studio\tools\hvigor\ ...
 +                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     + CategoryInfo          : NotSpecified: (> hvigor [33mW...eJar.ets:353:38:String) [], RemoteException
@@ -909,6 +909,7 @@ n is 6.0.0(20).
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7517:41
  'px2vp' has been deprecated.
 [39m[39m
+> hvigor [32mFinished :entry:default@CompileArkTS... after 7 s 745 ms [39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7529:41
  'px2vp' has been deprecated.
 [39m[39m
@@ -925,8 +926,6 @@ s 6.0.0(20).
 s 6.0.0(20).
  It is recommended to use apiAvailable to safeguard API compatibility.
 [39m[39m
-> hvigor [32mFinished :entry:default@CompileArkTS... after 4 s 906 ms [39m
-> hvigor [32mUP-TO-DATE :entry:default@GeneratePkgModuleJson...  [39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/Index.ets:7664:13
  The 'systemMaterialEffect' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version i
 s 6.0.0(20).
@@ -958,6 +957,7 @@ s 6.0.0(20).
  It is recommended to use apiAvailable to safeguard API compatibility.
 [39m[39m
 [33mWARN: [33m[33mArkTS:WARN File: C:/HMStudy/Instamony/entry/src/main/ets/pages/LinkIn.ets:74:13
+> hvigor [32mUP-TO-DATE :entry:default@GeneratePkgModuleJson...  [39m
  The 'systemMaterialEffect' API is supported since SDK version 6.1.0(23). However, the current compatible SDK version i
 s 6.0.0(20).
  It is recommended to use apiAvailable to safeguard API compatibility.
@@ -981,18 +981,18 @@ s 6.0.0(20).
 > hvigor [33mWARN: If obfuscation is needed, enable obfuscation settings in this build process; failing to do so may p
 revent future obfuscation. 
                Properly configure obfuscation rules to avoid runtime issues.[39m
-> hvigor [32mFinished :entry:default@PackageHap... after 328 ms [39m
-> hvigor [32mFinished :entry:default@PackingCheck... after 5 ms [39m
-> hvigor [32mFinished :entry:default@SignHap... after 1 s 465 ms [39m
-> hvigor [32mFinished :entry:default@CollectDebugSymbol... after 7 ms [39m
+> hvigor [32mFinished :entry:default@PackageHap... after 338 ms [39m
+> hvigor [32mFinished :entry:default@PackingCheck... after 8 ms [39m
+> hvigor [32mFinished :entry:default@SignHap... after 1 s 455 ms [39m
+> hvigor [32mFinished :entry:default@CollectDebugSymbol... after 6 ms [39m
 > hvigor [32mFinished :entry:assembleHap... after 1 ms [39m
 > hvigor [32mUP-TO-DATE ::MakeProjectPackInfo...  [39m
 > hvigor [32mUP-TO-DATE ::ProcessProjectPrivacyProfile...  [39m
 > hvigor [32mUP-TO-DATE ::GeneratePackRes...  [39m
-> hvigor [32mFinished ::PackageApp... after 470 ms [39m
+> hvigor [32mFinished ::PackageApp... after 454 ms [39m
 > hvigor [32mFinished ::SignPackagesFromApp... after 2 ms [39m
-> hvigor [32mFinished ::SignApp... after 1 s 399 ms [39m
+> hvigor [32mFinished ::SignApp... after 1 s 371 ms [39m
 > hvigor [32mFinished ::assembleApp... after 1 ms [39m
-> hvigor [32mBUILD SUCCESSFUL in 11 s 858 ms [39m
+> hvigor [32mBUILD SUCCESSFUL in 14 s 625 ms [39m
 
 42 tasks in total: 23 executed, 19 up-to-date

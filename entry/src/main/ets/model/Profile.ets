@@ -14,7 +14,7 @@ import { FollowState } from '../core/FollowState';
 import { EngageState } from '../core/NativeEngage';
 
 /** 头部那条脚本的输出。 */
-export interface ProfileHeaderDto {
+interface ProfileHeaderDto {
   state?: string;
   username?: string;
   fullName?: string;
@@ -33,7 +33,7 @@ export interface ProfileHeaderDto {
 }
 
 /** 帖子那条脚本里的一条。 */
-export interface ProfilePostDto {
+interface ProfilePostDto {
   code?: string;
   video?: boolean;
   cover?: string;
@@ -44,7 +44,7 @@ export interface ProfilePostDto {
 }
 
 /** 帖子那条脚本的输出。 */
-export interface ProfilePostsDto {
+interface ProfilePostsDto {
   state?: string;
   items?: Array<ProfilePostDto>;
   cursor?: string;

@@ -340,7 +340,7 @@ class TcpStream {
 /* ------------------------------------------------------------- 握手 */
 
 /** 一次 TLS 1.3 连接（握手 + 收发应用数据）。 */
-export class Tls13Connection {
+class Tls13Connection {
   private readonly stream: TcpStream;
   private clientKeyPair: cryptoFramework.KeyPair | null = null;
   private clientPub: Uint8Array = new Uint8Array(0);

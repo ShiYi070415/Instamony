@@ -27,7 +27,7 @@ const STORE_NAME: string = 'instarmony_fbns';
 const STORE_KEY: string = 'auth_v1';
 
 /** CONNACK 结果（引导阶段要用 `payload`）。 */
-export class FbnsConnack {
+class FbnsConnack {
   returnCode: number = -1;
   payload: Uint8Array = new Uint8Array(0);
 
@@ -116,9 +116,9 @@ export class FbnsAuthStore {
 }
 
 /** push token 到手后的回调（由会话层负责 `push/register/`）。 */
-export type FbnsTokenHandler = (token: string) => void;
+type FbnsTokenHandler = (token: string) => void;
 /** 收到一条 FBNS 推送（topic 76）时的回调。 */
-export type FbnsPushHandler = (push: ESObject) => void;
+type FbnsPushHandler = (push: ESObject) => void;
 
 export class MobileFbnsClient {
   private sock: socket.TLSSocket | null = null;

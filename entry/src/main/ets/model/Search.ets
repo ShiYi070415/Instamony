@@ -55,14 +55,6 @@ export class SearchUser {
   }
 }
 
-/** 一次搜索的结果。 */
-export class SearchResultPage {
-  readonly users: Array<SearchUser>;
-
-  constructor(users: Array<SearchUser>) {
-    this.users = users;
-  }
-}
 
 /**
  * 一条**推荐帖子**（搜索页没输入关键词时那面三列瀑布流里的格子）。
@@ -227,5 +219,6 @@ interface SearchResultDto {
   count?: number;
   err?: string;
 }
+
 
 

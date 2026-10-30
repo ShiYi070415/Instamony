@@ -7,7 +7,7 @@
  */
 
 /** reelsScript 里的一条。 */
-export interface ReelDto {
+interface ReelDto {
   code?: string;
   /** 媒体数字 id（`pk`）：见 Reel.mediaId（个人主页视频分页要靠它补视频地址）。 */
   id?: string;
@@ -49,19 +49,6 @@ export interface ReelDto {
   plays?: number;
 }
 
-/** reelsScript 的整包输出。 */
-export interface ReelsDto {
-  state?: string;
-  /** 数据来源：capture=探针抓的页面响应（快路径）/ replay=回放请求 / ...（诊断与计时用）。 */
-  src?: string;
-  items?: Array<ReelDto>;
-  cursor?: string;
-  more?: boolean;
-  count?: number;
-  http?: number;
-  keys?: string;
-  message?: string;
-}
 
 /**
  * 一条 Reel：只要"播视频 + 画封面 + 标作者"需要的字段。
@@ -312,5 +299,6 @@ export interface ReelStreamVm {
    */
   reset(): void;
 }
+
 
 

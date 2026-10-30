@@ -47,7 +47,7 @@ const CHIP_AVATAR: number = 24;
 /** 选单里每一行的头像直径。 */
 const ROW_AVATAR: number = 32;
 /** 选单宽度。 */
-export const ACCOUNT_MENU_W: number = 208;
+const ACCOUNT_MENU_W: number = 208;
 /** 选单里一行的高度。 */
 const ROW_H: number = 48;
 /** 选单的圆角（和评论面板那种卡片一个量级）。 */
@@ -59,7 +59,7 @@ const MENU_RADIUS: number = 22;
  * 浮层容器从 37vp 处开始 —— 要让卡片顶边落在 304px + 35px(10vp) = 339px，
  * padding 就得是 (339 - 129) / 3.5 ≈ 60。
  */
-export const ACCOUNT_MENU_TOP_VP: number = 58;
+const ACCOUNT_MENU_TOP_VP: number = 58;
 
 /** 头像：有地址就画图，没有就用应用图标兜底。 */
 @Builder

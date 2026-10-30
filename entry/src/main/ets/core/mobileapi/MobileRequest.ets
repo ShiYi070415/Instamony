@@ -49,19 +49,19 @@ const TAG: string = 'MobileRequest';
  * 这套名字**故意和 instagrapi 的异常类名对齐**（`ChallengeRequired` → `challenge-required` 等）：
  * 移植代码时要能一眼看出"这一支对应 instagrapi 的哪个 except"。
  */
-export const MOBILE_LOGIN_REQUIRED: string = 'login_required';
-export const MOBILE_CHALLENGE: string = 'challenge_required';
-export const MOBILE_TWO_FACTOR: string = 'two_factor_required';
-export const MOBILE_FEEDBACK: string = 'feedback_required';
-export const MOBILE_RATE_LIMIT: string = 'rate_limit_error';
-export const MOBILE_THROTTLED: string = 'throttled_429';
-export const MOBILE_FORBIDDEN: string = 'forbidden_403';
-export const MOBILE_NOT_FOUND: string = 'not_found_404';
-export const MOBILE_BAD_REQUEST: string = 'bad_request_400';
-export const MOBILE_SERVER_ERROR: string = 'server_5xx';
-export const MOBILE_NON_JSON: string = 'non-json';
-export const MOBILE_NO_SESSION: string = 'no-session';
-export const MOBILE_THREW: string = 'threw';
+const MOBILE_LOGIN_REQUIRED: string = 'login_required';
+const MOBILE_CHALLENGE: string = 'challenge_required';
+const MOBILE_TWO_FACTOR: string = 'two_factor_required';
+const MOBILE_FEEDBACK: string = 'feedback_required';
+const MOBILE_RATE_LIMIT: string = 'rate_limit_error';
+const MOBILE_THROTTLED: string = 'throttled_429';
+const MOBILE_FORBIDDEN: string = 'forbidden_403';
+const MOBILE_NOT_FOUND: string = 'not_found_404';
+const MOBILE_BAD_REQUEST: string = 'bad_request_400';
+const MOBILE_SERVER_ERROR: string = 'server_5xx';
+const MOBILE_NON_JSON: string = 'non-json';
+const MOBILE_NO_SESSION: string = 'no-session';
+const MOBILE_THREW: string = 'threw';
 
 
 /**

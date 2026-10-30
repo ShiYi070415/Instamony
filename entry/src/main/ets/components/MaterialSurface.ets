@@ -239,9 +239,9 @@ export const MATERIAL_PILL_HEIGHT: number = 40;
 export const MATERIAL_PILL_WIDTH: number = 72;
 
 /** 文字按钮的语义色档位（见 MaterialLabelButton.tone）。 */
-export const TONE_DEFAULT: string = 'default';
+const TONE_DEFAULT: string = 'default';
 export const TONE_ACCENT: string = 'accent';
-export const TONE_DANGER: string = 'danger';
+const TONE_DANGER: string = 'danger';
 
 /**
  * 「手指正按在材质按钮上」的同步标记 + **这一下触摸的起点**。
@@ -289,7 +289,7 @@ export class MaterialPressState {
 const MATERIAL_HOLD_MS: number = 180;
 
 /** 按钮按下/抬起时调用（见 MaterialPressState）。 */
-export function setMaterialPressLock(down: boolean): void {
+function setMaterialPressLock(down: boolean): void {
   MaterialPressState.pressed = down;
 }
 
