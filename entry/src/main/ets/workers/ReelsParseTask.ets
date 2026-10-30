@@ -12,7 +12,7 @@
  * 可以跨线程。
  */
 
-import { IgClipsMedia, ReelsPageRaw } from '../core/NativeReels';
+import { IgClipsMedia, ReelsPageRaw } from './ReelsParseModels';
 
 /** `clips/*` 响应 → 纯数据（`items[].media` 列表 + 分页信息）。 */
 @Concurrent
