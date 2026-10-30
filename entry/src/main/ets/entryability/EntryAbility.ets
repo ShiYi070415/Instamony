@@ -15,7 +15,7 @@
 
 import { AbilityConstant, Configuration, ConfigurationConstant, errorManager, UIAbility, Want } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { hilog } from '@kit.PerformanceAnalysisKit';
+import { hilog, hiAppEvent } from '@kit.PerformanceAnalysisKit';
 // 身份落盘（见 dumpIdentity）：设备字段 + 文件写入。
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { fileIo } from '@kit.CoreFileKit';
@@ -128,6 +128,54 @@ export default class EntryAbility extends UIAbility {
       });
     } catch (err) {
       hilog.warn(DOMAIN, 'testTag', 'errorManager.on(globalErrorOccurred) failed: %{public}s',
+        (err as Error).message);
+    }
+    /*
+     * **系统级 fault 事件也记一笔**（崩溃 / 卡死）。
+     *
+     * 为什么还需要它：`globalErrorOccurred` 只能抓 JS 异常；真机上 reels 玩家（AVPlayer /
+     * 解码器）直接 abort 时**不产生 JS 异常** —— 日志里只会看到 `session ABORTED`，
+     * 什么线索都没有（2026-10-30 那份日志 17:20 之后那一段就是这样）。
+     *
+     * `hiAppEvent` 的 APP_CRASH / APP_FREEZE 带系统侧信息（进程 / 线程 / 栈摘要），
+     * 在 onTrigger 里用 holder 取出来写进滚动日志，下次导出就能看到"是原生崩不是 JS 崩"。
+     */
+    try {
+      const watcher: hiAppEvent.Watcher = {
+        name: 'reelsFaultWatcher',
+        appEventFilters: [{
+          domain: 'OS',
+          eventTypes: [hiAppEvent.EventType.FAULT]
+        }],
+        onTrigger: (): void => {
+          try {
+            const holder: hiAppEvent.AppEventPackageHolder =
+              new hiAppEvent.AppEventPackageHolder('reelsFaultWatcher');
+            let pack: hiAppEvent.AppEventPackage | undefined = holder.takeNext();
+            let guard: number = 0;
+            while (pack !== undefined && pack !== null && guard < 4) {
+              const lines: string = (pack.data !== undefined && pack.data !== null)
+                ? pack.data.join(' | ') : '';
+              let names: string = '';
+              if (pack.appEventInfos !== undefined && pack.appEventInfos !== null) {
+                for (let index: number = 0; index < pack.appEventInfos.length; index++) {
+                  names += `${pack.appEventInfos[index].name},`;
+                }
+              }
+              ReelsCrashLog.note(`fault ${names} rows=${pack.row} `
+                + `${lines.substring(0, 1400)}`);
+              pack = holder.takeNext();
+              guard++;
+            }
+          } catch (inner) {
+            hilog.warn(DOMAIN, 'testTag', 'fault holder failed: %{public}s',
+              (inner as Error).message);
+          }
+        }
+      };
+      hiAppEvent.addWatcher(watcher);
+    } catch (err) {
+      hilog.warn(DOMAIN, 'testTag', 'hiAppEvent.addWatcher failed: %{public}s',
         (err as Error).message);
     }
     // 私信收件箱的落盘快照（冷启动先铺一屏，网络回来再换）。
