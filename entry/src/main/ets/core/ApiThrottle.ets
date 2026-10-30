@@ -62,9 +62,9 @@ const PACE_JITTER_MS: number = 2000;
  * 而用户点开某一发快拍时，真实 App 就是"立刻发" —— 让这一发也等满 1.5 秒只是白白让界面慢。
  * 600ms 仍然保证它不会和上一发挤在同一个瞬间（真正的风险是密集连发，不是单发）。
  */
-const PACE_MIN_INTERACTIVE_MS: number = 600;
+const PACE_MIN_INTERACTIVE_MS: number = 400;
 /** 交互请求的抖动量（毫秒）：0~600，别让"点开就发"也变成固定节奏。 */
-const PACE_JITTER_INTERACTIVE_MS: number = 600;
+const PACE_JITTER_INTERACTIVE_MS: number = 400;
 /**
  * **同一时刻最多几发在路上**（原来写死 1）。
  *
@@ -80,7 +80,7 @@ const PACE_JITTER_INTERACTIVE_MS: number = 600;
  * 为什么不再往上放：并发越高，"同一瞬间打进去两发以上"的概率越接近真实用户的上限，
  * 而 2 已经是"人能同时干两件事"的量级；收益也递减（第三发之后排队里已经没有必争的了）。
  */
-const MAX_IN_FLIGHT: number = 2;
+const MAX_IN_FLIGHT: number = 3;
 /**
  * 一次"持闸"最长多久（毫秒）——**防呆用**。
  *

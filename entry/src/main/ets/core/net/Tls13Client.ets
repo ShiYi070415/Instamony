@@ -1744,6 +1744,8 @@ export class Tls13Client {
    */
   private static readonly POOL_IDLE_MS: number = 8000;
   private static pooled: Map<string, PooledConnection> = new Map<string, PooledConnection>();
+  /** 正在预热的 host（避免同一 host 并发预热两条连接）。 */
+  private static preconnecting: Set<string> = new Set<string>();
   /** 复用命中次数（诊断用：`ApiThrottle.paceDescribe` 那种一行现场）。 */
   private static reusedCount: number = 0;
 
@@ -1799,6 +1801,61 @@ export class Tls13Client {
   /** 复用命中次数（诊断/日志用）。 */
   static poolHits(): number {
     return Tls13Client.reusedCount;
+  }
+
+  /**
+   * **预热一条连接**（只握手，不发请求）：把 TCP + TLS1.3 握手提前做掉。
+   *
+   * 为什么有用：主页那几发请求都要先过 `ApiThrottle` 的节奏闸门（`interactive` 0.6~1.2s、
+   * `warm` 1.5~3.5s）。那段"等闸门"的时间链路是空转的 —— 在这里把连接握好，
+   * 闸门一放行就能直接发（省掉 1~2 个 RTT 的握手）。
+   *
+   * 约束：
+   *   · 池里已经有这个 host 的连接、或已经在预热 → 什么都不做；
+   *   · 失败只记日志（预热是纯优化，不能影响任何正常路径）；
+   *   · 不 await，调用方 fire-and-forget。
+   */
+  static preconnect(host: string, port: number): void {
+    const key: string = Tls13Client.poolKey(host, port);
+    if (Tls13Client.pooled.has(key) || Tls13Client.preconnecting.has(key)) {
+      return;
+    }
+    Tls13Client.preconnecting.add(key);
+    Tls13Client.openStream(host, port).then(async (stream: TcpStream): Promise<void> => {
+      const connection: Tls13Connection = new Tls13Connection(stream);
+      try {
+        await connection.handshake(host);
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'preconnect handshake failed host=%{public}s (%{public}s)',
+          host, Tls13Client.errorText(error));
+        await stream.close();
+        Tls13Client.preconnecting.delete(key);
+        return;
+      }
+      Tls13Client.preconnecting.delete(key);
+      /*
+       * 直接进池子：这里没有 HTTP 响应可判，但"握手成功"本身就是干净状态 ——
+       * 真正的请求会在这条连接上发，发完再按 `reply.complete` 决定去留（见 recycle）。
+       */
+      const old: PooledConnection | undefined = Tls13Client.pooled.get(key);
+      if (old !== undefined) {
+        old.connection.closeNow();
+      }
+      const entry: PooledConnection = new PooledConnection(connection, Date.now());
+      Tls13Client.pooled.set(key, entry);
+      setTimeout((): void => {
+        const current: PooledConnection | undefined = Tls13Client.pooled.get(key);
+        if (current !== undefined && current === entry) {
+          Tls13Client.pooled.delete(key);
+          entry.connection.closeNow();
+        }
+      }, Tls13Client.POOL_IDLE_MS + 1000);
+      hilog.info(DOMAIN, TAG, 'preconnect ready host=%{public}s', host);
+    }).catch((error: Error): void => {
+      Tls13Client.preconnecting.delete(key);
+      hilog.info(DOMAIN, TAG, 'preconnect skipped host=%{public}s (%{public}s)',
+        host, error.message ?? '-');
+    });
   }
 
   /**

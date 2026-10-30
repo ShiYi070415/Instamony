@@ -1365,6 +1365,16 @@ export class CaaLogin {
                      usdid: CaaUsdid,
                      codeProvider: (() => Promise<string>) | null,
                      preflightOnly: boolean = false): Promise<CaaResult> {
+
+    /*
+     * **预热一条到 `i.instagram.com` 的连接**（只握手，不发请求）。
+     *
+     * CAA 那 5 发都要过 `ApiThrottle` 的节奏闸门，等闸门这段时间链路是空转的 ——
+     * 正好用它在前面把 TCP + TLS1.3 握手做掉，第一发就不用再等 1~2 个 RTT
+     * （见 `Tls13Client.preconnect`）。纯优化：失败只记日志，不影响登录流程。
+     */
+    Tls13Client.preconnect('i.instagram.com', 443);
+
     CaaLogin.steps = [];
     // 新的一次登录：上一次没交的验证码现场作废（免得数字串到别的账号上）。
     CaaLogin.pending = null;
