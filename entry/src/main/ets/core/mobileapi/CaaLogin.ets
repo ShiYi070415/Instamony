@@ -351,6 +351,71 @@ export function bloksNeedsTwoStep(payload: ESObject): boolean {
   return bloksAllText(payload).indexOf(AP_2SV_ENTRYPOINT) >= 0;
 }
 
+/**
+ * 从一段（响应）文本里挑出**像人话**的句子。
+ *
+ * 为什么要这么干：CAA 的响应是一棵 bloks 布局树，IG 的提示文案（"密码不对"、"要验证码"、
+ * "这次请求没被接受"…）**没有任何标准字段**，就写在其中某一个引号串里。2026-10-30 真机上
+ * `send_login_request` 回了 200、body 是几万字布局树，`bloksErrorText` 里那几条固定短语
+ * 一条都没命中，用户看到的只是"响应里没找到登录结果（布局形状可能变了）"——等于没说。
+ *
+ * 规则：长度 12~140、含空格、只由常见 ASCII 字母数字与标点组成、不含 `_` `=` `/`
+ * （带下划线/等号的多半是字段名或埋点名）。**含提示词的排前面**（sorry / incorrect / verify …）。
+ */
+export function humanHints(text: string): Array<string> {
+  const keywords: Array<string> = [
+    'sorry', 'incorrect', 'wrong', 'unable', 'unfortunately', 'try again', 'verify',
+    'confirm', 'blocked', 'suspicious', 'unusual', 'wait', 'code', 'help'
+  ];
+  const strong: Array<string> = [];
+  const weak: Array<string> = [];
+  const found: RegExpMatchArray | null = text.match(/"[^"\\]{12,140}"/g);
+  if (found === null) {
+    return weak;
+  }
+  for (let index: number = 0; index < found.length; index++) {
+    const item: string = found[index];
+    const body: string = item.substring(1, item.length - 1);
+    if (body.indexOf(' ') < 0) {
+      continue;
+    }
+    if (!/^[A-Za-z0-9 ,.'!?%&()\-:;]+$/.test(body)) {
+      continue;
+    }
+    if (body.indexOf('_') >= 0 || body.indexOf('=') >= 0 || body.indexOf('/') >= 0) {
+      continue;
+    }
+    const lower: string = body.toLowerCase();
+    let matched: boolean = false;
+    for (let key: number = 0; key < keywords.length; key++) {
+      if (lower.indexOf(keywords[key]) >= 0) {
+        matched = true;
+        break;
+      }
+    }
+    const bucket: Array<string> = matched ? strong : weak;
+    let duplicate: boolean = false;
+    for (let seen: number = 0; seen < bucket.length; seen++) {
+      if (bucket[seen] === body) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (duplicate) {
+      continue;
+    }
+    bucket.push(body);
+    if (strong.length + weak.length >= 24) {
+      break;
+    }
+  }
+  const out: Array<string> = strong;
+  for (let index: number = 0; index < weak.length; index++) {
+    out.push(weak[index]);
+  }
+  return out;
+}
+
 /** 从失败响应里挑出给人看的文案（IG 把它写在 UI 文本里）。 */
 export function bloksErrorText(payload: ESObject): string {
   const text: string = bloksAllText(payload);
@@ -364,7 +429,9 @@ export function bloksErrorText(payload: ESObject): string {
       return text.substring(index, Math.min(index + 120, text.length)).replace(/\s+/g, ' ');
     }
   }
-  return '';
+  // 固定短语一条都没命中：退一步，把响应里第一句"人话"当成 IG 的说法交出去。
+  const hints: Array<string> = humanHints(text);
+  return hints.length > 0 ? hints[0] : '';
 }
 
 /* ---------------------------------------------------------------- USDID */
@@ -1317,9 +1384,11 @@ export class CaaLogin {
     }
     const step5: CaaHttpReply = await CaaLogin.bloks(identity, sendExtra,
       'com.bloks.www.bloks.caa.login.async.send_login_request', send);
-    // 这一发带了哪些 Cookie 是排障关键（429 的成因曾被这里误导过，见 cookieJar 的说明）。
+    // 这一发带了哪些 Cookie、回了哪些 Cookie 是排障关键（429 的成因曾被这里误导过，见 cookieJar 的说明）。
     CaaLogin.steps.push(new CaaStep('send_login_request', step5.status,
-      `cookie=${CaaLogin.cookieNames()}; csrf=${CaaLogin.csrfToken().length > 0 ? 'yes' : 'no'}`));
+      `cookie=${CaaLogin.cookieNames()}; csrf=${CaaLogin.csrfToken().length > 0 ? 'yes' : 'no'}`
+      + `; setcookie=${step5.headerOf('set-cookie').length > 0 ? 'yes' : 'no'}`
+      + `; body=${step5.body.length}B`));
     /*
      * **429 = IG 限流**（今天登录尝试太多）。必须单独认出来：否则会被当成"布局变了"，
      * 用户反复点只会让限流时间更长。给一句能照做的提示，并把现场留下。

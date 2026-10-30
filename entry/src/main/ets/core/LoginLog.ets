@@ -23,6 +23,7 @@ import { deviceInfo } from '@kit.BasicServicesKit';
 import { Tls13Client } from './net/Tls13Client';
 import { DoHResolver } from './net/DoHResolver';
 import { CaaSession } from './mobileapi/CaaSession';
+import { humanHints } from './mobileapi/CaaLogin';
 import { ApiThrottle } from './ApiThrottle';
 import { InstagramCookieJar, InstagramCookieSnapshot } from './InstagramCookieJar';
 import { PlatformCap } from './PlatformCap';
@@ -176,16 +177,42 @@ export class LoginLog {
     }
     const response: string = CaaSession.lastResponseText();
     if (response.length > 0) {
-      lines.push('[最近一次登录响应（前 1200 字）]');
-      lines.push(response.substring(0, 1200));
+      /*
+       * **别再只贴开头 1200 字**。
+       *
+       * 2026-10-30 真机：`send_login_request` 回了 200，但响应是一大棵 bloks 布局树，
+       * 开头全是事件埋点（`caa_login_client_events_ig`），真正的结果在**后半段/结尾**，
+       * 只贴开头等于什么都没看到。现在：开头 500 + **挑出来的人话** + 结尾 1800。
+       */
+      lines.push(`[最近一次登录响应（共 ${response.length} 字）]`);
+      lines.push('-- 开头 500 字 --');
+      lines.push(response.substring(0, 500));
+      const hints: Array<string> = LoginLog.textHints(response);
+      if (hints.length > 0) {
+        lines.push('-- 响应里像"人话"的句子（IG 的提示通常在里头）--');
+        for (let index: number = 0; index < hints.length; index++) {
+          lines.push(`· ${hints[index]}`);
+        }
+      }
+      if (response.length > 500) {
+        lines.push('-- 结尾 1800 字 --');
+        lines.push(response.substring(Math.max(500, response.length - 1800)));
+      }
       lines.push('');
     }
     lines.push('==== 到此为止 ====');
     return lines.join('\n');
   }
 
-  /** 导出用文件名（带时间，用户手上可能有好几份）。 */
-  static fileName(): string {
+  /**
+   * 从响应里挑出**人话**（实现见 `CaaLogin.humanHints`：日志与"登录失败"提示共用同一套规则，
+   * 免得界面上说一套、日志里挑另一套）。
+   */
+  private static textHints(text: string): Array<string> {
+    return humanHints(text);
+  }
+
+  /** 导出用文件名（带时间，用户手上可能有好几份）。 */  static fileName(): string {
     const now: Date = new Date();
     const pad: (value: number) => string = (value: number): string => {
       return value < 10 ? `0${value}` : `${value}`;
