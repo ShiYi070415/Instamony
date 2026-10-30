@@ -43,7 +43,13 @@ export class SessionGate {
     }
     return lower.indexOf('/accounts/') >= 0
       || lower.indexOf('/challenge') >= 0
-      || lower.indexOf('/consent') >= 0;
+      || lower.indexOf('/consent') >= 0
+      /*
+       * 新版验证平台：IG 给的 `checkpoint_url` 是 `/auth_platform/?apc=…`。
+       * 不加这一条，未登录状态下去点「去验证」会被这道门直接拦掉 —— 而那个人机验证/检查点
+       * 页面正是我们要让用户打开的（见 core/mobileapi/MobileChallenge 与 WebLoginProbe）。
+       */
+      || lower.indexOf('/auth_platform') >= 0;
   }
 
   /** 未登录时的统一判据：已登录 → 放行；未登录 → 只放行登录流程那几条。 */

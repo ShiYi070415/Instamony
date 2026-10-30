@@ -33,6 +33,14 @@
       "value": "Sign in to Instagram"
     },
     {
+      "name": "login_web_action",
+      "value": "Sign in on the Instagram web page"
+    },
+    {
+      "name": "login_web_hint",
+      "value": "Web sign-in can get through Instagram’s human check / checkpoint. Once it succeeds the app enters automatically."
+    },
+    {
       "name": "login_page_hint_account",
       "value": "Your account and password are typed only on Instagram’s official web page — this app never stores or reads them."
     },

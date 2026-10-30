@@ -73,6 +73,14 @@
       "value": "登录"
     },
     {
+      "name": "login_web_action",
+      "value": "用 Instagram 网页登录"
+    },
+    {
+      "name": "login_web_hint",
+      "value": "网页登录能过 IG 的人机验证/检查点；登录成功后会自动进入，不用再点登录。"
+    },
+    {
       "name": "login_label_username",
       "value": "用户名"
     },
@@ -150,7 +158,7 @@
     },
     {
       "name": "login_password_note",
-      "value": "登录走 App 自己的登录协议，全程不显示网页。开了两步验证的账号会再弹一个验证码面板。"
+      "value": "默认走 App 自己的登录协议（不显示网页）。过不去人机验证时用上面的「网页登录」；开了两步验证的账号会再弹一个验证码面板。"
     },
     {
       "name": "login_username_hint",

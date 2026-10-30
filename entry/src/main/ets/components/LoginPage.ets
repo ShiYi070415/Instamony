@@ -660,10 +660,25 @@ export struct LoginPage {
         .width('100%')
         .alignItems(HorizontalAlign.Start)
 
-        // ---- 按钮列：登录 / 注册新账号 ----
+        // ---- 按钮列：登录 / 网页登录 / 注册新账号 ----
         Column({ space: 12 }) {
           this.mainButton(this.primaryLabel(), (): void => {
             this.primaryAction();
+          })
+          /*
+           * **网页登录**（正式入口，不是只有失败后才出现的那行小字）。
+           *
+           * 为什么要它：IG 的反脚本门槛（FakeIncorrectPassword / auth_platform 检查点 /
+           * 图形验证码）在原生请求里过不去 —— reCAPTCHA 只能由浏览器渲染。网页登录走的是
+           * 同一份 Cookie 罐，登录成功后 App 自动切到主界面（见 Index.webLoginFallback）。
+           */
+          MaterialLabelButton({
+            labelRes: $r('app.string.login_web_action'),
+            fullWidth: true,
+            fontSize: 15,
+            onTap: (): void => {
+              this.onWebLogin();
+            }
           })
           MaterialLabelButton({
             labelRes: $r('app.string.login_register'),
