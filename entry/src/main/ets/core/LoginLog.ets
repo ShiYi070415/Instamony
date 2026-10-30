@@ -194,6 +194,13 @@ export class LoginLog {
           lines.push(`· ${hints[index]}`);
         }
       }
+      const apps: Array<string> = LoginLog.bloksApps(response);
+      if (apps.length > 0) {
+        lines.push('-- 响应里点名的 bloks 应用（IG 想让 App 接着走哪条流程）--');
+        for (let index: number = 0; index < apps.length; index++) {
+          lines.push(`· ${apps[index]}`);
+        }
+      }
       if (response.length > 500) {
         lines.push('-- 结尾 1800 字 --');
         lines.push(response.substring(Math.max(500, response.length - 1800)));
@@ -212,7 +219,40 @@ export class LoginLog {
     return humanHints(text);
   }
 
-  /** 导出用文件名（带时间，用户手上可能有好几份）。 */  static fileName(): string {
+  /**
+   * 响应里被点名的 bloks 应用（`com.bloks.www.xxx`）。
+   *
+   * 这是"IG 到底想让 App 接着走哪条流程"的**最直接证据**：登录成功时不会有；
+   * 要验证码会点 `two_step_verification.*`，要人机验证（captcha）会点 `*.machine_test*` /
+   * `*.challenge*`，要用户确认会点 `*.consent*`。上一次排查 2FA 时就是靠它认对了入口。
+   */
+  private static bloksApps(text: string): Array<string> {
+    const out: Array<string> = [];
+    const found: RegExpMatchArray | null = text.match(/com\.bloks\.www\.[A-Za-z0-9_.]+/g);
+    if (found === null) {
+      return out;
+    }
+    for (let index: number = 0; index < found.length; index++) {
+      const item: string = found[index];
+      let duplicate: boolean = false;
+      for (let seen: number = 0; seen < out.length; seen++) {
+        if (out[seen] === item) {
+          duplicate = true;
+          break;
+        }
+      }
+      if (!duplicate) {
+        out.push(item);
+      }
+      if (out.length >= 12) {
+        break;
+      }
+    }
+    return out;
+  }
+
+  /** 导出用文件名（带时间，用户手上可能有好几份）。 */
+  static fileName(): string {
     const now: Date = new Date();
     const pad: (value: number) => string = (value: number): string => {
       return value < 10 ? `0${value}` : `${value}`;
