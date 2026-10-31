@@ -52,11 +52,16 @@ export class SessionApplyPlan {
    *                        否则冷启动那一下会把 `(none) → u123` 当成"换账号"，
    *                        白清一遍内存、还把用户刚暖好的首页重置掉。
    * @param signedInChanged 登录态变没变（由调用方比对自己上一份 `signedIn`）
+   * @param accountOverride 调用方已经知道的目标账号槽位（`u<id>`）。切号 / 冷启动恢复
+   *                        时传它，避免 Cookie 罐里重复的 `ds_user_id` 把分区判成上一个人。
    */
-  static make(cookie: string, sessionChecked: boolean, signedInChanged: boolean): SessionApplyPlan {
-    const account: AccountChange = cookie.length > 0
-      ? AccountScope.adoptFrom(cookie)
-      : new AccountChange(AccountScope.current(), AccountScope.current());
+  static make(cookie: string, sessionChecked: boolean, signedInChanged: boolean,
+              accountOverride: string = ''): SessionApplyPlan {
+    const account: AccountChange = accountOverride.length > 0
+      ? AccountScope.adoptFrom(cookie, accountOverride)
+      : (cookie.length > 0
+        ? AccountScope.adoptFrom(cookie)
+        : new AccountChange(AccountScope.current(), AccountScope.current()));
     const accountChanged: boolean = account.changed() && sessionChecked;
     return new SessionApplyPlan(account, signedInChanged, accountChanged);
   }

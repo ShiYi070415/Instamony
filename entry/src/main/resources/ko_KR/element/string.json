@@ -1,0 +1,1248 @@
+{
+  "string": [
+    {
+      "name": "app_name",
+      "value": "Instamony"
+    },
+    {
+      "name": "common_cancel",
+      "value": "취소"
+    },
+    {
+      "name": "app_title",
+      "value": "Instamony"
+    },
+    {
+      "name": "module_desc",
+      "value": "Instamony 메인 모듈"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Instamony 메인 모듈"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Instamony"
+    },
+    {
+      "name": "login_title",
+      "value": "Instamony"
+    },
+    {
+      "name": "login_recheck",
+      "value": "로그인했어요 다시 확인해 보세요"
+    },
+    {
+      "name": "login_recheck_short",
+      "value": "다시 확인하다"
+    },
+    {
+      "name": "login_register",
+      "value": "새 계정 등록"
+    },
+    {
+      "name": "login_register_hint",
+      "value": "Instagram 공식 홈페이지에서 등록이 완료됩니다. 이 페이지로 돌아와 새 계정으로 직접 로그인하세요."
+    },
+    {
+      "name": "feed_recommended_title",
+      "value": "당신에게 추천"
+    },
+    {
+      "name": "feed_recommended_hint",
+      "value": "당신은 당신이 팔로우하는 사람들의 최신 게시물을 읽었습니다. 귀하에게 추천되는 콘텐츠는 다음과 같습니다."
+    },
+    {
+      "name": "challenge_title",
+      "value": "계정에 보안 확인이 필요합니다"
+    },
+    {
+      "name": "challenge_hint",
+      "value": "Instagram 사람 또는 장치 확인이 필요합니다. 인증은 웹페이지에서만 완료하실 수 있습니다. 완료 후 앱으로 돌아와서 계속 사용할 수 있습니다."
+    },
+    {
+      "name": "challenge_action",
+      "value": "확인하기 위해"
+    },
+    {
+      "name": "challenge_action_verify",
+      "value": "확인하러 가기"
+    },
+    {
+      "name": "login_page_action",
+      "value": "로그인"
+    },
+    {
+      "name": "login_web_action",
+      "value": "Instagram 웹페이지를 이용하여 로그인하세요."
+    },
+    {
+      "name": "login_web_hint",
+      "value": "웹페이지 로그인은 IG 인간-컴퓨터 확인/체크포인트를 통과할 수 있습니다. 로그인 성공 후 자동으로 입력되므로 다시 로그인을 클릭할 필요가 없습니다."
+    },
+    {
+      "name": "login_label_username",
+      "value": "사용자 이름"
+    },
+    {
+      "name": "login_label_password",
+      "value": "비밀번호"
+    },
+    {
+      "name": "login_label_code",
+      "value": "인증코드"
+    },
+    {
+      "name": "login_label_challenge_code",
+      "value": "보안 인증 코드"
+    },
+    {
+      "name": "login_web_short",
+      "value": "웹 로그인"
+    },
+    {
+      "name": "login_verify_title",
+      "value": "2단계 인증"
+    },
+    {
+      "name": "login_verify_hint",
+      "value": "이 계정에는 추가 인증이 사용 설정되어 있습니다. Instagram에서 발송한 6자리 인증번호(SMS/인증기/백업코드)를 입력하세요."
+    },
+    {
+      "name": "login_verify_approval_hint",
+      "value": "Instagram이(가) 다른 기기에서 이 로그인을 확인하도록 요청하는 경우: 동의를 클릭한 다음 앱으로 다시 전환하세요. 인증 코드를 입력하지 않고 자동으로 로그인을 다시 시도합니다."
+    },
+    {
+      "name": "login_verify_action",
+      "value": "확인 및 로그인"
+    },
+    {
+      "name": "login_verify_cancel",
+      "value": "취소"
+    },
+    {
+      "name": "login_verify_web_title",
+      "value": "추가 확인이 필요합니다"
+    },
+    {
+      "name": "login_verify_web_hint",
+      "value": "해당 계정은 이번에 Instagram 자체 인증 절차(계정 복구/보안 점검)가 필요하며, 여기에 인증 코드를 입력하시면 통과되지 않습니다. 아래 버튼을 클릭하시면 해당 웹페이지로 이동하여 한번 작성을 완료하실 수 있습니다. 로그인에 성공하면 애플리케이션은 자동으로 로그인 상태를 유지합니다."
+    },
+    {
+      "name": "login_verify_web_action",
+      "value": "웹페이지로 이동하여 인증을 완료하세요."
+    },
+    {
+      "name": "login_saved_accounts",
+      "value": "이미 로그인된 계정입니다(직접 전환하려면 클릭하세요)."
+    },
+    {
+      "name": "login_label_session",
+      "value": "sessionid"
+    },
+    {
+      "name": "login_session_hint",
+      "value": "숫자 계정 ID로 시작하는 문자열(브라우저 쿠키에서는 sessionid이라고 함)"
+    },
+    {
+      "name": "login_use_session",
+      "value": "sessionid로 로그인"
+    },
+    {
+      "name": "login_use_session_action",
+      "value": "sessionid로 로그인"
+    },
+    {
+      "name": "login_use_password",
+      "value": "대신 계정과 비밀번호를 사용하여 로그인하세요."
+    },
+    {
+      "name": "login_password_note",
+      "value": "기본적으로 앱 자체 로그인 프로토콜이 사용됩니다(웹페이지가 표시되지 않음). 인간-컴퓨터 검증을 통과할 수 없는 경우 위의 \"웹 로그인\"을 사용하십시오. 2단계 인증이 활성화된 계정의 경우 다른 인증 코드 패널이 나타납니다."
+    },
+    {
+      "name": "login_username_hint",
+      "value": "Instagram 사용자 이름"
+    },
+    {
+      "name": "login_password_hint",
+      "value": "비밀번호"
+    },
+    {
+      "name": "login_code_hint",
+      "value": "2단계 인증코드"
+    },
+    {
+      "name": "login_challenge_code_hint",
+      "value": "보안 인증 코드"
+    },
+    {
+      "name": "login_submit_code",
+      "value": "인증 코드 제출"
+    },
+    {
+      "name": "login_web_fallback",
+      "value": "Instagram 웹페이지를 이용하여 로그인하세요."
+    },
+    {
+      "name": "login_challenge_hint",
+      "value": "이 계정은 보안 인증을 받아야 합니다. Instagram 공식 앱이나 웹사이트로 이동하여 인증을 완료한 후 다시 로그인해 주세요."
+    },
+    {
+      "name": "login_upgrade_hint",
+      "value": "IG 최신 공식 버전의 클라이언트만 비밀번호로 로그인이 허용되며, 타사 클라이언트는 모두 거부됩니다(계정 비밀번호와 관계없음). 위 버튼을 클릭하시면 웹페이지를 통해 로그인하실 수 있습니다. 로그인 후 이 애플리케이션의 기능은 완전히 동일합니다."
+    },
+    {
+      "name": "login_challenge_web",
+      "value": "웹페이지로 이동하여 인증을 완료하세요."
+    },
+    {
+      "name": "login_page_hint_account",
+      "value": "계정 비밀번호는 이 로그인 요청에만 사용되며 이 애플리케이션에 저장되지 않습니다. 로그인에 성공하면 세션 쿠키만 로컬로 유지됩니다."
+    },
+    {
+      "name": "login_page_hint_features",
+      "value": "로그인한 후 정보 스트림, 스토리 및 개인 메시지를 찾아볼 수 있습니다. 데이터는 일반 로딩 프로세스에 따라 자동으로 검색됩니다."
+    },
+    {
+      "name": "login_page_hint_stuck",
+      "value": "웹페이지에 성공적으로 로그인했는데도 여전히 여기에서 멈춘 경우 아래의 \"로그인했습니다. 다시 확인하세요.\"를 클릭하세요."
+    },
+    {
+      "name": "sign_out",
+      "value": "로그아웃"
+    },
+    {
+      "name": "tab_home",
+      "value": "홈페이지"
+    },
+    {
+      "name": "tab_reels",
+      "value": "Reels"
+    },
+    {
+      "name": "tab_direct",
+      "value": "비공개 메시지"
+    },
+    {
+      "name": "tab_search",
+      "value": "검색"
+    },
+    {
+      "name": "tab_profile",
+      "value": "내"
+    },
+    {
+      "name": "tab_placeholder_hint",
+      "value": "이 페이지는 아직 연결되지 않았습니다"
+    },
+    {
+      "name": "status_ready",
+      "value": "준비"
+    },
+    {
+      "name": "status_failed",
+      "value": "읽기 실패"
+    },
+    {
+      "name": "status_unparsable",
+      "value": "내용을 읽을 수 없습니다"
+    },
+    {
+      "name": "status_sign_in_required",
+      "value": "먼저 로그인이 필요합니다"
+    },
+    {
+      "name": "status_session_expired",
+      "value": "로그인 상태가 만료되었습니다. 설정에서 로그아웃한 후 다시 로그인해 주세요."
+    },
+    {
+      "name": "status_page_not_ready",
+      "value": "페이지가 아직 준비되지 않았습니다."
+    },
+    {
+      "name": "web_close",
+      "value": "웹페이지 닫기"
+    },
+    {
+      "name": "video_play_failed",
+      "value": "비디오 재생에 실패했습니다."
+    },
+    {
+      "name": "repost_unsupported",
+      "value": "이 콘텐츠는 전달을 지원하지 않습니다(IG는 이 계정에 열려 있지 않습니다)."
+    },
+    {
+      "name": "repost_done",
+      "value": "전달되었습니다."
+    },
+    {
+      "name": "unrepost_done",
+      "value": "전달이 취소되었습니다."
+    },
+    {
+      "name": "unfollow_done",
+      "value": "팔로우하지 않았습니다."
+    },
+    {
+      "name": "feature_pending",
+      "value": "이 기능은 아직 구현되지 않았습니다."
+    },
+    {
+      "name": "save_failed",
+      "value": "이 게시물을 즐겨찾기에 추가하지 못했습니다."
+    },
+    {
+      "name": "posted_ago_now",
+      "value": "지금 막"
+    },
+    {
+      "name": "posted_ago_minutes",
+      "value": "%d분 전"
+    },
+    {
+      "name": "posted_ago_hours",
+      "value": "%d시간 전"
+    },
+    {
+      "name": "posted_ago_days",
+      "value": "%d일 전"
+    },
+    {
+      "name": "posted_ago_weeks",
+      "value": "%d주 전"
+    },
+    {
+      "name": "posted_ago_months",
+      "value": "%d개월 전"
+    },
+    {
+      "name": "posted_ago_years",
+      "value": "%d년 전"
+    },
+    {
+      "name": "notify_today",
+      "value": "오늘"
+    },
+    {
+      "name": "notify_yesterday",
+      "value": "어제"
+    },
+    {
+      "name": "notify_past_7d",
+      "value": "지난 7일"
+    },
+    {
+      "name": "notify_past_30d",
+      "value": "지난 30일"
+    },
+    {
+      "name": "notify_show_more",
+      "value": "더 보기"
+    },
+    {
+      "name": "notify_suggested",
+      "value": "당신에게 추천"
+    },
+    {
+      "name": "notify_follow",
+      "value": "팔로우"
+    },
+    {
+      "name": "notify_follow_back",
+      "value": "세관으로 돌아가기"
+    },
+    {
+      "name": "notify_earlier",
+      "value": "더 일찍"
+    },
+    {
+      "name": "notify_this_month",
+      "value": "이번 달"
+    },
+    {
+      "name": "notify_empty",
+      "value": "웹페이지에서 알림을 읽을 수 없습니다."
+    },
+    {
+      "name": "action_follow",
+      "value": "팔로우"
+    },
+    {
+      "name": "action_following",
+      "value": "이미 팔로우 중"
+    },
+    {
+      "name": "action_more",
+      "value": "더보기"
+    },
+    {
+      "name": "action_create",
+      "value": "출판하다"
+    },
+    {
+      "name": "action_download",
+      "value": "다운로드"
+    },
+    {
+      "name": "action_settings",
+      "value": "설정"
+    },
+    {
+      "name": "account_add",
+      "value": "계정 추가"
+    },
+    {
+      "name": "account_unnamed",
+      "value": "이름 없는 계정"
+    },
+    {
+      "name": "account_switch_failed",
+      "value": "계정을 전환하지 못했습니다. 이 계정에 다시 로그인하세요."
+    },
+    {
+      "name": "action_mute",
+      "value": "음소거"
+    },
+    {
+      "name": "comments_title",
+      "value": "코멘트"
+    },
+    {
+      "name": "comments_hint",
+      "value": "댓글 추가…"
+    },
+    {
+      "name": "comments_empty",
+      "value": "아직 댓글이 없습니다"
+    },
+    {
+      "name": "comments_failed",
+      "value": "댓글을 읽지 못했습니다."
+    },
+    {
+      "name": "comments_send",
+      "value": "보내다"
+    },
+    {
+      "name": "comments_end",
+      "value": "더 이상 댓글이 없습니다."
+    },
+    {
+      "name": "comments_reply",
+      "value": "답장하다"
+    },
+    {
+      "name": "comments_hide_replies",
+      "value": "답장 숨기기"
+    },
+    {
+      "name": "comments_replies_loading",
+      "value": "답글 로드 중…"
+    },
+    {
+      "name": "comments_view_replies",
+      "value": "%d 더 많은 답변 보기"
+    },
+    {
+      "name": "comment_pending",
+      "value": "아직 댓글을 받지 못했습니다. 입력란입니다."
+    },
+    {
+      "name": "story_load_failed",
+      "value": "이 스토리를 검색할 수 없습니다(이유 %s)."
+    },
+    {
+      "name": "story_action_pending",
+      "value": "스토리 상호작용이 아직 연결되지 않았습니다. 이 버튼입니다"
+    },
+    {
+      "name": "story_message_hint",
+      "value": "메시지 보내기"
+    },
+    {
+      "name": "story_your_story",
+      "value": "당신의 이야기"
+    },
+    {
+      "name": "profile_chip_add",
+      "value": "추가하다"
+    },
+    {
+      "name": "profile_action_edit",
+      "value": "홈페이지 수정"
+    },
+    {
+      "name": "profile_action_share",
+      "value": "홈페이지 공유"
+    },
+    {
+      "name": "profile_highlight_new",
+      "value": "새로운"
+    },
+    {
+      "name": "profile_highlight_suggest",
+      "value": "관심을 추천"
+    },
+    {
+      "name": "story_create_pending",
+      "value": "아직 포스트 스토리가 연결되지 않았습니다 - 입구입니다"
+    },
+    {
+      "name": "translate_action",
+      "value": "번역 보기"
+    },
+    {
+      "name": "translate_show_original",
+      "value": "원본 텍스트 표시"
+    },
+    {
+      "name": "translate_failed",
+      "value": "번역에 실패했습니다. 나중에 다시 시도해 주세요."
+    },
+    {
+      "name": "reels_page_title",
+      "value": "Reels"
+    },
+    {
+      "name": "post_page_title",
+      "value": "게시물"
+    },
+    {
+      "name": "create_post_title",
+      "value": "새 게시물"
+    },
+    {
+      "name": "create_post_hint",
+      "value": "뭔가를 써보세요…"
+    },
+    {
+      "name": "search_hint",
+      "value": "검색"
+    },
+    {
+      "name": "search_empty",
+      "value": "검색을 시작하려면 계정 이름을 입력하세요."
+    },
+    {
+      "name": "search_action",
+      "value": "검색"
+    },
+    {
+      "name": "count_thousands",
+      "value": "%s백만"
+    },
+    {
+      "name": "profile_stat_posts",
+      "value": "게시물"
+    },
+    {
+      "name": "profile_stat_followers",
+      "value": "팬"
+    },
+    {
+      "name": "profile_stat_following",
+      "value": "팔로우"
+    },
+    {
+      "name": "profile_loading_more",
+      "value": "로드 중…"
+    },
+    {
+      "name": "profile_end",
+      "value": "더 이상"
+    },
+    {
+      "name": "profile_empty",
+      "value": "아직 게시물이 없습니다"
+    },
+    {
+      "name": "direct_empty",
+      "value": "아직 소식이 없습니다"
+    },
+    {
+      "name": "direct_kind_media",
+      "value": "[사진/영상]"
+    },
+    {
+      "name": "direct_kind_voice",
+      "value": "[음성]"
+    },
+    {
+      "name": "direct_kind_other",
+      "value": "[메시지]"
+    },
+    {
+      "name": "direct_thread_hint",
+      "value": "메시지 보내기…"
+    },
+    {
+      "name": "direct_thread_empty",
+      "value": "아직 소식이 없습니다. 인사 부탁드립니다."
+    },
+    {
+      "name": "direct_send_failed",
+      "value": "전송되지 않음 · 다시 시도하려면 여기를 클릭하세요"
+    },
+    {
+      "name": "direct_sending",
+      "value": "보내는 중…"
+    },
+    {
+      "name": "direct_open_web",
+      "value": "웹페이지에서 열기"
+    },
+    {
+      "name": "settings_group_appearance",
+      "value": "외관"
+    },
+    {
+      "name": "settings_group_bar",
+      "value": "하단 바"
+    },
+    {
+      "name": "settings_bar_native_animation",
+      "value": "하단 바 기본 효과"
+    },
+    {
+      "name": "settings_bar_native_animation_hint",
+      "value": "하단 막대는 간단한 페이드 인 및 아웃으로 닫힙니다."
+    },
+    {
+      "name": "settings_material_level",
+      "value": "몰입형 빛 인식"
+    },
+    {
+      "name": "settings_material_hint",
+      "value": "기어가 높을수록 시각적 효과가 더욱 정교해지지만, 전력 소모도 늘어납니다. 컴퓨팅 성능이 낮은 장치는 자동으로 다운그레이드됩니다. 확실하지 않은 경우 \"적응형\"을 선택하면 시스템이 장치의 기능에 따라 결정합니다."
+    },
+    {
+      "name": "settings_material_adaptive",
+      "value": "적응형"
+    },
+    {
+      "name": "settings_material_gentle",
+      "value": "온화한"
+    },
+    {
+      "name": "settings_material_smooth",
+      "value": "부드러운"
+    },
+    {
+      "name": "settings_material_exquisite",
+      "value": "절묘한"
+    },
+    {
+      "name": "settings_material_thickness",
+      "value": "재료 두께"
+    },
+    {
+      "name": "settings_thickness_ultra_thin",
+      "value": "매우 얇음"
+    },
+    {
+      "name": "settings_thickness_thin",
+      "value": "얇은"
+    },
+    {
+      "name": "settings_thickness_regular",
+      "value": "일반"
+    },
+    {
+      "name": "settings_thickness_thick",
+      "value": "두꺼운"
+    },
+    {
+      "name": "settings_thickness_ultra_thick",
+      "value": "매우 두꺼운"
+    },
+    {
+      "name": "settings_unsupported_hint",
+      "value": "현재 시스템 버전은 플로팅 하단 바 및 몰입형 조명을 지원하지 않으며 관련 옵션이 숨겨져 있습니다. 하단 표시줄과 버튼은 단순화된 흐림 스타일을 사용합니다."
+    },
+    {
+      "name": "probe_title",
+      "value": "프로브"
+    },
+    {
+      "name": "probe_hint",
+      "value": "먼저 웹페이지를 정상적으로 탐색한 다음 돌아와서 새로고침하세요."
+    },
+    {
+      "name": "probe_refresh",
+      "value": "새로고침"
+    },
+    {
+      "name": "probe_dom",
+      "value": "웹페이지 구조"
+    },
+    {
+      "name": "probe_copy",
+      "value": "복사"
+    },
+    {
+      "name": "probe_save",
+      "value": "샌드박스 저장"
+    },
+    {
+      "name": "probe_clear",
+      "value": "지우기"
+    },
+    {
+      "name": "probe_close",
+      "value": "닫기"
+    },
+    {
+      "name": "probe_open_direct",
+      "value": "비공개 메시지"
+    },
+    {
+      "name": "probe_open_profile",
+      "value": "내"
+    },
+    {
+      "name": "probe_open_reels",
+      "value": "Reels"
+    },
+    {
+      "name": "probe_open_search",
+      "value": "검색"
+    },
+    {
+      "name": "probe_open_hint",
+      "value": "웹 페이지 캡처 인터페이스를 엽니다(패널은 덮여 있음):"
+    },
+    {
+      "name": "probe_open_post",
+      "value": "게시물 페이지(첫 번째 사진 게시물)"
+    },
+    {
+      "name": "probe_comments_first",
+      "value": "댓글(첫 번째 게시물)"
+    },
+    {
+      "name": "probe_comments_embed",
+      "value": "포함된 댓글 읽기"
+    },
+    {
+      "name": "probe_capture",
+      "value": "정보 흐름 템플릿 저장"
+    },
+    {
+      "name": "probe_replay_stored",
+      "value": "저장된 템플릿 재생"
+    },
+    {
+      "name": "probe_profile_templates",
+      "value": "개인 페이지 4페이지 템플릿 저장"
+    },
+    {
+      "name": "probe_search_templates",
+      "value": "검색 페이지 템플릿 저장"
+    },
+    {
+      "name": "probe_digest",
+      "value": "인터페이스 요약"
+    },
+    {
+      "name": "probe_direct_selftest",
+      "value": "자가진단을 위해 비공개 메시지 보내기"
+    },
+    {
+      "name": "reels_segment_explore",
+      "value": "탐색"
+    },
+    {
+      "name": "reels_segment_following",
+      "value": "친구"
+    },
+    {
+      "name": "reels_following_empty",
+      "value": "내 친구가 아직 영상을 올리지 않았어"
+    },
+    {
+      "name": "reels_loading",
+      "value": "동영상 로드 중…"
+    },
+    {
+      "name": "engage_not_rendered",
+      "value": "전달된 콘텐츠를 읽을 수 없습니다."
+    },
+    {
+      "name": "feed_empty",
+      "value": "아직 콘텐츠가 없습니다."
+    },
+    {
+      "name": "feed_load",
+      "value": "로드"
+    },
+    {
+      "name": "feed_no_more",
+      "value": "더 이상"
+    },
+    {
+      "name": "feed_none_read",
+      "value": "웹페이지에서 게시물을 읽을 수 없습니다."
+    },
+    {
+      "name": "feed_none_visible",
+      "value": "페이지에 표시되는 게시물이 없습니다."
+    },
+    {
+      "name": "follow_done",
+      "value": "이미 팔로우하고 있습니다."
+    },
+    {
+      "name": "follow_failed",
+      "value": "실패에 집중하라"
+    },
+    {
+      "name": "like_failed",
+      "value": "좋아요를 누르지 못했습니다."
+    },
+    {
+      "name": "media_saved",
+      "value": "저장됨"
+    },
+    {
+      "name": "media_save_failed",
+      "value": "저장 실패"
+    },
+    {
+      "name": "notifications",
+      "value": "알림"
+    },
+    {
+      "name": "notify_greet",
+      "value": "%s에게 메시지 보내기"
+    },
+    {
+      "name": "notify_greet_suggest",
+      "value": "%s님에게 인사하세요"
+    },
+    {
+      "name": "notify_loading",
+      "value": "알림 로드 중…"
+    },
+    {
+      "name": "notify_message",
+      "value": "메시지 보내기"
+    },
+    {
+      "name": "notify_message_hint",
+      "value": "메시지 보내기…"
+    },
+    {
+      "name": "notify_month",
+      "value": "%d월"
+    },
+    {
+      "name": "direct_call",
+      "value": "전화"
+    },
+    {
+      "name": "direct_video_call",
+      "value": "비디오"
+    },
+    {
+      "name": "save_rate_limited",
+      "value": "IG은 전류 흐름을 제한합니다. 약 %d분 후에 다시 시도할 수 있습니다."
+    },
+    {
+      "name": "settings_group_media",
+      "value": "사진 및 비디오"
+    },
+    {
+      "name": "settings_image_quality",
+      "value": "화질"
+    },
+    {
+      "name": "settings_video_quality",
+      "value": "비디오 품질"
+    },
+    {
+      "name": "settings_quality_auto",
+      "value": "적응형"
+    },
+    {
+      "name": "settings_quality_saver",
+      "value": "돈을 절약"
+    },
+    {
+      "name": "settings_quality_high",
+      "value": "HD"
+    },
+    {
+      "name": "settings_quality_original",
+      "value": "원본 그림"
+    },
+    {
+      "name": "settings_media_quality_hint",
+      "value": "적응형은 현재 네트워크에 따라 자동으로 선택합니다. Wi-Fi 고화질 및 모바일 데이터를 사용하여 데이터를 절약합니다. 다운로드는 항상 원본 사진/원본 비디오를 저장합니다."
+    },
+    {
+      "name": "settings_group_diag",
+      "value": "진단"
+    },
+    {
+      "name": "settings_export_diag",
+      "value": "진단 로그 내보내기"
+    },
+    {
+      "name": "settings_copy_diag",
+      "value": "진단 요약 복사"
+    },
+    {
+      "name": "settings_diag_hint",
+      "value": "문제가 발생하면(예: 스토리를 클릭했는데 프롬프트가 표시되지 않는 경우) \"진단 로그 내보내기\"를 클릭하여 txt로 저장한 다음 \"파일\"에서 개발자에게 보냅니다. 저장할 수 없는 경우 \"진단 요약 복사\"를 클릭하여 직접 붙여넣으세요."
+    },
+    {
+      "name": "diag_exported",
+      "value": "%s을 내보냈습니다."
+    },
+    {
+      "name": "diag_export_failed",
+      "value": "내보내기 실패: %s"
+    },
+    {
+      "name": "diag_copied",
+      "value": "진단 요약이 클립보드에 복사되었습니다."
+    },
+    {
+      "name": "settings_capture_story",
+      "value": "스토리 캡처 페이지 템플릿(테스트)"
+    },
+    {
+      "name": "diag_story_captured",
+      "value": "스토리 페이지 템플릿이 캡처되었습니다. 스토리는 나중에 열 수 있어야 합니다."
+    },
+    {
+      "name": "diag_story_capture_failed",
+      "value": "스토리 페이지 템플릿을 찾을 수 없습니다: %s"
+    },
+    {
+      "name": "settings_run_mobile_probe",
+      "value": "RunMobile API 자가 테스트(테스트)"
+    },
+    {
+      "name": "diag_mobile_running",
+      "value": "모바일 API 자체 테스트 실행 중(요청 3개, 약 몇 초 소요)..."
+    },
+    {
+      "name": "diag_mobile_done",
+      "value": "모바일 API 자가 테스트 완료: 성공적인 %d 전송, 결과는 아래와 같습니다."
+    },
+    {
+      "name": "diag_mobile_failed",
+      "value": "모바일 API 자가 테스트 예외: %s"
+    },
+    {
+      "name": "diag_mobile_result",
+      "value": "API 자가 테스트 결과 이동(복사하려면 클릭)"
+    },
+    {
+      "name": "story_need_challenge",
+      "value": "IG 이 계정은 먼저 보안 인증을 완료해야 합니다. 웹 페이지에 로그인/인증한 후 다시 돌아와 스토리를 확인하세요."
+    },
+    {
+      "name": "settings_proxy_title",
+      "value": "대리인"
+    },
+    {
+      "name": "settings_proxy_host",
+      "value": "호스트"
+    },
+    {
+      "name": "settings_proxy_port",
+      "value": "항구"
+    },
+    {
+      "name": "settings_proxy_user",
+      "value": "사용자 이름"
+    },
+    {
+      "name": "settings_proxy_pass",
+      "value": "비밀번호"
+    },
+    {
+      "name": "settings_proxy_apply",
+      "value": "신청"
+    },
+    {
+      "name": "settings_proxy_off",
+      "value": "프록시 끄기"
+    },
+    {
+      "name": "settings_proxy_enable",
+      "value": "프록시 활성화"
+    },
+    {
+      "name": "settings_proxy_saved",
+      "value": "저장된 에이전트"
+    },
+    {
+      "name": "settings_proxy_none",
+      "value": "없음"
+    },
+    {
+      "name": "settings_proxy_add_title",
+      "value": "프록시 추가"
+    },
+    {
+      "name": "settings_proxy_name",
+      "value": "이름"
+    },
+    {
+      "name": "settings_proxy_add",
+      "value": "추가하다"
+    },
+    {
+      "name": "settings_group_proxy",
+      "value": "대리인"
+    },
+    {
+      "name": "settings_proxy_hint",
+      "value": "프록시는 이 앱의 네트워크 요청에 대해서만 작동하며 저장 후 즉시 적용됩니다. 스위치를 끄면 직접 연결이 복원됩니다."
+    },
+    {
+      "name": "proxy_ph_name",
+      "value": "예: 회사 대리인"
+    },
+    {
+      "name": "proxy_ph_host",
+      "value": "예: 127.0.0.1"
+    },
+    {
+      "name": "proxy_ph_port",
+      "value": "예: 7890"
+    },
+    {
+      "name": "proxy_ph_optional",
+      "value": "선택사항"
+    },
+    {
+      "name": "settings_proxy_pick_title",
+      "value": "대리인을 선택하세요"
+    },
+    {
+      "name": "settings_proxy_confirm",
+      "value": "알았어"
+    },
+    {
+      "name": "settings_proxy_selected",
+      "value": "선택됨"
+    },
+    {
+      "name": "settings_proxy_manage_title",
+      "value": "관리 대리인"
+    },
+    {
+      "name": "settings_proxy_edit_title",
+      "value": "에이전트 편집"
+    },
+    {
+      "name": "settings_proxy_save",
+      "value": "저장"
+    },
+    {
+      "name": "settings_proxy_edit_action",
+      "value": "편집"
+    },
+    {
+      "name": "settings_proxy_delete_action",
+      "value": "삭제"
+    },
+    {
+      "name": "settings_proxy_deleted",
+      "value": "삭제됨"
+    },
+    {
+      "name": "settings_proxy_verifying",
+      "value": "에이전트 확인 중…"
+    },
+    {
+      "name": "settings_proxy_verify_failed",
+      "value": "에이전트가 연결할 수 없습니다: %s"
+    },
+    {
+      "name": "settings_proxy_invalid",
+      "value": "호스트와 포트를 입력해야 합니다."
+    },
+    {
+      "name": "back_press_exit_hint",
+      "value": "다시 데스크탑으로 돌아가기"
+    },
+    {
+      "name": "login_probe_busy",
+      "value": "확인 중…"
+    },
+    {
+      "name": "login_probe_hint",
+      "value": "계정 비밀번호가 맞나요? IG 웹 인터페이스를 사용하여 한 번 확인하려면 여기를 클릭하세요."
+    },
+    {
+      "name": "login_web_retry_hint",
+      "value": "아직도 들어갈 수 없나요? 웹 페이지를 사용하여 한 번 로그인하십시오. (인간-기계 검증 통과 가능)"
+    },
+    {
+      "name": "settings_doh_scope_hint",
+      "value": "HTTP, 내장된 웹페이지와 로그인 체인은 모두 암호화됩니다 DNS; 실패하면 웹페이지/로그인 체인이 분석을 위해 자동으로 시스템으로 돌아갑니다."
+    },
+    {
+      "name": "settings_relay_endpoint",
+      "value": "이체신고주소"
+    },
+    {
+      "name": "settings_relay_key",
+      "value": "공유 키(비어 있을 수 있음, 릴레이 키에 해당)"
+    },
+    {
+      "name": "settings_relay_key_hint",
+      "value": "릴레이와 일치하는 모든 문자열"
+    },
+    {
+      "name": "settings_relay_disabled",
+      "value": "대중교통 보고가 종료되었습니다."
+    },
+    {
+      "name": "settings_clear_device_hint",
+      "value": "먼저 로그아웃한 후 장치 인증을 삭제하세요."
+    },
+    {
+      "name": "settings_login_help",
+      "value": "로그인에 실패한 경우: 먼저 \"로그인 채널 자가 점검\"을 클릭한 후 \"로그인 로그 복사\"를 클릭하여 내용을 보내주세요. \n"
+    },
+    {
+      "name": "settings_login_selftest_running",
+      "value": "로그인 채널 자체 확인(최대 15초)…"
+    },
+    {
+      "name": "settings_ip_check_running",
+      "value": "내보내기 IP 확인 중(최대 10초)…"
+    },
+    {
+      "name": "settings_ip_datacenter",
+      "value": "전산실 IP 입니다. 노드를 변경하고 다시 시도하는 것이 좋습니다."
+    },
+    {
+      "name": "settings_ip_normal",
+      "value": "이 줄은 평범해 보이는데"
+    },
+    {
+      "name": "settings_login_log_copied",
+      "value": "로그인 로그가 복사되었습니다. (붙여넣어 개발자에게 보내기)"
+    },
+    {
+      "name": "settings_meow_login_sending",
+      "value": "로그인 로그를 MeoW에 푸시하는 중…"
+    },
+    {
+      "name": "settings_reels_log_empty",
+      "value": "아직 릴 충돌 로그가 없습니다(릴이 입력되지 않았거나 로그가 지워졌습니다)."
+    },
+    {
+      "name": "settings_reels_log_prefix",
+      "value": "(장치 및 버전: %s) \n\n"
+    },
+    {
+      "name": "settings_meow_reels_sending",
+      "value": "릴 충돌 로그를 MeoW에 푸시하는 중…"
+    },
+    {
+      "name": "login_error_transport",
+      "value": "로그인 요청 예외: %s"
+    },
+    {
+      "name": "login_ok_session_pending",
+      "value": "%s 성공(모바일 세션 자료가 준비되지 않음)"
+    },
+    {
+      "name": "system_http_failed",
+      "value": "시스템 HTTP 스택도 실패했습니다: %s"
+    },
+    {
+      "name": "notify_direct_fallback",
+      "value": "비공개 메시지"
+    },
+    {
+      "name": "notify_direct_count",
+      "value": "%d개의 새 비공개 메시지가 있습니다."
+    },
+    {
+      "name": "notify_direct_one",
+      "value": "새로운 비공개 메시지가 있습니다"
+    },
+    {
+      "name": "index_web_login_hint",
+      "value": "해당 페이지에 로그인(인간-기계 검증을 거쳐야 할 수도 있음)한 후, 성공 후 직접 입장하게 됩니다."
+    },
+    {
+      "name": "index_open_link_failed",
+      "value": "이 링크를 열 수 없습니다(시스템에 사용 가능한 브라우저가 없습니까?)"
+    },
+    {
+      "name": "index_share_empty",
+      "value": "이 공유에는 열 수 있는 콘텐츠가 없습니다."
+    },
+    {
+      "name": "linkin_title",
+      "value": "딥링크를 통해 입장"
+    },
+    {
+      "name": "linkin_hint",
+      "value": "링크는 시스템에서 Want를 통해 이 애플리케이션으로 전송됩니다. 다음은 URI에서 구문 분석된 내용입니다."
+    },
+    {
+      "name": "linkin_target_known",
+      "value": "✓ 목표 이해"
+    },
+    {
+      "name": "linkin_target_unknown",
+      "value": "✗ 알 수 없는 대상"
+    },
+    {
+      "name": "linkin_params_ok",
+      "value": "✓ 완전한 매개변수"
+    },
+    {
+      "name": "linkin_params_missing",
+      "value": "✗ 매개변수 누락"
+    },
+    {
+      "name": "linkin_open_action",
+      "value": "이 링크를 열고 실행하세요."
+    },
+    {
+      "name": "linkin_ignore",
+      "value": "무시하고 홈페이지로 바로 이동"
+    },
+    {
+      "name": "linkin_supported",
+      "value": "지원되는 링크"
+    },
+    {
+      "name": "story_diag_guide",
+      "value": "2) Detail= 및 \"Press-by-Send Track\"을 보십시오. Detail=empty는 서버가 200+JSON에 응답했지만 미디어가 없음을 의미합니다."
+    },
+    {
+      "name": "settings_group_language",
+      "value": "언어"
+    },
+    {
+      "name": "settings_language",
+      "value": "언어"
+    },
+    {
+      "name": "settings_language_search",
+      "value": "언어 검색"
+    },
+    {
+      "name": "settings_language_hint",
+      "value": "앱 언어를 선택하세요. 이 앱에만 적용되며 시스템 언어는 변경되지 않습니다."
+    },
+    {
+      "name": "settings_language_changed",
+      "value": "언어가 변경되었습니다"
+    }
+  ]
+}

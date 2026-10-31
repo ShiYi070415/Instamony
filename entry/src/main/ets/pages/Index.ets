@@ -86,6 +86,7 @@ import { immersiveMaterial } from '../components/MaterialSurface';
 import { BarChromeModifier, immersiveLevel, immersiveMaterialType, titleScrollEffectType } from '../core/ImmersiveLight';
 import { PlatformCap } from '../core/PlatformCap';
 import { SettingsPanel } from '../components/SettingsPanel';
+import { SponsorPage } from '../components/SponsorPage';
 import { AppTab } from '../model/AppTab';
 import { DeepLink, DeepLinkIntent, DeepLinkRoute } from '../core/DeepLink';
 // 点私信通知要直接进那条会话（EntryAbility 把会话 id 交给它，见 consumeNotifyRoute）。
@@ -208,6 +209,10 @@ const DOMAIN: number = 0xFF00;
 const NOTIFICATIONS_PAGE: string = 'notifications';
 /** 设定页在 NavPathStack 里的名字（见 destinationBuilder）。 */
 const SETTINGS_PAGE: string = 'settings';
+/** 设置二级页（参数 = 分类 key，见 SettingsPanel 的 detailSection）。 */
+const SETTINGS_DETAIL_PAGE: string = 'settingsDetail';
+/** 赞助开发者页。 */
+const SPONSOR_PAGE: string = 'sponsor';
 /**
  * **新增账号页**在 NavPathStack 里的名字（见 destinationBuilder）。
  *
@@ -3023,10 +3028,47 @@ struct Index {
    * 这一步和以前的 15 秒轮询是**并存**关系，不是替换：轮询留在私信页做兜底，
    * 实时推过来的私信只负责"让它早点知道"。
    */
+  /**
+   * **实时事件的业务侧处理器**：必须在选择传输通道（FBNS / iris）**之前**挂。
+   *
+   * 这里踩过一次：处理器原来写在 `startRealtime` 的 iris 分支里，设备级会话走 FBNS 时
+   * 在分支前就 `return` 了 —— FBNS 收到了补丁，但 `DirectRealtime` 没有任何监听者，
+   * 表现就是"会话里不实时，退到列表重进才拿到"。现在先挂处理器，再由 FBNS 或 iris 喂事件。
+   */
+  private hookRealtimeHandlers(): void {
+    if (this.realtimeHooked) {
+      return;
+    }
+    this.realtimeHooked = true;
+    MobileRealtime.onEvent((event: RealtimeEvent): void => {
+      this.onRealtimeEvent(event);
+    });
+    DirectRealtime.onMessage((incoming: RealtimeMessage): void => {
+      this.onRealtimeMessage(incoming);
+    });
+    DirectRealtime.onThreadChange((threadId: string): void => {
+      this.scheduleDirectInboxRefresh();
+      /*
+       * 会话内有"非消息"补丁（已读/改名/加人），或补丁没解析出消息时，当前会话
+       * 马上补一拍轮询 —— 不再干等 4~7 秒的常规间隔。
+       */
+      if (this.topPage === DIRECT_THREAD_PAGE && this.selectedTab === AppTab.Direct
+        && this.directThreadVm.threadIdNow() === threadId) {
+        this.directThreadVm.pollSoon(500);
+      }
+    });
+    DirectRealtime.onUnknownDirect((): void => {
+      this.scheduleDirectInboxRefresh();
+    });
+    DirectRealtime.selfTest();
+  }
+
   private async startRealtime(): Promise<void> {
     if (this.realtimeStarted) {
       return;
     }
+    // 先挂处理器，再决定 FBNS / iris —— 见 hookRealtimeHandlers 的说明。
+    this.hookRealtimeHandlers();
     /*
      * **设备级会话走 FBNS，网页会话走 iris**（见 core/mobileapi/MobileFbnsService）。
      *
@@ -3039,37 +3081,6 @@ struct Index {
       this.realtimeStarted = true;
       hilog.info(DOMAIN, TAG, 'realtime via fbns (device-level session)');
       return;
-    }
-    /*
-     * **事件处理器只挂一次**：`MobileRealtime.onEvent` 是往数组里 push，
-     * 重试时再挂一遍就会一条消息派发多次（通知会重复弹）。
-     */
-    if (!this.realtimeHooked) {
-      this.realtimeHooked = true;
-      MobileRealtime.onEvent((event: RealtimeEvent): void => {
-        this.onRealtimeEvent(event);
-      });
-      /*
-       * **实时私信的直接落地**（见 core/DirectRealtime）：补丁解析成"某条会话多了条消息"，
-       * 当前开着的那条会话直接插入，其余情况才去刷新收件箱。这样"新消息"是**推过来的**，
-       * 不需要任何本地缓存，也不需要先知道列表里有什么。
-       */
-      DirectRealtime.onMessage((incoming: RealtimeMessage): void => {
-        this.onRealtimeMessage(incoming);
-      });
-      DirectRealtime.onThreadChange((): void => {
-        this.scheduleDirectInboxRefresh();
-      });
-      /*
-       * **形状认不出的 direct 补丁也让列表刷一次**：IG 在收件箱级别推的补丁路径与
-       * 会话内不同（见 DirectRealtime.threadIdOf 的说明），解析器认不出时以前直接丢掉，
-       * 表现就是"收到新消息，私信列表毫无反应"。
-       */
-      DirectRealtime.onUnknownDirect((): void => {
-        this.scheduleDirectInboxRefresh();
-      });
-      // 解析自检（只打一行日志，不派发）：真实补丁要等别人发消息才有，先验证形状解析没问题。
-      DirectRealtime.selfTest();
     }
     /*
      * **实时通道的两种跑法**（见 core/mobileapi/RealtimeWorkerClient 的文件头）：
@@ -3355,6 +3366,10 @@ struct Index {
         `${applied}`, DirectRealtime.describe());
       // 插进去了 = 用户正在看这条 → 列表那一行不加未读、也不弹通知。
       readHere = applied;
+      if (!applied) {
+        // 补丁没插进当前这一屏（形状/时序问题）：0.6 秒后补一发，不干等常规轮询。
+        this.directThreadVm.pollSoon(600);
+      }
     }
     const inList: boolean = this.directVm.applyRealtimeMessage(incoming.threadId,
       incoming.message, readHere);
@@ -3524,9 +3539,10 @@ struct Index {
      *   · 一个进程只恢复一次（`sessionRecoveryTried`）；
      *   · 登录 / 新增账号流程进行中（`addAccountFlow`）绝不恢复。
      */
+    let restored: AccountEntry | null = null;
     if (!snapshot.signedIn && !this.sessionRecoveryTried && !this.addAccountFlow) {
       this.sessionRecoveryTried = true;
-      const restored: AccountEntry | null = await this.restoreRememberedSession();
+      restored = await this.restoreRememberedSession();
       if (restored !== null) {
         // `adoptSession` 内部已经作废了读罐缓存（见 InstagramCookieJar.adoptSession），这里重读一次。
         snapshot = await InstagramCookieJar.inspect();
@@ -3537,7 +3553,12 @@ struct Index {
     if (snapshot.signedIn) {
       await InstagramCookieJar.save();
     }
-    this.applySession(snapshot.signedIn, snapshot.cookie);
+    /*
+     * 冷启动恢复时把**花名册里那个人的槽位**直接交给 applySession：罐里可能还有
+     * 恢复前/旧账号的重复 `ds_user_id`，按它判分区会落到上一个人。
+     */
+    this.applySession(snapshot.signedIn, snapshot.cookie,
+      restored !== null && snapshot.signedIn ? `u${restored.userId}` : '');
   }
 
   /**
@@ -3567,8 +3588,8 @@ struct Index {
       }
       for (let index: number = 0; index < candidates.length; index++) {
         const one: AccountEntry = candidates[index];
-        const ok: boolean = await InstagramCookieJar.adoptSession(one.sessionId, one.userId,
-          one.csrf);
+        // 两种会话都走 core/AccountActionService.adoptAccount（设备级会话也要能冷启动恢复）。
+        const ok: boolean = await AccountActionService.adoptAccount(one);
         if (ok) {
           hilog.info(DOMAIN, TAG, 'restored remembered session uid=%{public}s', one.userId);
           return one;
@@ -3601,7 +3622,8 @@ struct Index {
     return this.sessionChecked && !this.signedIn;
   }
 
-  private applySession(signedIn: boolean, cookie: string = ''): void {
+  private applySession(signedIn: boolean, cookie: string = '',
+                       accountOverride: string = '', forceReset: boolean = false): void {
     /*
      * **新增账号流程里的"未登录"信号是预期的**（见 addAccountFlow）：那段时间罐被清空，
      * 隐藏网页会报未登录；照常走的话整个壳会换成整页登录页（那一页没有返回键），
@@ -3668,7 +3690,8 @@ struct Index {
      * **判据与副作用分开**：前半段（登的是谁 / 换没换人 / 要不要搬分区）交给
      * `core/SessionApplyPlan`（只有一个只读结果），这里照着执行副作用。
      */
-    const plan: SessionApplyPlan = SessionApplyPlan.make(cookie, this.sessionChecked, changed);
+    const plan: SessionApplyPlan = SessionApplyPlan.make(cookie, this.sessionChecked, changed,
+      accountOverride);
     const account: AccountChange = plan.account;
     const accountChanged: boolean = plan.accountChanged;
     if (accountChanged) {
@@ -3681,7 +3704,15 @@ struct Index {
       if (plan.restoreCurrent) {
         AccountScope.restoreAll(account.current);
       }
-      this.forgetAccountMemory(account.current);
+      /*
+       * **保留名单要传纯数字 id**：`account.current` 是分区槽位 `u<id>`，而
+       * `MobileSession.clearSession` 比的是 `identity.userId`（纯数字）。以前把槽位
+       * 原样传下去，"同一个人 + 设备级会话就保留 authorization"那条判据永远不成立 ——
+       * 只能靠 60 秒免清通行证兜底（见 AccountActionService.adoptAccount）。
+       */
+      const keepId: string = account.current.startsWith('u')
+        ? account.current.substring(1) : account.current;
+      this.forgetAccountMemory(keepId);
     }
     /*
      * **登录成功就记进花名册**（多账号用，见 core/AccountBook）。
@@ -3691,7 +3722,13 @@ struct Index {
      * 覆盖三条路：登录成功、切回某个账号、网页里自己登进去 —— 只要罐里有会话就该有一份记录。
      */
     if (signedIn) {
-      this.rememberAccount().catch((): void => {
+      /*
+       * **这里只记会话，不记名字/头像**（用户报的"切换账号后头像和用户名变成同一个人"）：
+       * `selfUsername` / `selfAvatarUrl` 在切号瞬间还是上一个人的，带进 `rememberCurrent`
+       * 会把上一个人的资料写到新账号上。账号资料统一由 `ensureAccountProfile` 用
+       * **按 id 核对过的**接口头部来写（见它和 `rememberCurrent` 的注释）。
+       */
+      this.rememberAccountSession().catch((): void => {
       });
       // 名字/头像缺了就主动补一次（见 ensureAccountProfile：真机上不能指望用户先进「我的」）。
       this.ensureAccountProfile();
@@ -3700,7 +3737,7 @@ struct Index {
      * 任何"人数变了"或"登录态变了"都要走下面的复位；两者都没变才早退。
      * （换账号那条以前被漏在这里，见上面 accountChanged 的说明。）
      */
-    if (!changed && !accountChanged) {
+    if (!changed && !accountChanged && !forceReset) {
       return;
     }
     // 换了登录态 / 换了人 = 列表会清空重来，首屏骨架屏要重新生效。
@@ -4246,7 +4283,7 @@ struct Index {
     hilog.info(DOMAIN, TAG, 'web login fallback: open instagram login page');
     this.openWeb('https://www.instagram.com/accounts/login/');
     this.watchLoginSession();
-    this.toast('在页面里登录（可能要过人机验证），成功后会自己进入');
+    this.toast($r('app.string.index_web_login_hint'));
   }
 
   /**
@@ -4298,7 +4335,7 @@ struct Index {
         // 系统浏览器打不开：不再退回内嵌网页（WebView 只留给"账号安全验证"），如实提示。
         hilog.warn(DOMAIN, TAG, 'external open failed (%{public}d): %{public}s',
           error.code, error.message ?? '-');
-        this.toast('打不开这个链接（系统里没有可用的浏览器？）');
+        this.toast($r('app.string.index_open_link_failed'));
       });
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'external open threw: %{public}s', (error as Error).message);
@@ -8360,19 +8397,20 @@ struct Index {
   }
 
   /**
-   * **补当前账号的头像与账号名**（一次 `users/{pk}/info`，花名册里缺才发）。
+   * **补当前账号的头像与账号名**（一次 `users/{pk}/info`，每个账号每次切换后补一次）。
    *
    * 为什么需要它：标题栏那颗按钮要"头像 + 账号名"，而这两样原来只能靠「我的」页头部
    * （真机 3~5 秒、而且用户不进那一页就永远没有）。这里在登录/切换之后主动补一次，
    * 同一个账号只试一次（`profileBootstrapFor`），失败也不重试 —— 这只是"让按钮早点好看"。
+   *
+   * **为什么花名册里已经有资料也照样发**（用户报的"切换账号后头像和用户名一样"）：
+   * 旧版本可能在切号瞬间把上一个人的资料写进这个账号，盘上那份已经不可信；
+   * 这里按当前 `ds_user_id` 重新取一次并覆盖，正好把被写错的条目修正回来。
+   * 同一账号 5 分钟内还有 `NativeProfile` 的头部短缓存，重复调用不会真的多发请求。
    */
   private ensureAccountProfile(): void {
     const userId: string = this.currentAccountId();
     if (userId.length === 0 || this.profileBootstrapFor === userId) {
-      return;
-    }
-    const entry: AccountEntry | null = AccountBook.find(userId);
-    if (entry !== null && entry.username.length > 0 && entry.avatarUrl.length > 0) {
       return;
     }
     this.profileBootstrapFor = userId;
@@ -8464,7 +8502,27 @@ struct Index {
   private async rememberAccount(): Promise<void> {
     // 落盘那半边在 core/AccountActionService（Cookie 罐 → 花名册），这里只管界面回调。
     const ok: boolean = await AccountActionService.rememberCurrent(this.selfUsername,
-      this.selfAvatarUrl);
+      this.selfAvatarUrl, this.currentAccountId());
+    if (!ok) {
+      hilog.info(DOMAIN, TAG, 'account book: no session to remember');
+      return;
+    }
+    this.refreshOtherAccounts();
+  }
+
+  /**
+   * **只把当前账号的会话记进花名册**（名字/头像一个都不碰）。
+   *
+   * 为什么需要单独一条：`applySession` 是"登录态/账号已经切好之后"才被调用的，而
+   * `selfUsername` / `selfAvatarUrl` 这时候可能还是**上一个人的**（切号那条路的赋值在
+   * `applySession` 之后）。带进 `rememberCurrent` 就会把上一个人的资料写到新账号上 ——
+   * 用户看到的就是"两个账号的头像和用户名一样"。
+   *
+   * 账号资料只认接口回来的、按 `ds_user_id` 核对过的头部（见 `ensureAccountProfile`）。
+   */
+  private async rememberAccountSession(): Promise<void> {
+    const ok: boolean = await AccountActionService.rememberCurrent('', '',
+      this.currentAccountId());
     if (!ok) {
       hilog.info(DOMAIN, TAG, 'account book: no session to remember');
       return;
@@ -8495,8 +8553,12 @@ struct Index {
     hilog.info(DOMAIN, TAG, 'switch account → %{public}s (%{public}s)',
       userId, entry.username.length > 0 ? entry.username : '(no name)');
     await this.rememberAccount();
-    const adopted: boolean = await InstagramCookieJar.adoptSession(entry.sessionId, entry.userId,
-      entry.csrf);
+    /*
+     * 把目标账号的会话种回去。**不能只调 `adoptSession`**：设备级会话（没有 sessionid，
+     * IG 2026-10 起密码登录会下发这种）只能靠它那份 Authorization 切过去 ——
+     * 两条路的判据收在 core/AccountActionService.adoptAccount。
+     */
+    const adopted: boolean = await AccountActionService.adoptAccount(entry);
     if (!adopted) {
       this.toast($r('app.string.account_switch_failed'));
       return false;
@@ -8512,7 +8574,12 @@ struct Index {
      * 走那条唯一的登录态出口：账号分区 + 清内存 + 清导航栈 + **回主页** + 重新取数都在里面
      * （见 applySession 里 accountChanged 那条：换人现在和换登录态走同一套复位）。
      */
-    this.applySession(true, snapshot.cookie);
+    /*
+     * **把目标账号槽位直接传给 applySession**：`switchAccount(userId)` 本来就知道
+     * 点的是谁，不能再让 Cookie 罐里可能重复的 `ds_user_id` 决定分区 —— 判错一次就是
+     * "标题换了人、页面数据还是上一个人的"。
+     */
+    this.applySession(true, snapshot.cookie, `u${userId}`, true);
     /*
      * 复位之后再放**目标账号**的名字/头像（applySession 里的 forgetAccountMemory 会先把它们清掉）。
      * 这样按钮在「我的」头部回来之前（2~5 秒）就已经是对的人了，不会短暂显示上一个账号。
@@ -8664,8 +8731,8 @@ struct Index {
     if (previous === null || !previous.usable()) {
       return;
     }
-    const restored: boolean = await InstagramCookieJar.adoptSession(previous.sessionId,
-      previous.userId, previous.csrf);
+    // 两种会话都走 core/AccountActionService.adoptAccount（新增账号失败也要能把设备级会话种回去）。
+    const restored: boolean = await AccountActionService.adoptAccount(previous);
     hilog.info(DOMAIN, TAG, 'add-account restore previous (%{public}s) ok=%{public}s',
       reason, `${restored}`);
     if (restored) {
@@ -9038,7 +9105,7 @@ struct Index {
     if (code.length === 0) {
       // 连短码都没有 = 没法按 pk 取数：给一句提示，别让用户觉得"点了没反应"。
       hilog.info(DOMAIN, TAG, 'direct share no shortcode kind=%{public}s', message.shareKind);
-      this.toast('这条分享没有可打开的内容');
+      this.toast($r('app.string.index_share_empty'));
       return;
     }
     /*
@@ -10219,6 +10286,23 @@ struct Index {
    * 标题栏、返回键、沉浸光感材质都由 HdsNavDestination 负责 —— 返回键走它自己的
    * 路由栈 pop，不需要页面再兜一层 onBackPress（这正是换掉模态的收益之一）。
    */
+  /** 设置二级页的 HDS 标题。 */
+  private settingsDetailTitle(section: string): string {
+    switch (section) {
+      case 'bar': return '底栏';
+      case 'language': return '语言';
+      case 'media': return '图片和视频';
+      case 'appearance': return '外观';
+      case 'proxy': return '代理';
+      case 'doh': return '网络';
+      case 'relay': return '中转上报';
+      case 'diag': return '诊断';
+      case 'device': return '登录与设备';
+      case 'about': return '应用详情';
+      default: return '设置';
+    }
+  }
+
   @Builder
   destinationBuilder(name: string, param: object) {
     if (name === NOTIFICATIONS_PAGE) {
@@ -10288,6 +10372,13 @@ struct Index {
             this.viewModel.resetForQualityChange();
             this.viewModel.refresh().catch((): void => {
             });
+          },
+          // 设置首页点一项：新开一个 NavDestination（返回键回设置首页）。
+          onOpenSection: (section: string): void => {
+            this.navStack.pushPath({ name: SETTINGS_DETAIL_PAGE, param: section });
+          },
+          onOpenSponsor: (): void => {
+            this.navStack.pushPath({ name: SPONSOR_PAGE });
           }
         })
       }
@@ -10313,6 +10404,55 @@ struct Index {
       })
       // 返回键：**评论浮层开着就先收评论**（需求："返回优先收起面板"），不再 pop 页面。
       .onBackPressed((): boolean => this.handleDestinationBack())
+    } else if (name === SETTINGS_DETAIL_PAGE) {
+      // 设置二级页：新开一页 NavDestination，标题栏/返回键由 HDS 提供。
+      HdsNavDestination() {
+        SettingsPanel({
+          detailSection: `${param}`,
+          standaloneDetail: true,
+          signedIn: this.signedIn,
+          onSignOut: (): void => {
+            this.signOut();
+          },
+          onQualityChanged: (): void => {
+            this.viewModel.resetForQualityChange();
+            this.viewModel.refresh().catch((): void => {
+            });
+          },
+          onOpenSponsor: (): void => {
+            this.navStack.pushPath({ name: SPONSOR_PAGE });
+          }
+        })
+      }
+      .titleBar({
+        content: {
+          title: { mainTitle: this.settingsDetailTitle(`${param}`) }
+        },
+        style: this.destinationTitleStyle(),
+        avoidLayoutSafeArea: false,
+        enableComponentSafeArea: false
+      })
+      .hideBackButton(false)
+      .titleMode(HdsNavDestinationTitleMode.MINI)
+      .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
+      .clip(false)
+    } else if (name === SPONSOR_PAGE) {
+      // 赞助开发者：独立一页，标题栏/返回键由 HDS 提供。
+      HdsNavDestination() {
+        SponsorPage()
+      }
+      .titleBar({
+        content: {
+          title: { mainTitle: '赞助开发者' }
+        },
+        style: this.destinationTitleStyle(),
+        avoidLayoutSafeArea: false,
+        enableComponentSafeArea: false
+      })
+      .hideBackButton(false)
+      .titleMode(HdsNavDestinationTitleMode.MINI)
+      .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
+      .clip(false)
     } else if (name === ADD_ACCOUNT_PAGE) {
       /*
        * **新增账号**（需求："新增账号时登录页作为新一页展开，应该是 navigation，左上角添加返回按钮"）。

@@ -1198,8 +1198,17 @@ export class DirectMapper {
     const shareUrl: string = DirectMapper.shareUrlOf(item);
     const shareVideo: boolean = DirectMapper.shareIsVideoOf(item);
     const card: ShareCard = DirectMapper.shareCardOf(item);
+    /*
+     * **时间戳单位按量级认，不能一律 /1000**。
+     *
+     * IG REST 是微秒（~1e15），FBNS 推送和 GraphQL 的 `timestamp_ms` 是毫秒（~1e12）。
+     * 上一版一律 /1000，实时消息的 tsMs 变成 1970 年，`applyIncoming` 按时间排序
+     * 就把它排到**最顶部** —— 用户看到的正是"新消息插到顶部，底部不显示"。
+     */
+    const tsMs: number = micros > 1e14 ? Math.round(micros / 1000)
+      : (micros > 0 ? Math.round(micros) : Date.now());
     return new DirectMessage(id, userId, ownId.length > 0 && userId === ownId,
-      micros > 0 ? Math.round(micros / 1000) : Date.now(), kind, text, mediaUrl,
+      tsMs, kind, text, mediaUrl,
       DirectMapper.hasVideoMedia(item), shareCode, shareUrl, shareVideo,
       card.kind, card.cover, card.user, card.avatar, card.caption,
       card.playable);

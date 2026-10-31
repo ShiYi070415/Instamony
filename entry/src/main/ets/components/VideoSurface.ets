@@ -195,11 +195,12 @@ export struct VideoSurface {
    * 绑了 surface / 走过 prepare，随后 `first frame play+33ms` 之后进程直接 ABORTED
    * —— 没有任何 JS 异常、也没有系统 fault 记录，是**原生层**在多个解码器/表面之间崩的。
    *
-   * 所以给"预加载用的播放器"加一道闸：**进程内已经有 2 个播放器时，预加载不再建**
-   * （正在播的那条不受影响，保证播放优先）。等它真的滑到当前位，`playing` 变 true
-   * 会再走一次 createPlayer，那时才允许创建。
+   * 2026-10-31 再收紧：reels 的日志里 `alive=2` 之后仍然 ABORTED（切页时
+   * `release alive=1` 紧接着 `create alive=2`），而信息流只挂 1 个播放器不崩。
+   * 所以预加载预算改成 **1**：只要进程里已经有一个播放器，就不再建预加载的第二个。
+   * 播放本身不受影响（`playing` 那条仍然优先创建）。
    */
-  private static readonly MAX_ALIVE_FOR_PRELOAD: number = 2;
+  private static readonly MAX_ALIVE_FOR_PRELOAD: number = 1;
   /** 正在创建（createAVPlayer 还没回来）的数量 —— 也算进预算，见 createPlayer 的闸门。 */
   private static pendingCreates: number = 0;
   /** 全局串行：同一时刻只允许一个 createAVPlayer 在飞。 */

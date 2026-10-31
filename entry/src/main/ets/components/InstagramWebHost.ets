@@ -17,6 +17,8 @@ import { AppLifecycle } from '../core/AppLifecycle';
 import { InstagramCookieJar, InstagramCookieSnapshot } from '../core/InstagramCookieJar';
 // 内置网页只允许去这几个域（见 core/WebPolicy 的文件头）。
 import { WebPolicy } from '../core/WebPolicy';
+// 全 app DoH：网页也走同一条加密解析（AUTO = DoH 失败自动回退系统 DNS）。
+import { DoHResolver } from '../core/net/DoHResolver';
 
 const TAG: string = 'InstagramWebHost';
 const DOMAIN: number = 0xFF00;
@@ -312,6 +314,20 @@ export struct InstagramWebHost {
           this.bridge.controller.setCustomUserAgent(AppConfig.webUserAgent());
         } catch (error) {
           hilog.warn(0x0000, TAG, 'custom user agent rejected');
+        }
+        /*
+         * **网页也走 DoH**：和 HTTP / 自建 TLS 用同一条加密解析。
+         * `AUTO`：DoH 失败自动回退系统 DNS（`SECURE_ONLY` 会在端点不可达时直接白屏，不用）。
+         */
+        try {
+          const dns: string = DoHResolver.webviewDns();
+          if (dns.length > 0) {
+            webview.WebviewController.setHttpDns(webview.SecureDnsMode.AUTO, dns);
+            hilog.info(DOMAIN, TAG, 'webview httpdns on (%{public}s)', dns);
+          }
+        } catch (error) {
+          hilog.warn(DOMAIN, TAG, 'webview httpdns rejected: %{public}s',
+            (error as Error).message);
         }
         /*
          * 控制器绑好了：把"挂载之前"收到的导航请求补发（见 PageBridge.markAttached）。

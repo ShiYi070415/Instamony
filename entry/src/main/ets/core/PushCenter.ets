@@ -277,11 +277,32 @@ export class PushCenter {
    * @param added    这一轮新增几条（正文兜底时用）
    * @param threadId 会话 id（点通知带给 app，以后可直达那条会话）
    */
+  /** 后台通知也要跟随应用语言：用启动时注入的 context 取资源字符串。 */
+  private static localized(resId: number): string {
+    try {
+      const context: common.Context | null = PushCenter.appContext;
+      return context === null ? '' : context.resourceManager.getStringSync(resId);
+    } catch (error) {
+      return '';
+    }
+  }
+
+  /** 带 `%d` 占位符的通知文案。 */
+  private static localizedNumber(resId: number, value: number): string {
+    try {
+      const context: common.Context | null = PushCenter.appContext;
+      return context === null ? '' : context.resourceManager.getStringSync(resId, value);
+    } catch (error) {
+      return '';
+    }
+  }
+
   static notifyDirect(username: string, preview: string, added: number,
                        threadId: string = ''): void {
-    const title: string = username.trim().length > 0 ? username.trim() : '私信';
+    const title: string = username.trim().length > 0 ? username.trim()
+      : PushCenter.localized($r('app.string.notify_direct_fallback').id);
     const body: string = preview.trim().length > 0 ? preview.trim()
-      : `你有 ${added} 条新私信`;
+      : PushCenter.localizedNumber($r('app.string.notify_direct_count').id, added);
     hilog.info(DOMAIN, TAG, 'direct notify from=%{public}s added=%{public}d',
       title, added);
     PushCenter.publish(NOTIFY_ID_DIRECT, title, body,
@@ -300,8 +321,10 @@ export class PushCenter {
    */
   static notifyDirectEach(username: string, preview: string, threadId: string,
                           messageId: string): void {
-    const title: string = username.trim().length > 0 ? username.trim() : '私信';
-    const body: string = preview.trim().length > 0 ? preview.trim() : '你有一条新私信';
+    const title: string = username.trim().length > 0 ? username.trim()
+      : PushCenter.localized($r('app.string.notify_direct_fallback').id);
+    const body: string = preview.trim().length > 0 ? preview.trim()
+      : PushCenter.localized($r('app.string.notify_direct_one').id);
     const id: number = messageId.length > 0
       ? PushCenter.idOfMessage(messageId) : NOTIFY_ID_DIRECT;
     // 记下"最近一条私信通知是哪条会话"：点击若没把 want 送进来（真机上发生过），

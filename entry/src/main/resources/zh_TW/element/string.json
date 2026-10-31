@@ -1,0 +1,1248 @@
+{
+  "string": [
+    {
+      "name": "app_name",
+      "value": "Instamony"
+    },
+    {
+      "name": "common_cancel",
+      "value": "取消"
+    },
+    {
+      "name": "app_title",
+      "value": "Instamony"
+    },
+    {
+      "name": "module_desc",
+      "value": "Instamony 主模組"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Instamony 主模組"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Instamony"
+    },
+    {
+      "name": "login_title",
+      "value": "Instamony"
+    },
+    {
+      "name": "login_recheck",
+      "value": "我已登錄，重新檢查"
+    },
+    {
+      "name": "login_recheck_short",
+      "value": "重新檢查"
+    },
+    {
+      "name": "login_register",
+      "value": "註冊新帳號"
+    },
+    {
+      "name": "login_register_hint",
+      "value": "註冊會在 Instagram 官方網頁完成，回到這一頁後直接用新帳號登入即可。"
+    },
+    {
+      "name": "feed_recommended_title",
+      "value": "為你推薦"
+    },
+    {
+      "name": "feed_recommended_hint",
+      "value": "追蹤的人的最新貼文你已經看完了，以下是推薦給你的內容"
+    },
+    {
+      "name": "challenge_title",
+      "value": "帳號需要安全驗證"
+    },
+    {
+      "name": "challenge_hint",
+      "value": "Instagram 要求完成真人或裝置驗證。驗證只能在網頁完成，完成後再回到應用程式即可繼續使用。"
+    },
+    {
+      "name": "challenge_action",
+      "value": "去驗證"
+    },
+    {
+      "name": "challenge_action_verify",
+      "value": "前往驗證"
+    },
+    {
+      "name": "login_page_action",
+      "value": "登入"
+    },
+    {
+      "name": "login_web_action",
+      "value": "用 Instagram 網頁登入"
+    },
+    {
+      "name": "login_web_hint",
+      "value": "網頁登入能過 IG 的人機驗證/檢查點；登入成功後會自動進入，不用再點登入。"
+    },
+    {
+      "name": "login_label_username",
+      "value": "使用者名稱"
+    },
+    {
+      "name": "login_label_password",
+      "value": "密碼"
+    },
+    {
+      "name": "login_label_code",
+      "value": "驗證碼"
+    },
+    {
+      "name": "login_label_challenge_code",
+      "value": "安全驗證碼"
+    },
+    {
+      "name": "login_web_short",
+      "value": "網頁登入"
+    },
+    {
+      "name": "login_verify_title",
+      "value": "兩步驟驗證"
+    },
+    {
+      "name": "login_verify_hint",
+      "value": "這個帳號開啟了額外驗證。請輸入 Instagram 發給你的 6 位驗證碼（簡訊 / 驗證器 / 備用碼）。"
+    },
+    {
+      "name": "login_verify_approval_hint",
+      "value": "如果 Instagram 讓你在另一台裝置上確認這次登入：在那邊點同意，然後切回本應用程式 —— 會自動重試登錄，不用輸驗證碼。"
+    },
+    {
+      "name": "login_verify_action",
+      "value": "驗證並登入"
+    },
+    {
+      "name": "login_verify_cancel",
+      "value": "取消"
+    },
+    {
+      "name": "login_verify_web_title",
+      "value": "需要額外驗證"
+    },
+    {
+      "name": "login_verify_web_hint",
+      "value": "這個帳號這次要 Instagram 自己的驗證流程（帳號恢復 / 安全檢查），在這裡輸驗證碼過不去。點下面這顆按鈕到網頁完成一次，登入成功後本應用程式會自己保持登入。"
+    },
+    {
+      "name": "login_verify_web_action",
+      "value": "去網頁完成驗證"
+    },
+    {
+      "name": "login_saved_accounts",
+      "value": "已登入過的帳號（點一下直接切回）"
+    },
+    {
+      "name": "login_label_session",
+      "value": "sessionid"
+    },
+    {
+      "name": "login_session_hint",
+      "value": "以數字帳號 id 開頭的那一串（瀏覽器 Cookie 裡叫 sessionid）"
+    },
+    {
+      "name": "login_use_session",
+      "value": "用 sessionid 登入"
+    },
+    {
+      "name": "login_use_session_action",
+      "value": "用 sessionid 登入"
+    },
+    {
+      "name": "login_use_password",
+      "value": "改用帳號密碼登入"
+    },
+    {
+      "name": "login_password_note",
+      "value": "預設走 App 自己的登入協定（不顯示網頁）。過不去人機驗證時用上面的「網頁登入」；開了兩步驟驗證的帳號會再彈一個驗證碼面板。"
+    },
+    {
+      "name": "login_username_hint",
+      "value": "Instagram 使用者名稱"
+    },
+    {
+      "name": "login_password_hint",
+      "value": "密碼"
+    },
+    {
+      "name": "login_code_hint",
+      "value": "兩步驟驗證碼"
+    },
+    {
+      "name": "login_challenge_code_hint",
+      "value": "安全驗證碼"
+    },
+    {
+      "name": "login_submit_code",
+      "value": "提交驗證碼"
+    },
+    {
+      "name": "login_web_fallback",
+      "value": "用 Instagram 網頁登入"
+    },
+    {
+      "name": "login_challenge_hint",
+      "value": "這個帳號被要求做安全驗證。請到 Instagram 官方 App 或網頁完成驗證，再回來登入。"
+    },
+    {
+      "name": "login_upgrade_hint",
+      "value": "IG 只允許官方最新版用戶端用密碼登錄，第三方用戶端一律被拒（與帳號密碼無關）。點上面的按鈕改用網頁登入即可，登入後本應用程式功能完全一樣。"
+    },
+    {
+      "name": "login_challenge_web",
+      "value": "去網頁完成驗證"
+    },
+    {
+      "name": "login_page_hint_account",
+      "value": "帳號密碼只用於本次登入要求，本應用程式不儲存；登入成功後本機只保留會話 cookie。"
+    },
+    {
+      "name": "login_page_hint_features",
+      "value": "登入後即可瀏覽資訊流、快拍與私訊；資料會依正常載入流程自動取回。"
+    },
+    {
+      "name": "login_page_hint_stuck",
+      "value": "若網頁裡已經登入成功、這裡還停著，點下面的「我已登錄，重新檢查」。"
+    },
+    {
+      "name": "sign_out",
+      "value": "登出登入"
+    },
+    {
+      "name": "tab_home",
+      "value": "首頁"
+    },
+    {
+      "name": "tab_reels",
+      "value": "Reels"
+    },
+    {
+      "name": "tab_direct",
+      "value": "私訊"
+    },
+    {
+      "name": "tab_search",
+      "value": "搜尋"
+    },
+    {
+      "name": "tab_profile",
+      "value": "我的"
+    },
+    {
+      "name": "tab_placeholder_hint",
+      "value": "這一頁還沒接上"
+    },
+    {
+      "name": "status_ready",
+      "value": "已就緒"
+    },
+    {
+      "name": "status_failed",
+      "value": "讀取失敗"
+    },
+    {
+      "name": "status_unparsable",
+      "value": "讀不出內容"
+    },
+    {
+      "name": "status_sign_in_required",
+      "value": "需要先登入"
+    },
+    {
+      "name": "status_session_expired",
+      "value": "登入狀態已失效：請在設定裡登出後重新登入一次。"
+    },
+    {
+      "name": "status_page_not_ready",
+      "value": "頁面還沒準備好"
+    },
+    {
+      "name": "web_close",
+      "value": "關閉網頁"
+    },
+    {
+      "name": "video_play_failed",
+      "value": "影片播放失敗。"
+    },
+    {
+      "name": "repost_unsupported",
+      "value": "這條內容不支援轉送（IG 未對帳號開放）。"
+    },
+    {
+      "name": "repost_done",
+      "value": "已轉發。"
+    },
+    {
+      "name": "unrepost_done",
+      "value": "已取消轉發。"
+    },
+    {
+      "name": "unfollow_done",
+      "value": "已取消追蹤。"
+    },
+    {
+      "name": "feature_pending",
+      "value": "這個功能還沒接上。"
+    },
+    {
+      "name": "save_failed",
+      "value": "沒能收藏這篇貼文。"
+    },
+    {
+      "name": "posted_ago_now",
+      "value": "剛剛"
+    },
+    {
+      "name": "posted_ago_minutes",
+      "value": "%d分鐘前"
+    },
+    {
+      "name": "posted_ago_hours",
+      "value": "%d小時前"
+    },
+    {
+      "name": "posted_ago_days",
+      "value": "%d天前"
+    },
+    {
+      "name": "posted_ago_weeks",
+      "value": "%d週前"
+    },
+    {
+      "name": "posted_ago_months",
+      "value": "%d個月前"
+    },
+    {
+      "name": "posted_ago_years",
+      "value": "%d年前"
+    },
+    {
+      "name": "notify_today",
+      "value": "今天"
+    },
+    {
+      "name": "notify_yesterday",
+      "value": "昨天"
+    },
+    {
+      "name": "notify_past_7d",
+      "value": "過去 7 天"
+    },
+    {
+      "name": "notify_past_30d",
+      "value": "過去 30 天"
+    },
+    {
+      "name": "notify_show_more",
+      "value": "顯示更多"
+    },
+    {
+      "name": "notify_suggested",
+      "value": "為你推薦"
+    },
+    {
+      "name": "notify_follow",
+      "value": "關注"
+    },
+    {
+      "name": "notify_follow_back",
+      "value": "回關"
+    },
+    {
+      "name": "notify_earlier",
+      "value": "更早"
+    },
+    {
+      "name": "notify_this_month",
+      "value": "本月"
+    },
+    {
+      "name": "notify_empty",
+      "value": "沒能從網頁讀到通知。"
+    },
+    {
+      "name": "action_follow",
+      "value": "關注"
+    },
+    {
+      "name": "action_following",
+      "value": "已關注"
+    },
+    {
+      "name": "action_more",
+      "value": "更多"
+    },
+    {
+      "name": "action_create",
+      "value": "發布"
+    },
+    {
+      "name": "action_download",
+      "value": "下載"
+    },
+    {
+      "name": "action_settings",
+      "value": "設定"
+    },
+    {
+      "name": "account_add",
+      "value": "新增帳號"
+    },
+    {
+      "name": "account_unnamed",
+      "value": "未命名帳號"
+    },
+    {
+      "name": "account_switch_failed",
+      "value": "切換帳號失敗，請重新登入這個帳號"
+    },
+    {
+      "name": "action_mute",
+      "value": "靜音"
+    },
+    {
+      "name": "comments_title",
+      "value": "評論"
+    },
+    {
+      "name": "comments_hint",
+      "value": "新增評論…"
+    },
+    {
+      "name": "comments_empty",
+      "value": "還沒有評論"
+    },
+    {
+      "name": "comments_failed",
+      "value": "評論讀取失敗"
+    },
+    {
+      "name": "comments_send",
+      "value": "傳送"
+    },
+    {
+      "name": "comments_end",
+      "value": "沒有更多評論"
+    },
+    {
+      "name": "comments_reply",
+      "value": "回覆"
+    },
+    {
+      "name": "comments_hide_replies",
+      "value": "隱藏回覆"
+    },
+    {
+      "name": "comments_replies_loading",
+      "value": "正在加載回复…"
+    },
+    {
+      "name": "comments_view_replies",
+      "value": "查看另外 %d 則回复"
+    },
+    {
+      "name": "comment_pending",
+      "value": "發評論還沒接上 —— 這是輸入框"
+    },
+    {
+      "name": "story_load_failed",
+      "value": "這快拍沒取到（原因 %s）"
+    },
+    {
+      "name": "story_action_pending",
+      "value": "快拍互動還沒接上 —— 這是按鈕"
+    },
+    {
+      "name": "story_message_hint",
+      "value": "發訊息"
+    },
+    {
+      "name": "story_your_story",
+      "value": "你的快拍"
+    },
+    {
+      "name": "profile_chip_add",
+      "value": "添加"
+    },
+    {
+      "name": "profile_action_edit",
+      "value": "編輯首頁"
+    },
+    {
+      "name": "profile_action_share",
+      "value": "分享首頁"
+    },
+    {
+      "name": "profile_highlight_new",
+      "value": "新"
+    },
+    {
+      "name": "profile_highlight_suggest",
+      "value": "推薦關注"
+    },
+    {
+      "name": "story_create_pending",
+      "value": "發布快拍還沒接上 —— 這是入口"
+    },
+    {
+      "name": "translate_action",
+      "value": "查看翻譯"
+    },
+    {
+      "name": "translate_show_original",
+      "value": "顯示原文"
+    },
+    {
+      "name": "translate_failed",
+      "value": "翻譯失敗，請稍後再試"
+    },
+    {
+      "name": "reels_page_title",
+      "value": "Reels"
+    },
+    {
+      "name": "post_page_title",
+      "value": "貼文"
+    },
+    {
+      "name": "create_post_title",
+      "value": "新貼文"
+    },
+    {
+      "name": "create_post_hint",
+      "value": "寫點什麼…"
+    },
+    {
+      "name": "search_hint",
+      "value": "搜尋"
+    },
+    {
+      "name": "search_empty",
+      "value": "輸入帳號名開始搜尋"
+    },
+    {
+      "name": "search_action",
+      "value": "搜尋"
+    },
+    {
+      "name": "count_thousands",
+      "value": "%s萬"
+    },
+    {
+      "name": "profile_stat_posts",
+      "value": "貼文"
+    },
+    {
+      "name": "profile_stat_followers",
+      "value": "粉絲"
+    },
+    {
+      "name": "profile_stat_following",
+      "value": "關注"
+    },
+    {
+      "name": "profile_loading_more",
+      "value": "正在加載…"
+    },
+    {
+      "name": "profile_end",
+      "value": "沒有更多了"
+    },
+    {
+      "name": "profile_empty",
+      "value": "還沒有帖子"
+    },
+    {
+      "name": "direct_empty",
+      "value": "還沒有消息"
+    },
+    {
+      "name": "direct_kind_media",
+      "value": "[照片/影片]"
+    },
+    {
+      "name": "direct_kind_voice",
+      "value": "[語音]"
+    },
+    {
+      "name": "direct_kind_other",
+      "value": "[訊息]"
+    },
+    {
+      "name": "direct_thread_hint",
+      "value": "發訊息…"
+    },
+    {
+      "name": "direct_thread_empty",
+      "value": "還沒消息，打個招呼吧"
+    },
+    {
+      "name": "direct_send_failed",
+      "value": "未發送 · 點這裡重試"
+    },
+    {
+      "name": "direct_sending",
+      "value": "發送中…"
+    },
+    {
+      "name": "direct_open_web",
+      "value": "在網頁中開啟"
+    },
+    {
+      "name": "settings_group_appearance",
+      "value": "外觀"
+    },
+    {
+      "name": "settings_group_bar",
+      "value": "底欄"
+    },
+    {
+      "name": "settings_bar_native_animation",
+      "value": "底欄原生動效"
+    },
+    {
+      "name": "settings_bar_native_animation_hint",
+      "value": "關閉後底欄只用簡單的淡入淡出。"
+    },
+    {
+      "name": "settings_material_level",
+      "value": "沉浸光感"
+    },
+    {
+      "name": "settings_material_hint",
+      "value": "檔位越高視覺效果越精緻，同時也更耗電。低算力設備會自動降級；不確定就選“自適應”，由系統依設備能力決定。"
+    },
+    {
+      "name": "settings_material_adaptive",
+      "value": "自適應"
+    },
+    {
+      "name": "settings_material_gentle",
+      "value": "輕柔"
+    },
+    {
+      "name": "settings_material_smooth",
+      "value": "順滑"
+    },
+    {
+      "name": "settings_material_exquisite",
+      "value": "精緻"
+    },
+    {
+      "name": "settings_material_thickness",
+      "value": "材質厚度"
+    },
+    {
+      "name": "settings_thickness_ultra_thin",
+      "value": "極薄"
+    },
+    {
+      "name": "settings_thickness_thin",
+      "value": "薄"
+    },
+    {
+      "name": "settings_thickness_regular",
+      "value": "常規"
+    },
+    {
+      "name": "settings_thickness_thick",
+      "value": "厚"
+    },
+    {
+      "name": "settings_thickness_ultra_thick",
+      "value": "極厚"
+    },
+    {
+      "name": "settings_unsupported_hint",
+      "value": "目前系統版本不支援懸浮底欄與沉浸光感，相關選項已隱藏；底欄與按鈕會使用簡化的模糊樣式。"
+    },
+    {
+      "name": "probe_title",
+      "value": "探針"
+    },
+    {
+      "name": "probe_hint",
+      "value": "先在網頁裡正常瀏覽，再回來刷新。"
+    },
+    {
+      "name": "probe_refresh",
+      "value": "重新整理"
+    },
+    {
+      "name": "probe_dom",
+      "value": "網頁結構"
+    },
+    {
+      "name": "probe_copy",
+      "value": "複製"
+    },
+    {
+      "name": "probe_save",
+      "value": "存沙箱"
+    },
+    {
+      "name": "probe_clear",
+      "value": "清空"
+    },
+    {
+      "name": "probe_close",
+      "value": "關閉"
+    },
+    {
+      "name": "probe_open_direct",
+      "value": "私訊"
+    },
+    {
+      "name": "probe_open_profile",
+      "value": "我的"
+    },
+    {
+      "name": "probe_open_reels",
+      "value": "Reels"
+    },
+    {
+      "name": "probe_open_search",
+      "value": "搜尋"
+    },
+    {
+      "name": "probe_open_hint",
+      "value": "打開網頁抓接口（會蓋住面板）："
+    },
+    {
+      "name": "probe_open_post",
+      "value": "貼文頁（首圖）"
+    },
+    {
+      "name": "probe_comments_first",
+      "value": "評論（首則貼文）"
+    },
+    {
+      "name": "probe_comments_embed",
+      "value": "讀內嵌評論"
+    },
+    {
+      "name": "probe_capture",
+      "value": "儲存資訊流模板"
+    },
+    {
+      "name": "probe_replay_stored",
+      "value": "回放存的模板"
+    },
+    {
+      "name": "probe_profile_templates",
+      "value": "存個人頁四頁模板"
+    },
+    {
+      "name": "probe_search_templates",
+      "value": "儲存搜尋頁模板"
+    },
+    {
+      "name": "probe_digest",
+      "value": "介面摘要"
+    },
+    {
+      "name": "probe_direct_selftest",
+      "value": "私訊發送自檢"
+    },
+    {
+      "name": "reels_segment_explore",
+      "value": "探索"
+    },
+    {
+      "name": "reels_segment_following",
+      "value": "好友"
+    },
+    {
+      "name": "reels_following_empty",
+      "value": "好友還沒發影片"
+    },
+    {
+      "name": "reels_loading",
+      "value": "正在加載影片…"
+    },
+    {
+      "name": "engage_not_rendered",
+      "value": "轉發內容讀不出來"
+    },
+    {
+      "name": "feed_empty",
+      "value": "還沒有內容"
+    },
+    {
+      "name": "feed_load",
+      "value": "載入"
+    },
+    {
+      "name": "feed_no_more",
+      "value": "沒有更多了"
+    },
+    {
+      "name": "feed_none_read",
+      "value": "沒能從網頁讀到帖子"
+    },
+    {
+      "name": "feed_none_visible",
+      "value": "頁面上沒有可見的帖子"
+    },
+    {
+      "name": "follow_done",
+      "value": "已關注。"
+    },
+    {
+      "name": "follow_failed",
+      "value": "注意失敗"
+    },
+    {
+      "name": "like_failed",
+      "value": "讚失敗"
+    },
+    {
+      "name": "media_saved",
+      "value": "已儲存"
+    },
+    {
+      "name": "media_save_failed",
+      "value": "保存失敗"
+    },
+    {
+      "name": "notifications",
+      "value": "通知"
+    },
+    {
+      "name": "notify_greet",
+      "value": "給 %s 發訊息"
+    },
+    {
+      "name": "notify_greet_suggest",
+      "value": "和 %s 打個招呼"
+    },
+    {
+      "name": "notify_loading",
+      "value": "正在載入通知…"
+    },
+    {
+      "name": "notify_message",
+      "value": "發訊息"
+    },
+    {
+      "name": "notify_message_hint",
+      "value": "發訊息…"
+    },
+    {
+      "name": "notify_month",
+      "value": "%d月"
+    },
+    {
+      "name": "direct_call",
+      "value": "電話"
+    },
+    {
+      "name": "direct_video_call",
+      "value": "影片"
+    },
+    {
+      "name": "save_rate_limited",
+      "value": "IG 正在限流，約 %d 分鐘後可再試"
+    },
+    {
+      "name": "settings_group_media",
+      "value": "圖片和影片"
+    },
+    {
+      "name": "settings_image_quality",
+      "value": "圖片品質"
+    },
+    {
+      "name": "settings_video_quality",
+      "value": "視訊品質"
+    },
+    {
+      "name": "settings_quality_auto",
+      "value": "自適應"
+    },
+    {
+      "name": "settings_quality_saver",
+      "value": "省流"
+    },
+    {
+      "name": "settings_quality_high",
+      "value": "高畫質"
+    },
+    {
+      "name": "settings_quality_original",
+      "value": "原畫"
+    },
+    {
+      "name": "settings_media_quality_hint",
+      "value": "自適應依目前網路自動挑：Wi-Fi 以高清、行動資料用省流；下載始終儲存原圖/原影片。"
+    },
+    {
+      "name": "settings_group_diag",
+      "value": "診斷"
+    },
+    {
+      "name": "settings_export_diag",
+      "value": "匯出診斷日誌"
+    },
+    {
+      "name": "settings_copy_diag",
+      "value": "複製診斷摘要"
+    },
+    {
+      "name": "settings_diag_hint",
+      "value": "遇到問題（例如點開快拍提示沒取到）時點「匯出診斷日誌」儲存成 txt，再從「檔案」裡發給開發者；存不了就點「複製診斷摘要」直接貼上。"
+    },
+    {
+      "name": "diag_exported",
+      "value": "已匯出 %s"
+    },
+    {
+      "name": "diag_export_failed",
+      "value": "匯出失敗：%s"
+    },
+    {
+      "name": "diag_copied",
+      "value": "診斷摘要已複製到剪貼簿"
+    },
+    {
+      "name": "settings_capture_story",
+      "value": "抓故事頁模板（測試）"
+    },
+    {
+      "name": "diag_story_captured",
+      "value": "已抓到故事頁模板，之後快拍應該可以打開"
+    },
+    {
+      "name": "diag_story_capture_failed",
+      "value": "沒抓到故事頁模板：%s"
+    },
+    {
+      "name": "settings_run_mobile_probe",
+      "value": "跑移動 API 自我檢測（測試）"
+    },
+    {
+      "name": "diag_mobile_running",
+      "value": "正在跑移動 API 自我檢測（三發請求，約幾秒）…"
+    },
+    {
+      "name": "diag_mobile_done",
+      "value": "移動 API 自我檢測完成：成功 %d 發，結果見下方"
+    },
+    {
+      "name": "diag_mobile_failed",
+      "value": "移動 API 自我檢測異常：%s"
+    },
+    {
+      "name": "diag_mobile_result",
+      "value": "移動 API 自我檢測結果（點複製）"
+    },
+    {
+      "name": "story_need_challenge",
+      "value": "IG 請這個帳號先完成安全驗證：請到網頁登入 / 驗證一次再回來看快拍"
+    },
+    {
+      "name": "settings_proxy_title",
+      "value": "代理商"
+    },
+    {
+      "name": "settings_proxy_host",
+      "value": "主機"
+    },
+    {
+      "name": "settings_proxy_port",
+      "value": "連接埠"
+    },
+    {
+      "name": "settings_proxy_user",
+      "value": "使用者名稱"
+    },
+    {
+      "name": "settings_proxy_pass",
+      "value": "密碼"
+    },
+    {
+      "name": "settings_proxy_apply",
+      "value": "應用"
+    },
+    {
+      "name": "settings_proxy_off",
+      "value": "關閉代理"
+    },
+    {
+      "name": "settings_proxy_enable",
+      "value": "啟用代理"
+    },
+    {
+      "name": "settings_proxy_saved",
+      "value": "已儲存的代理"
+    },
+    {
+      "name": "settings_proxy_none",
+      "value": "暫無"
+    },
+    {
+      "name": "settings_proxy_add_title",
+      "value": "新增代理"
+    },
+    {
+      "name": "settings_proxy_name",
+      "value": "名稱"
+    },
+    {
+      "name": "settings_proxy_add",
+      "value": "添加"
+    },
+    {
+      "name": "settings_group_proxy",
+      "value": "代理商"
+    },
+    {
+      "name": "settings_proxy_hint",
+      "value": "代理只作用於本 App 的網路請求，保存後立即生效；關閉開關即恢復直連"
+    },
+    {
+      "name": "proxy_ph_name",
+      "value": "例如：公司代理"
+    },
+    {
+      "name": "proxy_ph_host",
+      "value": "例如：127.0.0.1"
+    },
+    {
+      "name": "proxy_ph_port",
+      "value": "例如：7890"
+    },
+    {
+      "name": "proxy_ph_optional",
+      "value": "可選"
+    },
+    {
+      "name": "settings_proxy_pick_title",
+      "value": "選擇代理"
+    },
+    {
+      "name": "settings_proxy_confirm",
+      "value": "確定"
+    },
+    {
+      "name": "settings_proxy_selected",
+      "value": "已選取"
+    },
+    {
+      "name": "settings_proxy_manage_title",
+      "value": "管理代理"
+    },
+    {
+      "name": "settings_proxy_edit_title",
+      "value": "編輯代理"
+    },
+    {
+      "name": "settings_proxy_save",
+      "value": "儲存"
+    },
+    {
+      "name": "settings_proxy_edit_action",
+      "value": "編輯"
+    },
+    {
+      "name": "settings_proxy_delete_action",
+      "value": "刪除"
+    },
+    {
+      "name": "settings_proxy_deleted",
+      "value": "已刪除"
+    },
+    {
+      "name": "settings_proxy_verifying",
+      "value": "正在驗證代理…"
+    },
+    {
+      "name": "settings_proxy_verify_failed",
+      "value": "代理無法連線：%s"
+    },
+    {
+      "name": "settings_proxy_invalid",
+      "value": "主機和連接埠必須填"
+    },
+    {
+      "name": "back_press_exit_hint",
+      "value": "再次返回桌面"
+    },
+    {
+      "name": "login_probe_busy",
+      "value": "正在核對…"
+    },
+    {
+      "name": "login_probe_hint",
+      "value": "帳號密碼對不對？點這裡用 IG 網頁介面核對一次"
+    },
+    {
+      "name": "login_web_retry_hint",
+      "value": "還是進不去？用網頁登入一次（能過人機驗證）"
+    },
+    {
+      "name": "settings_doh_scope_hint",
+      "value": "HTTP、內建網頁與登入鏈都改走加密 DNS；失敗會在網頁/登入鏈上自動退回系統解析。"
+    },
+    {
+      "name": "settings_relay_endpoint",
+      "value": "轉上報地址"
+    },
+    {
+      "name": "settings_relay_key",
+      "value": "共用金鑰（可空，對應 relay 的 key）"
+    },
+    {
+      "name": "settings_relay_key_hint",
+      "value": "隨便一串字符，和 relay 保持一致"
+    },
+    {
+      "name": "settings_relay_disabled",
+      "value": "已關閉轉上報"
+    },
+    {
+      "name": "settings_clear_device_hint",
+      "value": "先登出登入，再清除設備認證"
+    },
+    {
+      "name": "settings_login_help",
+      "value": "登入失敗時：先點選「登入頻道自我檢測」，再點「複製登入日誌」把內容發給我。 \n"
+    },
+    {
+      "name": "settings_login_selftest_running",
+      "value": "正在自我檢測登入頻道（最多 15 秒）…"
+    },
+    {
+      "name": "settings_ip_check_running",
+      "value": "正在查出口 IP（最多 10 秒）…"
+    },
+    {
+      "name": "settings_ip_datacenter",
+      "value": "這是機房 IP，建議換節點再試"
+    },
+    {
+      "name": "settings_ip_normal",
+      "value": "這條線路看著正常"
+    },
+    {
+      "name": "settings_login_log_copied",
+      "value": "登入日誌已複製（貼上發給開發者）"
+    },
+    {
+      "name": "settings_meow_login_sending",
+      "value": "正在推送登入日誌到 MeoW…"
+    },
+    {
+      "name": "settings_reels_log_empty",
+      "value": "還沒有 reels 崩潰日誌（沒進過 reels，或日誌已被清除）"
+    },
+    {
+      "name": "settings_reels_log_prefix",
+      "value": "（設備與版本：%s）\n\n"
+    },
+    {
+      "name": "settings_meow_reels_sending",
+      "value": "正在推送 reels 崩潰日誌到 MeoW…"
+    },
+    {
+      "name": "login_error_transport",
+      "value": "登入請求異常：%s"
+    },
+    {
+      "name": "login_ok_session_pending",
+      "value": "%s成功（移動會話材料未就緒）"
+    },
+    {
+      "name": "system_http_failed",
+      "value": "系統 HTTP 堆疊也失敗：%s"
+    },
+    {
+      "name": "notify_direct_fallback",
+      "value": "私訊"
+    },
+    {
+      "name": "notify_direct_count",
+      "value": "你有 %d 封新私信"
+    },
+    {
+      "name": "notify_direct_one",
+      "value": "你有一則新私信"
+    },
+    {
+      "name": "index_web_login_hint",
+      "value": "在頁面登入（可能要人機驗證），成功後會自己進入"
+    },
+    {
+      "name": "index_open_link_failed",
+      "value": "打不開這個連結（系統裡沒有可用的瀏覽器？）"
+    },
+    {
+      "name": "index_share_empty",
+      "value": "這條分享沒有可打開的內容"
+    },
+    {
+      "name": "linkin_title",
+      "value": "透過深鏈進入"
+    },
+    {
+      "name": "linkin_hint",
+      "value": "連結由系統透過 Want 送進本應用，以下是從 URI 解析出來的內容。"
+    },
+    {
+      "name": "linkin_target_known",
+      "value": "✓ 認識這個目標"
+    },
+    {
+      "name": "linkin_target_unknown",
+      "value": "✗ 不認識的目標"
+    },
+    {
+      "name": "linkin_params_ok",
+      "value": "✓ 參數完整"
+    },
+    {
+      "name": "linkin_params_missing",
+      "value": "✗ 參數缺失"
+    },
+    {
+      "name": "linkin_open_action",
+      "value": "打開並執行這條鏈接"
+    },
+    {
+      "name": "linkin_ignore",
+      "value": "忽略，直接進首頁"
+    },
+    {
+      "name": "linkin_supported",
+      "value": "支援的連結"
+    },
+    {
+      "name": "story_diag_guide",
+      "value": "2) 再看 detail= 與「逐發軌跡」：detail=empty 表示服務端答了 200+JSON 但沒有媒體；"
+    },
+    {
+      "name": "settings_group_language",
+      "value": "語言"
+    },
+    {
+      "name": "settings_language",
+      "value": "語言"
+    },
+    {
+      "name": "settings_language_search",
+      "value": "搜尋語言"
+    },
+    {
+      "name": "settings_language_hint",
+      "value": "選擇應用程式語言；只影響本應用程式，不改變系統語言。"
+    },
+    {
+      "name": "settings_language_changed",
+      "value": "語言已切換"
+    }
+  ]
+}

@@ -1,0 +1,1248 @@
+{
+  "string": [
+    {
+      "name": "app_name",
+      "value": "Instamony"
+    },
+    {
+      "name": "common_cancel",
+      "value": "キャンセル"
+    },
+    {
+      "name": "app_title",
+      "value": "Instamony"
+    },
+    {
+      "name": "module_desc",
+      "value": "Instamonyメインモジュール"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Instamonyメインモジュール"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Instamony"
+    },
+    {
+      "name": "login_title",
+      "value": "Instamony"
+    },
+    {
+      "name": "login_recheck",
+      "value": "ログインしました、もう一度確認してください"
+    },
+    {
+      "name": "login_recheck_short",
+      "value": "再確認してください"
+    },
+    {
+      "name": "login_register",
+      "value": "新しいアカウントを登録する"
+    },
+    {
+      "name": "login_register_hint",
+      "value": "登録はInstagram公式サイトから行います。このページに戻って、新しいアカウントで直接ログインします。"
+    },
+    {
+      "name": "feed_recommended_title",
+      "value": "あなたにおすすめ"
+    },
+    {
+      "name": "feed_recommended_hint",
+      "value": "フォローしている人の最新の投稿を読みました。そんなあなたにおすすめのコンテンツをご紹介します。"
+    },
+    {
+      "name": "challenge_title",
+      "value": "アカウントにはセキュリティ検証が必要です"
+    },
+    {
+      "name": "challenge_hint",
+      "value": "Instagram には人間による検証またはデバイスによる検証が必要です。認証はWebページ上でのみ完了できます。完了後、アプリに戻って使用を続けることができます。"
+    },
+    {
+      "name": "challenge_action",
+      "value": "確認する"
+    },
+    {
+      "name": "challenge_action_verify",
+      "value": "確認に行く"
+    },
+    {
+      "name": "login_page_action",
+      "value": "ログイン"
+    },
+    {
+      "name": "login_web_action",
+      "value": "Instagram Web ページを使用してログインします"
+    },
+    {
+      "name": "login_web_hint",
+      "value": "Web ページのログインは IG 人間とコンピュータの検証/チェックポイントを通過できます。ログインに成功すると自動的に入力されるため、再度「ログイン」をクリックする必要はありません。"
+    },
+    {
+      "name": "login_label_username",
+      "value": "ユーザー名"
+    },
+    {
+      "name": "login_label_password",
+      "value": "パスワード"
+    },
+    {
+      "name": "login_label_code",
+      "value": "認証コード"
+    },
+    {
+      "name": "login_label_challenge_code",
+      "value": "セキュリティ認証コード"
+    },
+    {
+      "name": "login_web_short",
+      "value": "ウェブログイン"
+    },
+    {
+      "name": "login_verify_title",
+      "value": "二段階認証"
+    },
+    {
+      "name": "login_verify_hint",
+      "value": "このアカウントでは追加の認証が有効になっています。 Instagramから送信された6桁の認証コード（SMS/認証コード/バックアップコード）を入力してください。"
+    },
+    {
+      "name": "login_verify_approval_hint",
+      "value": "Instagram が別のデバイスでこのログインを確認するように求めた場合: そこで [同意する] をクリックし、アプリに戻ります。確認コードを入力せずにログインが自動的に再試行されます。"
+    },
+    {
+      "name": "login_verify_action",
+      "value": "確認してログインする"
+    },
+    {
+      "name": "login_verify_cancel",
+      "value": "キャンセル"
+    },
+    {
+      "name": "login_verify_web_title",
+      "value": "追加の検証が必要です"
+    },
+    {
+      "name": "login_verify_web_hint",
+      "value": "このアカウントには、今回 Instagram 独自の認証プロセス (アカウント回復/セキュリティ チェック) が必要です。ここで認証コードを入力しても認証は通過しません。下のボタンをクリックして Web ページに移動し、一度完了してください。ログインに成功すると、アプリケーションは自動的にログイン状態を維持します。"
+    },
+    {
+      "name": "login_verify_web_action",
+      "value": "Web ページにアクセスして検証を完了します"
+    },
+    {
+      "name": "login_saved_accounts",
+      "value": "すでにログインしているアカウント (クリックして直接元に戻ります)"
+    },
+    {
+      "name": "login_label_session",
+      "value": "sessionid"
+    },
+    {
+      "name": "login_session_hint",
+      "value": "数値のアカウント ID で始まる文字列 (ブラウザーの Cookie では sessionid と呼ばれます)"
+    },
+    {
+      "name": "login_use_session",
+      "value": "sessionidでログインします"
+    },
+    {
+      "name": "login_use_session_action",
+      "value": "sessionidでログインします"
+    },
+    {
+      "name": "login_use_password",
+      "value": "代わりにアカウントとパスワードを使用してログインしてください"
+    },
+    {
+      "name": "login_password_note",
+      "value": "デフォルトでは、アプリ独自のログイン プロトコルが使用されます (Web ページは表示されません)。人間とコンピュータの検証に合格できない場合は、上記の「Web ログイン」を使用してください。 2 段階認証が有効になっているアカウントの場合は、別の認証コード パネルがポップアップします。"
+    },
+    {
+      "name": "login_username_hint",
+      "value": "Instagram ユーザー名"
+    },
+    {
+      "name": "login_password_hint",
+      "value": "パスワード"
+    },
+    {
+      "name": "login_code_hint",
+      "value": "2段階認証コード"
+    },
+    {
+      "name": "login_challenge_code_hint",
+      "value": "セキュリティ認証コード"
+    },
+    {
+      "name": "login_submit_code",
+      "value": "確認コードを送信する"
+    },
+    {
+      "name": "login_web_fallback",
+      "value": "Instagram Web ページを使用してログインします"
+    },
+    {
+      "name": "login_challenge_hint",
+      "value": "このアカウントはセキュリティ検証を受ける必要があります。 Instagram 公式アプリまたは Web サイトにアクセスして認証を完了し、再度ログインしてください。"
+    },
+    {
+      "name": "login_upgrade_hint",
+      "value": "IG クライアントの最新の正式バージョンのみがパスワードによるログインを許可され、サードパーティのクライアントは (アカウントのパスワードに関係なく) すべて拒否されます。上のボタンをクリックしてWebページからログインしてください。ログイン後の機能は全く同じです。"
+    },
+    {
+      "name": "login_challenge_web",
+      "value": "Web ページにアクセスして検証を完了します"
+    },
+    {
+      "name": "login_page_hint_account",
+      "value": "アカウントのパスワードは、このログイン要求にのみ使用され、このアプリケーションによって保存されません。ログインに成功すると、セッション Cookie のみがローカルに保持されます。"
+    },
+    {
+      "name": "login_page_hint_features",
+      "value": "ログイン後は、情報ストリーム、ストーリー、プライベート メッセージを閲覧できます。データは通常の読み込みプロセスに従って自動的に取得されます。"
+    },
+    {
+      "name": "login_page_hint_stuck",
+      "value": "Web ページに正常にログインしたにもかかわらず、まだここでスタックしている場合は、下の「ログインしました。もう一度確認してください」をクリックしてください。"
+    },
+    {
+      "name": "sign_out",
+      "value": "ログアウト"
+    },
+    {
+      "name": "tab_home",
+      "value": "ホームページ"
+    },
+    {
+      "name": "tab_reels",
+      "value": "Reels"
+    },
+    {
+      "name": "tab_direct",
+      "value": "プライベートメッセージ"
+    },
+    {
+      "name": "tab_search",
+      "value": "検索"
+    },
+    {
+      "name": "tab_profile",
+      "value": "私の"
+    },
+    {
+      "name": "tab_placeholder_hint",
+      "value": "このページはまだ接続されていません"
+    },
+    {
+      "name": "status_ready",
+      "value": "準備完了"
+    },
+    {
+      "name": "status_failed",
+      "value": "読み取りに失敗しました"
+    },
+    {
+      "name": "status_unparsable",
+      "value": "内容が読めない"
+    },
+    {
+      "name": "status_sign_in_required",
+      "value": "最初にログインする必要があります"
+    },
+    {
+      "name": "status_session_expired",
+      "value": "ログインステータスの有効期限が切れています: 設定でログアウトし、再度ログインしてください。"
+    },
+    {
+      "name": "status_page_not_ready",
+      "value": "ページはまだ準備ができていません"
+    },
+    {
+      "name": "web_close",
+      "value": "Webページを閉じる"
+    },
+    {
+      "name": "video_play_failed",
+      "value": "ビデオの再生に失敗しました。"
+    },
+    {
+      "name": "repost_unsupported",
+      "value": "このコンテンツは転送をサポートしていません (IG はこのアカウントに対して開かれていません)。"
+    },
+    {
+      "name": "repost_done",
+      "value": "転送されました。"
+    },
+    {
+      "name": "unrepost_done",
+      "value": "転送がキャンセルされました。"
+    },
+    {
+      "name": "unfollow_done",
+      "value": "フォローを外されました。"
+    },
+    {
+      "name": "feature_pending",
+      "value": "この機能はまだ実装されていません。"
+    },
+    {
+      "name": "save_failed",
+      "value": "この投稿をお気に入りに登録できませんでした。"
+    },
+    {
+      "name": "posted_ago_now",
+      "value": "たった今"
+    },
+    {
+      "name": "posted_ago_minutes",
+      "value": "%d 分前"
+    },
+    {
+      "name": "posted_ago_hours",
+      "value": "%d時間前"
+    },
+    {
+      "name": "posted_ago_days",
+      "value": "%d日前"
+    },
+    {
+      "name": "posted_ago_weeks",
+      "value": "%d数週間前"
+    },
+    {
+      "name": "posted_ago_months",
+      "value": "%d数ヶ月前"
+    },
+    {
+      "name": "posted_ago_years",
+      "value": "%d 年前"
+    },
+    {
+      "name": "notify_today",
+      "value": "今日"
+    },
+    {
+      "name": "notify_yesterday",
+      "value": "昨日"
+    },
+    {
+      "name": "notify_past_7d",
+      "value": "過去7日間"
+    },
+    {
+      "name": "notify_past_30d",
+      "value": "過去 30 日間"
+    },
+    {
+      "name": "notify_show_more",
+      "value": "もっと見る"
+    },
+    {
+      "name": "notify_suggested",
+      "value": "あなたにおすすめ"
+    },
+    {
+      "name": "notify_follow",
+      "value": "フォローする"
+    },
+    {
+      "name": "notify_follow_back",
+      "value": "税関に戻る"
+    },
+    {
+      "name": "notify_earlier",
+      "value": "もっと早くに"
+    },
+    {
+      "name": "notify_this_month",
+      "value": "今月"
+    },
+    {
+      "name": "notify_empty",
+      "value": "Web ページから通知を読み取ることができません。"
+    },
+    {
+      "name": "action_follow",
+      "value": "フォローする"
+    },
+    {
+      "name": "action_following",
+      "value": "すでにフォローしています"
+    },
+    {
+      "name": "action_more",
+      "value": "もっと見る"
+    },
+    {
+      "name": "action_create",
+      "value": "公開する"
+    },
+    {
+      "name": "action_download",
+      "value": "ダウンロード"
+    },
+    {
+      "name": "action_settings",
+      "value": "設定"
+    },
+    {
+      "name": "account_add",
+      "value": "アカウントを追加"
+    },
+    {
+      "name": "account_unnamed",
+      "value": "名前のないアカウント"
+    },
+    {
+      "name": "account_switch_failed",
+      "value": "アカウントの切り替えに失敗しました。このアカウントに再度ログインしてください"
+    },
+    {
+      "name": "action_mute",
+      "value": "ミュート"
+    },
+    {
+      "name": "comments_title",
+      "value": "コメント"
+    },
+    {
+      "name": "comments_hint",
+      "value": "コメントを追加…"
+    },
+    {
+      "name": "comments_empty",
+      "value": "まだコメントはありません"
+    },
+    {
+      "name": "comments_failed",
+      "value": "コメントを読み取れませんでした"
+    },
+    {
+      "name": "comments_send",
+      "value": "送信する"
+    },
+    {
+      "name": "comments_end",
+      "value": "これ以上コメントはありません"
+    },
+    {
+      "name": "comments_reply",
+      "value": "返信"
+    },
+    {
+      "name": "comments_hide_replies",
+      "value": "返信を隠す"
+    },
+    {
+      "name": "comments_replies_loading",
+      "value": "返信を読み込んでいます…"
+    },
+    {
+      "name": "comments_view_replies",
+      "value": "%d の他の返信を見る"
+    },
+    {
+      "name": "comment_pending",
+      "value": "まだコメントを受け取っていません - これは入力ボックスです"
+    },
+    {
+      "name": "story_load_failed",
+      "value": "このストーリーは取得されませんでした (理由 %s)"
+    },
+    {
+      "name": "story_action_pending",
+      "value": "ストーリー インタラクションはまだ接続されていません - これはボタンです"
+    },
+    {
+      "name": "story_message_hint",
+      "value": "メッセージを送信する"
+    },
+    {
+      "name": "story_your_story",
+      "value": "あなたの物語"
+    },
+    {
+      "name": "profile_chip_add",
+      "value": "追加する"
+    },
+    {
+      "name": "profile_action_edit",
+      "value": "ホームページを編集する"
+    },
+    {
+      "name": "profile_action_share",
+      "value": "ホームページを共有する"
+    },
+    {
+      "name": "profile_highlight_new",
+      "value": "新しい"
+    },
+    {
+      "name": "profile_highlight_suggest",
+      "value": "注意を促す"
+    },
+    {
+      "name": "story_create_pending",
+      "value": "ポストストーリーはまだ繋がっていない、ここが入り口です"
+    },
+    {
+      "name": "translate_action",
+      "value": "翻訳を見る"
+    },
+    {
+      "name": "translate_show_original",
+      "value": "元のテキストを表示"
+    },
+    {
+      "name": "translate_failed",
+      "value": "翻訳に失敗しました。後でもう一度試してください"
+    },
+    {
+      "name": "reels_page_title",
+      "value": "Reels"
+    },
+    {
+      "name": "post_page_title",
+      "value": "ポスト"
+    },
+    {
+      "name": "create_post_title",
+      "value": "新しい投稿"
+    },
+    {
+      "name": "create_post_hint",
+      "value": "何か書いて…"
+    },
+    {
+      "name": "search_hint",
+      "value": "検索"
+    },
+    {
+      "name": "search_empty",
+      "value": "アカウント名を入力して検索を開始してください"
+    },
+    {
+      "name": "search_action",
+      "value": "検索"
+    },
+    {
+      "name": "count_thousands",
+      "value": "%s百万"
+    },
+    {
+      "name": "profile_stat_posts",
+      "value": "ポスト"
+    },
+    {
+      "name": "profile_stat_followers",
+      "value": "ファン"
+    },
+    {
+      "name": "profile_stat_following",
+      "value": "フォローする"
+    },
+    {
+      "name": "profile_loading_more",
+      "value": "読み込み中…"
+    },
+    {
+      "name": "profile_end",
+      "value": "もうだめ"
+    },
+    {
+      "name": "profile_empty",
+      "value": "まだ投稿はありません"
+    },
+    {
+      "name": "direct_empty",
+      "value": "まだニュースはありません"
+    },
+    {
+      "name": "direct_kind_media",
+      "value": "【写真・動画】"
+    },
+    {
+      "name": "direct_kind_voice",
+      "value": "【声】"
+    },
+    {
+      "name": "direct_kind_other",
+      "value": "【メッセージ】"
+    },
+    {
+      "name": "direct_thread_hint",
+      "value": "メッセージを送信してください…"
+    },
+    {
+      "name": "direct_thread_empty",
+      "value": "まだニュースはありませんが、よろしくお願いします。"
+    },
+    {
+      "name": "direct_send_failed",
+      "value": "未送信 · ここをクリックしてもう一度お試しください"
+    },
+    {
+      "name": "direct_sending",
+      "value": "送信中…"
+    },
+    {
+      "name": "direct_open_web",
+      "value": "Webページで開く"
+    },
+    {
+      "name": "settings_group_appearance",
+      "value": "外観"
+    },
+    {
+      "name": "settings_group_bar",
+      "value": "下のバー"
+    },
+    {
+      "name": "settings_bar_native_animation",
+      "value": "下部バーのネイティブ効果"
+    },
+    {
+      "name": "settings_bar_native_animation_hint",
+      "value": "下部のバーは単純なフェードインとフェードアウトで閉じられます。"
+    },
+    {
+      "name": "settings_material_level",
+      "value": "没入型の光知覚"
+    },
+    {
+      "name": "settings_material_hint",
+      "value": "ギアが高くなるほど、視覚効果はより洗練されますが、消費電力も増加します。コンピューティング能力が低いデバイスは自動的にダウングレードされます。よくわからない場合は、「アダプティブ」を選択すると、システムがデバイスの機能に基づいて決定します。"
+    },
+    {
+      "name": "settings_material_adaptive",
+      "value": "アダプティブ"
+    },
+    {
+      "name": "settings_material_gentle",
+      "value": "優しい"
+    },
+    {
+      "name": "settings_material_smooth",
+      "value": "スムーズ"
+    },
+    {
+      "name": "settings_material_exquisite",
+      "value": "絶妙な"
+    },
+    {
+      "name": "settings_material_thickness",
+      "value": "材料の厚さ"
+    },
+    {
+      "name": "settings_thickness_ultra_thin",
+      "value": "非常に薄い"
+    },
+    {
+      "name": "settings_thickness_thin",
+      "value": "薄い"
+    },
+    {
+      "name": "settings_thickness_regular",
+      "value": "定期的な"
+    },
+    {
+      "name": "settings_thickness_thick",
+      "value": "厚い"
+    },
+    {
+      "name": "settings_thickness_ultra_thick",
+      "value": "極厚"
+    },
+    {
+      "name": "settings_unsupported_hint",
+      "value": "現在のシステム バージョンはフローティング ボトム バーとイマーシブ ライトをサポートしておらず、関連するオプションは非表示になっています。下部のバーとボタンでは、簡略化されたぼかしスタイルが使用されます。"
+    },
+    {
+      "name": "probe_title",
+      "value": "プローブ"
+    },
+    {
+      "name": "probe_hint",
+      "value": "まず通常どおり Web ページを閲覧し、戻ってページを更新します。"
+    },
+    {
+      "name": "probe_refresh",
+      "value": "リフレッシュ"
+    },
+    {
+      "name": "probe_dom",
+      "value": "Webページの構造"
+    },
+    {
+      "name": "probe_copy",
+      "value": "コピー"
+    },
+    {
+      "name": "probe_save",
+      "value": "サンドボックスを保存する"
+    },
+    {
+      "name": "probe_clear",
+      "value": "クリア"
+    },
+    {
+      "name": "probe_close",
+      "value": "閉じる"
+    },
+    {
+      "name": "probe_open_direct",
+      "value": "プライベートメッセージ"
+    },
+    {
+      "name": "probe_open_profile",
+      "value": "私の"
+    },
+    {
+      "name": "probe_open_reels",
+      "value": "Reels"
+    },
+    {
+      "name": "probe_open_search",
+      "value": "検索"
+    },
+    {
+      "name": "probe_open_hint",
+      "value": "Web ページ取得インターフェイスを開きます (パネルは覆われます)。"
+    },
+    {
+      "name": "probe_open_post",
+      "value": "投稿ページ（最初の写真投稿）"
+    },
+    {
+      "name": "probe_comments_first",
+      "value": "コメント（最初の投稿）"
+    },
+    {
+      "name": "probe_comments_embed",
+      "value": "埋め込まれたコメントを読む"
+    },
+    {
+      "name": "probe_capture",
+      "value": "情報フローテンプレートの保存"
+    },
+    {
+      "name": "probe_replay_stored",
+      "value": "保存されたテンプレートを再生する"
+    },
+    {
+      "name": "probe_profile_templates",
+      "value": "個人ページの 4 ページのテンプレートを保存"
+    },
+    {
+      "name": "probe_search_templates",
+      "value": "検索ページのテンプレートを保存"
+    },
+    {
+      "name": "probe_digest",
+      "value": "インターフェースの概要"
+    },
+    {
+      "name": "probe_direct_selftest",
+      "value": "セルフチェックのためにプライベートメッセージを送信する"
+    },
+    {
+      "name": "reels_segment_explore",
+      "value": "探検する"
+    },
+    {
+      "name": "reels_segment_following",
+      "value": "友達"
+    },
+    {
+      "name": "reels_following_empty",
+      "value": "私の友達はまだビデオを投稿していません"
+    },
+    {
+      "name": "reels_loading",
+      "value": "ビデオを読み込み中…"
+    },
+    {
+      "name": "engage_not_rendered",
+      "value": "転送されたコンテンツを読み取ることができません"
+    },
+    {
+      "name": "feed_empty",
+      "value": "まだコンテンツがありません"
+    },
+    {
+      "name": "feed_load",
+      "value": "ロード"
+    },
+    {
+      "name": "feed_no_more",
+      "value": "もうだめ"
+    },
+    {
+      "name": "feed_none_read",
+      "value": "Webページから投稿を読むことができません"
+    },
+    {
+      "name": "feed_none_visible",
+      "value": "ページに表示される投稿はありません"
+    },
+    {
+      "name": "follow_done",
+      "value": "すでにフォロー中です。"
+    },
+    {
+      "name": "follow_failed",
+      "value": "失敗に焦点を当てる"
+    },
+    {
+      "name": "like_failed",
+      "value": "いいねに失敗しました"
+    },
+    {
+      "name": "media_saved",
+      "value": "保存されました"
+    },
+    {
+      "name": "media_save_failed",
+      "value": "保存に失敗しました"
+    },
+    {
+      "name": "notifications",
+      "value": "お知らせ"
+    },
+    {
+      "name": "notify_greet",
+      "value": "%s にメッセージを送信してください"
+    },
+    {
+      "name": "notify_greet_suggest",
+      "value": "%s に挨拶してください"
+    },
+    {
+      "name": "notify_loading",
+      "value": "通知を読み込んでいます…"
+    },
+    {
+      "name": "notify_message",
+      "value": "メッセージを送信する"
+    },
+    {
+      "name": "notify_message_hint",
+      "value": "メッセージを送信してください…"
+    },
+    {
+      "name": "notify_month",
+      "value": "%d月"
+    },
+    {
+      "name": "direct_call",
+      "value": "電話"
+    },
+    {
+      "name": "direct_video_call",
+      "value": "ビデオ"
+    },
+    {
+      "name": "save_rate_limited",
+      "value": "IG が電流の流れを制限しています。約 %d 分後にもう一度お試しください。"
+    },
+    {
+      "name": "settings_group_media",
+      "value": "写真とビデオ"
+    },
+    {
+      "name": "settings_image_quality",
+      "value": "画質"
+    },
+    {
+      "name": "settings_video_quality",
+      "value": "ビデオ品質"
+    },
+    {
+      "name": "settings_quality_auto",
+      "value": "アダプティブ"
+    },
+    {
+      "name": "settings_quality_saver",
+      "value": "お金を節約する"
+    },
+    {
+      "name": "settings_quality_high",
+      "value": "HD"
+    },
+    {
+      "name": "settings_quality_original",
+      "value": "オリジナルの絵"
+    },
+    {
+      "name": "settings_media_quality_hint",
+      "value": "現在のネットワークに応じて適応型が自動的に選択します: Wi-Fi データを節約するために高解像度とモバイル データを使用します。ダウンロードすると、常に元の画像/元のビデオが保存されます。"
+    },
+    {
+      "name": "settings_group_diag",
+      "value": "診断"
+    },
+    {
+      "name": "settings_export_diag",
+      "value": "診断ログをエクスポートする"
+    },
+    {
+      "name": "settings_copy_diag",
+      "value": "診断概要のコピー"
+    },
+    {
+      "name": "settings_diag_hint",
+      "value": "問題が発生した場合 (たとえば、ストーリーをクリックしてもプロンプトが表示されない場合)、[診断ログのエクスポート] をクリックして txt として保存し、[ファイル] から開発者に送信します。保存できない場合は、「診断概要をコピー」をクリックして直接貼り付けてください。"
+    },
+    {
+      "name": "diag_exported",
+      "value": "エクスポート済み %s"
+    },
+    {
+      "name": "diag_export_failed",
+      "value": "エクスポートに失敗しました: %s"
+    },
+    {
+      "name": "diag_copied",
+      "value": "診断概要がクリップボードにコピーされました"
+    },
+    {
+      "name": "settings_capture_story",
+      "value": "キャプチャ ストーリー ページ テンプレート (テスト)"
+    },
+    {
+      "name": "diag_story_captured",
+      "value": "ストーリー ページのテンプレートがキャプチャされました。ストーリーズは後で開くことができるはずです。"
+    },
+    {
+      "name": "diag_story_capture_failed",
+      "value": "ストーリー ページ テンプレートが見つかりません: %s"
+    },
+    {
+      "name": "settings_run_mobile_probe",
+      "value": "RunMobile API セルフテスト (テスト)"
+    },
+    {
+      "name": "diag_mobile_running",
+      "value": "モバイル API セルフテストを実行しています (3 つのリクエスト、約数秒)..."
+    },
+    {
+      "name": "diag_mobile_done",
+      "value": "モバイル API セルフテストが完了しました: 成功した %d が送信されました。結果は以下に示されています"
+    },
+    {
+      "name": "diag_mobile_failed",
+      "value": "モバイル API セルフテスト例外: %s"
+    },
+    {
+      "name": "diag_mobile_result",
+      "value": "API セルフテスト結果を移動 (クリックしてコピー)"
+    },
+    {
+      "name": "story_need_challenge",
+      "value": "IG このアカウントは、最初にセキュリティ検証を完了する必要があります。Web ページでログイン/検証してから、ストーリーを表示するために戻ってください。"
+    },
+    {
+      "name": "settings_proxy_title",
+      "value": "エージェント"
+    },
+    {
+      "name": "settings_proxy_host",
+      "value": "ホスト"
+    },
+    {
+      "name": "settings_proxy_port",
+      "value": "ポート"
+    },
+    {
+      "name": "settings_proxy_user",
+      "value": "ユーザー名"
+    },
+    {
+      "name": "settings_proxy_pass",
+      "value": "パスワード"
+    },
+    {
+      "name": "settings_proxy_apply",
+      "value": "アプリケーション"
+    },
+    {
+      "name": "settings_proxy_off",
+      "value": "プロキシをオフにする"
+    },
+    {
+      "name": "settings_proxy_enable",
+      "value": "プロキシを有効にする"
+    },
+    {
+      "name": "settings_proxy_saved",
+      "value": "保存されたエージェント"
+    },
+    {
+      "name": "settings_proxy_none",
+      "value": "なし"
+    },
+    {
+      "name": "settings_proxy_add_title",
+      "value": "プロキシの追加"
+    },
+    {
+      "name": "settings_proxy_name",
+      "value": "名前"
+    },
+    {
+      "name": "settings_proxy_add",
+      "value": "追加する"
+    },
+    {
+      "name": "settings_group_proxy",
+      "value": "エージェント"
+    },
+    {
+      "name": "settings_proxy_hint",
+      "value": "プロキシはこのアプリのネットワーク リクエストにのみ作用し、保存後すぐに有効になります。スイッチをオフにすると直接接続が復元されます"
+    },
+    {
+      "name": "proxy_ph_name",
+      "value": "例: 企業エージェント"
+    },
+    {
+      "name": "proxy_ph_host",
+      "value": "例: 127.0.0.1"
+    },
+    {
+      "name": "proxy_ph_port",
+      "value": "例: 7890"
+    },
+    {
+      "name": "proxy_ph_optional",
+      "value": "オプション"
+    },
+    {
+      "name": "settings_proxy_pick_title",
+      "value": "エージェントを選択してください"
+    },
+    {
+      "name": "settings_proxy_confirm",
+      "value": "OK"
+    },
+    {
+      "name": "settings_proxy_selected",
+      "value": "選択された"
+    },
+    {
+      "name": "settings_proxy_manage_title",
+      "value": "管理エージェント"
+    },
+    {
+      "name": "settings_proxy_edit_title",
+      "value": "エージェントの編集"
+    },
+    {
+      "name": "settings_proxy_save",
+      "value": "保存する"
+    },
+    {
+      "name": "settings_proxy_edit_action",
+      "value": "編集"
+    },
+    {
+      "name": "settings_proxy_delete_action",
+      "value": "削除"
+    },
+    {
+      "name": "settings_proxy_deleted",
+      "value": "削除されました"
+    },
+    {
+      "name": "settings_proxy_verifying",
+      "value": "エージェントを確認中…"
+    },
+    {
+      "name": "settings_proxy_verify_failed",
+      "value": "エージェントが接続できません: %s"
+    },
+    {
+      "name": "settings_proxy_invalid",
+      "value": "ホストとポートを入力する必要があります"
+    },
+    {
+      "name": "back_press_exit_hint",
+      "value": "再びデスクトップに戻ります"
+    },
+    {
+      "name": "login_probe_busy",
+      "value": "確認中…"
+    },
+    {
+      "name": "login_probe_hint",
+      "value": "アカウントのパスワードは正しいですか? IG Web インターフェースを使用して一度確認するには、ここをクリックしてください"
+    },
+    {
+      "name": "login_web_retry_hint",
+      "value": "まだ入れませんか？ Web ページを使用して 1 回ログイン (人間によるマシン検証を通過可能)"
+    },
+    {
+      "name": "settings_doh_scope_hint",
+      "value": "HTTP、組み込みの Web ページとログイン チェーンはすべて暗号化されています DNS。失敗した場合、Web ページ/ログイン チェーンは分析のために自動的にシステムに戻ります。"
+    },
+    {
+      "name": "settings_relay_endpoint",
+      "value": "移転報告先アドレス"
+    },
+    {
+      "name": "settings_relay_key",
+      "value": "共有キー (リレーキーに対応し、空にすることもできます)"
+    },
+    {
+      "name": "settings_relay_key_hint",
+      "value": "リレーと一致する任意の文字列"
+    },
+    {
+      "name": "settings_relay_disabled",
+      "value": "交通機関のレポートは終了しました"
+    },
+    {
+      "name": "settings_clear_device_hint",
+      "value": "まずログアウトしてから、デバイス認証をクリアします"
+    },
+    {
+      "name": "settings_login_help",
+      "value": "ログインに失敗した場合：まず「ログインチャネルセルフチェック」をクリックし、次に「ログインログをコピー」をクリックして内容を送信してください。 \n"
+    },
+    {
+      "name": "settings_login_selftest_running",
+      "value": "ログイン チャネルのセルフチェック (最大 15 秒)…"
+    },
+    {
+      "name": "settings_ip_check_running",
+      "value": "エクスポート IP を確認しています (最大 10 秒)…"
+    },
+    {
+      "name": "settings_ip_datacenter",
+      "value": "こちらはコンピュータ室のIPです。ノードを変更して再試行することをお勧めします。"
+    },
+    {
+      "name": "settings_ip_normal",
+      "value": "この線は普通に見えます"
+    },
+    {
+      "name": "settings_login_log_copied",
+      "value": "ログイン ログがコピーされました (貼り付けて開発者に送信)"
+    },
+    {
+      "name": "settings_meow_login_sending",
+      "value": "ログインログをMeoWにプッシュしています…"
+    },
+    {
+      "name": "settings_reels_log_empty",
+      "value": "リールのクラッシュ ログはまだありません (リールが入力されていないか、ログがクリアされています)"
+    },
+    {
+      "name": "settings_reels_log_prefix",
+      "value": "(デバイスとバージョン: %s) \n\n"
+    },
+    {
+      "name": "settings_meow_reels_sending",
+      "value": "リールのクラッシュログを MeoW にプッシュ中…"
+    },
+    {
+      "name": "login_error_transport",
+      "value": "ログイン要求例外: %s"
+    },
+    {
+      "name": "login_ok_session_pending",
+      "value": "%s 成功 (モバイル セッションのマテリアルの準備ができていません)"
+    },
+    {
+      "name": "system_http_failed",
+      "value": "システム HTTP スタックも失敗しました: %s"
+    },
+    {
+      "name": "notify_direct_fallback",
+      "value": "プライベートメッセージ"
+    },
+    {
+      "name": "notify_direct_count",
+      "value": "新しいプライベート メッセージが %d 件あります"
+    },
+    {
+      "name": "notify_direct_one",
+      "value": "新しいプライベートメッセージがあります"
+    },
+    {
+      "name": "index_web_login_hint",
+      "value": "ページにログインし (人間と機械による検証が必要な場合があります)、成功したら自分で入力します。"
+    },
+    {
+      "name": "index_open_link_failed",
+      "value": "このリンクは開けません (システムに使用可能なブラウザがありません?)"
+    },
+    {
+      "name": "index_share_empty",
+      "value": "この共有には開くコンテンツがありません"
+    },
+    {
+      "name": "linkin_title",
+      "value": "ディープリンクから入る"
+    },
+    {
+      "name": "linkin_hint",
+      "value": "リンクは、Want を通じてシステムによってこのアプリケーションに送信されます。以下は、URI から解析されたコンテンツです。"
+    },
+    {
+      "name": "linkin_target_known",
+      "value": "✓ 目標を理解する"
+    },
+    {
+      "name": "linkin_target_unknown",
+      "value": "✗ 未知のターゲット"
+    },
+    {
+      "name": "linkin_params_ok",
+      "value": "✓ 完全なパラメータ"
+    },
+    {
+      "name": "linkin_params_missing",
+      "value": "✗ パラメータがありません"
+    },
+    {
+      "name": "linkin_open_action",
+      "value": "このリンクを開いて実行します"
+    },
+    {
+      "name": "linkin_ignore",
+      "value": "無視してホームページに直接アクセスしてください"
+    },
+    {
+      "name": "linkin_supported",
+      "value": "サポートされているリンク"
+    },
+    {
+      "name": "story_diag_guide",
+      "value": "2)detail= と「Press-by-Send Track」を確認します。detail=empty は、サーバーが 200+JSON に応答したが、メディアがないことを意味します。"
+    },
+    {
+      "name": "settings_group_language",
+      "value": "言語"
+    },
+    {
+      "name": "settings_language",
+      "value": "言語"
+    },
+    {
+      "name": "settings_language_search",
+      "value": "言語を検索"
+    },
+    {
+      "name": "settings_language_hint",
+      "value": "アプリの言語を選択します。このアプリにのみ適用され、システム言語は変わりません。"
+    },
+    {
+      "name": "settings_language_changed",
+      "value": "言語を切り替えました"
+    }
+  ]
+}

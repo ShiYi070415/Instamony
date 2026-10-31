@@ -2071,14 +2071,14 @@ export class Tls13Client {
     const url: string = port === 443 ? `https://${host}${path}` : `https://${host}:${port}${path}`;
     const request: http.HttpRequest = http.createHttp();
     try {
-      const response: http.HttpResponse = await request.request(url, {
+      const response: http.HttpResponse = await request.request(url, DoHResolver.apply({
         method: method === 'POST' ? http.RequestMethod.POST : http.RequestMethod.GET,
         header: headers,
         extraData: method === 'POST' ? body : undefined,
         connectTimeout: 15000,
         readTimeout: 30000,
         expectDataType: http.HttpDataType.STRING
-      });
+      }));
       const text: string = typeof response.result === 'string'
         ? response.result as string : JSON.stringify(response.result);
       const head: Record<string, string> | null = (response.header ?? null) as Record<string, string> | null;

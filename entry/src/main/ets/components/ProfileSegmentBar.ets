@@ -64,6 +64,8 @@ export const SEGMENT_MODE_USER: string = 'user';
  * 差别只有两条：段里放**文字**而不是图标；胶囊要窄一点（段数只有 2）并居中。
  */
 export const SEGMENT_MODE_REELS: string = 'reels';
+/** 赞助页那条：两段文字，CNY / HKD（复用同一套材质、灰底药丸与横拖手势）。 */
+export const SEGMENT_MODE_SPONSOR: string = 'sponsor';
 const ICONS_SELF_NORMAL: Array<Resource> = [
   $r('sys.symbol.square_grid_2x2'),
   $r('sys.symbol.template'),
@@ -165,14 +167,17 @@ export struct ProfileSegmentBar {
     return index >= 0 && index < icons.length ? icons[index] : icons[0];
   }
 
-  /** 文字模式（Reels 那条）用的标签：0 = 探索，1 = 关注。 */
+  /** 文字模式用的标签：Reels = 探索/关注，赞助 = CNY/HKD。 */
   private labelOf(index: number): ResourceStr {
+    if (this.mode === SEGMENT_MODE_SPONSOR) {
+      return index === 1 ? 'HKD' : 'CNY';
+    }
     return index === 1 ? $r('app.string.reels_segment_following') : $r('app.string.reels_segment_explore');
   }
 
-  /** 这一段是文字还是图标（见 SEGMENT_MODE_REELS）。 */
+  /** 这一段是文字还是图标（见 SEGMENT_MODE_REELS / SEGMENT_MODE_SPONSOR）。 */
   private textMode(): boolean {
-    return this.mode === SEGMENT_MODE_REELS;
+    return this.mode === SEGMENT_MODE_REELS || this.mode === SEGMENT_MODE_SPONSOR;
   }
 
   /** ForEach 用的下标表（段数可配，不能写死 [0,1,2,3]）。 */

@@ -155,21 +155,26 @@ export class AccountScope {
   /**
    * 按 Cookie 串判定账号（Cookie 罐现读的那一串）。
    *
+   * @param override 调用方**已经知道**目标账号时直接给槽位（`u<id>`）。切号那条路
+   *   `switchAccount(userId)` 本来就知道点的是谁，不该再让罐里可能有重复的
+   *   `ds_user_id` 来决定分区 —— 判错一次就是"标题换了人、页面数据还是上一个人的"。
    * @returns 变更前后（`changed()` 为真时调用方要清内存、搬分区）
    */
-  static adoptFrom(cookie: string): AccountChange {
+  static adoptFrom(cookie: string, override: string = ''): AccountChange {
     const previous: string = AccountScope.account;
-    const id: string = AccountScope.accountOfCookie(cookie);
+    const id: string = override.length > 0 ? override : AccountScope.accountOfCookie(cookie);
     AccountScope.setAccount(id);
     return new AccountChange(previous, id);
   }
 
-  /** 从 Cookie 头串里推账号槽位（`u<ds_user_id>`；退回 sessionid 数字前缀）。 */
+  /**
+   * 从 Cookie 头串里推账号槽位。
+   *
+   * **优先 sessionid 的数字前缀**：它和这个会话是同一份凭据，比 ds_user_id 可靠。
+   * Cookie 罐里可能同时躺着 `.instagram.com` 与 `www.instagram.com` 两份
+   * `ds_user_id`（换号时旧的那份没被覆盖干净），按"第一颗"取就会取到上一个人。
+   */
   private static accountOfCookie(cookie: string): string {
-    const uid: string = AccountScope.cookieOf(cookie, 'ds_user_id');
-    if (uid.length > 0) {
-      return `u${uid}`;
-    }
     const session: string = AccountScope.cookieOf(cookie, 'sessionid');
     let end: number = 0;
     while (end < session.length) {
@@ -179,7 +184,38 @@ export class AccountScope {
       }
       end++;
     }
-    return end > 0 ? `u${session.substring(0, end)}` : '';
+    const sessionUid: string = end > 0 ? session.substring(0, end) : '';
+    const uids: Array<string> = AccountScope.cookieValues(cookie, 'ds_user_id');
+    if (sessionUid.length > 0) {
+      for (let index: number = 0; index < uids.length; index++) {
+        if (uids[index] === sessionUid) {
+          return `u${sessionUid}`;
+        }
+      }
+      // 罐里有 sessionid 但 ds_user_id 对不上：以 sessionid 为准（见上面）。
+      return `u${sessionUid}`;
+    }
+    // 没有 sessionid（设备级会话）：取**最后一颗** ds_user_id —— 新会话是最后写进去的。
+    if (uids.length > 0) {
+      return `u${uids[uids.length - 1]}`;
+    }
+    return '';
+  }
+
+  /** 取某个 cookie 名在整串里的**全部**值（同名多域时会有多颗）。 */
+  private static cookieValues(cookie: string, name: string): Array<string> {
+    const out: Array<string> = [];
+    const parts: Array<string> = cookie.split(';');
+    for (let index: number = 0; index < parts.length; index++) {
+      const pair: string = parts[index].trim();
+      if (pair.startsWith(`${name}=`)) {
+        const value: string = pair.substring(name.length + 1).trim();
+        if (value.length > 0 && out.indexOf(value) < 0) {
+          out.push(value);
+        }
+      }
+    }
+    return out;
   }
 
   private static cookieOf(cookie: string, name: string): string {

@@ -20,6 +20,7 @@ import { JsonRead } from './JsonRead';
 import { MediaQuality, PickedMedia } from './MediaQuality';
 import { InstagramCookieJar, InstagramCookieSnapshot } from './InstagramCookieJar';
 import { ApiThrottle } from './ApiThrottle';
+import { DoHResolver } from './net/DoHResolver';
 import { MobileProfile, MobileUserBody, MobileGridPage } from './mobileapi/MobileProfile';
 import { ProfileHeader, ProfileHighlight, ProfileMusic, ProfilePost, ProfilePostsPage } from '../model/Profile';
 // UA 的**唯一来源**（见 AppConfig.webUserAgent）：这里只读取，不再自己拼一份型号。
@@ -662,13 +663,13 @@ export class NativeProfile {
     const url: string = `https://www.instagram.com/${encodeURIComponent(name)}/`;
     const request: http.HttpRequest = http.createHttp();
     try {
-      const response: http.HttpResponse = await request.request(url, {
+      const response: http.HttpResponse = await request.request(url, DoHResolver.apply({
         method: http.RequestMethod.GET,
         header: headers,
         connectTimeout: 12000,
         readTimeout: 12000,
         expectDataType: http.HttpDataType.STRING
-      });
+      }));
       const text: string = typeof response.result === 'string'
         ? response.result as string : JSON.stringify(response.result);
       hilog.info(DOMAIN, TAG, 'profile html code=%{public}d len=%{public}d',

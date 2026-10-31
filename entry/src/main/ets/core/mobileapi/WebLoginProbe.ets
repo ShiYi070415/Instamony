@@ -20,6 +20,7 @@
  */
 
 import { http } from '@kit.NetworkKit';
+import { DoHResolver } from '../net/DoHResolver';
 
 const DOMAIN_APP_ID: string = '936619743392459';
 const BROWSER_UA: string =
@@ -51,10 +52,19 @@ export class WebProbeResult {
   readonly checkpointUrl: string;
   /** 脱敏后的现场摘要（进登录日志）。 */
   readonly detailNote: string;
+  /**
+   * Meta 是否要求**先改密码**再登录。
+   *
+   * 2026-10-31 用户反馈：挂着 VPN 登录一直提示"密码错误"，但密码本身是对的；
+   * 去 Meta 那边按提示改过一次密码后就能登录。也就是说这类账号并不是密码不匹配，
+   * 而是账号侧被要求走"改密码"这一步。网页接口的 `error_type` / `message` 里
+   * 会带 `password_change_required` 一类字样，必须单独识别，不能笼统归到 checkpoint。
+   */
+  readonly passwordChange: boolean;
 
   constructor(text: string, credentialsOk: boolean, challengeType: string = '',
               nativeFlow: boolean = false, apiPath: string = '', detailNote: string = '',
-              checkpointUrl: string = '') {
+              checkpointUrl: string = '', passwordChange: boolean = false) {
     this.text = text;
     this.credentialsOk = credentialsOk;
     this.challengeType = challengeType;
@@ -62,6 +72,7 @@ export class WebProbeResult {
     this.apiPath = apiPath;
     this.detailNote = detailNote;
     this.checkpointUrl = checkpointUrl;
+    this.passwordChange = passwordChange;
   }
 }
 
@@ -104,14 +115,14 @@ export class WebLoginProbe {
     const request: http.HttpRequest = http.createHttp();
     try {
       const response: http.HttpResponse = await request.request(
-        'https://www.instagram.com/api/v1/web/accounts/login/ajax/', {
+        'https://www.instagram.com/api/v1/web/accounts/login/ajax/', DoHResolver.apply({
           method: http.RequestMethod.POST,
           header: headers,
           extraData: body,
           connectTimeout: 15000,
           readTimeout: 20000,
           expectDataType: http.HttpDataType.STRING
-        });
+        }));
       const text: string = `${response.result}`;
       return WebLoginProbe.verdict(text, response.responseCode);
     } catch (error) {
@@ -152,6 +163,21 @@ export class WebLoginProbe {
       + ` error_type=${errorType.length > 0 ? errorType : '(无)'}`
       + ` is_vetted=${vetted ? 'true' : 'false'}`
       + ` raw=${json.length > 900 ? json.substring(0, 900) + '…' : json}`;
+    /*
+     * **Meta 要求先改密码**：不是密码不匹配，也不是普通 checkpoint。
+     * 这类账号用原密码登录会被回成"密码错误"，用户去官方那边改一次密码后就能进。
+     * 必须在"安全验证"之前认出来，否则界面会让人反复重试原密码。
+     */
+    const passwordChange: boolean = lower.indexOf('password_change') >= 0
+      || lower.indexOf('passwordchange') >= 0
+      || lower.indexOf('change_password') >= 0
+      || lower.indexOf('password_reset') >= 0;
+    if (passwordChange) {
+      return new WebProbeResult(
+        'Meta 要求先更改密码（不是密码不匹配）——请到 Instagram 官方 App / 网页按提示改一次密码，'
+          + '改完再用新密码回来登录。',
+        true, challengeType, nativeFlow, apiPath, detail, checkpointUrl, true);
+    }
     // ---- 先认 IG 自己给的那些"假/门槛类"错误（它们比 message 字段更有信息量）----
     if (inactivated) {
       return new WebProbeResult('这个账号已被 IG 停用（is_user_inactivated_error），登录不了是正常结果',
@@ -232,7 +258,7 @@ export class WebLoginProbe {
   private static async csrfToken(): Promise<string> {
     const request: http.HttpRequest = http.createHttp();
     try {
-      const response: http.HttpResponse = await request.request('https://www.instagram.com/', {
+      const response: http.HttpResponse = await request.request('https://www.instagram.com/', DoHResolver.apply({
         method: http.RequestMethod.GET,
         header: {
           'User-Agent': BROWSER_UA,
@@ -242,7 +268,7 @@ export class WebLoginProbe {
         connectTimeout: 15000,
         readTimeout: 15000,
         expectDataType: http.HttpDataType.STRING
-      });
+      }));
       const raw: ESObject = response.header as ESObject;
       if (raw === null || raw === undefined) {
         return '';

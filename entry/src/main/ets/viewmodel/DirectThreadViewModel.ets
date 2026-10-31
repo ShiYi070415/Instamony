@@ -51,12 +51,12 @@ const SHARE_PREFETCH_GAP_MS: number = 250;
  * 真正的实时通道（MQTT）在本机不可用（见 core/mobileapi/NetProbe 的三组对照），
  * 所以这里的前提是"宁可慢一点，也别把账号打成脚本"。
  */
-const THREAD_POLL_MIN_MS: number = 12000;
-const THREAD_POLL_MAX_MS: number = 25000;
+const THREAD_POLL_MIN_MS: number = 4000;
+const THREAD_POLL_MAX_MS: number = 7000;
 /** 自己刚发完消息后的**突发窗口**（毫秒）与窗口内的间隔范围。 */
 const THREAD_POLL_BURST_MS: number = 4500;
-const THREAD_POLL_BURST_MIN_MS: number = 4000;
-const THREAD_POLL_BURST_MAX_MS: number = 6000;
+const THREAD_POLL_BURST_MIN_MS: number = 2500;
+const THREAD_POLL_BURST_MAX_MS: number = 4000;
 const THREAD_POLL_BURST_WINDOW_MS: number = 30000;
 /**
  * **无人操作就停**（毫秒）。
@@ -1079,6 +1079,33 @@ export class DirectThreadViewModel {
       return;
     }
     this.armTimer();
+  }
+
+  /**
+   * **实时事件到了，但没解析成消息**（或消息没插进当前这一屏）时，马上补一发轮询。
+   *
+   * 为什么需要：MQTT/FBNS 的补丁形状偶尔认不出（见 DirectRealtime.unknownHandlers），
+   * 以前只能等下一拍 4~7 秒的轮询，用户看到的就是"对方发了，半天不冒出来"。
+   * 这里把下一拍提前到 0.6 秒左右，仍然只发**一发**，不改变长期轮询节奏。
+   */
+  pollSoon(delayMs: number = 600): void {
+    if (this.threadId.length === 0 || !this.foreground || !this.isPollingWanted) {
+      return;
+    }
+    if (this.view === null) {
+      return;
+    }
+    if (this.pollTimer >= 0) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = -1;
+    }
+    // 这是一次"补拍"：跳过 pollOnce 里"刚 load 过 8 秒"的闸门。
+    this.lastLoadAtMs = 0;
+    this.pollTimer = setTimeout((): void => {
+      this.pollTimer = -1;
+      this.pollOnce();
+      this.armTimer();
+    }, Math.max(120, delayMs));
   }
 
   /**

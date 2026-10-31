@@ -25,6 +25,7 @@ import { http } from '@kit.NetworkKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { InstagramCookieJar, InstagramCookieSnapshot } from '../InstagramCookieJar';
 import { ApiThrottle, BACKOFF_MS, FEEDBACK_BACKOFF_MS } from '../ApiThrottle';
+import { DoHResolver } from '../net/DoHResolver';
 import { MobileSession, MobileIdentity } from './MobileSession';
 import { MobileChallenge } from './MobileChallenge';
 import { signedBody } from './MobileSign';
@@ -343,14 +344,14 @@ export class MobileRequest {
         endpoint, Date.now() - queued, ApiThrottle.paceDescribe());
     }
     try {
-      const response: http.HttpResponse = await request.request(url, {
+      const response: http.HttpResponse = await request.request(url, DoHResolver.apply({
         method: isPost ? http.RequestMethod.POST : http.RequestMethod.GET,
         header: headers,
         extraData: isPost ? payload : undefined,
         connectTimeout: CONNECT_TIMEOUT_MS,
         readTimeout: READ_TIMEOUT_MS,
         expectDataType: http.HttpDataType.STRING
-      });
+      }));
       const text: string = typeof response.result === 'string'
         ? response.result as string : JSON.stringify(response.result);
       // 服务端下发的会话材料（claim / mid / rur / authorization）先捡起来，再判成败 ——

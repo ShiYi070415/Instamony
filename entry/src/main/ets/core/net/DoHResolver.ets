@@ -44,8 +44,9 @@ const NEGATIVE_TTL_MS: number = 30000;
  * 它们要依赖系统解析，只作为"IP 端点都被墙/都不通"时的兜底。
  */
 const ENDPOINTS: Array<string> = [
-  'https://1.1.1.1/dns-query',
+  // 国内优先：223.5.5.5 有 IP SAN，且在国内网络最稳。
   'https://223.5.5.5/dns-query',
+  'https://1.1.1.1/dns-query',
   'https://8.8.8.8/dns-query',
   'https://9.9.9.9/dns-query',
   'https://dns.alidns.com/dns-query',
@@ -67,11 +68,94 @@ export class DoHResolver {
   private static cache: Map<string, DnsEntry> = new Map<string, DnsEntry>();
   /** 最近一次查询的现场（设置页那一行 + 日志用）。 */
   private static lastLine: string = '-';
+  /**
+   * 当前选中的端点：先按默认顺序试，`addressFor` 成功一次就换成真正能用的那个。
+   *
+   * 全局 HTTP / WebView 都拿它当 `dnsOverHttps`，所以它必须是**实测能通**的那一条；
+   * 默认指向国内最稳的 223.5.5.5（IP 字面量，不依赖系统 DNS）。
+   */
+  private static activeEndpoint: string = ENDPOINTS[0];
+  /**
+   * 端点是否已经**实测可用**。
+   *
+   * 没探通之前 `httpDns()` 返回空串（这一发走系统 DNS）—— 不能拿一个没验证过的端点
+   * 去配置全 app 的 HTTP：端点被墙时会把所有请求一起拖死。探通一次之后才全量启用。
+   */
+  private static ready: boolean = false;
+  /** 预热是否在跑（避免启动时重复探）。 */
+  private static warming: boolean = false;
 
-  /** 开关（设置页那个 Toggle；默认关）。 */
+  /** 开关（设置页那个 Toggle；默认开 —— 全 app 的 HTTP / WebView / 自建 TLS 都走它）。 */
   static enabled(): boolean {
     const value: boolean | undefined = AppStorage.get<boolean>(SETTING_DOH);
-    return value === true;
+    return value !== false;
+  }
+
+  /**
+   * 给 `HttpRequestOptions.dnsOverHttps` 的值（空串 = 这次不用 DoH）。
+   *
+   * 只返回 `https://…/dns-query`：HTTP 栈会用它解析**这一发请求**的域名，
+   * 不写系统设置、不影响别的 app。
+   */
+  static httpDns(): string {
+    return DoHResolver.enabled() && DoHResolver.ready ? DoHResolver.activeEndpoint : '';
+  }
+
+  /** 给 `WebviewController.setHttpDns` 的配置（空串 = 不配置）。 */
+  static webviewDns(): string {
+    return DoHResolver.httpDns();
+  }
+
+  /**
+   * 把 `dnsOverHttps` 塞进一次 HTTP 请求的 options（开关关着时原样返回）。
+   *
+   * 所有 `http.createHttp().request(...)` 都过这一层，才能叫"全 app 的 HTTP 都走 DoH"。
+   */
+  static apply(options: http.HttpRequestOptions): http.HttpRequestOptions {
+    const endpoint: string = DoHResolver.httpDns();
+    if (endpoint.length > 0) {
+      options.dnsOverHttps = endpoint;
+    }
+    return options;
+  }
+
+  /**
+   * 启动时**探一次端点**（fire-and-forget）：挑一条真能解析的，之后全 app 都用它。
+   *
+   * 为什么不在每发请求前探：那会把 DoH 变成所有请求的串行前置，得不偿失。
+   * 这里只在启动 / 切网 / 用户点"测一下"时更新 `activeEndpoint`。
+   */
+  static warmUp(): void {
+    if (!DoHResolver.enabled() || DoHResolver.warming) {
+      return;
+    }
+    DoHResolver.warming = true;
+    DoHResolver.probeEndpoint().then((): void => {
+      DoHResolver.warming = false;
+    }).catch((): void => {
+      DoHResolver.warming = false;
+    });
+  }
+
+  /** 探一条能用的端点（成功则更新 activeEndpoint）。 */
+  private static async probeEndpoint(): Promise<void> {
+    for (let index: number = 0; index < ENDPOINTS.length; index++) {
+      const endpoint: string = ENDPOINTS[index];
+      try {
+        const outcome: DnsOutcome = await DoHResolver.queryA(endpoint, 'i.instagram.com');
+        if (outcome.ip.length > 0) {
+          DoHResolver.activeEndpoint = endpoint;
+          DoHResolver.ready = true;
+          hilog.info(DOMAIN, TAG, 'active endpoint=%{public}s', DoHResolver.hostOf(endpoint));
+          return;
+        }
+      } catch (error) {
+        hilog.info(DOMAIN, TAG, 'endpoint unavailable %{public}s (%{public}s)',
+          DoHResolver.hostOf(endpoint), (error as Error).message ?? '-');
+      }
+    }
+    hilog.warn(DOMAIN, TAG, 'no doh endpoint reachable, keep %{public}s',
+      DoHResolver.hostOf(DoHResolver.activeEndpoint));
   }
 
   /** 最近一次查询的现场（`host=… ip=… via=… ms=…` / `fallback: …`）。 */
@@ -88,6 +172,8 @@ export class DoHResolver {
   static clear(): void {
     DoHResolver.cache.clear();
     DoHResolver.lastLine = '-';
+    // 换端点/换网之后要重新探通才全量启用（见 ready 的说明）。
+    DoHResolver.ready = false;
     hilog.info(DOMAIN, TAG, 'doh cache cleared');
   }
 
@@ -122,6 +208,8 @@ export class DoHResolver {
           continue;
         }
         DoHResolver.remember(host, new DnsEntry(outcome.ip, Date.now() + outcome.ttlMs));
+        DoHResolver.activeEndpoint = endpoint;
+        DoHResolver.ready = true;
         DoHResolver.lastLine = `host=${host} ip=${outcome.ip} via=${DoHResolver.hostOf(endpoint)}`
           + ` ttl=${Math.round(outcome.ttlMs / 1000)}s ms=${Date.now() - started}`;
         hilog.info(DOMAIN, TAG, 'doh ok %{public}s', DoHResolver.lastLine);
@@ -317,10 +405,14 @@ export class DoHResolver {
   /** 设置项切换后用一行话说明当前状态（设置页显示）。 */
   static describe(): string {
     if (!DoHResolver.enabled()) {
-      return '未启用（登录链的域名解析走系统）';
+      return '未启用（HTTP / 网页 / 自建 TLS 都走系统 DNS）';
+    }
+    if (!DoHResolver.ready) {
+      return '已启用（全 app）· 正在探测可用端点，探测通过前先走系统 DNS';
     }
     const cached: number = DoHResolver.cacheSize();
-    return `已启用 · 端点 ${ENDPOINTS.length} 个 · 缓存 ${cached} 条 · 最近：${DoHResolver.lastLine}`;
+    return `已启用（全 app）· 当前端点 ${DoHResolver.hostOf(DoHResolver.activeEndpoint)}`
+      + ` · 缓存 ${cached} 条 · 最近：${DoHResolver.lastLine}`;
   }
 }
 

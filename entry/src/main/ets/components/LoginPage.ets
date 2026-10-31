@@ -469,7 +469,8 @@ export struct LoginPage {
   probeRow() {
     Column({ space: 6 }) {
       Row({ space: 6 }) {
-        Text(this.probeBusy ? '正在核对…' : '账号密码对不对？点这里用 IG 网页接口核对一次')
+        Text(this.probeBusy ? $r('app.string.login_probe_busy')
+          : $r('app.string.login_probe_hint'))
           .fontSize(11)
           .lineHeight(16)
           .fontColor(this.probeBusy ? $r('app.color.secondary_text') : $r('app.color.brand_blue'))
@@ -494,7 +495,7 @@ export struct LoginPage {
        * App 自动切到主界面。
        */
       Row({ space: 6 }) {
-        Text('还是进不去？用网页登录一次（能过人机验证）')
+        Text($r('app.string.login_web_retry_hint'))
           .fontSize(11)
           .lineHeight(16)
           .fontColor($r('app.color.brand_blue'))

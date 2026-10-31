@@ -590,6 +590,8 @@ export struct PostCardPanel {
       }
     }
     .width('100%')
+    // 译文/原文切换时卡片内容高度跟着文本平滑变化。
+    .animation({ duration: TRANSLATE_ANIM_MS, curve: Curve.EaseOut })
     .alignItems(HorizontalAlign.Start)
     // 四边**同一个值**。
     .padding(CARD_PAD_VP)

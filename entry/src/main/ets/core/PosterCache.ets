@@ -24,6 +24,7 @@ import { http } from '@kit.NetworkKit';
 import { image } from '@kit.ImageKit';
 import { MediaPost } from '../model/MediaPost';
 import { FEED_POSTER_READY } from './AppSettings';
+import { DoHResolver } from './net/DoHResolver';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'PosterCache';
@@ -113,12 +114,12 @@ export class PosterCache {
   /** 取一张小图并解码（自己发 HTTP，因为 image 那套不支持 http 地址）。 */
   private static decode(key: string, url: string): void {
     const request: http.HttpRequest = http.createHttp();
-    request.request(url, {
+    request.request(url, DoHResolver.apply({
       method: http.RequestMethod.GET,
       connectTimeout: TIMEOUT_MS,
       readTimeout: TIMEOUT_MS,
       expectDataType: http.HttpDataType.ARRAY_BUFFER
-    }).then((response: http.HttpResponse): void => {
+    })).then((response: http.HttpResponse): void => {
       const buffer: ArrayBuffer = response.result as ArrayBuffer;
       if (response.responseCode !== 200 || buffer === undefined || buffer.byteLength === 0
         || buffer.byteLength > MAX_BYTES) {

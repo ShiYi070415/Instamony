@@ -943,47 +943,306 @@
     {
       "name": "story_need_challenge",
       "value": "IG 要求这个账号先完成安全验证：请到网页里登录 / 验证一次再回来看快拍"
+    },
+    {
+      "name": "settings_proxy_title",
+      "value": "代理"
+    },
+    {
+      "name": "settings_proxy_host",
+      "value": "主机"
+    },
+    {
+      "name": "settings_proxy_port",
+      "value": "端口"
+    },
+    {
+      "name": "settings_proxy_user",
+      "value": "用户名"
+    },
+    {
+      "name": "settings_proxy_pass",
+      "value": "密码"
+    },
+    {
+      "name": "settings_proxy_apply",
+      "value": "应用"
+    },
+    {
+      "name": "settings_proxy_off",
+      "value": "关闭代理"
+    },
+    {
+      "name": "settings_proxy_enable",
+      "value": "启用代理"
+    },
+    {
+      "name": "settings_proxy_saved",
+      "value": "已保存的代理"
+    },
+    {
+      "name": "settings_proxy_none",
+      "value": "暂无"
+    },
+    {
+      "name": "settings_proxy_add_title",
+      "value": "添加代理"
+    },
+    {
+      "name": "settings_proxy_name",
+      "value": "名称"
+    },
+    {
+      "name": "settings_proxy_add",
+      "value": "添加"
+    },
+    {
+      "name": "settings_group_proxy",
+      "value": "代理"
+    },
+    {
+      "name": "settings_proxy_hint",
+      "value": "代理只作用于本 App 的网络请求，保存后立即生效；关闭开关即恢复直连"
+    },
+    {
+      "name": "proxy_ph_name",
+      "value": "例如：公司代理"
+    },
+    {
+      "name": "proxy_ph_host",
+      "value": "例如：127.0.0.1"
+    },
+    {
+      "name": "proxy_ph_port",
+      "value": "例如：7890"
+    },
+    {
+      "name": "proxy_ph_optional",
+      "value": "可选"
+    },
+    {
+      "name": "settings_proxy_pick_title",
+      "value": "选择代理"
+    },
+    {
+      "name": "settings_proxy_confirm",
+      "value": "确定"
+    },
+    {
+      "name": "settings_proxy_selected",
+      "value": "已选中"
+    },
+    {
+      "name": "settings_proxy_manage_title",
+      "value": "管理代理"
+    },
+    {
+      "name": "settings_proxy_edit_title",
+      "value": "编辑代理"
+    },
+    {
+      "name": "settings_proxy_save",
+      "value": "保存"
+    },
+    {
+      "name": "settings_proxy_edit_action",
+      "value": "编辑"
+    },
+    {
+      "name": "settings_proxy_delete_action",
+      "value": "删除"
+    },
+    {
+      "name": "settings_proxy_deleted",
+      "value": "已删除"
+    },
+    {
+      "name": "settings_proxy_verifying",
+      "value": "正在验证代理…"
+    },
+    {
+      "name": "settings_proxy_verify_failed",
+      "value": "代理无法连接：%s"
+    },
+    {
+      "name": "settings_proxy_invalid",
+      "value": "主机和端口必须填"
+    },
+    {
+      "name": "back_press_exit_hint",
+      "value": "再次返回到桌面"
+    },
+    {
+      "name": "login_probe_busy",
+      "value": "正在核对…"
+    },
+    {
+      "name": "login_probe_hint",
+      "value": "账号密码对不对？点这里用 IG 网页接口核对一次"
+    },
+    {
+      "name": "login_web_retry_hint",
+      "value": "还是进不去？用网页登录一次（能过人机验证）"
+    },
+    {
+      "name": "settings_doh_scope_hint",
+      "value": "HTTP、内置网页与登录链都改走加密 DNS；失败会在网页/登录链上自动退回系统解析。"
+    },
+    {
+      "name": "settings_relay_endpoint",
+      "value": "中转上报地址"
+    },
+    {
+      "name": "settings_relay_key",
+      "value": "共享密钥（可空，对应 relay 的 key）"
+    },
+    {
+      "name": "settings_relay_key_hint",
+      "value": "随便一串字符，和 relay 保持一致"
+    },
+    {
+      "name": "settings_relay_disabled",
+      "value": "已关闭中转上报"
+    },
+    {
+      "name": "settings_clear_device_hint",
+      "value": "先退出登录，再清设备认证"
+    },
+    {
+      "name": "settings_login_help",
+      "value": "登录失败时：先点「登录通道自检」，再点「复制登录日志」把内容发我。\n"
+    },
+    {
+      "name": "settings_login_selftest_running",
+      "value": "正在自检登录通道（最多 15 秒）…"
+    },
+    {
+      "name": "settings_ip_check_running",
+      "value": "正在查出口 IP（最多 10 秒）…"
+    },
+    {
+      "name": "settings_ip_datacenter",
+      "value": "这是机房 IP，建议换节点再试"
+    },
+    {
+      "name": "settings_ip_normal",
+      "value": "这条线路看着正常"
+    },
+    {
+      "name": "settings_login_log_copied",
+      "value": "登录日志已复制（粘贴发给开发者）"
+    },
+    {
+      "name": "settings_meow_login_sending",
+      "value": "正在推送登录日志到 MeoW…"
+    },
+    {
+      "name": "settings_reels_log_empty",
+      "value": "还没有 reels 崩溃日志（没进过 reels，或日志已被清掉）"
+    },
+    {
+      "name": "settings_reels_log_prefix",
+      "value": "（设备与版本：%s）\n\n"
+    },
+    {
+      "name": "settings_meow_reels_sending",
+      "value": "正在推送 reels 崩溃日志到 MeoW…"
+    },
+    {
+      "name": "login_error_transport",
+      "value": "登录请求异常：%s"
+    },
+    {
+      "name": "login_ok_session_pending",
+      "value": "%s成功（移动会话材料未就绪）"
+    },
+    {
+      "name": "system_http_failed",
+      "value": "系统 HTTP 栈也失败：%s"
+    },
+    {
+      "name": "notify_direct_fallback",
+      "value": "私信"
+    },
+    {
+      "name": "notify_direct_count",
+      "value": "你有 %d 条新私信"
+    },
+    {
+      "name": "notify_direct_one",
+      "value": "你有一条新私信"
+    },
+    {
+      "name": "index_web_login_hint",
+      "value": "在页面里登录（可能要过人机验证），成功后会自己进入"
+    },
+    {
+      "name": "index_open_link_failed",
+      "value": "打不开这个链接（系统里没有可用的浏览器？）"
+    },
+    {
+      "name": "index_share_empty",
+      "value": "这条分享没有可打开的内容"
+    },
+    {
+      "name": "linkin_title",
+      "value": "通过深链进入"
+    },
+    {
+      "name": "linkin_hint",
+      "value": "链接由系统通过 Want 送进本应用，下面是从 URI 里解析出来的内容。"
+    },
+    {
+      "name": "linkin_target_known",
+      "value": "✓ 认识这个目标"
+    },
+    {
+      "name": "linkin_target_unknown",
+      "value": "✗ 不认识的目标"
+    },
+    {
+      "name": "linkin_params_ok",
+      "value": "✓ 参数完整"
+    },
+    {
+      "name": "linkin_params_missing",
+      "value": "✗ 参数缺失"
+    },
+    {
+      "name": "linkin_open_action",
+      "value": "打开并执行这条链接"
+    },
+    {
+      "name": "linkin_ignore",
+      "value": "忽略，直接进首页"
+    },
+    {
+      "name": "linkin_supported",
+      "value": "支持的链接"
+    },
+    {
+      "name": "story_diag_guide",
+      "value": "2) 再看 detail= 与「逐发轨迹」：detail=empty 表示服务端答了 200+JSON 但没有媒体；"
+    },
+    {
+      "name": "settings_group_language",
+      "value": "语言"
+    },
+    {
+      "name": "settings_language",
+      "value": "语言"
+    },
+    {
+      "name": "settings_language_search",
+      "value": "搜索语言"
+    },
+    {
+      "name": "settings_language_hint",
+      "value": "选择应用语言；只影响本应用，不改变系统语言。"
+    },
+    {
+      "name": "settings_language_changed",
+      "value": "语言已切换"
     }
-  ,
-    {"name": "settings_proxy_title", "value": "代理"},
-    {"name": "settings_proxy_host", "value": "主机"},
-    {"name": "settings_proxy_port", "value": "端口"},
-    {"name": "settings_proxy_user", "value": "用户名"},
-    {"name": "settings_proxy_pass", "value": "密码"},
-    {"name": "settings_proxy_apply", "value": "应用"},
-    {"name": "settings_proxy_off", "value": "关闭代理"}
-,
-    {"name": "settings_proxy_enable", "value": "启用代理"},
-    {"name": "settings_proxy_saved", "value": "已保存的代理"},
-    {"name": "settings_proxy_none", "value": "暂无代理"},
-    {"name": "settings_proxy_add_title", "value": "添加代理"},
-    {"name": "settings_proxy_name", "value": "名称"},
-    {"name": "settings_proxy_add", "value": "添加"}
-,
-    {"name": "settings_group_proxy", "value": "代理"}
-,
-    {"name": "settings_proxy_hint", "value": "代理只作用于本 App 的网络请求，保存后立即生效；关闭开关即恢复直连"}
-,
-    {"name": "proxy_ph_name", "value": "例如：公司代理"},
-    {"name": "proxy_ph_host", "value": "例如：127.0.0.1"},
-    {"name": "proxy_ph_port", "value": "例如：7890"},
-    {"name": "proxy_ph_optional", "value": "可选"}
-,
-    {"name": "settings_proxy_pick_title", "value": "选择代理"},
-    {"name": "settings_proxy_confirm", "value": "确定"},
-    {"name": "settings_proxy_selected", "value": "已选中"}
-,
-    {"name": "settings_proxy_manage_title", "value": "管理代理"},
-    {"name": "settings_proxy_edit_title", "value": "编辑代理"},
-    {"name": "settings_proxy_save", "value": "保存"},
-    {"name": "settings_proxy_edit_action", "value": "编辑"},
-    {"name": "settings_proxy_delete_action", "value": "删除"},
-    {"name": "settings_proxy_deleted", "value": "已删除"}
-,
-    {"name": "settings_proxy_verifying", "value": "正在验证代理…"},
-    {"name": "settings_proxy_verify_failed", "value": "代理无法连接：%s"},
-    {"name": "settings_proxy_invalid", "value": "主机和端口必须填"}
-,
-    {"name": "back_press_exit_hint", "value": "再次返回到桌面"}
-]
+  ]
 }

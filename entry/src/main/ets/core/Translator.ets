@@ -36,6 +36,7 @@ import { http } from '@kit.NetworkKit';
 import { i18n } from '@kit.LocalizationKit';
 import { common } from '@kit.AbilityKit';
 import { InstagramProbe } from '../probe/InstagramProbe';
+import { DoHResolver } from './net/DoHResolver';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'Translator';
@@ -294,13 +295,13 @@ export class Translator {
     }
     const request: http.HttpRequest = http.createHttp();
     try {
-      const response: http.HttpResponse = await request.request(url, {
+      const response: http.HttpResponse = await request.request(url, DoHResolver.apply({
         method: http.RequestMethod.GET,
         header: Translator.headersFor(target),
         connectTimeout: CONNECT_TIMEOUT_MS,
         readTimeout: READ_TIMEOUT_MS,
         expectDataType: http.HttpDataType.STRING
-      });
+      }));
       const body: string = typeof response.result === 'string'
         ? response.result as string : JSON.stringify(response.result);
       if (response.responseCode !== 200) {

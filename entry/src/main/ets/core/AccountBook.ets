@@ -4,23 +4,34 @@
  * ## 为什么单独一份，不塞进 AccountScope
  * `AccountScope`（见 core/AccountScope）管的是"**当前**这个人"的缓存分区：它只知道一个 key，
  * 换人就搬备份。而多账号要的是**花名册**：
- *   · 每个账号：数字 id、账号名、头像、会话（sessionid + csrftoken）、最近使用时间；
+ *   · 每个账号：数字 id、账号名、头像、会话（sessionid + csrftoken，或设备级 Authorization）、
+ *     最近使用时间；
  *   · 界面上要在标题栏列出"其他账号"并一键切过去 —— 切过去 = 把它那串会话重新种回 Cookie 罐。
  * 两者关注点不同，硬合在一起会让"分区"那套逻辑跟着长出账号列表，得不偿失。
  *
  * ## 存什么、不存什么
- *   · **存**：会话 cookie（sessionid / csrftoken）、ds_user_id、账号名、头像地址。
+ *   · **存**：会话 cookie（sessionid / csrftoken）、ds_user_id、账号名、头像地址；
+ *     以及**设备级会话**的 `Authorization`（见下面 `authorization` 的说明）。
  *     登录本身就是要落会话的（Cookie 罐自己也会落盘），这里只是把**每个人的**一份分开存，
  *     否则切回去要重新走一遍密码 + 两步验证。
  *   · **不存**：密码。任何时候都不落盘（密码只在登录那一次请求里用，见 LoginPage）。
  *   · 退出登录（`signOut`）**不清账本**：用户要的正是"退出后还能切回来"。
  *     真要删某个账号的会话，用 `forget(userId)`（设置页将来可以接一颗按钮）。
  *
+ * ## 为什么还要存 Authorization（设备级会话）
+ * IG 2026-10 起密码登录会下发**没有 sessionid 的设备级会话**（只有
+ * `Authorization: Bearer IGT:2:…` + `ds_user_id` 等 cookie，见 core/mobileapi/MobileSession）。
+ * 这种账号的唯一凭据就是那串 Authorization；只存 sessionid 的话它既进不了花名册、
+ * 也切不过去 —— 真机表现就是"主号登录小号后能看见两个账号，一旦切回主号小号就消失"。
+ * 所以 Authorization 和 sessionid 一样按账号存一份（只落本机，随 `forget` 一起删）。
+ *
  * ## 和 AccountScope 的配合
- * 切换账号时：`InstagramCookieJar.adoptSession(...)` 把目标账号的会话种回去 →
- * `pages/Index.applySession(...)` 会按 Cookie 里的 `ds_user_id` 走账号分区（stash 上一个人、
- * restore 这一个人的备份）。所以这里的 `usedAt` 只用于排序，不作为"当前账号"的判据 ——
- * 当前账号**永远以 Cookie 罐为准**（`AccountScope.current()` / `ds_user_id`）。
+ * 切换账号时：带 sessionid 的会话走 `InstagramCookieJar.adoptSession(...)`，设备级会话走
+ * `core/AccountActionService.adoptAccount(...)`（Authorization 交回 MobileSession）；两条路
+ * 最后都把 `ds_user_id` 种进 Cookie 罐 → `pages/Index.applySession(...)` 按它走账号分区
+ * （stash 上一个人、restore 这一个人的备份）。所以这里的 `usedAt` 只用于排序，不作为
+ * "当前账号"的判据 —— 当前账号**永远以 Cookie 罐为准**（`AccountScope.current()` /
+ * `ds_user_id`）。
  */
 
 import { preferences } from '@kit.ArkData';
@@ -45,22 +56,36 @@ export class AccountEntry {
   sessionId: string;
   /** 会话里的 csrftoken（移动端私有接口要用，见 MobileSession）。 */
   csrf: string;
+  /**
+   * **设备级会话**的凭据：`Authorization: Bearer IGT:2:…`（没有 sessionid 时才有值）。
+   *
+   * 与 `sessionId` 二选一：带 sessionid 的会话切回去只需重种 cookie；
+   * 设备级会话没有 sessionid，只能把这份 Authorization 交回 MobileSession
+   * （见 core/AccountActionService.adoptAccount）。
+   */
+  authorization: string;
   /** 最近一次使用的时间戳（毫秒）：花名册按它倒序排。 */
   usedAt: number;
 
   constructor(userId: string, username: string, avatarUrl: string, sessionId: string,
-              csrf: string, usedAt: number) {
+              csrf: string, usedAt: number, authorization: string = '') {
     this.userId = userId;
     this.username = username;
     this.avatarUrl = avatarUrl;
     this.sessionId = sessionId;
     this.csrf = csrf;
     this.usedAt = usedAt;
+    this.authorization = authorization;
   }
 
-  /** 能不能拿来切换（没有会话就只能显示，切过去也没用）。 */
+  /**
+   * 能不能拿来切换（没有会话就只能显示，切过去也没用）。
+   *
+   * 两种会话都算「有会话」：带 sessionid 的会话，或只有 Authorization 的设备级会话
+   * （IG 2026-10 起密码登录会下发后者，见文件头）。
+   */
   usable(): boolean {
-    return this.userId.length > 0 && this.sessionId.length > 0;
+    return this.userId.length > 0 && (this.sessionId.length > 0 || this.authorization.length > 0);
   }
 }
 
@@ -114,20 +139,33 @@ export class AccountBook {
    *
    * 已有的条目**只覆盖传进来的那几样**：切换账号时我们只拿得到会话，
    * 不该把之前存好的账号名/头像抹成空。
+   *
+   * @param authorization **设备级会话**的 `Authorization`（带 sessionid 的会话传空串）。
+   *   两种凭据是互斥的：传了 Authorization 就说明这次会话没有 sessionid，旧 sessionid
+   *   必须一并作废（否则切过去会带着上一个人/上一次的 sessionid 发请求）。
    */
-  static saveSession(userId: string, sessionId: string, csrf: string): void {
+  static saveSession(userId: string, sessionId: string, csrf: string,
+                     authorization: string = ''): void {
     if (userId.length === 0) {
       return;
     }
     const existing: AccountEntry | null = AccountBook.find(userId);
     if (existing === null) {
-      AccountBook.entries.push(new AccountEntry(userId, '', '', sessionId, csrf, Date.now()));
+      AccountBook.entries.push(new AccountEntry(userId, '', '', sessionId, csrf, Date.now(),
+        authorization));
     } else {
       if (sessionId.length > 0) {
         existing.sessionId = sessionId;
+        // 这一份会话带 sessionid：旧 authorization 是上一次的凭据，作废（切的时候会重建）。
+        existing.authorization = '';
       }
       if (csrf.length > 0) {
         existing.csrf = csrf;
+      }
+      if (authorization.length > 0) {
+        // 设备级会话：没有 sessionid，只有 Authorization。
+        existing.authorization = authorization;
+        existing.sessionId = '';
       }
       existing.usedAt = Date.now();
     }
@@ -145,6 +183,28 @@ export class AccountBook {
       return;
     }
     let touched: boolean = false;
+    /*
+     * **同一个 IG 用户名只可能属于一个数字 id**。如果它已经挂在另一个 userId 名下，
+     * 那一定是历史版本在切号瞬间写串了（用户报的"切换账号后头像和用户名变成同一个人"）。
+     * 这里以**当前这次按 id 核对过的接口头部**为准，先把别人名下那份同名资料清掉，
+     * 再写当前账号 —— 盘上已经被写错的条目因此能自愈，不必等用户把两个号都切一遍。
+     */
+    const nameKey: string = username.trim().toLowerCase();
+    if (nameKey.length > 0) {
+      for (let index: number = 0; index < AccountBook.entries.length; index++) {
+        const other: AccountEntry = AccountBook.entries[index];
+        if (other.userId === userId) {
+          continue;
+        }
+        if (other.username.trim().toLowerCase() === nameKey) {
+          other.username = '';
+          other.avatarUrl = '';
+          touched = true;
+          hilog.info(DOMAIN, TAG, 'cleared duplicate profile @%{public}s from %{public}s',
+            username, other.userId);
+        }
+      }
+    }
     if (username.length > 0 && existing.username !== username) {
       existing.username = username;
       touched = true;
@@ -192,7 +252,8 @@ export class AccountBook {
     return AccountBook.entries.map((one: AccountEntry): string =>
       `${one.userId}:${one.username.length > 0 ? one.username : '(no name)'}`
         + `:${one.avatarUrl.length > 0 ? 'avatar' : 'no-avatar'}`
-        + `:${one.usable() ? 'session' : 'no-session'}`).join(' | ');
+        + `:${one.sessionId.length > 0 ? 'session' : (one.authorization.length > 0 ? 'device' : 'no-session')}`)
+      .join(' | ');
   }
 
   /** 从落盘里重读（`init` 与外部改动后调）。 */
@@ -220,14 +281,19 @@ export class AccountBook {
     }
   }
 
-  /** 序列化成 JSON 数组文本（键名用短名，省点空间）。 */
+  /**
+   * 序列化成 JSON 数组文本（键名用短名，省点空间）。
+   *
+   * `z` = 设备级会话的 `Authorization`（老数据没有这个键，解析时给空串）。
+   */
   private static serialize(entries: Array<AccountEntry>): string {
     const parts: Array<string> = [];
     for (let index: number = 0; index < entries.length; index++) {
       const one: AccountEntry = entries[index];
       parts.push(`{"u":${JSON.stringify(one.userId)},"n":${JSON.stringify(one.username)},`
         + `"a":${JSON.stringify(one.avatarUrl)},"s":${JSON.stringify(one.sessionId)},`
-        + `"c":${JSON.stringify(one.csrf)},"t":${one.usedAt}}`);
+        + `"c":${JSON.stringify(one.csrf)},"z":${JSON.stringify(one.authorization)},`
+        + `"t":${one.usedAt}}`);
     }
     return `[${parts.join(',')}]`;
   }
@@ -267,7 +333,7 @@ export class AccountBook {
         continue;
       }
       result.push(new AccountEntry(userId, field(one, 'n'), field(one, 'a'),
-        field(one, 's'), field(one, 'c'), numField(one, 't')));
+        field(one, 's'), field(one, 'c'), numField(one, 't'), field(one, 'z')));
     }
     return result;
   }

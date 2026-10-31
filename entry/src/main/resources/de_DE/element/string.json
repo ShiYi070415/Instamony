@@ -1,0 +1,1248 @@
+{
+  "string": [
+    {
+      "name": "app_name",
+      "value": "Instamony"
+    },
+    {
+      "name": "common_cancel",
+      "value": "Abbrechen"
+    },
+    {
+      "name": "app_title",
+      "value": "Instamony"
+    },
+    {
+      "name": "module_desc",
+      "value": "Instamony Hauptmodul"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Instamony Hauptmodul"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Instamony"
+    },
+    {
+      "name": "login_title",
+      "value": "Instamony"
+    },
+    {
+      "name": "login_recheck",
+      "value": "Ich bin angemeldet, überprüfen Sie es noch einmal"
+    },
+    {
+      "name": "login_recheck_short",
+      "value": "noch einmal prüfen"
+    },
+    {
+      "name": "login_register",
+      "value": "Registrieren Sie ein neues Konto"
+    },
+    {
+      "name": "login_register_hint",
+      "value": "Die Registrierung erfolgt auf der offiziellen Website von Instagram. Kehren Sie zu dieser Seite zurück und melden Sie sich direkt mit Ihrem neuen Konto an."
+    },
+    {
+      "name": "feed_recommended_title",
+      "value": "Für Sie empfohlen"
+    },
+    {
+      "name": "feed_recommended_hint",
+      "value": "Sie haben die neuesten Beiträge der Personen gelesen, denen Sie folgen. Hier sind die empfohlenen Inhalte für Sie."
+    },
+    {
+      "name": "challenge_title",
+      "value": "Für das Konto ist eine Sicherheitsüberprüfung erforderlich"
+    },
+    {
+      "name": "challenge_hint",
+      "value": "Instagram erfordert eine Überprüfung durch einen Menschen oder ein Gerät. Die Verifizierung kann nur auf der Webseite durchgeführt werden. Nach Abschluss können Sie zur App zurückkehren, um sie weiter zu verwenden."
+    },
+    {
+      "name": "challenge_action",
+      "value": "zu verifizieren"
+    },
+    {
+      "name": "challenge_action_verify",
+      "value": "Gehen Sie zur Überprüfung"
+    },
+    {
+      "name": "login_page_action",
+      "value": "Anmelden"
+    },
+    {
+      "name": "login_web_action",
+      "value": "Melden Sie sich über die Webseite Instagram an"
+    },
+    {
+      "name": "login_web_hint",
+      "value": "Die Anmeldung auf einer Webseite kann den IG Mensch-Computer-Verifizierungs-/Kontrollpunkt bestehen; Sie werden nach erfolgreicher Anmeldung automatisch angemeldet, Sie müssen nicht erneut auf „Anmelden“ klicken."
+    },
+    {
+      "name": "login_label_username",
+      "value": "Benutzername"
+    },
+    {
+      "name": "login_label_password",
+      "value": "Passwort"
+    },
+    {
+      "name": "login_label_code",
+      "value": "Bestätigungscode"
+    },
+    {
+      "name": "login_label_challenge_code",
+      "value": "Sicherheitsverifizierungscode"
+    },
+    {
+      "name": "login_web_short",
+      "value": "Web-Login"
+    },
+    {
+      "name": "login_verify_title",
+      "value": "zweistufige Verifizierung"
+    },
+    {
+      "name": "login_verify_hint",
+      "value": "Für dieses Konto ist die zusätzliche Überprüfung aktiviert. Bitte geben Sie den 6-stelligen Bestätigungscode (SMS/Authenticator/Backup-Code) ein, der Ihnen von Instagram zugesandt wurde."
+    },
+    {
+      "name": "login_verify_approval_hint",
+      "value": "Wenn Instagram Sie auffordert, diese Anmeldung auf einem anderen Gerät zu bestätigen: Klicken Sie dort auf „Zustimmen“ und wechseln Sie dann zurück zur App – sie wird die Anmeldung automatisch wiederholen, ohne einen Bestätigungscode einzugeben."
+    },
+    {
+      "name": "login_verify_action",
+      "value": "Bestätigen Sie und melden Sie sich an"
+    },
+    {
+      "name": "login_verify_cancel",
+      "value": "Abbrechen"
+    },
+    {
+      "name": "login_verify_web_title",
+      "value": "Erfordert eine zusätzliche Überprüfung"
+    },
+    {
+      "name": "login_verify_web_hint",
+      "value": "Dieses Konto erfordert Instagram dieses Mal einen eigenen Verifizierungsprozess (Kontowiederherstellung/Sicherheitsüberprüfung) und wird nicht bestanden, wenn Sie hier den Verifizierungscode eingeben. Klicken Sie auf die Schaltfläche unten, um zur Webseite zu gelangen und den Vorgang einmal abzuschließen. Nach erfolgreicher Anmeldung hält die Anwendung Sie automatisch angemeldet."
+    },
+    {
+      "name": "login_verify_web_action",
+      "value": "Gehen Sie zur Webseite, um die Überprüfung abzuschließen"
+    },
+    {
+      "name": "login_saved_accounts",
+      "value": "Bereits angemeldetes Konto (klicken, um direkt zurück zu wechseln)"
+    },
+    {
+      "name": "login_label_session",
+      "value": "sessionid"
+    },
+    {
+      "name": "login_session_hint",
+      "value": "Die Zeichenfolge, die mit der numerischen Konto-ID beginnt (in Browser-Cookies sessionid genannt)"
+    },
+    {
+      "name": "login_use_session",
+      "value": "Melden Sie sich mit sessionid an"
+    },
+    {
+      "name": "login_use_session_action",
+      "value": "Melden Sie sich mit sessionid an"
+    },
+    {
+      "name": "login_use_password",
+      "value": "Melden Sie sich stattdessen mit Konto und Passwort an"
+    },
+    {
+      "name": "login_password_note",
+      "value": "Standardmäßig wird das eigene Anmeldeprotokoll der App verwendet (es wird keine Webseite angezeigt). Wenn Sie die Mensch-Computer-Überprüfung nicht bestehen können, verwenden Sie das oben genannte „Web-Login“. Bei Konten mit aktivierter Bestätigung in zwei Schritten wird ein weiteres Fenster mit dem Bestätigungscode angezeigt."
+    },
+    {
+      "name": "login_username_hint",
+      "value": "Instagram Benutzername"
+    },
+    {
+      "name": "login_password_hint",
+      "value": "Passwort"
+    },
+    {
+      "name": "login_code_hint",
+      "value": "2-stufiger Bestätigungscode"
+    },
+    {
+      "name": "login_challenge_code_hint",
+      "value": "Sicherheitsverifizierungscode"
+    },
+    {
+      "name": "login_submit_code",
+      "value": "Senden Sie den Bestätigungscode"
+    },
+    {
+      "name": "login_web_fallback",
+      "value": "Melden Sie sich über die Webseite Instagram an"
+    },
+    {
+      "name": "login_challenge_hint",
+      "value": "Dieses Konto muss einer Sicherheitsüberprüfung unterzogen werden. Bitte gehen Sie zur offiziellen App oder Website von Instagram, um die Verifizierung abzuschließen, und kehren Sie dann zurück, um sich anzumelden."
+    },
+    {
+      "name": "login_upgrade_hint",
+      "value": "IG Nur die neueste offizielle Version des Clients darf sich mit einem Passwort anmelden, und Clients von Drittanbietern werden alle abgelehnt (unabhängig vom Kontopasswort). Klicken Sie auf die Schaltfläche oben, um sich über die Webseite anzumelden. Nach dem Anmelden sind die Funktionen dieser Anwendung genau die gleichen."
+    },
+    {
+      "name": "login_challenge_web",
+      "value": "Gehen Sie zur Webseite, um die Überprüfung abzuschließen"
+    },
+    {
+      "name": "login_page_hint_account",
+      "value": "Das Kontopasswort wird nur für diese Anmeldeanfrage verwendet und von dieser Anwendung nicht gespeichert. Nach erfolgreicher Anmeldung bleibt lediglich das Session-Cookie lokal erhalten."
+    },
+    {
+      "name": "login_page_hint_features",
+      "value": "Nach dem Einloggen können Sie den Informationsstrom, Geschichten und privaten Nachrichten durchsuchen; Die Daten werden entsprechend dem normalen Ladevorgang automatisch abgerufen."
+    },
+    {
+      "name": "login_page_hint_stuck",
+      "value": "Wenn Sie sich erfolgreich auf der Webseite angemeldet haben und immer noch hier hängen bleiben, klicken Sie unten auf „Ich habe mich angemeldet, überprüfen Sie es erneut“."
+    },
+    {
+      "name": "sign_out",
+      "value": "Abmelden"
+    },
+    {
+      "name": "tab_home",
+      "value": "Startseite"
+    },
+    {
+      "name": "tab_reels",
+      "value": "Reels"
+    },
+    {
+      "name": "tab_direct",
+      "value": "private Nachricht"
+    },
+    {
+      "name": "tab_search",
+      "value": "Suchen"
+    },
+    {
+      "name": "tab_profile",
+      "value": "meins"
+    },
+    {
+      "name": "tab_placeholder_hint",
+      "value": "Diese Seite wurde noch nicht verbunden"
+    },
+    {
+      "name": "status_ready",
+      "value": "Bereit"
+    },
+    {
+      "name": "status_failed",
+      "value": "Das Lesen ist fehlgeschlagen"
+    },
+    {
+      "name": "status_unparsable",
+      "value": "Inhalte können nicht gelesen werden"
+    },
+    {
+      "name": "status_sign_in_required",
+      "value": "Sie müssen sich zuerst anmelden"
+    },
+    {
+      "name": "status_session_expired",
+      "value": "Der Anmeldestatus ist abgelaufen: Bitte melden Sie sich in den Einstellungen ab und erneut an."
+    },
+    {
+      "name": "status_page_not_ready",
+      "value": "Die Seite ist noch nicht fertig"
+    },
+    {
+      "name": "web_close",
+      "value": "Webseite schließen"
+    },
+    {
+      "name": "video_play_failed",
+      "value": "Die Videowiedergabe ist fehlgeschlagen."
+    },
+    {
+      "name": "repost_unsupported",
+      "value": "Dieser Inhalt unterstützt keine Weiterleitung (IG ist für dieses Konto nicht geöffnet)."
+    },
+    {
+      "name": "repost_done",
+      "value": "Weitergeleitet."
+    },
+    {
+      "name": "unrepost_done",
+      "value": "Weiterleitung abgebrochen."
+    },
+    {
+      "name": "unfollow_done",
+      "value": "Nicht verfolgt."
+    },
+    {
+      "name": "feature_pending",
+      "value": "Diese Funktion wurde noch nicht implementiert."
+    },
+    {
+      "name": "save_failed",
+      "value": "Dieser Beitrag konnte nicht zu den Favoriten hinzugefügt werden."
+    },
+    {
+      "name": "posted_ago_now",
+      "value": "Gerade eben"
+    },
+    {
+      "name": "posted_ago_minutes",
+      "value": "Vor %d Minuten"
+    },
+    {
+      "name": "posted_ago_hours",
+      "value": "Vor %dStunden"
+    },
+    {
+      "name": "posted_ago_days",
+      "value": "Vor %dTagen"
+    },
+    {
+      "name": "posted_ago_weeks",
+      "value": "%dvor Wochen"
+    },
+    {
+      "name": "posted_ago_months",
+      "value": "%dvor Monaten"
+    },
+    {
+      "name": "posted_ago_years",
+      "value": "%d vor Jahren"
+    },
+    {
+      "name": "notify_today",
+      "value": "heute"
+    },
+    {
+      "name": "notify_yesterday",
+      "value": "gestern"
+    },
+    {
+      "name": "notify_past_7d",
+      "value": "letzten 7 Tage"
+    },
+    {
+      "name": "notify_past_30d",
+      "value": "letzten 30 Tage"
+    },
+    {
+      "name": "notify_show_more",
+      "value": "Mehr anzeigen"
+    },
+    {
+      "name": "notify_suggested",
+      "value": "Für Sie empfohlen"
+    },
+    {
+      "name": "notify_follow",
+      "value": "Folgen Sie"
+    },
+    {
+      "name": "notify_follow_back",
+      "value": "Rückkehr zum Zoll"
+    },
+    {
+      "name": "notify_earlier",
+      "value": "früher"
+    },
+    {
+      "name": "notify_this_month",
+      "value": "diesen Monat"
+    },
+    {
+      "name": "notify_empty",
+      "value": "Die Benachrichtigung von der Webseite kann nicht gelesen werden."
+    },
+    {
+      "name": "action_follow",
+      "value": "Folgen Sie"
+    },
+    {
+      "name": "action_following",
+      "value": "Folgt bereits"
+    },
+    {
+      "name": "action_more",
+      "value": "Mehr"
+    },
+    {
+      "name": "action_create",
+      "value": "veröffentlichen"
+    },
+    {
+      "name": "action_download",
+      "value": "Herunterladen"
+    },
+    {
+      "name": "action_settings",
+      "value": "Einstellungen"
+    },
+    {
+      "name": "account_add",
+      "value": "Konto hinzufügen"
+    },
+    {
+      "name": "account_unnamed",
+      "value": "Unbenanntes Konto"
+    },
+    {
+      "name": "account_switch_failed",
+      "value": "Der Kontowechsel ist fehlgeschlagen. Bitte melden Sie sich erneut bei diesem Konto an"
+    },
+    {
+      "name": "action_mute",
+      "value": "stumm"
+    },
+    {
+      "name": "comments_title",
+      "value": "Kommentar"
+    },
+    {
+      "name": "comments_hint",
+      "value": "Einen Kommentar hinzufügen…"
+    },
+    {
+      "name": "comments_empty",
+      "value": "Noch keine Kommentare"
+    },
+    {
+      "name": "comments_failed",
+      "value": "Kommentare konnten nicht gelesen werden"
+    },
+    {
+      "name": "comments_send",
+      "value": "senden"
+    },
+    {
+      "name": "comments_end",
+      "value": "Keine Kommentare mehr"
+    },
+    {
+      "name": "comments_reply",
+      "value": "Antwort"
+    },
+    {
+      "name": "comments_hide_replies",
+      "value": "Antwort ausblenden"
+    },
+    {
+      "name": "comments_replies_loading",
+      "value": "Antworten werden geladen…"
+    },
+    {
+      "name": "comments_view_replies",
+      "value": "Weitere Antworten finden Sie unter %d."
+    },
+    {
+      "name": "comment_pending",
+      "value": "Ich habe noch keinen Kommentar erhalten – dies ist das Eingabefeld"
+    },
+    {
+      "name": "story_load_failed",
+      "value": "Diese Geschichte wurde nicht abgerufen (Grund %s)"
+    },
+    {
+      "name": "story_action_pending",
+      "value": "Die Story-Interaktion wurde noch nicht verbunden – das ist die Schaltfläche"
+    },
+    {
+      "name": "story_message_hint",
+      "value": "Nachricht senden"
+    },
+    {
+      "name": "story_your_story",
+      "value": "eure Geschichten"
+    },
+    {
+      "name": "profile_chip_add",
+      "value": "hinzufügen"
+    },
+    {
+      "name": "profile_action_edit",
+      "value": "Homepage bearbeiten"
+    },
+    {
+      "name": "profile_action_share",
+      "value": "Homepage teilen"
+    },
+    {
+      "name": "profile_highlight_new",
+      "value": "neu"
+    },
+    {
+      "name": "profile_highlight_suggest",
+      "value": "Aufmerksamkeit empfehlen"
+    },
+    {
+      "name": "story_create_pending",
+      "value": "Die Beitragsgeschichte wurde noch nicht verlinkt – hier ist der Eingang"
+    },
+    {
+      "name": "translate_action",
+      "value": "Übersetzung ansehen"
+    },
+    {
+      "name": "translate_show_original",
+      "value": "Originaltext anzeigen"
+    },
+    {
+      "name": "translate_failed",
+      "value": "Die Übersetzung ist fehlgeschlagen. Bitte versuchen Sie es später noch einmal"
+    },
+    {
+      "name": "reels_page_title",
+      "value": "Reels"
+    },
+    {
+      "name": "post_page_title",
+      "value": "Beitrag"
+    },
+    {
+      "name": "create_post_title",
+      "value": "neuer Beitrag"
+    },
+    {
+      "name": "create_post_hint",
+      "value": "Schreiben Sie etwas ..."
+    },
+    {
+      "name": "search_hint",
+      "value": "Suchen"
+    },
+    {
+      "name": "search_empty",
+      "value": "Geben Sie Ihren Kontonamen ein, um mit der Suche zu beginnen"
+    },
+    {
+      "name": "search_action",
+      "value": "Suchen"
+    },
+    {
+      "name": "count_thousands",
+      "value": "%sMillionen"
+    },
+    {
+      "name": "profile_stat_posts",
+      "value": "Beitrag"
+    },
+    {
+      "name": "profile_stat_followers",
+      "value": "Fans"
+    },
+    {
+      "name": "profile_stat_following",
+      "value": "Folgen Sie"
+    },
+    {
+      "name": "profile_loading_more",
+      "value": "Laden…"
+    },
+    {
+      "name": "profile_end",
+      "value": "nicht mehr"
+    },
+    {
+      "name": "profile_empty",
+      "value": "Es sind noch keine Beiträge vorhanden"
+    },
+    {
+      "name": "direct_empty",
+      "value": "Noch keine Neuigkeiten"
+    },
+    {
+      "name": "direct_kind_media",
+      "value": "[Foto/Video]"
+    },
+    {
+      "name": "direct_kind_voice",
+      "value": "[Stimme]"
+    },
+    {
+      "name": "direct_kind_other",
+      "value": "[Nachricht]"
+    },
+    {
+      "name": "direct_thread_hint",
+      "value": "Senden Sie eine Nachricht…"
+    },
+    {
+      "name": "direct_thread_empty",
+      "value": "Noch keine Neuigkeiten, bitte sagen Sie Hallo."
+    },
+    {
+      "name": "direct_send_failed",
+      "value": "Nicht gesendet · Klicken Sie hier, um es erneut zu versuchen"
+    },
+    {
+      "name": "direct_sending",
+      "value": "Senden…"
+    },
+    {
+      "name": "direct_open_web",
+      "value": "Auf Webseite öffnen"
+    },
+    {
+      "name": "settings_group_appearance",
+      "value": "Aussehen"
+    },
+    {
+      "name": "settings_group_bar",
+      "value": "untere Leiste"
+    },
+    {
+      "name": "settings_bar_native_animation",
+      "value": "Nativer Effekt der unteren Leiste"
+    },
+    {
+      "name": "settings_bar_native_animation_hint",
+      "value": "Die untere Leiste wird durch einfaches Ein- und Ausblenden geschlossen."
+    },
+    {
+      "name": "settings_material_level",
+      "value": "Immersive Lichtwahrnehmung"
+    },
+    {
+      "name": "settings_material_hint",
+      "value": "Je höher der Gang, desto raffinierter wird der visuelle Effekt, aber auch der Stromverbrauch steigt. Geräte mit geringer Rechenleistung werden automatisch heruntergestuft; Wenn Sie sich nicht sicher sind, wählen Sie „Adaptiv“ und das System entscheidet anhand der Fähigkeiten des Geräts."
+    },
+    {
+      "name": "settings_material_adaptive",
+      "value": "Adaptiv"
+    },
+    {
+      "name": "settings_material_gentle",
+      "value": "sanft"
+    },
+    {
+      "name": "settings_material_smooth",
+      "value": "Glatt"
+    },
+    {
+      "name": "settings_material_exquisite",
+      "value": "Exquisit"
+    },
+    {
+      "name": "settings_material_thickness",
+      "value": "Materialstärke"
+    },
+    {
+      "name": "settings_thickness_ultra_thin",
+      "value": "Extrem dünn"
+    },
+    {
+      "name": "settings_thickness_thin",
+      "value": "dünn"
+    },
+    {
+      "name": "settings_thickness_regular",
+      "value": "regelmäßig"
+    },
+    {
+      "name": "settings_thickness_thick",
+      "value": "dick"
+    },
+    {
+      "name": "settings_thickness_ultra_thick",
+      "value": "Extrem dick"
+    },
+    {
+      "name": "settings_unsupported_hint",
+      "value": "Die aktuelle Systemversion unterstützt keine schwebende untere Leiste und immersives Licht und die entsprechenden Optionen wurden ausgeblendet; Die untere Leiste und die Schaltflächen verwenden einen vereinfachten Unschärfestil."
+    },
+    {
+      "name": "probe_title",
+      "value": "Sonde"
+    },
+    {
+      "name": "probe_hint",
+      "value": "Durchsuchen Sie die Webseite zunächst wie gewohnt, kehren Sie dann zurück und aktualisieren Sie sie."
+    },
+    {
+      "name": "probe_refresh",
+      "value": "Aktualisieren"
+    },
+    {
+      "name": "probe_dom",
+      "value": "Webseitenstruktur"
+    },
+    {
+      "name": "probe_copy",
+      "value": "Kopieren"
+    },
+    {
+      "name": "probe_save",
+      "value": "Sandbox speichern"
+    },
+    {
+      "name": "probe_clear",
+      "value": "Klar"
+    },
+    {
+      "name": "probe_close",
+      "value": "schließen"
+    },
+    {
+      "name": "probe_open_direct",
+      "value": "private Nachricht"
+    },
+    {
+      "name": "probe_open_profile",
+      "value": "meins"
+    },
+    {
+      "name": "probe_open_reels",
+      "value": "Reels"
+    },
+    {
+      "name": "probe_open_search",
+      "value": "Suchen"
+    },
+    {
+      "name": "probe_open_hint",
+      "value": "Öffnen Sie die Web-Page-Grabbing-Oberfläche (das Bedienfeld wird abgedeckt):"
+    },
+    {
+      "name": "probe_open_post",
+      "value": "Beitragsseite (erster Bildbeitrag)"
+    },
+    {
+      "name": "probe_comments_first",
+      "value": "Kommentare (erster Beitrag)"
+    },
+    {
+      "name": "probe_comments_embed",
+      "value": "Lesen Sie eingebettete Kommentare"
+    },
+    {
+      "name": "probe_capture",
+      "value": "Informationsflussvorlage speichern"
+    },
+    {
+      "name": "probe_replay_stored",
+      "value": "Gespeicherte Vorlage wiedergeben"
+    },
+    {
+      "name": "probe_profile_templates",
+      "value": "Speichern Sie eine vierseitige Vorlage für eine persönliche Seite"
+    },
+    {
+      "name": "probe_search_templates",
+      "value": "Suchseitenvorlage speichern"
+    },
+    {
+      "name": "probe_digest",
+      "value": "Zusammenfassung der Schnittstelle"
+    },
+    {
+      "name": "probe_direct_selftest",
+      "value": "Private Nachricht zur Selbstkontrolle senden"
+    },
+    {
+      "name": "reels_segment_explore",
+      "value": "Entdecken"
+    },
+    {
+      "name": "reels_segment_following",
+      "value": "Freunde"
+    },
+    {
+      "name": "reels_following_empty",
+      "value": "Mein Freund hat das Video noch nicht gepostet"
+    },
+    {
+      "name": "reels_loading",
+      "value": "Video wird geladen…"
+    },
+    {
+      "name": "engage_not_rendered",
+      "value": "Der weitergeleitete Inhalt kann nicht gelesen werden"
+    },
+    {
+      "name": "feed_empty",
+      "value": "Noch kein Inhalt"
+    },
+    {
+      "name": "feed_load",
+      "value": "Laden"
+    },
+    {
+      "name": "feed_no_more",
+      "value": "nicht mehr"
+    },
+    {
+      "name": "feed_none_read",
+      "value": "Der Beitrag von der Webseite kann nicht gelesen werden"
+    },
+    {
+      "name": "feed_none_visible",
+      "value": "Auf der Seite sind keine Beiträge sichtbar"
+    },
+    {
+      "name": "follow_done",
+      "value": "Folgt bereits."
+    },
+    {
+      "name": "follow_failed",
+      "value": "Konzentrieren Sie sich auf das Scheitern"
+    },
+    {
+      "name": "like_failed",
+      "value": "Hat mir nicht gefallen"
+    },
+    {
+      "name": "media_saved",
+      "value": "gespeichert"
+    },
+    {
+      "name": "media_save_failed",
+      "value": "Speichern fehlgeschlagen"
+    },
+    {
+      "name": "notifications",
+      "value": "Benachrichtigung"
+    },
+    {
+      "name": "notify_greet",
+      "value": "Senden Sie eine Nachricht an %s"
+    },
+    {
+      "name": "notify_greet_suggest",
+      "value": "Sag Hallo zu %s"
+    },
+    {
+      "name": "notify_loading",
+      "value": "Benachrichtigungen werden geladen…"
+    },
+    {
+      "name": "notify_message",
+      "value": "Nachricht senden"
+    },
+    {
+      "name": "notify_message_hint",
+      "value": "Senden Sie eine Nachricht…"
+    },
+    {
+      "name": "notify_month",
+      "value": "%dMonat"
+    },
+    {
+      "name": "direct_call",
+      "value": "Telefon"
+    },
+    {
+      "name": "direct_video_call",
+      "value": "Video"
+    },
+    {
+      "name": "save_rate_limited",
+      "value": "IG begrenzt den Stromfluss. Sie können es in etwa %d Minuten erneut versuchen."
+    },
+    {
+      "name": "settings_group_media",
+      "value": "Bilder und Videos"
+    },
+    {
+      "name": "settings_image_quality",
+      "value": "Bildqualität"
+    },
+    {
+      "name": "settings_video_quality",
+      "value": "Videoqualität"
+    },
+    {
+      "name": "settings_quality_auto",
+      "value": "Adaptiv"
+    },
+    {
+      "name": "settings_quality_saver",
+      "value": "Sparen Sie Geld"
+    },
+    {
+      "name": "settings_quality_high",
+      "value": "HD"
+    },
+    {
+      "name": "settings_quality_original",
+      "value": "Originalgemälde"
+    },
+    {
+      "name": "settings_media_quality_hint",
+      "value": "Adaptive wählt automatisch entsprechend dem aktuellen Netzwerk aus: Wi-Fi Verwenden Sie hochauflösende und mobile Daten, um Daten zu speichern; Beim Download wird immer das Originalbild/Originalvideo gespeichert."
+    },
+    {
+      "name": "settings_group_diag",
+      "value": "Diagnose"
+    },
+    {
+      "name": "settings_export_diag",
+      "value": "Diagnoseprotokolle exportieren"
+    },
+    {
+      "name": "settings_copy_diag",
+      "value": "Diagnosezusammenfassung kopieren"
+    },
+    {
+      "name": "settings_diag_hint",
+      "value": "Wenn Sie auf ein Problem stoßen (z. B. wenn Sie auf die Story klicken und keine Eingabeaufforderung erhalten), klicken Sie auf „Diagnoseprotokoll exportieren“, um es als TXT zu speichern, und senden Sie es dann über „Datei“ an den Entwickler. Wenn Sie es nicht speichern können, klicken Sie auf „Diagnosezusammenfassung kopieren“ und fügen Sie es direkt ein."
+    },
+    {
+      "name": "diag_exported",
+      "value": "Exportiert %s"
+    },
+    {
+      "name": "diag_export_failed",
+      "value": "Export fehlgeschlagen: %s"
+    },
+    {
+      "name": "diag_copied",
+      "value": "Diagnosezusammenfassung in die Zwischenablage kopiert"
+    },
+    {
+      "name": "settings_capture_story",
+      "value": "Vorlage für Story-Seite erfassen (Test)"
+    },
+    {
+      "name": "diag_story_captured",
+      "value": "Die Story-Seitenvorlage wurde erfasst. Stories sollten es später öffnen können."
+    },
+    {
+      "name": "diag_story_capture_failed",
+      "value": "Story-Seitenvorlage nicht gefunden: %s"
+    },
+    {
+      "name": "settings_run_mobile_probe",
+      "value": "RunMobile API Selbsttest (Test)"
+    },
+    {
+      "name": "diag_mobile_running",
+      "value": "Ausführen des mobilen API-Selbsttests (drei Anfragen, etwa ein paar Sekunden) ..."
+    },
+    {
+      "name": "diag_mobile_done",
+      "value": "Mobiler API-Selbsttest abgeschlossen: erfolgreich %d gesendet, die Ergebnisse werden unten angezeigt"
+    },
+    {
+      "name": "diag_mobile_failed",
+      "value": "Mobile API Selbsttest-Ausnahme: %s"
+    },
+    {
+      "name": "diag_mobile_result",
+      "value": "API Selbsttestergebnisse verschieben (zum Kopieren klicken)"
+    },
+    {
+      "name": "story_need_challenge",
+      "value": "IG Dieses Konto ist erforderlich, um zuerst die Sicherheitsüberprüfung abzuschließen: Bitte melden Sie sich auf der Webseite an bzw. bestätigen Sie sie und kehren Sie dann zurück, um die Story anzuzeigen"
+    },
+    {
+      "name": "settings_proxy_title",
+      "value": "Agent"
+    },
+    {
+      "name": "settings_proxy_host",
+      "value": "Gastgeber"
+    },
+    {
+      "name": "settings_proxy_port",
+      "value": "Hafen"
+    },
+    {
+      "name": "settings_proxy_user",
+      "value": "Benutzername"
+    },
+    {
+      "name": "settings_proxy_pass",
+      "value": "Passwort"
+    },
+    {
+      "name": "settings_proxy_apply",
+      "value": "Bewerbung"
+    },
+    {
+      "name": "settings_proxy_off",
+      "value": "Proxy ausschalten"
+    },
+    {
+      "name": "settings_proxy_enable",
+      "value": "Proxy aktivieren"
+    },
+    {
+      "name": "settings_proxy_saved",
+      "value": "Gespeicherter Agent"
+    },
+    {
+      "name": "settings_proxy_none",
+      "value": "Keine"
+    },
+    {
+      "name": "settings_proxy_add_title",
+      "value": "Proxy hinzufügen"
+    },
+    {
+      "name": "settings_proxy_name",
+      "value": "Name"
+    },
+    {
+      "name": "settings_proxy_add",
+      "value": "hinzufügen"
+    },
+    {
+      "name": "settings_group_proxy",
+      "value": "Agent"
+    },
+    {
+      "name": "settings_proxy_hint",
+      "value": "Der Proxy reagiert nur auf die Netzwerkanfragen dieser App und wird sofort nach dem Speichern wirksam. Durch Ausschalten des Schalters wird die direkte Verbindung wiederhergestellt"
+    },
+    {
+      "name": "proxy_ph_name",
+      "value": "Beispiel: Firmenvertreter"
+    },
+    {
+      "name": "proxy_ph_host",
+      "value": "Beispiel: 127.0.0.1"
+    },
+    {
+      "name": "proxy_ph_port",
+      "value": "Beispiel: 7890"
+    },
+    {
+      "name": "proxy_ph_optional",
+      "value": "Optional"
+    },
+    {
+      "name": "settings_proxy_pick_title",
+      "value": "Wählen Sie einen Agenten"
+    },
+    {
+      "name": "settings_proxy_confirm",
+      "value": "Okay"
+    },
+    {
+      "name": "settings_proxy_selected",
+      "value": "ausgewählt"
+    },
+    {
+      "name": "settings_proxy_manage_title",
+      "value": "Managementagent"
+    },
+    {
+      "name": "settings_proxy_edit_title",
+      "value": "Agent bearbeiten"
+    },
+    {
+      "name": "settings_proxy_save",
+      "value": "sparen"
+    },
+    {
+      "name": "settings_proxy_edit_action",
+      "value": "Bearbeiten"
+    },
+    {
+      "name": "settings_proxy_delete_action",
+      "value": "Löschen"
+    },
+    {
+      "name": "settings_proxy_deleted",
+      "value": "Gelöscht"
+    },
+    {
+      "name": "settings_proxy_verifying",
+      "value": "Verifizierungsagent…"
+    },
+    {
+      "name": "settings_proxy_verify_failed",
+      "value": "Agent kann keine Verbindung herstellen: %s"
+    },
+    {
+      "name": "settings_proxy_invalid",
+      "value": "Host und Port müssen ausgefüllt werden"
+    },
+    {
+      "name": "back_press_exit_hint",
+      "value": "Kehren Sie erneut zum Desktop zurück"
+    },
+    {
+      "name": "login_probe_busy",
+      "value": "Überprüfen…"
+    },
+    {
+      "name": "login_probe_hint",
+      "value": "Ist das Kontopasswort korrekt? Klicken Sie hier, um die Überprüfung einmalig über die IG-Weboberfläche durchzuführen"
+    },
+    {
+      "name": "login_web_retry_hint",
+      "value": "Sie kommen immer noch nicht rein? Melden Sie sich einmal über die Webseite an (kann die Mensch-Maschine-Verifizierung bestehen)"
+    },
+    {
+      "name": "settings_doh_scope_hint",
+      "value": "HTTP, die integrierte Webseite und die Anmeldekette sind alle verschlüsselt DNS; Wenn dies fehlschlägt, kehrt die Webseite/Anmeldekette automatisch zur Analyse zum System zurück."
+    },
+    {
+      "name": "settings_relay_endpoint",
+      "value": "Meldeadresse übertragen"
+    },
+    {
+      "name": "settings_relay_key",
+      "value": "Gemeinsamer Schlüssel (kann leer sein, entsprechend dem Relaisschlüssel)"
+    },
+    {
+      "name": "settings_relay_key_hint",
+      "value": "Beliebige Zeichenfolge, konsistent mit Relay"
+    },
+    {
+      "name": "settings_relay_disabled",
+      "value": "Transitmeldung geschlossen"
+    },
+    {
+      "name": "settings_clear_device_hint",
+      "value": "Melden Sie sich zuerst ab und löschen Sie dann die Geräteauthentifizierung"
+    },
+    {
+      "name": "settings_login_help",
+      "value": "Wenn die Anmeldung fehlschlägt: Klicken Sie zuerst auf „Selbstprüfung des Anmeldekanals“ und dann auf „Anmeldeprotokoll kopieren“, um mir den Inhalt zu senden. \n"
+    },
+    {
+      "name": "settings_login_selftest_running",
+      "value": "Selbstprüfender Anmeldekanal (bis zu 15 Sekunden)…"
+    },
+    {
+      "name": "settings_ip_check_running",
+      "value": "Export-IP prüfen (bis zu 10 Sekunden)…"
+    },
+    {
+      "name": "settings_ip_datacenter",
+      "value": "Dies ist die IP des Computerraums. Es wird empfohlen, den Knoten zu ändern und es erneut zu versuchen."
+    },
+    {
+      "name": "settings_ip_normal",
+      "value": "Diese Zeile sieht normal aus"
+    },
+    {
+      "name": "settings_login_log_copied",
+      "value": "Das Anmeldeprotokoll wurde kopiert (einfügen und an den Entwickler senden)"
+    },
+    {
+      "name": "settings_meow_login_sending",
+      "value": "Anmeldeprotokoll wird an MeoW verschoben…"
+    },
+    {
+      "name": "settings_reels_log_empty",
+      "value": "Es gibt noch kein Reels-Absturzprotokoll (Reels wurde nicht eingegeben oder das Protokoll wurde gelöscht)"
+    },
+    {
+      "name": "settings_reels_log_prefix",
+      "value": "(Gerät und Version: %s) \n\n"
+    },
+    {
+      "name": "settings_meow_reels_sending",
+      "value": "Absturzprotokoll der Rollen wird auf MeoW verschoben…"
+    },
+    {
+      "name": "login_error_transport",
+      "value": "Ausnahme bei Anmeldeanforderung: %s"
+    },
+    {
+      "name": "login_ok_session_pending",
+      "value": "%s Erfolg (Material für die mobile Sitzung nicht bereit)"
+    },
+    {
+      "name": "system_http_failed",
+      "value": "Der Stapel des Systems HTTP ist ebenfalls fehlgeschlagen: %s"
+    },
+    {
+      "name": "notify_direct_fallback",
+      "value": "private Nachricht"
+    },
+    {
+      "name": "notify_direct_count",
+      "value": "Du hast %d neue private Nachrichten"
+    },
+    {
+      "name": "notify_direct_one",
+      "value": "Sie haben eine neue private Nachricht"
+    },
+    {
+      "name": "index_web_login_hint",
+      "value": "Melden Sie sich auf der Seite an (möglicherweise müssen Sie eine Mensch-Maschine-Verifizierung durchführen) und gelangen nach Erfolg selbst zur Eingabe."
+    },
+    {
+      "name": "index_open_link_failed",
+      "value": "Dieser Link kann nicht geöffnet werden (kein Browser im System verfügbar?)"
+    },
+    {
+      "name": "index_share_empty",
+      "value": "Diese Freigabe hat keinen Inhalt zum Öffnen"
+    },
+    {
+      "name": "linkin_title",
+      "value": "Treten Sie über einen Deep-Link ein"
+    },
+    {
+      "name": "linkin_hint",
+      "value": "Der Link wird vom System über Want an diese Anwendung gesendet. Das Folgende ist der aus dem URI analysierte Inhalt."
+    },
+    {
+      "name": "linkin_target_known",
+      "value": "✓ Verstehen Sie das Ziel"
+    },
+    {
+      "name": "linkin_target_unknown",
+      "value": "✗ Unbekanntes Ziel"
+    },
+    {
+      "name": "linkin_params_ok",
+      "value": "✓ Vollständige Parameter"
+    },
+    {
+      "name": "linkin_params_missing",
+      "value": "✗ Fehlender Parameter"
+    },
+    {
+      "name": "linkin_open_action",
+      "value": "Öffnen Sie diesen Link und führen Sie ihn aus"
+    },
+    {
+      "name": "linkin_ignore",
+      "value": "Ignorieren Sie es und gehen Sie direkt zur Startseite"
+    },
+    {
+      "name": "linkin_supported",
+      "value": "Unterstützte Links"
+    },
+    {
+      "name": "story_diag_guide",
+      "value": "2) Schauen Sie sich detail= und „Press-by-Send Track“ an: detail=empty bedeutet, dass der Server 200+JSON geantwortet hat, aber kein Medium vorhanden ist;"
+    },
+    {
+      "name": "settings_group_language",
+      "value": "Sprache"
+    },
+    {
+      "name": "settings_language",
+      "value": "Sprache"
+    },
+    {
+      "name": "settings_language_search",
+      "value": "Sprachen suchen"
+    },
+    {
+      "name": "settings_language_hint",
+      "value": "Wähle die App-Sprache. Sie gilt nur für diese App, nicht für die Systemsprache."
+    },
+    {
+      "name": "settings_language_changed",
+      "value": "Sprache geändert"
+    }
+  ]
+}

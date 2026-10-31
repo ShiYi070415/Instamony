@@ -296,6 +296,8 @@ export struct StoryViewer {
    */
   onAction: (kind: string) => void = (kind: string): void => {
   };
+  /** 快拍点赞按钮的本地状态（只驱动填充动画，业务仍交给宿主的 onAction）。 */
+  @State private storyLiked: boolean = false;
 
   /**
    * 这一层是不是在放**精选快拍（高光）**：是的话**不画底部动作区**（输入框 + 点赞/评论/转发）。
@@ -1814,12 +1816,18 @@ export struct StoryViewer {
    * 不能让图标跟着"材质反色"飘。
    */
   @Builder
-  actionButton(symbol: Resource, kind: string) {
+  actionButton(symbol: Resource, kind: string, isOn: boolean) {
     MaterialIconButton({
       symbol: symbol,
-      tint: '#FFFFFF',
+      isOn: isOn,
+      // 点赞用共享的 LikeIcon：弹性填充动画和 feeds / reels 完全一致。
+      animated: kind === 'like' ? 'like' : '',
+      tint: kind === 'like' ? '' : '#FFFFFF',
       autoInvert: false,
       onTap: (on: boolean): void => {
+        if (kind === 'like') {
+          this.storyLiked = on;
+        }
         this.onAction(kind);
       }
     })
@@ -1988,11 +1996,11 @@ export struct StoryViewer {
           })
             .layoutWeight(1)
 
-          this.actionButton($r('sys.symbol.heart'), 'like')
-          this.actionButton($r('sys.symbol.message'), 'comment')
+          this.actionButton($r('sys.symbol.heart'), 'like', this.storyLiked)
+          this.actionButton($r('sys.symbol.message'), 'comment', false)
           // 分享：图标用系统那朵 `share`（与 FeedList / ReelsPage 动作区那颗同一个）——
           // 纸飞机是"发私信"的语义，快拍底下这一颗干的是"把这条快拍分享出去"。
-          this.actionButton($r('sys.symbol.share'), 'share')
+          this.actionButton($r('sys.symbol.share'), 'share', false)
         }
         .width(this.cardW())
         .height(ACTION_H)

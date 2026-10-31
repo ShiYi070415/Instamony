@@ -114,11 +114,11 @@ struct LinkIn {
             SymbolGlyph($r('sys.symbol.link'))
               .fontSize(40)
               .fontColor([$r('app.color.accent')])
-            Text('通过深链进入')
+            Text($r('app.string.linkin_title'))
               .fontSize(20)
               .fontWeight(FontWeight.Medium)
               .fontColor($r('app.color.primary_text'))
-            Text('链接由系统通过 Want 送进本应用，下面是从 URI 里解析出来的内容。')
+            Text($r('app.string.linkin_hint'))
               .fontSize(13)
               .fontColor($r('app.color.secondary_text'))
               .textAlign(TextAlign.Center)
@@ -140,11 +140,13 @@ struct LinkIn {
             this.Field('route', this.intent === null ? '' : this.intent.route, true)
             this.Field('id', this.intent === null ? '' : this.intent.id, true)
             Row({ space: 8 }) {
-              Text(this.intent !== null && this.intent.isKnown() ? '✓ 认识这个目标' : '✗ 不认识的目标')
+              Text(this.intent !== null && this.intent.isKnown()
+                ? $r('app.string.linkin_target_known') : $r('app.string.linkin_target_unknown'))
                 .fontSize(12)
                 .fontColor(this.intent !== null && this.intent.isKnown()
                   ? $r('app.color.accent') : $r('app.color.like_active'))
-              Text(this.intent !== null && this.intent.isComplete() ? '✓ 参数完整' : '✗ 参数缺失')
+              Text(this.intent !== null && this.intent.isComplete()
+                ? $r('app.string.linkin_params_ok') : $r('app.string.linkin_params_missing'))
                 .fontSize(12)
                 .fontColor(this.intent !== null && this.intent.isComplete()
                   ? $r('app.color.accent') : $r('app.color.like_active'))
@@ -159,7 +161,7 @@ struct LinkIn {
 
           // —— 动作 ——
           Column({ space: 10 }) {
-            Button('打开并执行这条链接')
+            Button($r('app.string.linkin_open_action'))
               .width('100%')
               .backgroundColor(this.intent !== null && this.intent.isComplete()
                 ? $r('app.color.accent') : $r('app.color.divider'))
@@ -167,7 +169,7 @@ struct LinkIn {
               .enabled(this.intent !== null && this.intent.isComplete())
               .onClick((): void => this.openHome())
 
-            Button('忽略，直接进首页')
+            Button($r('app.string.linkin_ignore'))
               .width('100%')
               .backgroundColor($r('app.color.field_background'))
               .fontColor($r('app.color.primary_text'))
@@ -181,7 +183,7 @@ struct LinkIn {
 
           // —— 支持的形态（演示时把要试的链接直接抄走）——
           Column({ space: 6 }) {
-            Text('支持的链接')
+            Text($r('app.string.linkin_supported'))
               .fontSize(12)
               .fontWeight(FontWeight.Medium)
               .fontColor($r('app.color.secondary_text'))

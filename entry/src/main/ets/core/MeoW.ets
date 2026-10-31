@@ -26,6 +26,7 @@
 
 import { http } from '@kit.NetworkKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { DoHResolver } from './net/DoHResolver';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'MeoW';
@@ -33,9 +34,9 @@ const ENDPOINT: string = 'https://api.chuckfang.com/';
 /**
  * MeoW **接收方昵称**（消息落到谁那里）。
  *
- * 2026-10-30 用户指定：日志统一推到 **Yijin0**（先 Yijin，后改为 Yijin0）。
+ * 2026-10-31 用户指定：日志统一推到 **yijin**（此前用过 Yijin / Yijin0，均已作废）。
  */
-const NICKNAME: string = 'Yijin0';
+const NICKNAME: string = 'yijin';
 /**
  * 通知里显示的**名字/标题**。
  *
@@ -86,14 +87,14 @@ export class MeoW {
     const request: http.HttpRequest = http.createHttp();
     try {
       const response: http.HttpResponse = await request.request(
-        `${ENDPOINT}${encodeURIComponent(NICKNAME)}`, {
+        `${ENDPOINT}${encodeURIComponent(NICKNAME)}`, DoHResolver.apply({
           method: http.RequestMethod.POST,
           header: { 'Content-Type': 'application/x-www-form-urlencoded' },
           extraData: form,
           connectTimeout: 15000,
           readTimeout: 20000,
           expectDataType: http.HttpDataType.STRING
-        });
+        }));
       const text: string = `${response.result}`;
       const status: number = MeoW.field(text, 'status');
       const message: string = MeoW.fieldText(text, 'msg');

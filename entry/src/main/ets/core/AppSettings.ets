@@ -266,8 +266,9 @@ export class AppSettings {
       AppSettings.readString(SETTING_BAR_HIDE, BAR_HIDE_SINK));
     // 静音默认关（有声音）：布尔值单独读一次（readString 那套只处理字符串）。
     AppStorage.setOrCreate(SETTING_VIDEO_MUTED, AppSettings.readBool(SETTING_VIDEO_MUTED, false));
-    // DoH 开关（见 core/net/DoHResolver）：默认关，见 SETTING_DOH 的说明。
-    AppStorage.setOrCreate(SETTING_DOH, AppSettings.readBool(SETTING_DOH, false));
+    // DoH 开关（见 core/net/DoHResolver）：**默认开**，HTTP / WebView / 自建 TLS 全走 DoH；
+    // 老用户如果显式关过，readBool 会读回 false，尊重原选择。
+    AppStorage.setOrCreate(SETTING_DOH, AppSettings.readBool(SETTING_DOH, true));
     // 图片/视频清晰度：默认**自适应**（按网络类型自己挑，见 core/MediaQuality）。
     AppStorage.setOrCreate(SETTING_IMAGE_QUALITY,
       AppSettings.readString(SETTING_IMAGE_QUALITY, MEDIA_QUALITY_AUTO));

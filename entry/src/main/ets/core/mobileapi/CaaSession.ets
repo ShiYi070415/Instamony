@@ -82,6 +82,8 @@ export class CaaOutcome {
 
 export class CaaSession {
   private static store: preferences.Preferences | null = null;
+  /** 应用上下文：登录结果里的文案要跟随应用语言（见 localized）。 */
+  private static appContext: common.Context | null = null;
   /** 已解出来的设备身份（进程内缓存：私钥解析要动 crypto，不必每次重做）。 */
   private static device: CaaUsdid | null = null;
 
@@ -90,6 +92,7 @@ export class CaaSession {
     if (CaaSession.store !== null) {
       return;
     }
+    CaaSession.appContext = context;
     try {
       CaaSession.store = preferences.getPreferencesSync(context, { name: STORE_NAME });
       // 上次的诊断读回来：重启之后仍然能"复制诊断"（不然失败一次就得再复现一次）。
@@ -211,7 +214,8 @@ export class CaaSession {
     } catch (error) {
       // 传输层（自建 TLS）抛出来的错要变成一句人话，而不是让界面炸掉。
       const thrown: CaaOutcome = CaaSession.outcome(false,
-        `登录请求异常：${(error as Error).message}`, CaaSession.stepsText());
+        CaaSession.localized($r('app.string.login_error_transport').id,
+          (error as Error).message), CaaSession.stepsText());
       CaaSession.rememberDiag('登录', thrown.reason, thrown.steps);
       return thrown;
     }
@@ -475,7 +479,11 @@ export class CaaSession {
     // 注意 authorization 要**服务端下发的那一份**（`Bearer IGT:2:…`），不是本地算的。
     try {
       const session: MobileSession = MobileSession.getInstance();
-      const identity: MobileIdentity | null = await session.ensure();
+      /*
+       * 登录这一刻 `AccountScope` 还指向上一个人，必须把**刚写进罐的账号 id** 显式交给
+       * `ensure`；否则它可能按旧分区 / 旧 cookie 拼出一个别人的身份。
+       */
+      const identity: MobileIdentity | null = await session.ensure(cookieUserId);
       if (identity !== null) {
         if (authorization.length > 0) {
           identity.authorization = authorization;
@@ -507,7 +515,24 @@ export class CaaSession {
         (error as Error).message);
     }
     // Cookie 罐已经是登录态了（网页那边能用），只是移动 API 身份没建起来：不算失败。
-    return CaaSession.outcome(true, `${what}成功（移动会话材料未就绪）`, CaaSession.stepsText());
+    return CaaSession.outcome(true,
+      CaaSession.localized($r('app.string.login_ok_session_pending').id, what),
+      CaaSession.stepsText());
+  }
+
+  /** 取一条资源字符串（登录结果会显示在界面，必须跟随应用语言）。 */
+  private static localized(resId: number, arg: string = ''): string {
+    try {
+      const context: common.Context | null = CaaSession.appContext;
+      if (context === null) {
+        return '';
+      }
+      return arg.length > 0
+        ? context.resourceManager.getStringSync(resId, arg)
+        : context.resourceManager.getStringSync(resId);
+    } catch (error) {
+      return '';
+    }
   }
 
   private static outcome(ok: boolean, reason: string, steps: string = ''): CaaOutcome {

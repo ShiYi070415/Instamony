@@ -26,6 +26,7 @@
 
 import { http } from '@kit.NetworkKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { DoHResolver } from './net/DoHResolver';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'NetQuality';
@@ -137,13 +138,13 @@ export class NetQuality {
   private static async get(url: string): Promise<string> {
     const request: http.HttpRequest = http.createHttp();
     try {
-      const response: http.HttpResponse = await request.request(url, {
+      const response: http.HttpResponse = await request.request(url, DoHResolver.apply({
         method: http.RequestMethod.GET,
         header: { 'Accept': 'application/json', 'User-Agent': 'Instamony/1.5.0' },
         connectTimeout: 8000,
         readTimeout: 8000,
         expectDataType: http.HttpDataType.STRING
-      });
+      }));
       if (response.responseCode !== 200) {
         return '';
       }

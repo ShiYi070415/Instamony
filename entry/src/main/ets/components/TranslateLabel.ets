@@ -36,19 +36,33 @@ export struct TranslateLabel {
 
   build() {
     if (Translator.needsTranslation(this.source)) {
-      Text(this.showing
-        ? $r('app.string.translate_show_original')
-        : $r('app.string.translate_action'))
-        .fontSize(this.fontSize)
-        // **粗体**（需求：评论面板里的"查看翻译"要加粗）。这颗小字全 app 一份，
-        // 统一加粗就不会出现"同一句话在别处不粗"的不一致。
-        .fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.secondary_text'))
-        // 点它是"切换"，不是"跳转"：给点内边距让手指好按，但别把行高撑起来。
-        .padding({ left: this.padLeft, right: 2, top: 2, bottom: 2 })
-        .onClick((): void => {
-          this.onToggle(!this.showing);
-        })
+      /*
+       * 两个分支而不是一个 Text 改字符串：只有节点切换才会触发 OPACITY 过渡。
+       * 外部容器的高度变化由各宿主自己的 `.animation` 负责。
+       */
+      if (this.showing) {
+        Text($r('app.string.translate_show_original'))
+          .fontSize(this.fontSize)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.secondary_text'))
+          .padding({ left: this.padLeft, right: 2, top: 2, bottom: 2 })
+          .transition(TransitionEffect.OPACITY
+            .animation({ duration: 160, curve: Curve.EaseOut }))
+          .onClick((): void => {
+            this.onToggle(!this.showing);
+          })
+      } else {
+        Text($r('app.string.translate_action'))
+          .fontSize(this.fontSize)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.secondary_text'))
+          .padding({ left: this.padLeft, right: 2, top: 2, bottom: 2 })
+          .transition(TransitionEffect.OPACITY
+            .animation({ duration: 160, curve: Curve.EaseOut }))
+          .onClick((): void => {
+            this.onToggle(!this.showing);
+          })
+      }
     }
   }
 }

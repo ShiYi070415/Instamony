@@ -1,0 +1,12 @@
+[
+  {
+    "file": "entry/src/main/ets/core/net/Tls13Client.ets",
+    "line": 2096,
+    "text": "系统 HTTP 栈也失败：${Tls13Client.errorText(error)}"
+  },
+  {
+    "file": "entry/src/main/ets/core/StoryDiag.ets",
+    "line": 224,
+    "text": "2) 再看 detail= 与「逐发轨迹」：detail=empty 表示服务端答了 200+JSON 但没有媒体；"
+  }
+]

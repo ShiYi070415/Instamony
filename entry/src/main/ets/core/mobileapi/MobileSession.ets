@@ -29,6 +29,7 @@ import { common } from '@kit.AbilityKit';
 import { util } from '@kit.ArkTS';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { InstagramCookieJar, InstagramCookieSnapshot } from '../InstagramCookieJar';
+import { AccountScope } from '../AccountScope';
 import {
   API_DOMAIN,
   APP_SETTINGS,
@@ -365,9 +366,12 @@ export class MobileSession {
    * 每调用一次都会**重新读 Cookie 罐**：网页那边重新登录后 sessionid 会变，
    * 而身份（UUID / mid / claim）要保持不变 —— 两者来源不同，不能一起缓存。
    *
+   * @param preferredUserId 调用方**已经知道**的目标账号（切号那条路）。Cookie 罐里可能
+   *   同时躺着新旧两份 `ds_user_id`，按"第一颗"取会取到上一个人；有了它就直接认这个 id，
+   *   并拒绝返回另一个人的身份。
    * @returns 会话不完整（没登录）时返回 null。
    */
-  async ensure(): Promise<MobileIdentity | null> {
+  async ensure(preferredUserId: string = ''): Promise<MobileIdentity | null> {
     const seed: StoredIdentity = MobileSession.loadSeed();
     let jar: InstagramCookieSnapshot;
     try {
@@ -380,11 +384,81 @@ export class MobileSession {
       hilog.info(DOMAIN, TAG, 'ensure: not signed in');
       return null;
     }
-    const sessionId: string = MobileSession.cookieOf(jar.cookie, COOKIE_SESSIONID);
+    let sessionId: string = MobileSession.cookieOf(jar.cookie, COOKIE_SESSIONID);
+    const candidates: Array<string> = MobileSession.cookieValues(jar.cookie,
+      COOKIE_DS_USER_ID);
+    /*
+     * **期望账号**：显式参数优先（切号时调用方给的目标 id）；没给就退到当前分区
+     * `AccountScope` —— 换完号之后每一发移动 API 都调 `ensure()`，不能每次再靠
+     * 罐里"第一颗 ds_user_id"猜，那正是"页面数据还是上一个人的"的来源。
+     *
+     * 分区账号只在**罐里确实有它**时才采用（软判据）：登录那一刻 AccountScope 还指向
+     * 上一个人，硬认它会把新会话判成旧账号。
+     */
+    const scoped: string = AccountScope.current();
+    const scopedId: string = scoped.startsWith('u') ? scoped.substring(1) : '';
+    const explicit: boolean = preferredUserId.length > 0;
+    let wanted: string = preferredUserId;
+    if (!explicit && scopedId.length > 0 && candidates.indexOf(scopedId) >= 0) {
+      wanted = scopedId;
+    }
+    if (wanted.length > 0) {
+      // 罐里可能同时有新旧的 sessionid：优先选**数字前缀就是目标账号**的那颗。
+      const sessions: Array<string> = MobileSession.cookieValues(jar.cookie, COOKIE_SESSIONID);
+      for (let index: number = 0; index < sessions.length; index++) {
+        if (MobileSession.userIdOfSession(sessions[index]) === wanted) {
+          sessionId = sessions[index];
+          break;
+        }
+      }
+    }
+    const sessionUserId: string = MobileSession.userIdOfSession(sessionId);
+    /*
+     * **sessionid 和期望账号对不上**：多域残留时旧账号的 sessionid 可能还在。
+     * 如果落盘 authorization 明确属于期望账号（设备级会话），就丢掉这颗旧 sessionid，
+     * 走"只有 Authorization"那条路；否则宁可失败也不拿两个人的凭据拼一个身份。
+     */
+    if (wanted.length > 0 && sessionUserId.length > 0 && sessionUserId !== wanted) {
+      const authOwner: string = seed.authorizationOwner.length > 0 ? seed.authorizationOwner
+        : MobileIdentity.authorizationUserId(seed.authorization);
+      if (seed.authorization.length > 0 && authOwner === wanted) {
+        hilog.warn(DOMAIN, TAG,
+          'ensure: stale sessionid belongs to another account → device-level auth (uid=%{public}d)',
+          wanted.length);
+        sessionId = '';
+      } else {
+        hilog.warn(DOMAIN, TAG,
+          'ensure: sessionid belongs to another account (sidUid=%{public}d wanted=%{public}d)',
+          sessionUserId.length, wanted.length);
+        return null;
+      }
+    }
     let userId: string = MobileSession.cookieOf(jar.cookie, COOKIE_DS_USER_ID);
-    if (userId.length === 0) {
-      // 兜底：sessionid 的数字前缀就是 user id（instagrapi 的 `re.search(r"^\d+", sessionid)`）。
-      userId = MobileSession.userIdOfSession(sessionId);
+    if (wanted.length > 0) {
+      /*
+       * 只有罐里确实有这个 id（或 sessionid 的前缀就是它）才认。显式目标缺失时
+       * 宁可失败也不串号；软判据缺失则退回 sessionid 前缀。
+       */
+      const present: boolean = candidates.indexOf(wanted) >= 0
+        || sessionUserId === wanted;
+      if (present) {
+        userId = wanted;
+      } else if (explicit) {
+        hilog.warn(DOMAIN, TAG,
+          'ensure: preferred uid=%{public}d not in jar (uids=%{public}d sidUid=%{public}d)',
+          wanted.length, candidates.length, sessionUserId.length);
+        return null;
+      } else if (sessionUserId.length > 0) {
+        userId = sessionUserId;
+      }
+    } else if (sessionUserId.length > 0) {
+      /*
+       * **sessionid 的数字前缀和它自己的会话是同一份凭据**，比 ds_user_id 可靠：
+       * 换号时旧账号的 `ds_user_id` 可能还挂在另一个域上，按"第一颗"取就会取到上一个人。
+       */
+      userId = sessionUserId;
+    } else if (userId.length === 0) {
+      userId = sessionUserId;
     }
     /*
      * **设备级会话**：IG 2026-10 起会下发"只有 `Authorization: Bearer IGT:2:…` + `ig-u-*`
@@ -440,8 +514,23 @@ export class MobileSession {
       return;
     }
     const seed: StoredIdentity = MobileSession.loadSeed();
+    /*
+     * **换人时把上一份会话材料作废**（审计 P1：设备级互切会串号）。
+     *
+     * `wwwClaim` / `igURur` 是**按会话**（有时按人）的，`MobileIdentity` 构造时会沿用
+     * seed 里这一份（见 MobileIdentity 构造函数）。只换 authorization、不动它们的话，
+     * 切到另一个人后的首批请求会带着**上一个人的** `X-IG-WWW-Claim` / `IG-U-RUR`，
+     * 和服务端刚下发的 authorization 并存 —— 又是"两个身份"。
+     * 同一账号重新采纳（owner 相同）时不动：那本来就是这个人的会话材料。
+     */
+    const previousOwner: string = seed.authorizationOwner;
+    const owner: string = String(userId || '');
+    if (owner.length > 0 && previousOwner !== owner) {
+      seed.wwwClaim = '0';
+      seed.igURur = '';
+    }
     seed.authorization = text;
-    seed.authorizationOwner = String(userId || '');
+    seed.authorizationOwner = owner;
     MobileSession.seed = seed;
     MobileSession.writeSeed(seed);
     hilog.info(DOMAIN, TAG, 'authorization adopted (owner=%{public}s, %{public}db)',
@@ -580,6 +669,8 @@ export class MobileSession {
     identity.igURur = '';
     identity.authorization = '';
     identity.authorizationOwner = '';
+    // 通行证只该管住"刚采纳的那一次复位"：没命中保留分支就一并作废，避免残留到后续复位。
+    MobileSession.keepAuthorizationUntil = 0;
     // 先按"清空会话材料、保留设备身份"的形状写盘，再丢掉内存里的身份。
     const kept: StoredIdentity = identity.toStored();
     MobileSession.seed = kept;
@@ -844,6 +935,22 @@ export class MobileSession {
       }
     }
     return '';
+  }
+
+  /** 取某个 cookie 名在整串里的**全部**值（同名多域时会有多颗）。 */
+  private static cookieValues(cookie: string, name: string): Array<string> {
+    const out: Array<string> = [];
+    const parts: Array<string> = cookie.split(';');
+    for (let index: number = 0; index < parts.length; index++) {
+      const pair: string = parts[index].trim();
+      if (pair.startsWith(`${name}=`)) {
+        const value: string = pair.substring(name.length + 1).trim();
+        if (value.length > 0 && out.indexOf(value) < 0) {
+          out.push(value);
+        }
+      }
+    }
+    return out;
   }
 
   /** 从响应头对象里按名取一个值（大小写不敏感）。 */

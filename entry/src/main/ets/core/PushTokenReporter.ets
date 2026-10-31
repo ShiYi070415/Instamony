@@ -21,6 +21,7 @@
 import { http } from '@kit.NetworkKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppSettings } from './AppSettings';
+import { DoHResolver } from './net/DoHResolver';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'PushTokenReporter';
@@ -122,7 +123,7 @@ export class PushTokenReporter {
       if (key.length > 0) {
         header['X-Relay-Key'] = key;
       }
-      const response: http.HttpResponse = await request.request(url, {
+      const response: http.HttpResponse = await request.request(url, DoHResolver.apply({
         method: http.RequestMethod.POST,
         header: header,
         extraData: JSON.stringify({
@@ -134,7 +135,7 @@ export class PushTokenReporter {
         connectTimeout: CONNECT_TIMEOUT_MS,
         readTimeout: READ_TIMEOUT_MS,
         expectDataType: http.HttpDataType.STRING
-      });
+      }));
       const body: string = typeof response.result === 'string'
         ? response.result as string : JSON.stringify(response.result);
       if (response.responseCode !== 200) {
@@ -188,13 +189,13 @@ export class PushTokenReporter {
       if (key.length > 0) {
         header['X-Relay-Key'] = key;
       }
-      const response: http.HttpResponse = await request.request(`${url}/health`, {
+      const response: http.HttpResponse = await request.request(`${url}/health`, DoHResolver.apply({
         method: http.RequestMethod.GET,
         header: header,
         connectTimeout: CONNECT_TIMEOUT_MS,
         readTimeout: READ_TIMEOUT_MS,
         expectDataType: http.HttpDataType.STRING
-      });
+      }));
       if (response.responseCode !== 200) {
         PushTokenReporter.lastStatus = `中转可达，但 /health 回了 HTTP ${response.responseCode}`;
         return PushTokenReporter.lastStatus;

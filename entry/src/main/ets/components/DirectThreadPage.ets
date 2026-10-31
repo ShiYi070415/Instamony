@@ -13,7 +13,8 @@
  * 取回来之后把视口**锚回加载前那条消息**（`scrollToIndex` + 回退标题栏高度），所以位置不变、不闪。
  */
 
-import { curves, display, window, componentUtils } from '@kit.ArkUI';
+import { curves, display, promptAction, window, componentUtils } from '@kit.ArkUI';
+import { MediaDownloader } from '../core/MediaDownloader';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { DirectMessage, DirectThreadView } from '../model/Direct';
@@ -21,7 +22,7 @@ import { DirectThreadViewModel } from '../viewmodel/DirectThreadViewModel';
 import { CommentInputBar, COMMENT_INPUT_BOTTOM_VP } from './CommentInputBar';
 import { ScrollDelta } from '../core/ScrollReport';
 // 分享卡片里的"用户资讯栏"用沉浸光感承载（只能挂在 Toggle 上，见 MaterialSurface）。
-import { FALLBACK_SURFACE, SurfaceModifier } from './MaterialSurface';
+import { FALLBACK_SURFACE, MaterialIconButton, SurfaceModifier } from './MaterialSurface';
 import { MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS } from '../core/AppSettings';
 
 const DOMAIN: number = 0xFF00;
@@ -179,6 +180,15 @@ const POP_RANK_KEEP_MS: number = 500;
  */
 const POP_NONE: number = -1;
 
+/** 图片预览卡片的展开/收起时长（毫秒）。 */
+const IMAGE_PREVIEW_MS: number = 240;
+/** 预览卡片最大占屏比例（宽/高）：留出标题栏和四周安全边距。 */
+/** 没有原始尺寸时的兜底比例（竖版快拍 9:16，和 StoryViewer 的 MEDIA_RATIO 一致）。 */
+const MEDIA_RATIO_FALLBACK: number = 9 / 16;
+/** 背景遮罩最终不透明度 / 背景模糊半径。 */
+const IMAGE_PREVIEW_DIM: number = 0.72;
+const IMAGE_PREVIEW_BLUR: number = 30;
+
 @Component
 export struct DirectThreadPage {
   vm: DirectThreadViewModel = new DirectThreadViewModel();
@@ -240,6 +250,35 @@ export struct DirectThreadPage {
   /** 输入法高度回调（销毁时要注销，否则组件没了还在写 @State）。 */
   private keyboardHandler: ((height: number) => void) | null = null;
   private keyboardWindow: window.Window | null = null;
+  /**
+   * 图片预览：当前展开的消息 id / 地址 / 原图比例 / 发送人。
+   *
+   * `previewDim` 从 0→1 驱动遮罩不透明度与 `backdropBlur`，卡片本体用
+   * `geometryTransition` 从气泡缩略图"长"到全屏卡片（两个组件绑同一个 id）。
+   */
+  @State private previewId: string = '';
+  @State private previewUrl: string = '';
+  @State private previewRatio: number = 1;
+  @State private previewName: string = '';
+  @State private previewAvatar: string = '';
+  @State private previewDim: number = 0;
+  /** 资讯栏 / 下载 / 卡片输入框的渐显渐隐（卡片动画快到位时才出现）。 */
+  @State private previewCover: boolean = false;
+  /** 预览输入框聚焦时的键盘高度（vp）：整组卡片/控件上抬避让。 */
+  @State private previewKeyboardVp: number = 0;
+  @State private previewChrome: number = 0;
+  /** 卡片当前几何（展开/收起由这几个值自己补间，不依赖 geometryTransition）。 */
+  @State private previewCardX: number = 0;
+  @State private previewCardY: number = 0;
+  @State private previewCardW: number = 0;
+  @State private previewCardH: number = 0;
+  /** 拖动卡片的实时位移（x/y 都跟手；松手后弹回或收起）。 */
+  @State private previewDragX: number = 0;
+  @State private previewDragY: number = 0;
+  /** 正在拖动：资讯栏 / 下载 / 输入框隐藏。 */
+  @State private previewDragging: boolean = false;
+  private previewOpenTimer: number = -1;
+  private previewCloseTimer: number = -1;
   /** 当前"最新那条"的 id（区分"来新消息"和"往前插历史"）。 */
   private newestId: string = '';
   /**
@@ -270,6 +309,18 @@ export struct DirectThreadPage {
         this.keyboardWindow = win;
         this.keyboardHandler = (height: number): void => {
           this.keyboardPx = height > 0 ? height : 0;
+          const nextPreviewKeyboard: number = height > 0 ? this.getUIContext().px2vp(height) : 0;
+          if (this.previewCover) {
+            // 先上抬 / 再压缩卡片高度；两者都用 180ms 过渡，不瞬间跳。
+            this.getUIContext().animateTo({ duration: 180, curve: Curve.EaseOut }, (): void => {
+              this.previewKeyboardVp = nextPreviewKeyboard;
+              this.previewCardW = this.previewImageWidth();
+              this.previewCardH = this.previewCardTargetHeight();
+              this.previewCardY = this.previewTargetY();
+            });
+          } else {
+            this.previewKeyboardVp = nextPreviewKeyboard;
+          }
           if (height <= 0) {
             // 键盘收起：抬升清零，输入条回到底部常规位置。
             this.keyboardVp = 0;
@@ -345,6 +396,14 @@ export struct DirectThreadPage {
   }
 
   aboutToDisappear(): void {
+    if (this.previewOpenTimer >= 0) {
+      clearTimeout(this.previewOpenTimer);
+      this.previewOpenTimer = -1;
+    }
+    if (this.previewCloseTimer >= 0) {
+      clearTimeout(this.previewCloseTimer);
+      this.previewCloseTimer = -1;
+    }
     this.vm.stopPolling();
     // 注销输入法监听（不注销的话组件没了回调还在跑，去写已释放的 @State）。
     if (this.keyboardWindow !== null && this.keyboardHandler !== null) {
@@ -806,6 +865,256 @@ export struct DirectThreadPage {
     return Math.round(this.mediaBoxWidth(message) * DirectThreadPage.mediaAspect(message));
   }
 
+  /** 气泡缩略图节点 id：展开时量它的窗口矩形，作为卡片动画起点。 */
+  private mediaSourceId(id: string): string {
+    return `dm-media-src-${id}`;
+  }
+
+  /** 只有普通图片能放大；贴图、视频、分享卡片的封面都不走这个预览。 */
+  private canPreviewImage(message: DirectMessage): boolean {
+    return message.mediaUrl.length > 0 && !message.mediaSticker
+      && !message.isVideo && !message.shareIsVideo;
+  }
+
+  /** 快拍卡片宽：两侧各留 16vp（和 StoryViewer 的 CARD_SIDE_VP 一致）。 */
+  private previewImageWidth(): number {
+    return Math.max(160, Math.round(this.screenWidthVp - 32));
+  }
+
+  /** 快拍卡片高：**直接绑定图片高度**（宽 × 原图比例），不再额外裁切。 */
+  private previewImageHeight(): number {
+    const ratio: number = this.previewRatio > 0 ? this.previewRatio : MEDIA_RATIO_FALLBACK;
+    return Math.round(this.previewImageWidth() * ratio);
+  }
+
+  /** 超过 4:3 的长图：资讯栏/下载/输入框放进卡片内部，卡片占满可用高度。 */
+  private isLongPreview(): boolean {
+    return this.previewRatio > 4 / 3 + 0.001;
+  }
+
+  /** 预览可用高度（扣掉顶部安全区和底部一点留白，键盘弹起时扣键盘）。 */
+  private previewAvailableHeight(): number {
+    const bottom: number = this.previewKeyboardVp > 0
+      ? this.windowHeightVp - this.previewKeyboardVp : this.windowHeightVp;
+    return Math.max(180, bottom - 56 - 24);
+  }
+
+  /**
+   * 卡片目标高度：
+   *   · 长图：占满可用高度（内部放资讯栏/输入框），键盘弹起时压缩；
+   *   · 普通图：图片原比例，若和上下控件一起放不下，先压缩卡片高度。
+   */
+  private previewCardTargetHeight(): number {
+    const available: number = this.previewAvailableHeight();
+    const imageHeight: number = this.previewImageHeight();
+    if (this.isLongPreview()) {
+      /*
+       * 长图不再"竖向填满可用高度"（那会把卡片撑到整屏）。
+       * 卡片高度 = 图片宽度 × 原图比例；只有键盘弹起、可用高度不够时才压缩。
+       */
+      if (this.previewKeyboardVp > 0) {
+        return Math.round(Math.min(imageHeight, available));
+      }
+      return Math.round(imageHeight);
+    }
+    const other: number = 48 + 8 + 8 + 44;
+    const fit: number = Math.max(120, available - other);
+    return Math.round(Math.min(imageHeight, fit));
+  }
+
+  /** 量气泡缩略图在窗口里的矩形（vp）；量不到给空数组。 */
+  private sourceRect(id: string): Array<number> {
+    try {
+      const info: componentUtils.ComponentInfo =
+        this.getUIContext().getComponentUtils().getRectangleById(this.mediaSourceId(id));
+      return [
+        this.getUIContext().px2vp(info.windowOffset.x),
+        this.getUIContext().px2vp(info.windowOffset.y),
+        this.getUIContext().px2vp(info.size.width),
+        this.getUIContext().px2vp(info.size.height)
+      ];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  /** 卡片展开后的目标 Y。 */
+  private previewTargetY(): number {
+    const cardHeight: number = this.previewCardTargetHeight();
+    if (this.isLongPreview()) {
+      // 长图：平时垂直居中；只有键盘弹起避让时才锁在顶部安全线。
+      if (this.previewKeyboardVp > 0) {
+        return 56;
+      }
+      return Math.max(56, Math.round((this.windowHeightVp - cardHeight) / 2));
+    }
+    const total: number = 48 + 8 + cardHeight + 8 + 44;
+    const available: number = this.previewAvailableHeight();
+    const groupTop: number = 56 + Math.max(0, (available - total) / 2);
+    return groupTop + 48 + 8;
+  }
+
+  /**
+   * 点气泡里的图片：卡片从缩略图矩形开始，下一帧用 springMotion 推到目标矩形。
+   *
+   * 和 StoryViewer 一样**自己算矩形**，不用 geometryTransition —— 那套在"源节点还活着"
+   * 的场景里配对不可靠，展开/收起会变成硬切。
+   */
+  private openImagePreview(message: DirectMessage): void {
+    if (!this.canPreviewImage(message)) {
+      return;
+    }
+    if (this.previewOpenTimer >= 0) {
+      clearTimeout(this.previewOpenTimer);
+      this.previewOpenTimer = -1;
+    }
+    if (this.previewCloseTimer >= 0) {
+      clearTimeout(this.previewCloseTimer);
+      this.previewCloseTimer = -1;
+    }
+    this.previewUrl = message.mediaUrl;
+    // 预览必须用原图真实比例：mediaAspect 会为了气泡排版夹到 4:3 / 16:9，导致黑边。
+    const rawRatio: number = DirectThreadPage.rawAspect(message);
+    this.previewRatio = rawRatio > 0 ? rawRatio : MEDIA_RATIO_FALLBACK;
+    this.previewName = message.senderName.length > 0 ? message.senderName
+      : (this.view !== null && this.view.withUsername.length > 0
+        ? this.view.withUsername : (this.view !== null ? this.view.title : ''));
+    this.previewAvatar = message.senderAvatar.length > 0 ? message.senderAvatar
+      : (this.view !== null ? this.view.withAvatar : '');
+
+    const targetW: number = this.previewImageWidth();
+    const targetH: number = this.previewCardTargetHeight();
+    const targetX: number = 16;
+    const targetY: number = this.previewTargetY();
+    const source: Array<number> = this.sourceRect(message.id);
+    const fromX: number = source.length > 0 ? source[0] : targetX;
+    const fromY: number = source.length > 0 ? source[1] : targetY;
+    const fromW: number = source.length > 0 && source[2] > 0 ? source[2] : targetW;
+    const fromH: number = source.length > 0 && source[3] > 0 ? source[3] : targetH;
+
+    this.previewCardX = fromX;
+    this.previewCardY = fromY;
+    this.previewCardW = fromW;
+    this.previewCardH = fromH;
+    this.previewDim = 0;
+    this.previewChrome = 0;
+    this.previewKeyboardVp = this.keyboardPx > 0 ? this.getUIContext().px2vp(this.keyboardPx) : 0;
+    this.previewDragX = 0;
+    this.previewDragY = 0;
+    this.previewDragging = false;
+    this.previewId = message.id;
+    // 用系统内容覆盖层承载预览：它盖在 HDS 导航栏之上，卡片不会再浮在标题栏下面。
+    this.previewCover = true;
+
+    this.previewOpenTimer = setTimeout((): void => {
+      this.previewOpenTimer = -1;
+      /*
+       * 卡片的 position/width/height 变化交给卡片自己的隐式 `.animation`（见 imagePreview），
+       * 这里直接写目标值即可。这样**宽度也会从缩略图宽度补间到卡片宽度**，
+       * 不会只在 x/y 上动、宽度一步跳过去。
+       */
+      this.previewCardX = targetX;
+      this.previewCardY = targetY;
+      this.previewCardW = targetW;
+      this.previewCardH = targetH;
+      this.getUIContext().animateTo({ duration: 260, curve: Curve.EaseOut }, (): void => {
+        this.previewDim = 1;
+      });
+      // 卡片快到位时再渐显资讯栏 / 下载 / 输入框。
+      this.previewOpenTimer = setTimeout((): void => {
+        this.previewOpenTimer = -1;
+        this.getUIContext().animateTo({ duration: 150, curve: Curve.EaseOut }, (): void => {
+          this.previewChrome = 1;
+        });
+      }, 180);
+    }, 16);
+  }
+
+  private closeImagePreview(): void {
+    if (this.previewOpenTimer >= 0) {
+      clearTimeout(this.previewOpenTimer);
+      this.previewOpenTimer = -1;
+    }
+    if (this.previewCloseTimer >= 0) {
+      clearTimeout(this.previewCloseTimer);
+      this.previewCloseTimer = -1;
+    }
+    const source: Array<number> = this.sourceRect(this.previewId);
+    const toX: number = source.length > 0 ? source[0] : this.previewCardX;
+    const toY: number = source.length > 0 ? source[1] : this.previewCardY;
+    const toW: number = source.length > 0 && source[2] > 0 ? source[2] : this.previewCardW;
+    const toH: number = source.length > 0 && source[3] > 0 ? source[3] : this.previewCardH;
+    const closingId: string = this.previewId;
+    this.previewKeyboardVp = 0;
+    /*
+     * 收起一开始就把资讯栏/下载/输入框直接隐藏（不做 120ms 渐隐，避免"卡手"）。
+     * 输入框不可见后，卡片再自己弹簧收回缩略图 —— 它就不会跟着卡片几何跑。
+     */
+    this.previewChrome = 0;
+    this.previewCardX = toX;
+    this.previewCardY = toY;
+    this.previewCardW = toW;
+    this.previewCardH = toH;
+    this.getUIContext().animateTo({
+      duration: 220,
+      curve: curves.springMotion(0.5, 0.78)
+    }, (): void => {
+      this.previewDim = 0;
+      this.previewDragX = 0;
+      this.previewDragY = 0;
+    });
+    this.previewCloseTimer = setTimeout((): void => {
+      this.previewCloseTimer = -1;
+      if (this.previewId === closingId) {
+        this.previewId = '';
+        this.previewCover = false;
+      }
+    }, 260);
+  }
+
+  /** 手势松手：拖动距离超过一段就收起，否则弹性回原位并让底部控件渐显。 */
+  private endPreviewDrag(): void {
+    const distance: number = Math.sqrt(this.previewDragX * this.previewDragX
+      + this.previewDragY * this.previewDragY);
+    if (distance > 110) {
+      this.closeImagePreview();
+      return;
+    }
+    this.getUIContext().animateTo({
+      duration: 420,
+      curve: curves.springMotion(0.55, 0.62)
+    }, (): void => {
+      this.previewDragX = 0;
+      this.previewDragY = 0;
+      this.previewDragging = false;
+      // 回到原位后再把资讯栏/下载/输入框渐显回来。
+      this.getUIContext().animateTo({ duration: 160, curve: Curve.EaseOut }, (): void => {
+        this.previewChrome = 1;
+      });
+    });
+  }
+
+  /** 预览卡片右上角的下载：复用全 app 的「沙盒 → 相册授权」链路。 */
+  private downloadPreviewImage(): void {
+    if (this.previewUrl.length === 0) {
+      return;
+    }
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      MediaDownloader.save(context, this.previewUrl, 'jpg',
+        `instamony_dm_${Date.now()}`, false)
+        .then((ok: boolean): void => {
+          promptAction.showToast({ message: ok ? '已保存到相册' : '保存失败' });
+        })
+        .catch((): void => {
+          promptAction.showToast({ message: '保存失败' });
+        });
+    } catch (error) {
+      promptAction.showToast({ message: '保存失败' });
+    }
+  }
+
   private bubbleMediaWidth(): number {
     const width: number = this.screenWidthVp > 0 ? this.screenWidthVp : FALLBACK_WIDTH_VP;
     return Math.min(200, width * 0.52);
@@ -823,7 +1132,9 @@ export struct DirectThreadPage {
    */
   private prevOf(index: number, message: DirectMessage): DirectMessage | undefined {
     const list: Array<DirectMessage> = this.allMessages();
-    if (index > 0 && index < list.length) {
+    // 必须核对 id：触顶刷新会在前面插入更老的消息，ForEach 传进来的 index 已经偏移；
+    // 只按 index 取会把"上一段"取错，整片气泡的分组/圆角/头像就乱了。
+    if (index > 0 && index < list.length && list[index].id === message.id) {
       return list[index - 1];
     }
     for (let at: number = 0; at < list.length; at++) {
@@ -1356,6 +1667,8 @@ export struct DirectThreadPage {
             .backgroundColor(message.mediaSticker ? Color.Transparent
               : $r('app.color.field_background'))
             .alt($r('app.media.grid_placeholder'))
+            // 节点 id：展开时量这个缩略图的窗口矩形，卡片从它长出来/缩回去。
+            .id(this.mediaSourceId(message.id))
             /*
              * 图解码完 = 这一条的高度真正定下来了：如果用户还贴在底部，就再贴一次 ——
              * 否则晚到的图会把"最新那条"顶到输入框下面去（用户报的正是这个）。
@@ -1373,6 +1686,8 @@ export struct DirectThreadPage {
           .onClick((): void => {
             if (DirectThreadPage.hasShareTarget(message)) {
               this.onOpenShare(message);
+            } else if (this.canPreviewImage(message)) {
+              this.openImagePreview(message);
             }
           })
           if (message.isVideo || message.shareIsVideo) {
@@ -1635,6 +1950,12 @@ export struct DirectThreadPage {
          */
         .contentStartOffset(this.topOffsetVp())
         .contentEndOffset(BOTTOM_OFFSET)
+        /*
+         * **不要 `stackFromEnd`**（真机踩坑）：
+         * 它虽然能把内容底部对齐，但和 `ForEach` 的正序索引、`scrollEdge` 混在一起时，
+         * 新条目会落到视口外；表现就是"消息结构有反应，但看不到新消息"。
+         * 这里回到普通正序列表，只靠 `scrollToNewest()` 的 `scrollEdge(Bottom)` 贴底。
+         */
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring)
         .clip(false)
@@ -1715,7 +2036,7 @@ export struct DirectThreadPage {
        * `HitTestMode.Transparent`：不阻塞列表的滚动与点击，返回键自己仍然收得到点击。
        */
       Column() {
-        if (!this.externalHeader) {
+        if (!this.externalHeader && this.previewId.length === 0) {
           this.pageHeader()
         }
       }
@@ -1724,10 +2045,29 @@ export struct DirectThreadPage {
       .justifyContent(FlexAlign.Start)
       .alignItems(HorizontalAlign.Start)
       .hitTestBehavior(HitTestMode.Transparent)
+
     }
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.page_background'))
+    /*
+     * 图片预览走系统 `bindContentCover`，而不是页内 Stack：
+     * 页内 Stack 再高也压不住 HDS 导航栏（标题栏是 Navigation 自己画的一层），
+     * 卡片会浮在标题栏下面；ContentCover 是窗口级全屏层，天然盖住整个 HDS 导航。
+     */
+    .bindContentCover($$this.previewCover, this.imagePreview(), {
+      modalTransition: ModalTransition.NONE,
+      backgroundColor: Color.Transparent,
+      // 不要系统再按安全区裁一次；背景层自己 expandSafeArea 铺到底。
+      enableSafeArea: false,
+      /*
+       * 系统返回键：先拦下默认关闭，跑卡片收回缩略图的动画；
+       * 动画结束后由 closeImagePreview 自己把 previewCover 置 false。
+       */
+      onWillDismiss: (action: DismissContentCoverAction): void => {
+        this.closeImagePreview();
+      }
+    })
     /*
      * **任何触摸都算"人还在看"**：这直接决定要不要继续轮询
      * （空闲 90 秒就停，见 DirectThreadViewModel.THREAD_IDLE_STOP_MS）。
@@ -1745,6 +2085,216 @@ export struct DirectThreadPage {
         this.userTouching = false;
       }
     })
+  }
+
+  /**
+   * 图片放大预览：快拍/highlight 那种圆角卡片，卡片与气泡缩略图共用
+   * `geometryTransition`（见 mediaTransitionId），背景随 `previewDim` 渐暗、渐模糊。
+   */
+  /** 预览里的用户资讯栏 + 下载（普通图放卡片上方，长图放卡片内部顶部）。 */
+  @Builder
+  previewInfoRow() {
+    Row({ space: 8 }) {
+      Toggle({ type: ToggleType.Button, isOn: false }) {
+        Row({ space: 8 }) {
+          Image(this.previewAvatar.length > 0 ? this.previewAvatar
+            : $r('app.media.grid_placeholder'))
+            .width(34)
+            .height(34)
+            .borderRadius(17)
+            .objectFit(ImageFit.Cover)
+            .backgroundColor('#333333')
+          Text(this.previewName.length > 0 ? this.previewName
+            : $r('app.string.direct_thread_empty'))
+            .fontSize(14)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Color.White)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .constraintSize({ maxWidth: this.previewCardW * 0.5 })
+        }
+      }
+      .padding({ left: 3, right: 12, top: 3, bottom: 3 })
+      .borderRadius(20)
+      .backgroundColor(Color.Transparent)
+      .selectedColor(Color.Transparent)
+      .attributeModifier(new SurfaceModifier(this.cardThickness, false))
+      .hitTestBehavior(HitTestMode.Transparent)
+
+      Blank()
+
+      MaterialIconButton({
+        symbol: $r('sys.symbol.arrow_down_to_line'),
+        buttonSize: 40,
+        iconSize: 20,
+        tint: '#FFFFFF',
+        autoInvert: false,
+        onTap: (on: boolean): void => {
+          this.downloadPreviewImage();
+        }
+      })
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Center)
+    .padding({ left: 8, right: 8 })
+  }
+
+  /** 预览里的输入框（沉浸光感 + 发送按钮）。 */
+  @Builder
+  previewInputBar() {
+    CommentInputBar({
+      hint: $r('app.string.direct_thread_hint'),
+      sideInset: 0,
+      bottomInset: 0,
+      onSend: (text: string): void => {
+        this.vm.send(text)
+          .then((): void => {
+            this.syncFromVm();
+            this.closeImagePreview();
+            this.scrollToNewest();
+          })
+          .catch((): void => {
+          });
+      }
+    })
+      .width('100%')
+  }
+
+  @Builder
+  imagePreview() {
+    Stack({ alignContent: Alignment.TopStart }) {
+      // 背景层：点空白关闭；不透明度与 backdropBlur 都跟着 previewDim 走。
+      Column()
+        .position({ x: 0, y: 0 })
+        .width('100%')
+        .height('100%')
+        .backgroundColor('#000000')
+        .opacity(IMAGE_PREVIEW_DIM * this.previewDim)
+        .backdropBlur(IMAGE_PREVIEW_BLUR * this.previewDim)
+        /*
+         * 背景层自己也要扩到系统避让区：只给外层 Stack 加 expandSafeArea 时，
+         * ContentCover 里的子层仍按安全区高度画，底部导航栏那一条会漏出来。
+         */
+        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+        .onClick((): void => {
+          this.closeImagePreview();
+        })
+
+      /*
+       * 普通图（≤4:3）：资讯栏/下载放卡片上方；长图改为放进卡片内部。
+       */
+      if (!this.isLongPreview()) {
+        Column() {
+          this.previewInfoRow()
+        }
+        .position({ x: this.previewCardX, y: this.previewCardY - 48 })
+        .width(this.previewCardW)
+        .opacity(this.previewChrome)
+        .translate({ y: (1 - this.previewChrome) * -6 })
+      }
+
+      /*
+       * 卡片本体：位置/宽高全部由 @State 驱动，展开时从缩略图矩形补间到目标矩形，
+       * 收起时反向回到缩略图，和 StoryViewer 的做法一致（不依赖 geometryTransition）。
+       */
+      Stack({ alignContent: Alignment.Center }) {
+        /*
+         * 宽度固定为展开后的卡片宽度；**高度跟着卡片高度实时变化**。
+         *
+         * 卡片用 clip 把超出的部分裁掉：展开/收起时只有卡片高度在变，图片宽度不缩放，
+         * 所以不会在动画过程中因为宽高比变化出现黑边。
+         */
+        Image(this.previewUrl)
+          /*
+           * 图片和卡片**完全同宽同高**（100% / 100%）。
+           *
+           * 之前宽度写死成展开后的原宽、只让高度跟卡片：收起最后一帧卡片虽然回到了
+           * 缩略图矩形，但图片仍按原宽做 Cover 裁切，和气泡缩略图的取景不一样，
+           * 于是切换回缩略图时"抽一下"。现在图片宽高都跟着卡片，最后一帧和缩略图
+           * 的盒子完全一致；Cover 又保证任何中间帧都不会出黑边。
+           */
+          .width('100%')
+          .height('100%')
+          .objectFit(ImageFit.Cover)
+          .borderRadius(18)
+          .draggable(false)
+          .alt($r('app.media.grid_placeholder'))
+          .onClick((): void => {
+            this.closeImagePreview();
+          })
+
+        // 长图：资讯栏、下载、输入框全部放进卡片内部。
+        if (this.isLongPreview()) {
+          Column() {
+            this.previewInfoRow()
+          }
+          .position({ x: 0, y: 8 })
+          .width('100%')
+          .opacity(this.previewChrome)
+
+          Column() {
+            this.previewInputBar()
+          }
+          .position({ x: 8, y: this.previewCardH - 52 })
+          .width(this.previewCardW - 16)
+          // 卡片高度弹簧变化时，内部输入框跟着同一条弹簧走，不跳。
+          .animation({ duration: 260, curve: curves.springMotion(0.55, 0.72) })
+          .opacity(this.previewChrome)
+        }
+      }
+      .position({ x: this.previewCardX, y: this.previewCardY })
+      .width(this.previewCardW)
+      .height(this.previewCardH)
+      // 只给几何（位置/宽/高）加隐式弹簧：展开、收起时宽度和高度都连续补间。
+      .animation({ duration: 260, curve: curves.springMotion(0.55, 0.72) })
+      .borderRadius(18)
+      .clip(true)
+      .backgroundColor(Color.Black)
+      .opacity(1 - Math.min(0.35,
+        (Math.abs(this.previewDragX) + Math.abs(this.previewDragY)) / 500))
+      // 卡片跟随手指的绝对位移（x/y 都跟手），松手按弹簧回原位或收起。
+      .translate({ x: this.previewDragX, y: this.previewDragY })
+      .gesture(
+        PanGesture({ direction: PanDirection.All, distance: 1 })
+          .onActionStart((): void => {
+            if (this.previewOpenTimer >= 0) {
+              clearTimeout(this.previewOpenTimer);
+              this.previewOpenTimer = -1;
+            }
+            this.previewDragX = 0;
+            this.previewDragY = 0;
+            this.previewDragging = true;
+            this.getUIContext().animateTo({ duration: 130, curve: Curve.EaseOut }, (): void => {
+              this.previewChrome = 0;
+            });
+          })
+          .onActionUpdate((event: GestureEvent): void => {
+            this.previewDragX = event.offsetX;
+            this.previewDragY = event.offsetY;
+          })
+          .onActionEnd((): void => {
+            this.endPreviewDrag();
+          })
+          .onActionCancel((): void => {
+            this.endPreviewDrag();
+          })
+      )
+
+      // 普通图：输入框在卡片下方；长图已经在卡片内部画过。
+      if (!this.isLongPreview()) {
+        Column() {
+          this.previewInputBar()
+        }
+        .position({ x: this.previewCardX, y: this.previewCardY + this.previewCardH + 8 })
+        .width(this.previewCardW)
+        .opacity(this.previewChrome)
+        .translate({ y: (1 - this.previewChrome) * 6 })
+      }
+    }
+    .width('100%')
+    .height('100%')
+    // 背景模糊/遮罩要铺到系统导航栏避让区，不能只到安全区上沿。
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 
   /** 悬浮的输入条（和评论浮层里那条完全同一个组件）。 */

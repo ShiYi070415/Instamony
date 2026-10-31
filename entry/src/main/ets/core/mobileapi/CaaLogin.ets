@@ -39,6 +39,7 @@ import { MobileRequest } from './MobileRequest';
 import { base64, base64UrlNoPad, utf8 } from './MobileSign';
 import { WebLoginProbe, WebProbeResult } from './WebLoginProbe';
 import { MobileChallenge } from './MobileChallenge';
+import { DoHResolver } from '../net/DoHResolver';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'CaaLogin';
@@ -722,7 +723,7 @@ export class CaaLogin {
     }
     const request: http.HttpRequest = http.createHttp();
     try {
-      const response: http.HttpResponse = await request.request('https://www.instagram.com/', {
+      const response: http.HttpResponse = await request.request('https://www.instagram.com/', DoHResolver.apply({
         method: http.RequestMethod.GET,
         header: {
           'User-Agent': WEB_UA,
@@ -732,7 +733,7 @@ export class CaaLogin {
         connectTimeout: 12000,
         readTimeout: 12000,
         expectDataType: http.HttpDataType.STRING
-      });
+      }));
       const raw: ESObject = response.header as ESObject;
       let joined: string = '';
       if (raw !== null && raw !== undefined) {
@@ -1747,6 +1748,27 @@ export class CaaLogin {
       CaaLogin.lastWebProbeNote = probed.text;
       CaaLogin.lastWebProbeDetail = probed.detailNote;
       probeNote = probed.text;
+      /*
+       * **Meta 要求先改密码**：与普通 checkpoint 分开提示。
+       *
+       * 用户实测：挂着 VPN 登录一直显示密码错误，但密码本身是对的；去 Meta 那边
+       * 按提示改过一次密码后就能登录。这句提示必须给出"改密码"这个动作，
+       * 不能让人继续重试原密码，也不能只让他"去验证"。
+       */
+      if (probed.passwordChange) {
+        const change: CaaResult = new CaaResult(false,
+          '登录失败：Meta 要求先更改密码（不是密码错误）。\n'
+            + '请到 Instagram 官方 App 或网页版，用同一账号按提示改一次密码，'
+            + '改完再用新密码回来登录。\n'
+            + `网页接口结论：${probed.text}`);
+        change.aac = aac;
+        try {
+          change.raw = JSON.stringify(payload).substring(0, 100000);
+        } catch (rawError) {
+          change.raw = '';
+        }
+        return change;
+      }
       if (probed.credentialsOk) {
         /*
          * 把真正的验证入口交给 `MobileChallenge`：界面会立刻出现「去验证」，
@@ -2888,13 +2910,13 @@ export class CaaLogin {
        * 缺 Cookie 这件事记进 `lastPasswordKeysNote`，登录日志里能直接看到。
        */
       const response: http.HttpResponse = await request.request(
-        'https://i.instagram.com/api/v1/qe/sync/', {
+        'https://i.instagram.com/api/v1/qe/sync/', DoHResolver.apply({
           method: http.RequestMethod.GET,
           header: headers,
           connectTimeout: 15000,
           readTimeout: 15000,
           expectDataType: http.HttpDataType.STRING
-        });
+        }));
       CaaLogin.absorbResponseCookies(response);
       let keyId: number = 0;
       let publicKey: string = '';

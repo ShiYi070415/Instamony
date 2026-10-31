@@ -683,47 +683,566 @@
     {
       "name": "story_need_challenge",
       "value": "Instagram wants this account verified first: sign in / complete the check on the web, then try stories again"
+    },
+    {
+      "name": "settings_proxy_title",
+      "value": "Proxy"
+    },
+    {
+      "name": "settings_proxy_host",
+      "value": "Host"
+    },
+    {
+      "name": "settings_proxy_port",
+      "value": "Port"
+    },
+    {
+      "name": "settings_proxy_user",
+      "value": "Username"
+    },
+    {
+      "name": "settings_proxy_pass",
+      "value": "Password"
+    },
+    {
+      "name": "settings_proxy_apply",
+      "value": "Apply"
+    },
+    {
+      "name": "settings_proxy_off",
+      "value": "Turn off proxy"
+    },
+    {
+      "name": "settings_proxy_enable",
+      "value": "Enable proxy"
+    },
+    {
+      "name": "settings_proxy_saved",
+      "value": "Saved proxy"
+    },
+    {
+      "name": "settings_proxy_none",
+      "value": "None"
+    },
+    {
+      "name": "settings_proxy_add_title",
+      "value": "Add proxy"
+    },
+    {
+      "name": "settings_proxy_name",
+      "value": "Name"
+    },
+    {
+      "name": "settings_proxy_add",
+      "value": "Add"
+    },
+    {
+      "name": "settings_group_proxy",
+      "value": "Proxy"
+    },
+    {
+      "name": "settings_proxy_hint",
+      "value": "The proxy applies to this app only and takes effect immediately; turn it off to connect directly"
+    },
+    {
+      "name": "proxy_ph_name",
+      "value": "e.g. Office proxy"
+    },
+    {
+      "name": "proxy_ph_host",
+      "value": "e.g. 127.0.0.1"
+    },
+    {
+      "name": "proxy_ph_port",
+      "value": "e.g. 7890"
+    },
+    {
+      "name": "proxy_ph_optional",
+      "value": "Optional"
+    },
+    {
+      "name": "settings_proxy_pick_title",
+      "value": "Choose proxy"
+    },
+    {
+      "name": "settings_proxy_confirm",
+      "value": "Confirm"
+    },
+    {
+      "name": "settings_proxy_selected",
+      "value": "Selected"
+    },
+    {
+      "name": "settings_proxy_manage_title",
+      "value": "Manage proxies"
+    },
+    {
+      "name": "settings_proxy_edit_title",
+      "value": "Edit proxy"
+    },
+    {
+      "name": "settings_proxy_save",
+      "value": "Save"
+    },
+    {
+      "name": "settings_proxy_edit_action",
+      "value": "Edit"
+    },
+    {
+      "name": "settings_proxy_delete_action",
+      "value": "Delete"
+    },
+    {
+      "name": "settings_proxy_deleted",
+      "value": "Deleted"
+    },
+    {
+      "name": "settings_proxy_verifying",
+      "value": "Checking proxy…"
+    },
+    {
+      "name": "settings_proxy_verify_failed",
+      "value": "Proxy unreachable: %s"
+    },
+    {
+      "name": "settings_proxy_invalid",
+      "value": "Host and port are required"
+    },
+    {
+      "name": "back_press_exit_hint",
+      "value": "Press back again to go to the home screen"
+    },
+    {
+      "name": "common_cancel",
+      "value": "Cancel"
+    },
+    {
+      "name": "login_recheck_short",
+      "value": "Recheck"
+    },
+    {
+      "name": "login_register",
+      "value": "Create account"
+    },
+    {
+      "name": "login_register_hint",
+      "value": "Registration completes on Instagram’s official website. Come back to this page and sign in with the new account."
+    },
+    {
+      "name": "feed_recommended_title",
+      "value": "Recommended for you"
+    },
+    {
+      "name": "feed_recommended_hint",
+      "value": "You’ve seen the latest posts from people you follow. Here’s what we recommend next."
+    },
+    {
+      "name": "challenge_title",
+      "value": "Account needs verification"
+    },
+    {
+      "name": "challenge_hint",
+      "value": "Instagram requires a human or device check. Complete it on the web page, then return to the app."
+    },
+    {
+      "name": "challenge_action",
+      "value": "Verify"
+    },
+    {
+      "name": "challenge_action_verify",
+      "value": "Go to verification"
+    },
+    {
+      "name": "login_label_username",
+      "value": "Username"
+    },
+    {
+      "name": "login_label_password",
+      "value": "Password"
+    },
+    {
+      "name": "login_label_code",
+      "value": "Code"
+    },
+    {
+      "name": "login_label_challenge_code",
+      "value": "Security code"
+    },
+    {
+      "name": "login_web_short",
+      "value": "Web sign-in"
+    },
+    {
+      "name": "login_verify_title",
+      "value": "Two-factor verification"
+    },
+    {
+      "name": "login_verify_hint",
+      "value": "This account has extra verification enabled. Enter the 6-digit code Instagram sent you (SMS / authenticator / backup code)."
+    },
+    {
+      "name": "login_verify_approval_hint",
+      "value": "If Instagram asks you to approve this sign-in on another device, approve it there and switch back — the app retries automatically, no code needed."
+    },
+    {
+      "name": "login_verify_action",
+      "value": "Verify and sign in"
+    },
+    {
+      "name": "login_verify_cancel",
+      "value": "Cancel"
+    },
+    {
+      "name": "login_verify_web_title",
+      "value": "Extra verification required"
+    },
+    {
+      "name": "login_verify_web_hint",
+      "value": "This account needs Instagram’s own verification flow (account recovery / security check); the code field here won’t work. Tap the button below to complete it on the web page; the app stays signed in afterwards."
+    },
+    {
+      "name": "login_verify_web_action",
+      "value": "Verify on web"
+    },
+    {
+      "name": "login_saved_accounts",
+      "value": "Saved accounts (tap to switch)"
+    },
+    {
+      "name": "login_label_session",
+      "value": "sessionid"
+    },
+    {
+      "name": "login_session_hint",
+      "value": "The string starting with your numeric account id (called sessionid in browser cookies)"
+    },
+    {
+      "name": "login_use_session",
+      "value": "Sign in with sessionid"
+    },
+    {
+      "name": "login_use_session_action",
+      "value": "Sign in with sessionid"
+    },
+    {
+      "name": "login_use_password",
+      "value": "Use username and password"
+    },
+    {
+      "name": "login_password_note",
+      "value": "By default the app uses its own sign-in protocol (no web page). If the human check fails, use “Web sign-in” above; accounts with two-factor enabled will show a code panel."
+    },
+    {
+      "name": "login_username_hint",
+      "value": "Instagram username"
+    },
+    {
+      "name": "login_password_hint",
+      "value": "Password"
+    },
+    {
+      "name": "login_code_hint",
+      "value": "Two-factor code"
+    },
+    {
+      "name": "login_challenge_code_hint",
+      "value": "Security code"
+    },
+    {
+      "name": "login_submit_code",
+      "value": "Submit code"
+    },
+    {
+      "name": "login_web_fallback",
+      "value": "Sign in on Instagram web"
+    },
+    {
+      "name": "login_challenge_hint",
+      "value": "Instagram requires a security check for this account. Complete it in the official Instagram app or website, then come back and sign in."
+    },
+    {
+      "name": "login_upgrade_hint",
+      "value": "Instagram only allows its latest official client to sign in with a password; third-party clients are rejected (regardless of credentials). Tap the button above to use web sign-in; the app works the same afterwards."
+    },
+    {
+      "name": "login_challenge_web",
+      "value": "Verify on web"
+    },
+    {
+      "name": "status_session_expired",
+      "value": "Your session expired. Sign out in Settings and sign in again."
+    },
+    {
+      "name": "notify_yesterday",
+      "value": "Yesterday"
+    },
+    {
+      "name": "notify_past_7d",
+      "value": "Past 7 days"
+    },
+    {
+      "name": "notify_past_30d",
+      "value": "Past 30 days"
+    },
+    {
+      "name": "notify_show_more",
+      "value": "Show more"
+    },
+    {
+      "name": "notify_this_month",
+      "value": "This month"
+    },
+    {
+      "name": "account_add",
+      "value": "Add account"
+    },
+    {
+      "name": "account_unnamed",
+      "value": "Unnamed account"
+    },
+    {
+      "name": "account_switch_failed",
+      "value": "Couldn’t switch accounts. Please sign in to this account again."
+    },
+    {
+      "name": "story_your_story",
+      "value": "Your story"
+    },
+    {
+      "name": "profile_chip_add",
+      "value": "Add"
+    },
+    {
+      "name": "profile_action_edit",
+      "value": "Edit profile"
+    },
+    {
+      "name": "profile_action_share",
+      "value": "Share profile"
+    },
+    {
+      "name": "profile_highlight_new",
+      "value": "New"
+    },
+    {
+      "name": "profile_highlight_suggest",
+      "value": "Suggested"
+    },
+    {
+      "name": "story_create_pending",
+      "value": "Story posting isn’t connected yet — this is the entry point"
+    },
+    {
+      "name": "direct_send_failed",
+      "value": "Not sent · Tap to retry"
+    },
+    {
+      "name": "direct_sending",
+      "value": "Sending…"
+    },
+    {
+      "name": "settings_group_media",
+      "value": "Photos and videos"
+    },
+    {
+      "name": "settings_image_quality",
+      "value": "Image quality"
+    },
+    {
+      "name": "settings_video_quality",
+      "value": "Video quality"
+    },
+    {
+      "name": "settings_quality_auto",
+      "value": "Auto"
+    },
+    {
+      "name": "settings_quality_saver",
+      "value": "Data saver"
+    },
+    {
+      "name": "settings_quality_high",
+      "value": "HD"
+    },
+    {
+      "name": "settings_quality_original",
+      "value": "Original"
+    },
+    {
+      "name": "settings_media_quality_hint",
+      "value": "Auto picks based on your network: HD on Wi-Fi, data saver on mobile data. Downloads always keep the original image/video."
+    },
+    {
+      "name": "login_probe_busy",
+      "value": "Checking…"
+    },
+    {
+      "name": "login_probe_hint",
+      "value": "Not sure about the password? Tap here to check it against Instagram’s web API."
+    },
+    {
+      "name": "login_web_retry_hint",
+      "value": "Still can’t get in? Try signing in on the web page (it can pass the human check)."
+    },
+    {
+      "name": "settings_doh_scope_hint",
+      "value": "HTTP, the built-in web page and the sign-in chain all use encrypted DNS; the web page and sign-in chain fall back to system DNS if that fails."
+    },
+    {
+      "name": "settings_relay_endpoint",
+      "value": "Relay report URL"
+    },
+    {
+      "name": "settings_relay_key",
+      "value": "Shared key (optional, matches the relay key)"
+    },
+    {
+      "name": "settings_relay_key_hint",
+      "value": "Any string, as long as it matches the relay"
+    },
+    {
+      "name": "settings_relay_disabled",
+      "value": "Relay reporting is off"
+    },
+    {
+      "name": "settings_clear_device_hint",
+      "value": "Sign out first, then clear device credentials"
+    },
+    {
+      "name": "settings_login_help",
+      "value": "If sign-in fails: run “Sign-in channel self-test”, then “Copy sign-in log” and send me the text.\n"
+    },
+    {
+      "name": "settings_login_selftest_running",
+      "value": "Running sign-in channel self-test (up to 15 s)…"
+    },
+    {
+      "name": "settings_ip_check_running",
+      "value": "Checking egress IP (up to 10 s)…"
+    },
+    {
+      "name": "settings_ip_datacenter",
+      "value": "This is a datacenter IP. Try another node."
+    },
+    {
+      "name": "settings_ip_normal",
+      "value": "This route looks normal"
+    },
+    {
+      "name": "settings_login_log_copied",
+      "value": "Sign-in log copied (paste it to the developer)"
+    },
+    {
+      "name": "settings_meow_login_sending",
+      "value": "Sending sign-in log to MeoW…"
+    },
+    {
+      "name": "settings_reels_log_empty",
+      "value": "No Reels crash log yet (Reels not opened, or the log was cleared)"
+    },
+    {
+      "name": "settings_reels_log_prefix",
+      "value": "(Device and version: %s)\n\n"
+    },
+    {
+      "name": "settings_meow_reels_sending",
+      "value": "Sending Reels crash log to MeoW…"
+    },
+    {
+      "name": "login_error_transport",
+      "value": "Sign-in request failed: %s"
+    },
+    {
+      "name": "login_ok_session_pending",
+      "value": "%s succeeded (mobile session material not ready)"
+    },
+    {
+      "name": "system_http_failed",
+      "value": "System HTTP stack also failed: %s"
+    },
+    {
+      "name": "notify_direct_fallback",
+      "value": "Direct message"
+    },
+    {
+      "name": "notify_direct_count",
+      "value": "You have %d new direct messages"
+    },
+    {
+      "name": "notify_direct_one",
+      "value": "You have a new direct message"
+    },
+    {
+      "name": "index_web_login_hint",
+      "value": "Sign in on the page (you may need to pass a human check); the app enters automatically afterwards."
+    },
+    {
+      "name": "index_open_link_failed",
+      "value": "Couldn’t open this link (no browser available?)"
+    },
+    {
+      "name": "index_share_empty",
+      "value": "This share has nothing to open"
+    },
+    {
+      "name": "linkin_title",
+      "value": "Opened by deep link"
+    },
+    {
+      "name": "linkin_hint",
+      "value": "The system delivered this link to the app via Want. Below is what was parsed from the URI."
+    },
+    {
+      "name": "linkin_target_known",
+      "value": "✓ Known target"
+    },
+    {
+      "name": "linkin_target_unknown",
+      "value": "✗ Unknown target"
+    },
+    {
+      "name": "linkin_params_ok",
+      "value": "✓ Parameters complete"
+    },
+    {
+      "name": "linkin_params_missing",
+      "value": "✗ Parameters missing"
+    },
+    {
+      "name": "linkin_open_action",
+      "value": "Open and run this link"
+    },
+    {
+      "name": "linkin_ignore",
+      "value": "Ignore and go to home"
+    },
+    {
+      "name": "linkin_supported",
+      "value": "Supported links"
+    },
+    {
+      "name": "story_diag_guide",
+      "value": "2) Then check detail= and the per-request trace: detail=empty means the server returned 200+JSON but no media."
+    },
+    {
+      "name": "settings_group_language",
+      "value": "Language"
+    },
+    {
+      "name": "settings_language",
+      "value": "Language"
+    },
+    {
+      "name": "settings_language_search",
+      "value": "Search languages"
+    },
+    {
+      "name": "settings_language_hint",
+      "value": "Choose the app language. This only affects this app, not the system language."
+    },
+    {
+      "name": "settings_language_changed",
+      "value": "Language changed"
     }
-  ,
-    {"name": "settings_proxy_title", "value": "Proxy"},
-    {"name": "settings_proxy_host", "value": "Host"},
-    {"name": "settings_proxy_port", "value": "Port"},
-    {"name": "settings_proxy_user", "value": "Username"},
-    {"name": "settings_proxy_pass", "value": "Password"},
-    {"name": "settings_proxy_apply", "value": "Apply"},
-    {"name": "settings_proxy_off", "value": "Turn off proxy"}
-,
-    {"name": "settings_proxy_enable", "value": "Enable proxy"},
-    {"name": "settings_proxy_saved", "value": "Saved proxy"},
-    {"name": "settings_proxy_none", "value": "No proxy"},
-    {"name": "settings_proxy_add_title", "value": "Add proxy"},
-    {"name": "settings_proxy_name", "value": "Name"},
-    {"name": "settings_proxy_add", "value": "Add"}
-,
-    {"name": "settings_group_proxy", "value": "Proxy"}
-,
-    {"name": "settings_proxy_hint", "value": "The proxy applies to this app only and takes effect immediately; turn it off to connect directly"}
-,
-    {"name": "proxy_ph_name", "value": "e.g. Office proxy"},
-    {"name": "proxy_ph_host", "value": "e.g. 127.0.0.1"},
-    {"name": "proxy_ph_port", "value": "e.g. 7890"},
-    {"name": "proxy_ph_optional", "value": "Optional"}
-,
-    {"name": "settings_proxy_pick_title", "value": "Choose proxy"},
-    {"name": "settings_proxy_confirm", "value": "Confirm"},
-    {"name": "settings_proxy_selected", "value": "Selected"}
-,
-    {"name": "settings_proxy_manage_title", "value": "Manage proxies"},
-    {"name": "settings_proxy_edit_title", "value": "Edit proxy"},
-    {"name": "settings_proxy_save", "value": "Save"},
-    {"name": "settings_proxy_edit_action", "value": "Edit"},
-    {"name": "settings_proxy_delete_action", "value": "Delete"},
-    {"name": "settings_proxy_deleted", "value": "Deleted"}
-,
-    {"name": "settings_proxy_verifying", "value": "Checking proxy…"},
-    {"name": "settings_proxy_verify_failed", "value": "Proxy unreachable: %s"},
-    {"name": "settings_proxy_invalid", "value": "Host and port are required"}
-,
-    {"name": "back_press_exit_hint", "value": "Press back again to go to the home screen"}
-]
+  ]
 }

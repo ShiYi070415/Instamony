@@ -26,6 +26,7 @@ import { BackgroundInbox, BackgroundKeep } from '../core/BackgroundKeep';
 // 点私信通知要直接进那条会话：这里只负责把 want 里的会话 id 交给 core/NotifyRoute。
 import { NotifyRoute } from '../core/NotifyRoute';
 import { AppSettings } from '../core/AppSettings';
+import { DoHResolver } from '../core/net/DoHResolver';
 import { MediaPrefetch } from '../core/MediaPrefetch';
 import { NativeFeed } from '../core/NativeFeed';
 import { FeedCache } from '../core/FeedCache';
@@ -105,6 +106,8 @@ export default class EntryAbility extends UIAbility {
     }
     // 设置与"当前是不是深色"早点发布到 AppStorage：页面第一次 build 就要用它们配色。
     AppSettings.init(this.context);
+    // 全 app DoH：启动时后台探一条能用的端点；不阻塞首屏（见 core/net/DoHResolver.warmUp）。
+    DoHResolver.warmUp();
     // Reels 崩溃现场日志（同步写、只追加；见 core/ReelsCrashLog 的文件头）。
     ReelsCrashLog.init(this.context.filesDir);
     /*

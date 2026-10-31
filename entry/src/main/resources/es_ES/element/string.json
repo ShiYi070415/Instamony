@@ -1,0 +1,1248 @@
+{
+  "string": [
+    {
+      "name": "app_name",
+      "value": "Instamony"
+    },
+    {
+      "name": "common_cancel",
+      "value": "Cancelar"
+    },
+    {
+      "name": "app_title",
+      "value": "Instamony"
+    },
+    {
+      "name": "module_desc",
+      "value": "Instamony Módulo principal"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Instamony Módulo principal"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Instamony"
+    },
+    {
+      "name": "login_title",
+      "value": "Instamony"
+    },
+    {
+      "name": "login_recheck",
+      "value": "Ya he iniciado sesión, comprueba de nuevo"
+    },
+    {
+      "name": "login_recheck_short",
+      "value": "volver a comprobar"
+    },
+    {
+      "name": "login_register",
+      "value": "Registrar una nueva cuenta"
+    },
+    {
+      "name": "login_register_hint",
+      "value": "La inscripción se realizará en el sitio web oficial de Instagram. Regrese a esta página e inicie sesión directamente con su nueva cuenta."
+    },
+    {
+      "name": "feed_recommended_title",
+      "value": "Recomendado para ti"
+    },
+    {
+      "name": "feed_recommended_hint",
+      "value": "Has leído las últimas publicaciones de las personas que sigues. Aquí tienes el contenido recomendado para ti."
+    },
+    {
+      "name": "challenge_title",
+      "value": "La cuenta requiere verificación de seguridad"
+    },
+    {
+      "name": "challenge_hint",
+      "value": "Instagram requiere verificación humana o del dispositivo. La verificación solo se puede completar en la página web. Una vez completado, puede regresar a la aplicación para continuar usándola."
+    },
+    {
+      "name": "challenge_action",
+      "value": "verificar"
+    },
+    {
+      "name": "challenge_action_verify",
+      "value": "Ir a verificar"
+    },
+    {
+      "name": "login_page_action",
+      "value": "Iniciar sesión"
+    },
+    {
+      "name": "login_web_action",
+      "value": "Inicie sesión usando la página web Instagram"
+    },
+    {
+      "name": "login_web_hint",
+      "value": "El inicio de sesión en la página web puede pasar el punto de verificación/control IG humano-computadora; ingresará automáticamente después de iniciar sesión exitosamente, no es necesario hacer clic en iniciar sesión nuevamente."
+    },
+    {
+      "name": "login_label_username",
+      "value": "Nombre de usuario"
+    },
+    {
+      "name": "login_label_password",
+      "value": "Contraseña"
+    },
+    {
+      "name": "login_label_code",
+      "value": "Código de verificación"
+    },
+    {
+      "name": "login_label_challenge_code",
+      "value": "Código de verificación de seguridad"
+    },
+    {
+      "name": "login_web_short",
+      "value": "inicio de sesión web"
+    },
+    {
+      "name": "login_verify_title",
+      "value": "verificación de dos pasos"
+    },
+    {
+      "name": "login_verify_hint",
+      "value": "Esta cuenta tiene activada la verificación adicional. Ingrese el código de verificación de 6 dígitos (SMS/Authenticador/Código de respaldo) que le envió Instagram."
+    },
+    {
+      "name": "login_verify_approval_hint",
+      "value": "Si Instagram le pide que confirme este inicio de sesión en otro dispositivo: haga clic en Aceptar allí, luego vuelva a la aplicación; automáticamente volverá a intentar iniciar sesión sin ingresar un código de verificación."
+    },
+    {
+      "name": "login_verify_action",
+      "value": "Verificar e iniciar sesión"
+    },
+    {
+      "name": "login_verify_cancel",
+      "value": "Cancelar"
+    },
+    {
+      "name": "login_verify_web_title",
+      "value": "Requiere verificación adicional"
+    },
+    {
+      "name": "login_verify_web_hint",
+      "value": "Esta cuenta requiere que Instagram su propio proceso de verificación (recuperación de cuenta/verificación de seguridad) esta vez, y no pasará si ingresa el código de verificación aquí. Haga clic en el botón a continuación para ir a la página web y completarla una vez. Después de iniciar sesión correctamente, la aplicación lo mantendrá conectado por sí sola."
+    },
+    {
+      "name": "login_verify_web_action",
+      "value": "Vaya a la página web para completar la verificación."
+    },
+    {
+      "name": "login_saved_accounts",
+      "value": "Cuenta ya iniciada (haga clic para volver directamente)"
+    },
+    {
+      "name": "login_label_session",
+      "value": "sessionid"
+    },
+    {
+      "name": "login_session_hint",
+      "value": "La cadena que comienza con la identificación numérica de la cuenta (llamada sessionid en las cookies del navegador)"
+    },
+    {
+      "name": "login_use_session",
+      "value": "Inicia sesión con sessionid"
+    },
+    {
+      "name": "login_use_session_action",
+      "value": "Inicia sesión con sessionid"
+    },
+    {
+      "name": "login_use_password",
+      "value": "Inicie sesión usando cuenta y contraseña en su lugar"
+    },
+    {
+      "name": "login_password_note",
+      "value": "De forma predeterminada, se utiliza el protocolo de inicio de sesión propio de la aplicación (no se muestra ninguna página web). Si no puede pasar la verificación humano-computadora, utilice el \"Inicio de sesión web\" arriba; para cuentas con la verificación en dos pasos habilitada, aparecerá otro panel de código de verificación."
+    },
+    {
+      "name": "login_username_hint",
+      "value": "Instagram Nombre de usuario"
+    },
+    {
+      "name": "login_password_hint",
+      "value": "Contraseña"
+    },
+    {
+      "name": "login_code_hint",
+      "value": "código de verificación de 2 pasos"
+    },
+    {
+      "name": "login_challenge_code_hint",
+      "value": "Código de verificación de seguridad"
+    },
+    {
+      "name": "login_submit_code",
+      "value": "Enviar código de verificación"
+    },
+    {
+      "name": "login_web_fallback",
+      "value": "Inicie sesión usando la página web Instagram"
+    },
+    {
+      "name": "login_challenge_hint",
+      "value": "Esta cuenta debe someterse a una verificación de seguridad. Vaya a la aplicación o sitio web oficial de Instagram para completar la verificación y luego regrese para iniciar sesión."
+    },
+    {
+      "name": "login_upgrade_hint",
+      "value": "IG Solo la última versión oficial del cliente puede iniciar sesión con una contraseña, y todos los clientes de terceros son rechazados (independientemente de la contraseña de la cuenta). Haga clic en el botón de arriba para iniciar sesión a través de la página web. Después de iniciar sesión, las funciones de esta aplicación son exactamente las mismas."
+    },
+    {
+      "name": "login_challenge_web",
+      "value": "Vaya a la página web para completar la verificación."
+    },
+    {
+      "name": "login_page_hint_account",
+      "value": "La contraseña de la cuenta solo se utiliza para esta solicitud de inicio de sesión y esta aplicación no la guarda; Después de iniciar sesión correctamente, solo se conserva localmente la cookie de sesión."
+    },
+    {
+      "name": "login_page_hint_features",
+      "value": "Después de iniciar sesión, puede navegar por el flujo de información, historias y mensajes privados; los datos se recuperarán automáticamente de acuerdo con el proceso de carga normal."
+    },
+    {
+      "name": "login_page_hint_stuck",
+      "value": "Si inició sesión correctamente en la página web y todavía está atascado aquí, haga clic en \"He iniciado sesión, verifique nuevamente\" a continuación."
+    },
+    {
+      "name": "sign_out",
+      "value": "Cerrar sesión"
+    },
+    {
+      "name": "tab_home",
+      "value": "pagina de inicio"
+    },
+    {
+      "name": "tab_reels",
+      "value": "Reels"
+    },
+    {
+      "name": "tab_direct",
+      "value": "mensaje privado"
+    },
+    {
+      "name": "tab_search",
+      "value": "Buscar"
+    },
+    {
+      "name": "tab_profile",
+      "value": "mio"
+    },
+    {
+      "name": "tab_placeholder_hint",
+      "value": "Esta página aún no se ha conectado"
+    },
+    {
+      "name": "status_ready",
+      "value": "Listo"
+    },
+    {
+      "name": "status_failed",
+      "value": "Error de lectura"
+    },
+    {
+      "name": "status_unparsable",
+      "value": "No puedo leer el contenido"
+    },
+    {
+      "name": "status_sign_in_required",
+      "value": "Necesitas iniciar sesión primero"
+    },
+    {
+      "name": "status_session_expired",
+      "value": "El estado de inicio de sesión ha caducado: cierre sesión en la configuración y vuelva a iniciar sesión."
+    },
+    {
+      "name": "status_page_not_ready",
+      "value": "La página aún no está lista"
+    },
+    {
+      "name": "web_close",
+      "value": "Cerrar página web"
+    },
+    {
+      "name": "video_play_failed",
+      "value": "Error en la reproducción del vídeo."
+    },
+    {
+      "name": "repost_unsupported",
+      "value": "Este contenido no admite el reenvío (IG no está abierto a esta cuenta)."
+    },
+    {
+      "name": "repost_done",
+      "value": "Reenviado."
+    },
+    {
+      "name": "unrepost_done",
+      "value": "Reenvío cancelado."
+    },
+    {
+      "name": "unfollow_done",
+      "value": "No seguido."
+    },
+    {
+      "name": "feature_pending",
+      "value": "Esta función aún no se ha implementado."
+    },
+    {
+      "name": "save_failed",
+      "value": "No se ha podido marcar esta publicación como favorita."
+    },
+    {
+      "name": "posted_ago_now",
+      "value": "justo ahora"
+    },
+    {
+      "name": "posted_ago_minutes",
+      "value": "%d hace minutos"
+    },
+    {
+      "name": "posted_ago_hours",
+      "value": "%dhace horas"
+    },
+    {
+      "name": "posted_ago_days",
+      "value": "%dhace días"
+    },
+    {
+      "name": "posted_ago_weeks",
+      "value": "%dhace semanas"
+    },
+    {
+      "name": "posted_ago_months",
+      "value": "%dhace meses"
+    },
+    {
+      "name": "posted_ago_years",
+      "value": "%d hace años"
+    },
+    {
+      "name": "notify_today",
+      "value": "hoy"
+    },
+    {
+      "name": "notify_yesterday",
+      "value": "ayer"
+    },
+    {
+      "name": "notify_past_7d",
+      "value": "últimos 7 días"
+    },
+    {
+      "name": "notify_past_30d",
+      "value": "últimos 30 días"
+    },
+    {
+      "name": "notify_show_more",
+      "value": "Mostrar más"
+    },
+    {
+      "name": "notify_suggested",
+      "value": "Recomendado para ti"
+    },
+    {
+      "name": "notify_follow",
+      "value": "Seguir"
+    },
+    {
+      "name": "notify_follow_back",
+      "value": "Regreso a la aduana"
+    },
+    {
+      "name": "notify_earlier",
+      "value": "antes"
+    },
+    {
+      "name": "notify_this_month",
+      "value": "este mes"
+    },
+    {
+      "name": "notify_empty",
+      "value": "No se puede leer la notificación de la página web."
+    },
+    {
+      "name": "action_follow",
+      "value": "Seguir"
+    },
+    {
+      "name": "action_following",
+      "value": "Ya estoy siguiendo"
+    },
+    {
+      "name": "action_more",
+      "value": "Más"
+    },
+    {
+      "name": "action_create",
+      "value": "publicar"
+    },
+    {
+      "name": "action_download",
+      "value": "Descargar"
+    },
+    {
+      "name": "action_settings",
+      "value": "Configuración"
+    },
+    {
+      "name": "account_add",
+      "value": "Agregar cuenta"
+    },
+    {
+      "name": "account_unnamed",
+      "value": "Cuenta sin nombre"
+    },
+    {
+      "name": "account_switch_failed",
+      "value": "No se pudo cambiar de cuenta, inicie sesión en esta cuenta nuevamente"
+    },
+    {
+      "name": "action_mute",
+      "value": "silenciar"
+    },
+    {
+      "name": "comments_title",
+      "value": "Comentario"
+    },
+    {
+      "name": "comments_hint",
+      "value": "Añade un comentario…"
+    },
+    {
+      "name": "comments_empty",
+      "value": "Aún no hay comentarios"
+    },
+    {
+      "name": "comments_failed",
+      "value": "No se pudieron leer los comentarios"
+    },
+    {
+      "name": "comments_send",
+      "value": "enviar"
+    },
+    {
+      "name": "comments_end",
+      "value": "No más comentarios"
+    },
+    {
+      "name": "comments_reply",
+      "value": "Responder"
+    },
+    {
+      "name": "comments_hide_replies",
+      "value": "ocultar respuesta"
+    },
+    {
+      "name": "comments_replies_loading",
+      "value": "Cargando respuestas…"
+    },
+    {
+      "name": "comments_view_replies",
+      "value": "Ver %d más respuestas"
+    },
+    {
+      "name": "comment_pending",
+      "value": "Aún no he recibido ningún comentario: este es el cuadro de entrada"
+    },
+    {
+      "name": "story_load_failed",
+      "value": "Esta historia no fue recuperada (motivo %s)"
+    },
+    {
+      "name": "story_action_pending",
+      "value": "La interacción de la historia aún no se ha conectado: este es el botón"
+    },
+    {
+      "name": "story_message_hint",
+      "value": "enviar mensaje"
+    },
+    {
+      "name": "story_your_story",
+      "value": "tus historias"
+    },
+    {
+      "name": "profile_chip_add",
+      "value": "agregar"
+    },
+    {
+      "name": "profile_action_edit",
+      "value": "Editar página de inicio"
+    },
+    {
+      "name": "profile_action_share",
+      "value": "Compartir página de inicio"
+    },
+    {
+      "name": "profile_highlight_new",
+      "value": "nuevo"
+    },
+    {
+      "name": "profile_highlight_suggest",
+      "value": "Recomendar atención"
+    },
+    {
+      "name": "story_create_pending",
+      "value": "La historia de la publicación aún no se ha conectado: esta es la entrada."
+    },
+    {
+      "name": "translate_action",
+      "value": "Ver traducción"
+    },
+    {
+      "name": "translate_show_original",
+      "value": "Mostrar texto original"
+    },
+    {
+      "name": "translate_failed",
+      "value": "La traducción falló, inténtalo de nuevo más tarde."
+    },
+    {
+      "name": "reels_page_title",
+      "value": "Reels"
+    },
+    {
+      "name": "post_page_title",
+      "value": "Publicar"
+    },
+    {
+      "name": "create_post_title",
+      "value": "nueva publicación"
+    },
+    {
+      "name": "create_post_hint",
+      "value": "Escribe algo..."
+    },
+    {
+      "name": "search_hint",
+      "value": "Buscar"
+    },
+    {
+      "name": "search_empty",
+      "value": "Ingrese el nombre de su cuenta para comenzar a buscar"
+    },
+    {
+      "name": "search_action",
+      "value": "Buscar"
+    },
+    {
+      "name": "count_thousands",
+      "value": "%smillones"
+    },
+    {
+      "name": "profile_stat_posts",
+      "value": "Publicar"
+    },
+    {
+      "name": "profile_stat_followers",
+      "value": "fans"
+    },
+    {
+      "name": "profile_stat_following",
+      "value": "Seguir"
+    },
+    {
+      "name": "profile_loading_more",
+      "value": "Cargando…"
+    },
+    {
+      "name": "profile_end",
+      "value": "no más"
+    },
+    {
+      "name": "profile_empty",
+      "value": "Aún no hay publicaciones"
+    },
+    {
+      "name": "direct_empty",
+      "value": "Aún no hay noticias"
+    },
+    {
+      "name": "direct_kind_media",
+      "value": "[Foto/Vídeo]"
+    },
+    {
+      "name": "direct_kind_voice",
+      "value": "[Voz]"
+    },
+    {
+      "name": "direct_kind_other",
+      "value": "[Mensaje]"
+    },
+    {
+      "name": "direct_thread_hint",
+      "value": "Enviar un mensaje…"
+    },
+    {
+      "name": "direct_thread_empty",
+      "value": "Aún no hay noticias, por favor saluda."
+    },
+    {
+      "name": "direct_send_failed",
+      "value": "No enviado · Haga clic aquí para intentarlo de nuevo"
+    },
+    {
+      "name": "direct_sending",
+      "value": "Enviando…"
+    },
+    {
+      "name": "direct_open_web",
+      "value": "Abrir en página web"
+    },
+    {
+      "name": "settings_group_appearance",
+      "value": "Apariencia"
+    },
+    {
+      "name": "settings_group_bar",
+      "value": "barra inferior"
+    },
+    {
+      "name": "settings_bar_native_animation",
+      "value": "Efecto nativo de la barra inferior"
+    },
+    {
+      "name": "settings_bar_native_animation_hint",
+      "value": "La barra inferior se cierra con un simple desvanecimiento de entrada y salida."
+    },
+    {
+      "name": "settings_material_level",
+      "value": "Percepción de luz inmersiva"
+    },
+    {
+      "name": "settings_material_hint",
+      "value": "Cuanto más alta sea la marcha, más refinado será el efecto visual, pero también consumirá más energía. Los dispositivos con baja potencia informática se degradarán automáticamente; Si no está seguro, seleccione \"Adaptable\" y el sistema decidirá en función de las capacidades del dispositivo."
+    },
+    {
+      "name": "settings_material_adaptive",
+      "value": "Adaptativo"
+    },
+    {
+      "name": "settings_material_gentle",
+      "value": "gentil"
+    },
+    {
+      "name": "settings_material_smooth",
+      "value": "Suave"
+    },
+    {
+      "name": "settings_material_exquisite",
+      "value": "Exquisito"
+    },
+    {
+      "name": "settings_material_thickness",
+      "value": "Espesor del material"
+    },
+    {
+      "name": "settings_thickness_ultra_thin",
+      "value": "Extremadamente delgado"
+    },
+    {
+      "name": "settings_thickness_thin",
+      "value": "delgado"
+    },
+    {
+      "name": "settings_thickness_regular",
+      "value": "regular"
+    },
+    {
+      "name": "settings_thickness_thick",
+      "value": "grueso"
+    },
+    {
+      "name": "settings_thickness_ultra_thick",
+      "value": "Extremadamente grueso"
+    },
+    {
+      "name": "settings_unsupported_hint",
+      "value": "La versión actual del sistema no admite barra inferior flotante ni luz inmersiva, y las opciones relacionadas se han ocultado; la barra inferior y los botones utilizarán un estilo de desenfoque simplificado."
+    },
+    {
+      "name": "probe_title",
+      "value": "sonda"
+    },
+    {
+      "name": "probe_hint",
+      "value": "Primero navegue por la página web normalmente, luego regrese y actualícela."
+    },
+    {
+      "name": "probe_refresh",
+      "value": "Actualizar"
+    },
+    {
+      "name": "probe_dom",
+      "value": "estructura de la página web"
+    },
+    {
+      "name": "probe_copy",
+      "value": "Copiar"
+    },
+    {
+      "name": "probe_save",
+      "value": "guardar caja de arena"
+    },
+    {
+      "name": "probe_clear",
+      "value": "Borrar"
+    },
+    {
+      "name": "probe_close",
+      "value": "cerrar"
+    },
+    {
+      "name": "probe_open_direct",
+      "value": "mensaje privado"
+    },
+    {
+      "name": "probe_open_profile",
+      "value": "mio"
+    },
+    {
+      "name": "probe_open_reels",
+      "value": "Reels"
+    },
+    {
+      "name": "probe_open_search",
+      "value": "Buscar"
+    },
+    {
+      "name": "probe_open_hint",
+      "value": "Abra la interfaz de captura de páginas web (el panel estará cubierto):"
+    },
+    {
+      "name": "probe_open_post",
+      "value": "Página de publicación (publicación de la primera imagen)"
+    },
+    {
+      "name": "probe_comments_first",
+      "value": "Comentarios (primer post)"
+    },
+    {
+      "name": "probe_comments_embed",
+      "value": "Leer comentarios incrustados"
+    },
+    {
+      "name": "probe_capture",
+      "value": "Guardar plantilla de flujo de información"
+    },
+    {
+      "name": "probe_replay_stored",
+      "value": "Plantilla guardada de reproducción"
+    },
+    {
+      "name": "probe_profile_templates",
+      "value": "Guardar plantilla de cuatro páginas de página personal"
+    },
+    {
+      "name": "probe_search_templates",
+      "value": "Guardar plantilla de página de búsqueda"
+    },
+    {
+      "name": "probe_digest",
+      "value": "Resumen de la interfaz"
+    },
+    {
+      "name": "probe_direct_selftest",
+      "value": "Enviar mensaje privado para autoverificación"
+    },
+    {
+      "name": "reels_segment_explore",
+      "value": "Explorar"
+    },
+    {
+      "name": "reels_segment_following",
+      "value": "amigos"
+    },
+    {
+      "name": "reels_following_empty",
+      "value": "Mi amigo aún no ha publicado el vídeo."
+    },
+    {
+      "name": "reels_loading",
+      "value": "Cargando vídeo…"
+    },
+    {
+      "name": "engage_not_rendered",
+      "value": "No se puede leer el contenido reenviado"
+    },
+    {
+      "name": "feed_empty",
+      "value": "Aún no hay contenido"
+    },
+    {
+      "name": "feed_load",
+      "value": "Cargar"
+    },
+    {
+      "name": "feed_no_more",
+      "value": "no más"
+    },
+    {
+      "name": "feed_none_read",
+      "value": "No se puede leer la publicación desde la página web."
+    },
+    {
+      "name": "feed_none_visible",
+      "value": "No hay publicaciones visibles en la página."
+    },
+    {
+      "name": "follow_done",
+      "value": "Ya estoy siguiendo."
+    },
+    {
+      "name": "follow_failed",
+      "value": "Centrarse en el fracaso"
+    },
+    {
+      "name": "like_failed",
+      "value": "No me gustó"
+    },
+    {
+      "name": "media_saved",
+      "value": "salvado"
+    },
+    {
+      "name": "media_save_failed",
+      "value": "Error al guardar"
+    },
+    {
+      "name": "notifications",
+      "value": "Notificación"
+    },
+    {
+      "name": "notify_greet",
+      "value": "Enviar un mensaje a %s"
+    },
+    {
+      "name": "notify_greet_suggest",
+      "value": "Saluda a %s"
+    },
+    {
+      "name": "notify_loading",
+      "value": "Cargando notificaciones…"
+    },
+    {
+      "name": "notify_message",
+      "value": "enviar mensaje"
+    },
+    {
+      "name": "notify_message_hint",
+      "value": "Enviar un mensaje…"
+    },
+    {
+      "name": "notify_month",
+      "value": "%dMes"
+    },
+    {
+      "name": "direct_call",
+      "value": "telefono"
+    },
+    {
+      "name": "direct_video_call",
+      "value": "vídeo"
+    },
+    {
+      "name": "save_rate_limited",
+      "value": "IG está limitando el flujo de corriente. Puedes volver a intentarlo en aproximadamente %d minutos."
+    },
+    {
+      "name": "settings_group_media",
+      "value": "Fotos y vídeos"
+    },
+    {
+      "name": "settings_image_quality",
+      "value": "Calidad de imagen"
+    },
+    {
+      "name": "settings_video_quality",
+      "value": "Calidad de vídeo"
+    },
+    {
+      "name": "settings_quality_auto",
+      "value": "Adaptativo"
+    },
+    {
+      "name": "settings_quality_saver",
+      "value": "ahorrar dinero"
+    },
+    {
+      "name": "settings_quality_high",
+      "value": "HD"
+    },
+    {
+      "name": "settings_quality_original",
+      "value": "pintura original"
+    },
+    {
+      "name": "settings_media_quality_hint",
+      "value": "Adaptive selecciona automáticamente según la red actual: Wi-Fi Utilice datos móviles y de alta definición para guardar datos; La descarga siempre guarda la imagen/video original."
+    },
+    {
+      "name": "settings_group_diag",
+      "value": "Diagnóstico"
+    },
+    {
+      "name": "settings_export_diag",
+      "value": "Exportar registros de diagnóstico"
+    },
+    {
+      "name": "settings_copy_diag",
+      "value": "Copiar resumen de diagnóstico"
+    },
+    {
+      "name": "settings_diag_hint",
+      "value": "Cuando encuentre un problema (por ejemplo, cuando haga clic en la historia y no reciba el mensaje), haga clic en \"Exportar registro de diagnóstico\" para guardarlo como txt y luego envíelo al desarrollador desde \"Archivo\"; Si no puede guardarlo, haga clic en \"Copiar resumen de diagnóstico\" y péguelo directamente."
+    },
+    {
+      "name": "diag_exported",
+      "value": "Exportado %s"
+    },
+    {
+      "name": "diag_export_failed",
+      "value": "Exportación fallida: %s"
+    },
+    {
+      "name": "diag_copied",
+      "value": "Resumen de diagnóstico copiado al portapapeles"
+    },
+    {
+      "name": "settings_capture_story",
+      "value": "Capturar plantilla de página de historia (prueba)"
+    },
+    {
+      "name": "diag_story_captured",
+      "value": "Se ha capturado la plantilla de la página de la historia. Las historias deberían poder abrirlo más tarde."
+    },
+    {
+      "name": "diag_story_capture_failed",
+      "value": "Plantilla de página de historia no encontrada: %s"
+    },
+    {
+      "name": "settings_run_mobile_probe",
+      "value": "RunMobile API Autoprueba (Prueba)"
+    },
+    {
+      "name": "diag_mobile_running",
+      "value": "Ejecutando la autoprueba del API móvil (tres solicitudes, aproximadamente unos segundos)..."
+    },
+    {
+      "name": "diag_mobile_done",
+      "value": "Autoprueba móvil API completada: %d enviado con éxito, los resultados se muestran a continuación"
+    },
+    {
+      "name": "diag_mobile_failed",
+      "value": "Móvil API Excepción de autoprueba: %s"
+    },
+    {
+      "name": "diag_mobile_result",
+      "value": "Mover API resultados de la autoprueba (haga clic para copiar)"
+    },
+    {
+      "name": "story_need_challenge",
+      "value": "IG Esta cuenta debe completar primero la verificación de seguridad: inicie sesión/verifique en la página web y luego regrese para ver la historia."
+    },
+    {
+      "name": "settings_proxy_title",
+      "value": "agente"
+    },
+    {
+      "name": "settings_proxy_host",
+      "value": "Anfitrión"
+    },
+    {
+      "name": "settings_proxy_port",
+      "value": "puerto"
+    },
+    {
+      "name": "settings_proxy_user",
+      "value": "Nombre de usuario"
+    },
+    {
+      "name": "settings_proxy_pass",
+      "value": "Contraseña"
+    },
+    {
+      "name": "settings_proxy_apply",
+      "value": "Solicitud"
+    },
+    {
+      "name": "settings_proxy_off",
+      "value": "Desactivar proxy"
+    },
+    {
+      "name": "settings_proxy_enable",
+      "value": "Habilitar proxy"
+    },
+    {
+      "name": "settings_proxy_saved",
+      "value": "Agente guardado"
+    },
+    {
+      "name": "settings_proxy_none",
+      "value": "Ninguno"
+    },
+    {
+      "name": "settings_proxy_add_title",
+      "value": "Agregar proxy"
+    },
+    {
+      "name": "settings_proxy_name",
+      "value": "Nombre"
+    },
+    {
+      "name": "settings_proxy_add",
+      "value": "agregar"
+    },
+    {
+      "name": "settings_group_proxy",
+      "value": "agente"
+    },
+    {
+      "name": "settings_proxy_hint",
+      "value": "El proxy solo actúa sobre las solicitudes de red de esta Aplicación y entrará en vigor inmediatamente después de guardarlo; apagar el interruptor restablecerá la conexión directa"
+    },
+    {
+      "name": "proxy_ph_name",
+      "value": "Por ejemplo: agente de la empresa"
+    },
+    {
+      "name": "proxy_ph_host",
+      "value": "Por ejemplo: 127.0.0.1"
+    },
+    {
+      "name": "proxy_ph_port",
+      "value": "Por ejemplo: 7890"
+    },
+    {
+      "name": "proxy_ph_optional",
+      "value": "Opcional"
+    },
+    {
+      "name": "settings_proxy_pick_title",
+      "value": "Elige un agente"
+    },
+    {
+      "name": "settings_proxy_confirm",
+      "value": "bien"
+    },
+    {
+      "name": "settings_proxy_selected",
+      "value": "seleccionado"
+    },
+    {
+      "name": "settings_proxy_manage_title",
+      "value": "agente de gestión"
+    },
+    {
+      "name": "settings_proxy_edit_title",
+      "value": "Editar agente"
+    },
+    {
+      "name": "settings_proxy_save",
+      "value": "guardar"
+    },
+    {
+      "name": "settings_proxy_edit_action",
+      "value": "Editar"
+    },
+    {
+      "name": "settings_proxy_delete_action",
+      "value": "Eliminar"
+    },
+    {
+      "name": "settings_proxy_deleted",
+      "value": "Eliminado"
+    },
+    {
+      "name": "settings_proxy_verifying",
+      "value": "Agente verificador..."
+    },
+    {
+      "name": "settings_proxy_verify_failed",
+      "value": "El agente no puede conectarse: %s"
+    },
+    {
+      "name": "settings_proxy_invalid",
+      "value": "Se deben completar el host y el puerto"
+    },
+    {
+      "name": "back_press_exit_hint",
+      "value": "Volver al escritorio nuevamente"
+    },
+    {
+      "name": "login_probe_busy",
+      "value": "Comprobando…"
+    },
+    {
+      "name": "login_probe_hint",
+      "value": "¿Es correcta la contraseña de la cuenta? Haga clic aquí para verificar una vez usando la interfaz web IG"
+    },
+    {
+      "name": "login_web_retry_hint",
+      "value": "¿Aún no puedes entrar? Inicie sesión una vez usando la página web (puede pasar la verificación hombre-máquina)"
+    },
+    {
+      "name": "settings_doh_scope_hint",
+      "value": "HTTP, la página web integrada y la cadena de inicio de sesión están cifradas DNS; si falla, la página web/cadena de inicio de sesión regresará automáticamente al sistema para su análisis."
+    },
+    {
+      "name": "settings_relay_endpoint",
+      "value": "Transferir dirección de informes"
+    },
+    {
+      "name": "settings_relay_key",
+      "value": "Clave compartida (puede estar vacía, correspondiente a la clave de relé)"
+    },
+    {
+      "name": "settings_relay_key_hint",
+      "value": "Cualquier cadena de caracteres, consistente con el relé."
+    },
+    {
+      "name": "settings_relay_disabled",
+      "value": "Informes de tránsito cerrados"
+    },
+    {
+      "name": "settings_clear_device_hint",
+      "value": "Primero cierre sesión y luego borre la autenticación del dispositivo"
+    },
+    {
+      "name": "settings_login_help",
+      "value": "Cuando falla el inicio de sesión: primero haga clic en \"Autocomprobación del canal de inicio de sesión\", luego haga clic en \"Copiar registro de inicio de sesión\" para enviarme el contenido. \n"
+    },
+    {
+      "name": "settings_login_selftest_running",
+      "value": "Canal de inicio de sesión de autocomprobación (hasta 15 segundos)…"
+    },
+    {
+      "name": "settings_ip_check_running",
+      "value": "Comprobando la IP de exportación (hasta 10 segundos)…"
+    },
+    {
+      "name": "settings_ip_datacenter",
+      "value": "Esta es la IP de la sala de ordenadores. Se recomienda cambiar el nodo y volver a intentarlo."
+    },
+    {
+      "name": "settings_ip_normal",
+      "value": "Esta línea parece normal"
+    },
+    {
+      "name": "settings_login_log_copied",
+      "value": "El registro de inicio de sesión ha sido copiado (péguelo y envíelo al desarrollador)"
+    },
+    {
+      "name": "settings_meow_login_sending",
+      "value": "Enviando el registro de inicio de sesión a MeoW…"
+    },
+    {
+      "name": "settings_reels_log_empty",
+      "value": "Aún no hay un registro de fallos de los carretes (no se han ingresado los carretes o se ha borrado el registro)"
+    },
+    {
+      "name": "settings_reels_log_prefix",
+      "value": "(Dispositivo y versión: %s) \n\n"
+    },
+    {
+      "name": "settings_meow_reels_sending",
+      "value": "Empujando el registro de fallos de los carretes a MeoW…"
+    },
+    {
+      "name": "login_error_transport",
+      "value": "Excepción de solicitud de inicio de sesión: %s"
+    },
+    {
+      "name": "login_ok_session_pending",
+      "value": "%s Éxito (el material de la sesión móvil no está listo)"
+    },
+    {
+      "name": "system_http_failed",
+      "value": "La pila del sistema HTTP también falló: %s"
+    },
+    {
+      "name": "notify_direct_fallback",
+      "value": "mensaje privado"
+    },
+    {
+      "name": "notify_direct_count",
+      "value": "Tienes %d nuevos mensajes privados"
+    },
+    {
+      "name": "notify_direct_one",
+      "value": "Tienes un nuevo mensaje privado"
+    },
+    {
+      "name": "index_web_login_hint",
+      "value": "Inicie sesión en la página (es posible que deba pasar por la verificación hombre-máquina) y podrá ingresar usted mismo después de tener éxito."
+    },
+    {
+      "name": "index_open_link_failed",
+      "value": "Este enlace no se puede abrir (¿no hay ningún navegador disponible en el sistema?)"
+    },
+    {
+      "name": "index_share_empty",
+      "value": "Este recurso compartido no tiene contenido para abrir."
+    },
+    {
+      "name": "linkin_title",
+      "value": "Ingresa a través del enlace profundo"
+    },
+    {
+      "name": "linkin_hint",
+      "value": "El sistema envía el enlace a esta aplicación a través de Want. El siguiente es el contenido analizado del URI."
+    },
+    {
+      "name": "linkin_target_known",
+      "value": "✓ Entender el objetivo"
+    },
+    {
+      "name": "linkin_target_unknown",
+      "value": "✗ Objetivo desconocido"
+    },
+    {
+      "name": "linkin_params_ok",
+      "value": "✓ Parámetros completos"
+    },
+    {
+      "name": "linkin_params_missing",
+      "value": "✗ Parámetro faltante"
+    },
+    {
+      "name": "linkin_open_action",
+      "value": "Abra y ejecute este enlace"
+    },
+    {
+      "name": "linkin_ignore",
+      "value": "Ignorar y ir directamente a la página de inicio."
+    },
+    {
+      "name": "linkin_supported",
+      "value": "Enlaces soportados"
+    },
+    {
+      "name": "story_diag_guide",
+      "value": "2) Mire detalle = y \"Pista de prensa por envío\": detalle = vacío significa que el servidor respondió 200+JSON pero no hay medios;"
+    },
+    {
+      "name": "settings_group_language",
+      "value": "Idioma"
+    },
+    {
+      "name": "settings_language",
+      "value": "Idioma"
+    },
+    {
+      "name": "settings_language_search",
+      "value": "Buscar idiomas"
+    },
+    {
+      "name": "settings_language_hint",
+      "value": "Elige el idioma de la aplicación. Solo afecta a esta app, no al idioma del sistema."
+    },
+    {
+      "name": "settings_language_changed",
+      "value": "Idioma cambiado"
+    }
+  ]
+}

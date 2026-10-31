@@ -3098,6 +3098,8 @@ export struct FeedList {
                 .fontColor($r('app.color.secondary_text'))
             }
             .fontSize(CAPTION_FONT_SIZE)
+            .transition(TransitionEffect.OPACITY
+              .animation({ duration: 200, curve: Curve.EaseOut }))
             .width('100%')
             .textAlign(TextAlign.Start)
             .padding({ left: CAPTION_SIDE_PADDING, right: CAPTION_SIDE_PADDING, top: 6,
@@ -3115,6 +3117,8 @@ export struct FeedList {
               }
             }
             .fontSize(CAPTION_FONT_SIZE)
+            .transition(TransitionEffect.OPACITY
+              .animation({ duration: 200, curve: Curve.EaseOut }))
             .maxLines(CAPTION_COLLAPSED_MAX_LINES)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .width('100%')
@@ -3136,6 +3140,8 @@ export struct FeedList {
               .fontColor($r('app.color.secondary_text'))
           }
           .fontSize(CAPTION_FONT_SIZE)
+          .transition(TransitionEffect.OPACITY
+            .animation({ duration: 200, curve: Curve.EaseOut }))
           .width('100%')
           .textAlign(TextAlign.Start)
           .padding({ left: CAPTION_SIDE_PADDING, right: CAPTION_SIDE_PADDING, top: 6,
@@ -3155,6 +3161,8 @@ export struct FeedList {
             }
           }
           .fontSize(CAPTION_FONT_SIZE)
+          .transition(TransitionEffect.OPACITY
+            .animation({ duration: 200, curve: Curve.EaseOut }))
           .maxLines(CAPTION_COLLAPSED_MAX_LINES)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           // 必须自己占满一行：卡片根 Column 的对齐是 Start，但这条 Text 没有宽度时
@@ -3212,6 +3220,8 @@ export struct FeedList {
       }
     }
     .width('100%')
+    // 正文在原文/译文之间切换时，卡片高度跟着文本变化平滑过渡。
+    .animation({ duration: 200, curve: Curve.EaseOut })
     // 卡片根容器显式左对齐：Column 默认是居中对齐，正文之类没占满宽度的子节点会被居中。
     .alignItems(HorizontalAlign.Start)
     // 供 cardSpan 量位置：聚焦按「卡片中心 vs 屏幕中心」比较。

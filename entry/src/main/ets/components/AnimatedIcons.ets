@@ -124,14 +124,27 @@ export struct LikeIcon {
   @Prop idleColor: string = '';
   /** 弹一下的缩放（名字不叫 scale —— 那和 CustomComponent 的保留属性撞名）。 */
   @State private popScale: number = 1;
+  /** 实心填充的进度：0 = 只有描边，1 = 完全填满。 */
+  @State private fillProgress: number = 0;
+
+  aboutToAppear(): void {
+    // 首帧就按当前状态画好：已赞的不能先空一下再填。
+    this.fillProgress = this.liked ? 1 : 0;
+  }
 
   onLiked(): void {
-    if (!this.liked) {
+    if (this.liked) {
+      // 填充动画：实心从中心弹出来并铺满，描边同时淡掉。
+      this.fillProgress = 0;
+      this.popScale = 0.62;
+      animateTo({ duration: 340, curve: curves.springMotion(0.5, 0.72) }, (): void => {
+        this.fillProgress = 1;
+        this.popScale = 1;
+      });
       return;
     }
-    // 先瞬时缩到起点，再补间回 1：同一帧里"先复位再设终值"框架只看得到终值，补间起不来。
-    this.popScale = POP_FROM;
-    animateTo({ duration: POP_MS, curve: curves.springMotion(0.42, 0.85) }, (): void => {
+    animateTo({ duration: 130, curve: Curve.EaseOut }, (): void => {
+      this.fillProgress = 0;
       this.popScale = 1;
     });
   }
@@ -145,13 +158,26 @@ export struct LikeIcon {
   }
 
   build() {
-    SymbolGlyph(this.liked ? $r('sys.symbol.heart_fill') : $r('sys.symbol.heart'))
-      .fontSize(this.iconSize)
-      .fontWeight(FontWeight.Medium)
-      .fontColor([this.color()])
-      .scale({ x: this.popScale, y: this.popScale })
-      // 禁止被动作区压缩：一行里图标多了以后，被压的图形会横向缩放，形状就毁了。
-      .flexShrink(0)
+    Stack({ alignContent: Alignment.Center }) {
+      // 描边底：未赞时可见，填充进度上去后淡出。
+      SymbolGlyph($r('sys.symbol.heart'))
+        .fontSize(this.iconSize)
+        .fontWeight(FontWeight.Medium)
+        .fontColor([this.color()])
+        .opacity(1 - this.fillProgress)
+
+      // 实心填充：从中间弹出并铺满，弹性由 springMotion 的过冲补出来。
+      SymbolGlyph($r('sys.symbol.heart_fill'))
+        .fontSize(this.iconSize)
+        .fontWeight(FontWeight.Medium)
+        .fontColor([this.color()])
+        .opacity(this.fillProgress)
+        .scale({ x: this.popScale, y: this.popScale })
+    }
+    .width(this.iconSize)
+    .height(this.iconSize)
+    // 禁止被动作区压缩：一行里图标多了以后，被压的图形会横向缩放，形状就毁了。
+    .flexShrink(0)
   }
 }
 

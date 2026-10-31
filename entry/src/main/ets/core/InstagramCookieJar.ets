@@ -201,36 +201,53 @@ export class InstagramCookieJar {
     hilog.info(DOMAIN, TAG, 'cleared the cookie jar for sign out');
   }
 
-  /** 只删**会话类** cookie 的名字（见 `clearSessionOnly`）。 */
+  /**
+   * 只删**会话类** cookie 的名字（见 `clearSessionOnly`）。
+   *
+   * 除了网页那几颗（sessionid / ds_user_id / csrftoken / rur / shbid / shbts），还要带上
+   * **`ig-u-*`**：设备级会话登录时服务端只回 `ig-set-ig-u-ds-user-id` / `ig-set-ig-u-rur`
+   * 这类头（见 core/mobileapi/CaaLogin.cookiesFromSessionHeaders），它们会被种成 `ig-u-*`
+   * cookie，**也是按人/按会话的**。换号不删的话，Cookie 头里会同时出现"新 ds_user_id +
+   * 上一个人的 ig-u-ds-user-id / ig-u-rur"——正是历史上修过的"两个身份"那类问题。
+   */
   private static readonly SESSION_COOKIES: Array<string> = [
-    'sessionid', 'ds_user_id', 'csrftoken', 'rur', 'shbid', 'shbts'
+    'sessionid', 'ds_user_id', 'csrftoken', 'rur', 'shbid', 'shbts',
+    'ig-u-sessionid', 'ig-u-ds-user-id', 'ig-u-rur', 'ig-u-shbid', 'ig-u-shbts',
+    'ig-u-www-claim'
   ];
 
   /**
-   * **只清会话、保留设备身份**（"新增账号"用，见 pages/Index.addAccountWebVerify）。
+   * 换号时要作废、但**不会被 `adoptSession` 重新写回**的旧会话项。
    *
-   * 为什么不能整罐清：用户反馈"两个号在同一个 Meta 账户下，浏览器里已登录大号时加小号
-   * **不需要 2FA**"——IG 判"可信设备"靠的是 `datr` / `ig_did` / `mid` 这类**设备** cookie
-   * 以及网页存储。整罐清（`clearAllCookiesSync` + `deleteAllData`）等于把自己伪装成
-   * 一台全新设备，IG 于是要求"恢复确认"，而且**不给 6 位验证码**（我们抓到过：
-   * `authenticated:false` + `showAccountRecoveryModal:true`，没有 `two_factor_required`）。
-   *
-   * 所以这条路只删会话那几颗：登录页照样会显示（没有 sessionid 就不是登录态），
-   * 但设备指纹与存储留着，IG 更可能走"同一台设备切换账号"的轻路径。
-   *
-   * @returns 是否至少删掉了一颗（失败时让调用方决定要不要退回整罐清）
+   * `rur` / `shbid` / `shbts` / `ig-u-*` 都是"按会话（有时按人）"的材料，`adoptSession`
+   * 只重写 sessionid / ds_user_id / csrftoken —— 不主动作废的话，切到新账号之后
+   * 请求头里还带着上一个人的 IG-U-RUR / ig-u-ds-user-id。
    */
-  static async clearSessionOnly(): Promise<boolean> {
-    InstagramCookieJar.invalidate();
+  private static readonly CROSS_ACCOUNT_STALE_COOKIES: Array<string> = [
+    'rur', 'shbid', 'shbts',
+    'ig-u-sessionid', 'ig-u-ds-user-id', 'ig-u-rur', 'ig-u-shbid', 'ig-u-shbts',
+    'ig-u-www-claim'
+  ];
+
+  /** 设备级会话（没有 sessionid）切过去时要清掉的会话项：sessionid 本身也算陈旧项。 */
+  private static readonly DEVICE_LEVEL_STALE_COOKIES: Array<string> = [
+    'sessionid', 'rur', 'shbid', 'shbts',
+    'ig-u-sessionid', 'ig-u-ds-user-id', 'ig-u-rur', 'ig-u-shbid', 'ig-u-shbts',
+    'ig-u-www-claim'
+  ];
+
+  /**
+   * 把若干颗 cookie 置成已过期（`name=; Max-Age=0`），返回处理了几颗。
+   *
+   * 这个 SDK 的 `WebCookieManager` **没有** `deleteCookieSync`（编译期就报不存在），
+   * 所以用"把同名 cookie 覆盖成已过期"这个标准做法来删。只改引擎里的罐，
+   * 落盘交给调用方（`save()`）。
+   */
+  private static expire(names: Array<string>): number {
     let removed: number = 0;
-    for (let index: number = 0; index < InstagramCookieJar.SESSION_COOKIES.length; index++) {
-      const name: string = InstagramCookieJar.SESSION_COOKIES[index];
+    for (let index: number = 0; index < names.length; index++) {
+      const name: string = names[index];
       try {
-        /*
-         * 这个 SDK 的 `WebCookieManager` **没有** `deleteCookieSync`（编译期就报不存在），
-         * 所以用"把同名 cookie 覆盖成已过期"这个标准做法来删：
-         * `name=; Max-Age=0; Path=/; Domain=.instagram.com`。
-         */
         webview.WebCookieManager.configCookieSync('https://www.instagram.com/',
           `${name}=; Max-Age=0; Path=/; Domain=.instagram.com`);
         webview.WebCookieManager.configCookieSync('https://i.instagram.com/',
@@ -241,10 +258,113 @@ export class InstagramCookieJar {
           name, (error as Error).message);
       }
     }
+    return removed;
+  }
+
+  /**
+   * **只清会话、保留设备身份**（换号 / "新增账号"用）。
+   *
+   * 为什么不能整罐清：用户反馈"两个号在同一个 Meta 账户下，浏览器里已登录大号时加小号
+   * **不需要 2FA**"——IG 判"可信设备"靠的是 `datr` / `ig_did` / `mid` 这类**设备** cookie
+   * 以及网页存储。整罐清（`clearAllCookiesSync` + `deleteAllData`）等于把自己伪装成
+   * 一台全新设备，IG 于是要求"恢复确认"，而且**不给 6 位验证码**（我们抓到过：
+   * `authenticated:false` + `showAccountRecoveryModal:true`，没有 `two_factor_required`）。
+   *
+   * 所以这条路只删会话那几颗：登录页照样会显示（没有 sessionid 就不是登录态），
+   * 但设备指纹与存储留着，IG 更可能走"同一台设备切换账号"的轻路径。
+   *
+   * 现在两处用它：切换账号时清上一个账号的会话 cookie（见
+   * core/AccountActionService.adoptAccount），以及"新增账号"清场。
+   *
+   * @returns 是否至少删掉了一颗（失败时让调用方决定要不要退回整罐清）
+   */
+  static async clearSessionOnly(): Promise<boolean> {
+    InstagramCookieJar.invalidate();
+    const removed: number = InstagramCookieJar.expire(InstagramCookieJar.SESSION_COOKIES);
     await InstagramCookieJar.save();
     hilog.info(DOMAIN, TAG, 'cleared %{public}d session cookie(s), device cookies kept',
       removed);
     return removed > 0;
+  }
+
+  /**
+   * 只作废**跨账号的旧会话项**（rur / shbid / shbts / ig-u-*），不碰刚种好的
+   * sessionid / ds_user_id / csrftoken（见 CROSS_ACCOUNT_STALE_COOKIES 的说明）。
+   *
+   * 用在 `adoptSession` 成功之后：带 sessionid 的账号切过去时，罐里还留着上一个人的
+   * IG-U-RUR 等材料，不删就是"两个身份"。
+   */
+  static async expireCrossAccountCookies(): Promise<number> {
+    InstagramCookieJar.invalidate();
+    const removed: number = InstagramCookieJar.expire(
+      InstagramCookieJar.CROSS_ACCOUNT_STALE_COOKIES);
+    if (removed > 0) {
+      await InstagramCookieJar.save();
+      hilog.info(DOMAIN, TAG, 'expired %{public}d cross-account cookie(s)', removed);
+    }
+    return removed;
+  }
+
+  /**
+   * **把设备级会话（没有 sessionid）的账号身份种回 Cookie 罐**（切换账号用，
+   * 见 core/AccountActionService.adoptAccount）。
+   *
+   * 和 `adoptSession` 的分工：带 sessionid 的会话只要重种三颗 cookie；而设备级会话
+   * （IG 2026-10 起密码登录会下发，唯一凭据是 `Authorization: Bearer IGT:2:…`）没有
+   * sessionid，这里只负责**账号身份**（`ds_user_id` / `csrftoken`），Authorization 由
+   * 调用方交给 `MobileSession`。
+   *
+   * **顺序是刻意的（先写新身份、再清旧会话）**：以前写成"先 `clearSessionOnly` 再写"，
+   * 任何一步失败都会把罐清空（signedIn=false、移动 API 全挂）而界面还停在上一个账号。
+   * 现在先写 `ds_user_id`（写失败就原样返回，罐里还是上一个账号），成功后才作废
+   * `sessionid` 等旧会话项；旧 `sessionid` 必须清掉 —— 不清的话 `MobileSession.ensure()`
+   * 会把它当成"这个人的会话"（新 ds_user_id + 旧 sessionid = 两个身份），
+   * MobileRequest 也会把它原样塞进 Cookie 头。
+   *
+   * 设备身份（datr / ig_did / mid…）**一律保留**：同一台设备换号不该被判成新设备。
+   */
+  static async adoptDeviceSession(userId: string, csrf: string): Promise<boolean> {
+    if (userId.length === 0) {
+      return false;
+    }
+    const attrs: string = 'Path=/; Domain=.instagram.com; Secure';
+    // ① 先写目标账号的 ds_user_id：失败时罐里还是上一个账号（这一步不破坏原状态）。
+    try {
+      webview.WebCookieManager.configCookieSync(INSTAGRAM_URL,
+        `ds_user_id=${userId}; ${attrs}`);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'configCookie ds_user_id failed: %{public}s',
+        (error as Error).message);
+      return false;
+    }
+    // ② 写 csrftoken（有就写；没有的话 MobileSession 会现造一个）。
+    if (csrf.length > 0) {
+      try {
+        webview.WebCookieManager.configCookieSync(INSTAGRAM_URL,
+          `csrftoken=${csrf}; ${attrs}`);
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'configCookie csrftoken failed: %{public}s',
+          (error as Error).message);
+      }
+    }
+    // ③ 作废设备级会话不该有的旧会话项（sessionid / rur / ig-u-*；不碰刚写的两颗）。
+    const expired: number = InstagramCookieJar.expire(
+      InstagramCookieJar.DEVICE_LEVEL_STALE_COOKIES);
+    // ④ 立刻落盘：不落的话重启就要重新走一遍登录。
+    await InstagramCookieJar.save();
+    InstagramCookieJar.invalidate();
+    // ⑤ 复核：旧 sessionid 真删掉了才算干净（删不掉只记日志，Authorization 那条路仍能跑）。
+    try {
+      const snapshot: InstagramCookieSnapshot = await InstagramCookieJar.inspect();
+      const stale: boolean = snapshot.cookie.indexOf('sessionid=') >= 0;
+      hilog.info(DOMAIN, TAG,
+        'adopted device-level session uid=%{public}d csrf=%{public}d expired=%{public}d staleSid=%{public}s',
+        userId.length, csrf.length, expired, stale ? '1' : '0');
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'verify device-level session failed: %{public}s',
+        (error as Error).message);
+    }
+    return true;
   }
 
   /**

@@ -29,6 +29,7 @@ import { RichTextView } from './RichText';
 import { PostCardPanel } from './PostCardPanel';
 import { TranslateLabel } from './TranslateLabel';
 import { Translator } from '../core/Translator';
+import { LikeIcon } from './AnimatedIcons';
 
 const DOMAIN = 0xFF00;
 const TAG = 'InstamonyCommentsPanel';
@@ -698,17 +699,35 @@ export struct CommentsPanel {
         // ② 正文（没有正文又没贴图的图片评论给一句灰字交代，见 photoHint）。
         //    「翻译」跟在正文后面（需求：评论"回复"文本旁那颗，见下面 ④）；显示了译文就用译文。
         if (body.length > 0) {
-          RichTextView({
-          text: this.isTranslationShown(body) ? this.translatedBody(body) : body,
-          fontSize: 14,
-          onMention: (name: string): void => {
-            this.onMentionTap(name);
-          },
-          onHashtag: (tag: string): void => {
-            this.onHashtagTap(tag);
+          if (this.isTranslationShown(body)) {
+            RichTextView({
+              text: this.translatedBody(body),
+              fontSize: 14,
+              onMention: (name: string): void => {
+                this.onMentionTap(name);
+              },
+              onHashtag: (tag: string): void => {
+                this.onHashtagTap(tag);
+              }
+            })
+              .width('100%')
+              .transition(TransitionEffect.OPACITY
+                .animation({ duration: 200, curve: Curve.EaseOut }))
+          } else {
+            RichTextView({
+              text: body,
+              fontSize: 14,
+              onMention: (name: string): void => {
+                this.onMentionTap(name);
+              },
+              onHashtag: (tag: string): void => {
+                this.onHashtagTap(tag);
+              }
+            })
+              .width('100%')
+              .transition(TransitionEffect.OPACITY
+                .animation({ duration: 200, curve: Curve.EaseOut }))
           }
-        })
-            .width('100%')
         } else if (imageUrl.length === 0 && this.photoHint.length > 0) {
           Text(this.photoHint)
             .fontSize(14)
@@ -751,16 +770,20 @@ export struct CommentsPanel {
         .margin({ top: 2 })
       }
       .layoutWeight(1)
+      // 译文比原文长/短时，这一列高度跟着平滑变化。
+      .animation({ duration: 200, curve: Curve.EaseOut })
       .alignItems(HorizontalAlign.Start)
 
       // 最右侧：点赞按钮（**总有**，用户报过"有部分评论点赞按钮消失"）。
       // 心形图标与赞数都按需求走了**粗体 + comment_muted**（点赞过则是强调红，不灰）。
       if (index >= 0) {
         Column({ space: 2 }) {
-          SymbolGlyph(liked ? $r('sys.symbol.heart_fill') : $r('sys.symbol.heart'))
-            .fontSize(15)
-            .fontWeight(FontWeight.Bold)
-            .fontColor([liked ? $r('app.color.like_active') : $r('app.color.comment_muted')])
+          LikeIcon({
+            liked: liked,
+            iconSize: 15,
+            activeColor: '#ED4956',
+            idleColor: '#8E8E8E'
+          })
           if (likes > 0) {
             Text(CommentsPanel.formatLikes(likes))
               .fontSize(11)
@@ -809,12 +832,25 @@ export struct CommentsPanel {
         this.nameRow(reply.username, reply.userId ?? '', reply.createdAt ?? 0, 14)
 
         if (reply.text.length > 0) {
-          Text(this.isTranslationShown(reply.text) ? this.translatedBody(reply.text) : reply.text)
-            .fontSize(14)
-            .lineHeight(19)
-            .fontColor($r('app.color.primary_text'))
-            .textAlign(TextAlign.Start)
-            .width('100%')
+          if (this.isTranslationShown(reply.text)) {
+            Text(this.translatedBody(reply.text))
+              .fontSize(14)
+              .lineHeight(19)
+              .fontColor($r('app.color.primary_text'))
+              .textAlign(TextAlign.Start)
+              .width('100%')
+              .transition(TransitionEffect.OPACITY
+                .animation({ duration: 200, curve: Curve.EaseOut }))
+          } else {
+            Text(reply.text)
+              .fontSize(14)
+              .lineHeight(19)
+              .fontColor($r('app.color.primary_text'))
+              .textAlign(TextAlign.Start)
+              .width('100%')
+              .transition(TransitionEffect.OPACITY
+                .animation({ duration: 200, curve: Curve.EaseOut }))
+          }
         }
 
         if ((reply.imageUrl ?? '').length > 0) {
@@ -848,15 +884,17 @@ export struct CommentsPanel {
         .margin({ top: 2 })
       }
       .layoutWeight(1)
+      .animation({ duration: 200, curve: Curve.EaseOut })
       .alignItems(HorizontalAlign.Start)
 
       // ④ 点赞。
       Column({ space: 2 }) {
-        SymbolGlyph(reply.liked === true ? $r('sys.symbol.heart_fill') : $r('sys.symbol.heart'))
-          .fontSize(15)
-          .fontWeight(FontWeight.Bold)
-          .fontColor([reply.liked === true
-            ? $r('app.color.like_active') : $r('app.color.comment_muted')])
+        LikeIcon({
+          liked: reply.liked === true,
+          iconSize: 15,
+          activeColor: '#ED4956',
+          idleColor: '#8E8E8E'
+        })
         if ((reply.likes ?? 0) > 0) {
           Text(`${reply.likes ?? 0}`)
             .fontSize(11)

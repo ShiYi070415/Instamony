@@ -2255,6 +2255,36 @@ struct ReelOverlay {
   }
 }
 
+/**
+ * 每条视频的整屏高模糊封面背景。
+ *
+ * 单独抽成组件是为了 `@ObjectLink`：从私信卡片进来的分享 Reels 初次进页时 `coverUrl`
+ * 是空的，详情回来后才原地补上（见 ProfileReelsViewModel.applyDetail）。如果背景直接写在
+ * `reelPage` builder 里，ForEach 键没变、builder 不重跑，背景就一直黑着；@ObjectLink
+ * 订阅这个 Reel 对象后，封面一补上背景就立刻重建。
+ */
+@Component
+struct ReelBackground {
+  @ObjectLink reel: Reel;
+
+  build() {
+    Stack() {
+      if (this.reel.coverUrl.length > 0) {
+        Image(this.reel.coverUrl)
+          .draggable(false)
+          .width('100%')
+          .height('100%')
+          .objectFit(ImageFit.Fill)
+          .blur(120)
+          .opacity(0.75)
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .hitTestBehavior(HitTestMode.None)
+  }
+}
+
 @Component
 export struct ReelsPage {
   /**
@@ -2726,7 +2756,40 @@ export struct ReelsPage {
       this.screenWidthVp = FALLBACK_WIDTH_VP;
     }
     this.vm.onReels = (reels: Array<Reel>, hasMore: boolean): void => {
+      /*
+       * **封面从无到有**时强制换代。
+       *
+       * 首次进入 Reels 时列表可能先来自落盘缓存（`coverUrl` 为空），随后网络那一页
+       * 用同一批 shortcode、但带上了封面。ForEach 的 key 只含 `feedGen#shortcode`，
+       * 键没变就不会重建 `ReelSlide`，@ObjectLink 还钉在旧的空封面对象上 ——
+       * 表现就是"第一次进来背景纯黑，退出重进才有模糊封面"。
+       *
+       * 只在这种"同一条、封面由空变有"的情况下换代（追加新页不换代，避免播放器重建）。
+       */
+      const previous: Array<Reel> = this.reels;
+      let coverArrived: boolean = false;
+      if (previous.length === reels.length) {
+        for (let index: number = 0; index < reels.length; index++) {
+          if (previous[index].shortcode === reels[index].shortcode
+            && previous[index].coverUrl.length === 0 && reels[index].coverUrl.length > 0) {
+            coverArrived = true;
+            break;
+          }
+        }
+      }
+      if (coverArrived) {
+        this.feedGen++;
+      }
       this.reels = reels;
+      if (coverArrived) {
+        const keep: number = this.activeIndex;
+        setTimeout((): void => {
+          try {
+            this.swiperController.changeIndex(keep, false);
+          } catch (error) {
+          }
+        }, 0);
+      }
       /*
        * **列表变短时把 activeIndex 拉回合法范围**（闪退防线）。
        *
@@ -3107,20 +3170,7 @@ export struct ReelsPage {
        * 之前这一层"看不见"，根因不是位置、不是比例，而是**信息层 `ReelOverlay` 有一块不透明的黑底**
        * （已在本轮改透明），所以现在能看到它了。
        */
-      if (reel.coverUrl.length > 0) {
-        Image(reel.coverUrl)
-          .draggable(false)
-          .width('100%')
-          .height('100%')
-          .objectFit(ImageFit.Fill)
-          /*
-           * 用户反馈："亮度很高" → 去掉之前的 `brightness(1.35)`（那是为了让暗场景不像黑边，
-           * 代价就是亮场景发白）；"模糊程度调最高" → blur 拉到 120，再压一档透明度让它沉下去。
-           */
-          .blur(120)
-          .opacity(0.75)
-          .hitTestBehavior(HitTestMode.None)
-      }
+      ReelBackground({ reel: reel })
       /*
        * **"画面之外"那一层：单击 = 隐藏 / 恢复全局控件**（需求第 4 条）。
        *
@@ -3163,14 +3213,16 @@ export struct ReelsPage {
           hostHold: this.pageHold,
           hostSpeed: this.pageSpeed,
           /*
-           * **只提前备好"下一条"**（原来备了两条）。
+           * **不再预加载下一条**（2026-10-31 真机日志）。
            *
-           * 为什么退回来（2026-10-30 真机）：真机上 reels 一进来就并发建出 **3 个 AVPlayer**，
-           * 播到第 4 秒整进程 ABORTED（无 JS 异常、无系统 fault），而**信息流只挂 1 个播放器就不崩**。
-           * 三路解码器 + 三块 XComponent 表面在这类机型上顶不住 —— "第三条少等两秒"不值得一次闪退。
-           * `VideoSurface.createPlayer` 那边还有预算/串行化闸门兜底（见 MAX_ALIVE_FOR_PRELOAD）。
+           * 现场：`player create ok alive=2`，切换时 `release alive=1` 紧接着又
+           * `create alive=2`，随后 `more added=10 total=14`，进程直接 ABORTED（无 JS 异常、
+           * 无系统 fault）。信息流只挂 1 个播放器不崩，reels 只要同时存在 2 个解码器就会崩。
+           *
+           * 稳定优先：reels 只保留**当前这一条**的播放器；切页时先释放旧的，再建新的。
+           * 代价是切换起播多等一点（没有预加载），但比闪退好。
            */
-          preload: index === this.activeIndex + 1,
+          preload: false,
           // 静音开关是全局的（媒体区那颗喇叭键），见 AppSettings.SETTING_VIDEO_MUTED。
           muted: this.videoMuted,
           /*
@@ -3362,10 +3414,9 @@ export struct ReelsPage {
         .vertical(true)
         .loop(false)
         .indicator(false)
-        // 预加载窗口：**2 而不是 1**。VideoSurface 的预加载要先把下一条的 XComponent 布局出来
-        // （表面是 XComponent onLoad 给的，没有它就 prepare 不了，见 VideoSurface 的说明），
-        // cachedCount=1 时下一条常常要等页开始动才布局，预加载就白等了。
-        .cachedCount(2)
+        // 缓存窗口收到 1：预加载已经关掉（见 reelPage 的 preload=false），多留一页只会
+        // 多占一块 XComponent 表面/GPU 内存。当前页 + 相邻一页足够接住手势切换。
+        .cachedCount(1)
         // 曲线 + 时长成对给：弹簧曲线的时长是固定的（约 560ms），只改 duration 没用（见 SWITCH_ANIM_MS）。
         // Ease（快出慢收）在"跟手"这件事上比 Linear 自然：手指离屏时速度最大，收尾平滑落定。
         .curve(Curve.Ease)

@@ -48,7 +48,8 @@ import {
 } from '../core/AppSettings';
 import { MATERIAL_PILL_HEIGHT, SelectSurfaceModifier, SurfaceModifier } from './MaterialSurface';
 // 半模态的系统材质（SheetOptions.systemMaterial，API 26+）。
-import { curves, LengthMetrics, uiMaterial } from '@kit.ArkUI';
+import { curves, KeyboardAvoidMode, LengthMetrics, uiMaterial, window } from '@kit.ArkUI';
+import { i18n } from '@kit.LocalizationKit';
 // 应用级代理（设置页的数据与生效逻辑，见 core/AppProxy）。
 import { AppProxy, ProxyEntry } from '../core/AppProxy';
 // 保存前的连通性探测（TCP + HTTP CONNECT，见 core/ProxyProbe）。
@@ -121,6 +122,10 @@ const CARD_RADIUS: number = 16;
 /** 代理输入框高度（vp；圆角=高/2 走胶囊那一档）。 */
 const PROXY_FIELD_HEIGHT: number = 42;
 const CARD_BORDER: number = 1;
+/** 列表滚到底时给系统手势条/导航栏留的高度（vp）。 */
+const SAFE_BOTTOM_VP: number = 34;
+/** 项目主页（外部浏览器打开）。 */
+const PROJECT_HOME_URL: string = 'https://github.com/ShiYi070415/Instamony';
 
 /**
  * 「管理代理」半模态里的卡片尺寸（需求：圆角 + blur 模糊卡片，卡片之间留间距，单选）。
@@ -182,6 +187,10 @@ const PROXY_MANAGE_LIST_PAD: number = 20;
 
 /** 下拉按钮的字体大小（vp；和 Select 的 `.font({ size })` 保持一致，量文字宽度要用它）。 */
 const SELECT_FONT_SIZE: number = 15;
+/** 下拉按钮最大宽度：文字再长也不无限撑开，超过就省略。 */
+const SELECT_MAX_WIDTH: number = 220;
+/** 语言下拉按钮的最大宽度（字号 16，比其它下拉略宽一点）。 */
+const LANGUAGE_BUTTON_MAX_WIDTH: number = 200;
 /** 宽度变化的补间时长（毫秒）：弹性曲线配 320ms，观感是"弹一下到位"。 */
 const SELECT_WIDTH_SPRING_MS: number = 320;
 
@@ -207,12 +216,81 @@ const MATERIAL_THICKNESS_ORDER: string[] = [
   MATERIAL_THICKNESS_ULTRA_THICK
 ];
 
+/** 语言选项：`code` 对应资源目录，`tag` 是 setAppPreferredLanguage 的 BCP 47。 */
+class LanguageOption {
+  readonly code: string;
+  readonly tag: string;
+  readonly nativeName: string;
+  /** 搜索用的别名（原生名 + 中英文名 + 语言代码）。 */
+  readonly searchText: string;
+
+  constructor(code: string, tag: string, nativeName: string, searchText: string) {
+    this.code = code;
+    this.tag = tag;
+    this.nativeName = nativeName;
+    this.searchText = searchText;
+  }
+}
+
+const LANGUAGES: Array<LanguageOption> = [
+  new LanguageOption('zh_CN', 'zh-Hans', '简体中文', '简体中文 中文 chinese simplified zh_cn zh-hans'),
+  new LanguageOption('zh_TW', 'zh-Hant', '繁體中文', '繁體中文 繁体中文 chinese traditional zh_tw zh-hant'),
+  new LanguageOption('en_US', 'en-US', 'English', 'english 英语 英文 en_us en-us'),
+  new LanguageOption('ja_JP', 'ja-JP', '日本語', '日本語 日语 japanese ja_jp ja-jp'),
+  new LanguageOption('ko_KR', 'ko-KR', '한국어', '한국어 韩语 korean ko_kr ko-kr'),
+  new LanguageOption('es_ES', 'es-ES', 'Español', 'español 西班牙语 spanish es_es es-es'),
+  new LanguageOption('de_DE', 'de-DE', 'Deutsch', 'deutsch 德语 german de_de de-de')
+];
+
+/** BCP 47 / 系统语言 → 资源目录。 */
+function languageCodeOf(tag: string): string {
+  const lower: string = tag.trim().toLowerCase();
+  if (lower.indexOf('zh') === 0) {
+    if (lower.indexOf('hant') >= 0 || lower.indexOf('tw') >= 0
+      || lower.indexOf('hk') >= 0 || lower.indexOf('mo') >= 0) {
+      return 'zh_TW';
+    }
+    return 'zh_CN';
+  }
+  if (lower.indexOf('en') === 0) {
+    return 'en_US';
+  }
+  if (lower.indexOf('ja') === 0) {
+    return 'ja_JP';
+  }
+  if (lower.indexOf('ko') === 0) {
+    return 'ko_KR';
+  }
+  if (lower.indexOf('es') === 0) {
+    return 'es_ES';
+  }
+  if (lower.indexOf('de') === 0) {
+    return 'de_DE';
+  }
+  return 'zh_CN';
+}
+
+const LANGUAGE_CARD_HEIGHT: number = 56;
+const LANGUAGE_CARD_RADIUS: number = 18;
+const LANGUAGE_CARD_GAP: number = 10;
+const LANGUAGE_SEARCH_HEIGHT: number = 44;
+
 @Component
 export struct SettingsPanel {
   /** 代理：总开关 / 已保存列表 / 当前选中 / 添加面板草稿。 */
+  /** 当前设置页：'root' = 分类首页，其余 = 对应二级页。 */
+  @State private settingsPage: string = 'root';
   @State private proxyOn: boolean = false;
   /** DoH（见 core/net/DoHResolver）：开关 + 一行现场（最近一次解析 / 降级原因）。 */
   @State private dohOn: boolean = false;
+  /** 语言切换：半模态开关 / 搜索词 / 当前资源目录。 */
+  @State private languageSheet: boolean = false;
+  @State private languageQuery: string = '';
+  @State private languageCode: string = 'zh_CN';
+  /** 输入法高度（vp）：只给内容底部加 padding，面板 FIT_CONTENT 自己长高。 */
+  @State private keyboardVp: number = 0;
+  private keyboardWindow: window.Window | null = null;
+  private keyboardHandler: ((height: number) => void) | null = null;
   /** 网络节点体检的结论（出口 IP / 是否机房，见 core/NetQuality）。 */
   @State private nodeText: string = '';
   @State private dohStatus: string = '';  @State private proxyNames: Array<string> = [];
@@ -278,6 +356,18 @@ export struct SettingsPanel {
    */
   onQualityChanged: () => void = (): void => {
   };
+  /** 从设置首页打开一个二级页（由宿主 push 新的 NavDestination）。 */
+  onOpenSection: (section: string) => void = (section: string): void => {
+    this.settingsPage = section;
+  };
+  /** 独立二级页模式下固定展示的分类 key；空串 = 设置首页。 */
+  detailSection: string = '';
+  /** 独立二级页：标题栏由 HDS 提供，不再画页内返回标题。 */
+  standaloneDetail: boolean = false;
+  /** 打开赞助开发者页（由宿主 push）。 */
+  onOpenSponsor: () => void = (): void => {
+    this.toast('赞助页面暂不可用');
+  };
   /** 沉浸光感的材质等级（@StorageLink：这里改，标题栏/底栏/本页材质一起变）。 */
   @StorageLink(SETTING_MATERIAL_LEVEL) materialLevel: string = MATERIAL_LEVEL_ADAPTIVE;
   /** 材质厚度（@StorageLink：这里改，全工程 ArkUI 材质组件的厚薄一起变）。 */
@@ -305,20 +395,284 @@ export struct SettingsPanel {
    * 只读一次、不重发请求。
    */
   aboutToAppear(): void {
+    if (this.detailSection.length > 0) {
+      this.settingsPage = this.detailSection;
+    }
     // 代理列表/选中/下拉按钮文字：进页面就读一次（不要等 proxySection 的 onAppear，
     // 否则第一帧按钮上的文字是空的）。
     this.refreshProxyNames();
     // DoH：进页面读一次开关 + 现场（登录链解析走哪条，见 core/net/DoHResolver）。
     this.dohOn = DoHResolver.enabled();
     this.dohStatus = DoHResolver.describe();
+    // 当前应用语言（下拉按钮上显示的原生语言名）。
+    this.languageCode = this.detectLanguageCode();
+    // 输入法高度：键盘弹出时面板升到最高档，列表底部按键盘高度避让。
+    try {
+      const context: common.Context = this.getUIContext().getHostContext() as common.Context;
+      window.getLastWindow(context).then((win: window.Window): void => {
+        this.keyboardWindow = win;
+        this.keyboardHandler = (height: number): void => {
+          this.keyboardVp = height > 0 ? this.getUIContext().px2vp(height) : 0;
+        };
+        win.on('keyboardHeightChange', this.keyboardHandler);
+      }).catch((): void => {
+      });
+    } catch (error) {
+    }
+  }
+
+  aboutToDisappear(): void {
+    if (this.keyboardWindow !== null && this.keyboardHandler !== null) {
+      try {
+        this.keyboardWindow.off('keyboardHeightChange', this.keyboardHandler);
+      } catch (error) {
+      }
+      this.keyboardHandler = null;
+      this.keyboardWindow = null;
+    }
+  }
+
+  /** 当前应用语言：优先应用偏好，没设过就跟随系统语言 + 地区。 */
+  private detectLanguageCode(): string {
+    try {
+      let tag: string = i18n.System.getAppPreferredLanguage();
+      if (tag.length === 0 || tag === 'default') {
+        tag = `${i18n.System.getSystemLanguage()}-${i18n.System.getSystemRegion()}`;
+      }
+      return languageCodeOf(tag);
+    } catch (error) {
+      return 'zh_CN';
+    }
+  }
+
+  private currentLanguage(): LanguageOption {
+    for (let index: number = 0; index < LANGUAGES.length; index++) {
+      if (LANGUAGES[index].code === this.languageCode) {
+        return LANGUAGES[index];
+      }
+    }
+    return LANGUAGES[0];
+  }
+
+  /**
+   * 语言下拉按钮的目标宽度：**和设置页其它 Select 下拉同一套口径**
+   * （文字宽 + 胶囊左右留白 + 箭头），换语言时宽度变化走 `animateSelectWidth` 的弹簧。
+   */
+  private languageButtonWidth(): number {
+    // 语言按钮字号是 16（不是 SELECT_FONT_SIZE 15），必须按 16 量；再留箭头/内边距。
+    const width: number = Math.round(this.textWidthOf(this.currentLanguage().nativeName, 16) + 56);
+    return Math.min(width, LANGUAGE_BUTTON_MAX_WIDTH);
+  }
+
+  private openLanguageSheet(): void {
+    this.languageQuery = '';
+    this.keyboardVp = 0;
+    this.languageSheet = true;
+  }
+
+  private closeLanguageSheet(): void {
+    this.languageSheet = false;
+  }
+
+  /** 按原生名 / 中英文名 / 代码过滤；空搜索显示全部。 */
+  private filteredLanguages(): Array<LanguageOption> {
+    const query: string = this.languageQuery.trim().toLowerCase();
+    if (query.length === 0) {
+      return LANGUAGES;
+    }
+    const out: Array<LanguageOption> = [];
+    for (let index: number = 0; index < LANGUAGES.length; index++) {
+      const one: LanguageOption = LANGUAGES[index];
+      if (one.searchText.toLowerCase().indexOf(query) >= 0) {
+        out.push(one);
+      }
+    }
+    return out;
+  }
+
+  private applyLanguage(option: LanguageOption): void {
+    try {
+      i18n.System.setAppPreferredLanguage(option.tag);
+      // 和 Select 下拉换选项同一套弹簧：按钮宽度跟着新语言名一起过渡。
+      this.animateSelectWidth((): void => {
+        this.languageCode = option.code;
+      });
+      this.languageSheet = false;
+      // 语言资源切换后，代理下拉的「暂无代理 / 管理代理」等文本要重新取一次；
+      // 代理名本身是用户输入，不会翻译。
+      this.refreshProxyNames();
+      setTimeout((): void => {
+        this.refreshProxyNames();
+      }, 60);
+      this.toast($r('app.string.settings_language_changed'));
+      hilog.info(DOMAIN, TAG, 'app language -> %{public}s', option.tag);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'set app language failed: %{public}s',
+        (error as Error).message);
+    }
+  }
+
+  /**
+   * **语言切换入口**：下拉按钮显示当前语言，点开系统半模态（HDS 标题 + 关闭按钮）。
+   *
+   * 面板内容：搜索框 + 语言 List；整体用系统沉浸光感材质（见 languageSheetOptions）。
+   */
+  @Builder
+  languageRow() {
+    Row({ space: 12 }) {
+      Text($r('app.string.settings_language'))
+        .fontSize(16)
+        .fontColor($r('app.color.primary_text'))
+      Blank()
+      Toggle({ type: ToggleType.Button, isOn: false }) {
+        Row({ space: 6 }) {
+          Text(this.currentLanguage().nativeName)
+            // 用户指定：文字白色但更浅一点，字号比其它下拉大一档（16）。
+            .fontSize(16)
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#D9FFFFFF')
+            // 宽度已按文字量出来并设了上限；万一超长只省略，不换行。
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          // 实心圆角三角形：加宽加大，和白色文字拉开层次。
+          SymbolGlyph($r('sys.symbol.arrowtriangle_down_fill'))
+            .fontSize(15)
+            .fontColor([$r('app.color.on_accent')])
+        }
+        .padding({ left: 14, right: 12 })
+        .height(SIGN_OUT_HEIGHT)
+      }
+      // 和设置页其它下拉按钮同高（40vp）、同胶囊圆角、同弹簧宽度过渡。
+      .width(this.languageButtonWidth())
+      .height(SIGN_OUT_HEIGHT)
+      .animation({ duration: SELECT_WIDTH_SPRING_MS, curve: curves.springMotion() })
+      .padding(0)
+      .borderRadius(SIGN_OUT_RADIUS)
+      .backgroundColor(Color.Transparent)
+      .selectedColor(Color.Transparent)
+      // 关闭触摸光源（lightEffect = false），只保留材质本身。
+      .attributeModifier(new SurfaceModifier(this.materialThickness, true, true, false, false))
+      .onClick((): void => {
+        this.openLanguageSheet();
+      })
+    }
+    .width('100%')
+    // 与设置页其它 Select 行同高（54vp），按钮 40vp 在行内垂直居中。
+    .height(ROW_HEIGHT)
+    .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING })
+  }
+
+  /**
+   * 系统半模态：`FIT_CONTENT` 跟随内容高度（搜索过滤后自动变矮），
+   * 键盘出现时只给内容底部加 padding，面板高度自己长到刚好容纳列表 + 键盘。
+   *
+   * `dragBar: false` + 不用 detents：不给人手拖挡位的入口，高度只由内容/代码决定。
+   */
+  private languageSheetOptions(): SheetOptions {
+    const options: SheetOptions = {
+      height: SheetSize.FIT_CONTENT,
+      dragBar: false,
+      showClose: true,
+      preferType: SheetType.BOTTOM,
+      keyboardAvoidMode: SheetKeyboardAvoidMode.NONE,
+      title: { title: $r('app.string.settings_language') },
+      onDisappear: (): void => {
+        this.languageQuery = '';
+        this.keyboardVp = 0;
+      }
+    };
+    return this.applySheetLook(options);
+  }
+
+  @Builder
+  languageSheetBuilder() {
+    Column({ space: 12 }) {
+      // 标题由 bindSheet 的 SheetOptions.title 交给系统画（HDS 标题）。
+      // 搜索框：底层 Toggle 垫沉浸光感材质，Search 透明叠在上面（内容区里 Toggle 才拿得到材质）。
+      Stack({ alignContent: Alignment.Center }) {
+        Toggle({ type: ToggleType.Button, isOn: false }) {
+          Row()
+            .width('100%')
+            .height(LANGUAGE_SEARCH_HEIGHT)
+        }
+        .width('100%')
+        .height(LANGUAGE_SEARCH_HEIGHT)
+        .padding(0)
+        .borderRadius(LANGUAGE_SEARCH_HEIGHT / 2)
+        .backgroundColor(Color.Transparent)
+        .selectedColor(Color.Transparent)
+        // 关闭触摸光源（lightEffect = false）。
+        .attributeModifier(new SurfaceModifier(this.materialThickness, true, true, false, false))
+        // 只负责画材质，点击/聚焦都交给上面的 Search。
+        .hitTestBehavior(HitTestMode.None)
+
+        Search({ value: this.languageQuery, placeholder: $r('app.string.settings_language_search') })
+          .width('100%')
+          // 不写死高度：固定过高的输入框会让 bindSheet 的键盘避让失效（官方 FAQ）。
+          .height(LANGUAGE_SEARCH_HEIGHT)
+          .backgroundColor(Color.Transparent)
+          .backgroundBlurStyle(BlurStyle.NONE)
+          .borderRadius(LANGUAGE_SEARCH_HEIGHT / 2)
+          .onChange((value: string): void => {
+            this.languageQuery = value;
+          })
+      }
+      .width('100%')
+      .height(LANGUAGE_SEARCH_HEIGHT)
+
+      // 列表紧跟搜索框，不再用 Blank 压到底部：面板高度由内容自然决定。
+      Column({ space: LANGUAGE_CARD_GAP }) {
+        ForEach(this.filteredLanguages(), (option: LanguageOption) => {
+          this.languageCard(option)
+        }, (option: LanguageOption): string => option.code)
+      }
+      .width('100%')
+      .padding({ top: 4, bottom: 4 })
+    }
+    .width('100%')
+    // 键盘高度只加在内容底部：FIT_CONTENT 会让面板长高，listitem 底边停在键盘上方。
+    .padding({ left: 16, right: 16, top: 8, bottom: 24 + this.keyboardVp })
+    .backgroundColor(Color.Transparent)
+  }
+
+  @Builder
+  languageCard(option: LanguageOption) {
+    Toggle({ type: ToggleType.Button, isOn: false }) {
+      Row({ space: 10 }) {
+        SymbolGlyph(option.code === this.languageCode
+          ? $r('sys.symbol.checkmark_circle_fill') : $r('sys.symbol.circle'))
+          .fontSize(20)
+          .fontColor([option.code === this.languageCode
+            ? $r('app.color.accent') : $r('app.color.secondary_text')])
+        Text(option.nativeName)
+          .fontSize(15)
+          .fontColor($r('app.color.primary_text'))
+          .layoutWeight(1)
+      }
+      .width('100%')
+      .height(LANGUAGE_CARD_HEIGHT)
+      .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING })
+    }
+    .width('100%')
+    .height(LANGUAGE_CARD_HEIGHT)
+    .padding(0)
+    .borderRadius(LANGUAGE_CARD_RADIUS)
+    .backgroundColor(Color.Transparent)
+    .selectedColor(Color.Transparent)
+    // 关闭触摸光源（lightEffect = false）。
+    .attributeModifier(new SurfaceModifier(this.materialThickness, true, true, false, false))
+    .onClick((): void => {
+      this.applyLanguage(option);
+    })
   }
 
   /**
    * **网络（DoH）区**：一行开关 + 一行"测一下" + 一行现场。
    *
-   * 为什么要这个开关：`Tls13Client` 那条登录链只用自建 TLS，域名解析却还得系统做；系统 DNS
-   * 在部分网络会被污染/劫持。DoH 只影响**本 app 这条链**（连 IP、SNI 与证书仍按域名），
-   * 失败自动降级，所以默认关、由用户自己打开（见 core/net/DoHResolver 的文件头）。
+   * 为什么要这个开关：系统 DNS 在部分网络会被污染/劫持。DoH 现在覆盖**全 app**：
+   * 所有 `@ohos.net.http` 请求（移动 API / 图片预取 / 翻译 / 中转）、内置网页、
+   * 以及 `Tls13Client` 自建 TLS（连 IP、SNI 与证书仍按域名）。
+   * 默认开；网页与自建 TLS 失败会自动回退，HTTP 端点不可达时可以在这里一键关掉。
    */
   @Builder
   dohSection() {
@@ -328,7 +682,7 @@ export struct SettingsPanel {
           Text('DNS over HTTPS（DoH）')
             .fontSize(16)
             .fontColor($r('app.color.primary_text'))
-          Text('登录链的域名解析改走加密 DNS；任何一步失败会自动退回系统解析。')
+          Text($r('app.string.settings_doh_scope_hint'))
             .fontSize(11)
             .lineHeight(15)
             .fontColor($r('app.color.secondary_text'))
@@ -344,6 +698,9 @@ export struct SettingsPanel {
             AppSettings.setDohEnabled(on);
             // 换了解析方式：缓存里那些 IP 不一定还合适，清掉。
             DoHResolver.clear();
+            if (on) {
+              DoHResolver.warmUp();
+            }
             this.dohStatus = DoHResolver.describe();
             hilog.info(DOMAIN, TAG, 'doh enabled=%{public}s', on ? 'y' : 'n');
           })
@@ -456,6 +813,8 @@ export struct SettingsPanel {
               ? this.proxyActive
               : -1)
             .value(this.proxyValueText)
+            // 长代理名/大字号下按钮最多占行宽 55%，不会把整行挤出屏幕。
+            .constraintSize({ maxWidth: '55%' })
             .font({ size: SELECT_FONT_SIZE })
             // 选中项样式**必须和本页其它四个下拉完全一致**（需求）：系统默认是主题蓝底白字，
             // 这里统一成「浅白半透底 + 粗体高对比字」，颜色都走资源（明暗两套）。
@@ -1071,7 +1430,7 @@ export struct SettingsPanel {
   @Builder
   relayUrlRow() {
     Column({ space: 6 }) {
-      Text('中转上报地址')
+      Text($r('app.string.settings_relay_endpoint'))
         .fontSize(13)
         .fontColor($r('app.color.secondary_text'))
         .width('100%')
@@ -1104,13 +1463,13 @@ export struct SettingsPanel {
   @Builder
   relayKeyRow() {
     Column({ space: 6 }) {
-      Text('共享密钥（可空，对应 relay 的 key）')
+      Text($r('app.string.settings_relay_key'))
         .fontSize(13)
         .fontColor($r('app.color.secondary_text'))
         .width('100%')
         .textAlign(TextAlign.Start)
       Toggle({ type: ToggleType.Button, isOn: false }) {
-        TextInput({ text: this.relayKey, placeholder: '随便一串字符，和 relay 保持一致' })
+        TextInput({ text: this.relayKey, placeholder: $r('app.string.settings_relay_key_hint') })
           .width('100%')
           .height(42)
           .fontSize(15)
@@ -1141,7 +1500,7 @@ export struct SettingsPanel {
     AppSettings.setRelayReport(this.relayUrl, this.relayKey);
     if (this.relayUrl.trim().length === 0) {
       this.relayStatus = '已关闭：不再上报';
-      this.toast('已关闭中转上报');
+      this.toast($r('app.string.settings_relay_disabled'));
       return;
     }
     const token: string = PushCenter.tokenNow();
@@ -1290,6 +1649,21 @@ export struct SettingsPanel {
     })
   }
 
+  /** 项目主页：交给系统外部浏览器打开。 */
+  private openProjectHome(): void {
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      context.openLink(PROJECT_HOME_URL).catch((error: Error): void => {
+        hilog.warn(DOMAIN, TAG, 'open project home failed: %{public}s', error.message);
+        this.toast('无法打开浏览器');
+      });
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'open project home threw: %{public}s', (error as Error).message);
+      this.toast('无法打开浏览器');
+    }
+  }
+
   /** 一行提示（用系统 toast，设置页里没有状态行）。 */
   private toast(text: ResourceStr): void {
     try {
@@ -1299,11 +1673,33 @@ export struct SettingsPanel {
     }
   }
 
+  /** 取一条资源字符串（拼接/日志这类需要 string 的场景用；纯 Text 直接传 `$r` 即可）。 */
+  private localized(resId: number): string {
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      return context.resourceManager.getStringSync(resId);
+    } catch (error) {
+      return '';
+    }
+  }
+
+  /** 带一个 `%s` 占位符的资源字符串。 */
+  private localizedWith(resId: number, arg: string): string {
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      return context.resourceManager.getStringSync(resId, arg);
+    } catch (error) {
+      return '';
+    }
+  }
+
 
   private clearDeviceAuth(): void {
     if (this.signedIn) {
       // 已登录时换设备身份会让当前会话看起来"来自另一台机器"，是纯粹的风险动作。
-      this.toast('先退出登录，再清设备认证');
+      this.toast($r('app.string.settings_clear_device_hint'));
       return;
     }
     CaaSession.forgetDevice();
@@ -1367,7 +1763,7 @@ export struct SettingsPanel {
    */
   @Builder
   loginLogHintRow() {
-    Text('登录失败时：先点「登录通道自检」，再点「复制登录日志」把内容发我。\n'
+    Text(this.localized($r('app.string.settings_login_help').id)
       + '自检：' + LoginLog.probeSummary()
       + '\n节点：' + (this.nodeText.length > 0 ? this.nodeText : LoginLog.nodeSummary()))
       .fontSize(12)
@@ -1379,7 +1775,7 @@ export struct SettingsPanel {
 
   /** 跑一次登录通道自检（TCP → TLS 1.3 → 一行 GET），结果进日志。 */
   private async runLoginProbe(): Promise<void> {
-    this.toast('正在自检登录通道（最多 15 秒）…');
+    this.toast($r('app.string.settings_login_selftest_running'));
     const result: string = await LoginLog.runProbe();
     this.toast(result.length > 90 ? result.substring(0, 90) + '…' : result);
   }
@@ -1392,11 +1788,12 @@ export struct SettingsPanel {
    * 换节点时能当场对比哪条线路更像家宽。
    */
   private async runNodeCheck(): Promise<void> {
-    this.toast('正在查出口 IP（最多 10 秒）…');
+    this.toast($r('app.string.settings_ip_check_running'));
     const report: NodeReport = await NetQuality.check();
     this.nodeText = report.text;
     LoginLog.rememberNode(report.text);
-    this.toast(report.datacenter ? '这是机房 IP，建议换节点再试' : '这条线路看着正常');
+    this.toast(report.datacenter ? $r('app.string.settings_ip_datacenter')
+      : $r('app.string.settings_ip_normal'));
   }
 
   /** 复制登录日志到剪贴板（粘到聊天窗口发给开发者）。 */
@@ -1411,7 +1808,7 @@ export struct SettingsPanel {
           this.toast($r('app.string.diag_export_failed', err.message));
           return;
         }
-        this.toast('登录日志已复制（粘贴发给开发者）');
+        this.toast($r('app.string.settings_login_log_copied'));
       });
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'login log copy threw: %{public}s', (error as Error).message);
@@ -1426,7 +1823,7 @@ export struct SettingsPanel {
    * 推送失败（网络 / 429 / 昵称未注册）**自动退回"存成 txt"**，别让用户的日志白跑一趟。
    */
   private async exportLoginLog(): Promise<void> {
-    this.toast('正在推送登录日志到 MeoW…');
+    this.toast($r('app.string.settings_meow_login_sending'));
     const text: string = await LoginLog.compose(this.appVersionText());
     const result: string = await MeoW.pushLog(text);
     hilog.info(DOMAIN, TAG, 'login log push: %{public}s', result.substring(0, 120));
@@ -1449,7 +1846,7 @@ export struct SettingsPanel {
   private async pushReelsCrashLog(): Promise<void> {
     const raw: string = ReelsCrashLog.read();
     if (raw.trim().length === 0) {
-      this.toast('还没有 reels 崩溃日志（没进过 reels，或日志已被清掉）');
+      this.toast($r('app.string.settings_reels_log_empty'));
       return;
     }
     /*
@@ -1461,9 +1858,9 @@ export struct SettingsPanel {
     const body: string = omitted > 0
       ? `…（前 ${omitted} 字省略，只保留最近的现场）\n${raw.substring(omitted)}`
       : raw;
-    const header: string = `Instamony reels 崩溃日志（共 ${raw.length} 字）\n`
-      + `（设备与版本：${this.appVersionText()}）\n\n`;
-    this.toast('正在推送 reels 崩溃日志到 MeoW…');
+    const header: string = `Instamony reels crash log (${raw.length} chars)\n`
+      + this.localizedWith($r('app.string.settings_reels_log_prefix').id, this.appVersionText());
+    this.toast($r('app.string.settings_meow_reels_sending'));
     const result: string = await MeoW.pushLog(header + body);
     hilog.info(DOMAIN, TAG, 'reels crash push: %{public}s', result.substring(0, 120));
     this.toast(result);
@@ -1504,6 +1901,28 @@ export struct SettingsPanel {
       const info: bundleManager.BundleInfo = bundleManager.getBundleInfoForSelfSync(
         bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT);
       return `${info.versionName} (${info.versionCode})`;
+    } catch (error) {
+      return '-';
+    }
+  }
+
+  /** 应用详情里的「当前版本」。 */
+  private appVersionName(): string {
+    try {
+      const info: bundleManager.BundleInfo = bundleManager.getBundleInfoForSelfSync(
+        bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT);
+      return info.versionName;
+    } catch (error) {
+      return '-';
+    }
+  }
+
+  /** 应用详情里的「构建版本（目标 API）」。 */
+  private appBuildText(): string {
+    try {
+      const info: bundleManager.BundleInfo = bundleManager.getBundleInfoForSelfSync(
+        bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT);
+      return `${info.targetVersion}`;
     } catch (error) {
       return '-';
     }
@@ -1732,23 +2151,25 @@ export struct SettingsPanel {
     if (this.selectChrome <= 0) {
       return 0;
     }
-    return Math.round(textWidth + this.selectChrome);
+    // 按文字长度自适应，但不超过 SELECT_MAX_WIDTH；超长文本由 Select 自己省略。
+    return Math.min(Math.round(textWidth + this.selectChrome), SELECT_MAX_WIDTH);
   }
 
   /** 一行文字的宽度（vp）：精确量一次并缓存；量不到就按字宽估。 */
-  private textWidthOf(text: string): number {
+  private textWidthOf(text: string, fontSize: number = SELECT_FONT_SIZE): number {
     if (text.length === 0) {
       return 0;
     }
-    const cached: number | undefined = this.measuredWidths.get(text);
+    const key: string = `${fontSize}:${text}`;
+    const cached: number | undefined = this.measuredWidths.get(key);
     if (cached !== undefined) {
       return cached;
     }
-    let width: number = this.estimateTextWidth(text, SELECT_FONT_SIZE);
+    let width: number = this.estimateTextWidth(text, fontSize);
     try {
       // measureText 在 UIContext.getMeasureUtils() 上（API 12+），返回 px，单位换成 vp。
       const px: number = this.getUIContext().getMeasureUtils()
-        .measureText({ textContent: text, fontSize: SELECT_FONT_SIZE });
+        .measureText({ textContent: text, fontSize: fontSize });
       const measured: number = px2vp(px);
       if (measured > width) {
         width = measured;
@@ -1756,7 +2177,7 @@ export struct SettingsPanel {
     } catch (error) {
       // 量不到就用估算值，不影响布局。
     }
-    this.measuredWidths.set(text, width);
+    this.measuredWidths.set(key, width);
     return width;
   }
 
@@ -1786,6 +2207,7 @@ export struct SettingsPanel {
       Select(this.thicknessOptions())
         .selected(this.thicknessIndex())
         .value(this.thicknessDisplay())
+        .constraintSize({ maxWidth: '55%' })
         .font({ size: 15 })
         .fontColor($r('app.color.primary_text'))
         // 按钮/菜单材质的厚薄都取本行选的厚度；颜色统一**透明**（需求：
@@ -1846,6 +2268,7 @@ export struct SettingsPanel {
       Select(this.materialOptions())
         .selected(this.materialIndex())
         .value(this.materialDisplay())
+        .constraintSize({ maxWidth: '55%' })
         .font({ size: 15 })
         .fontColor($r('app.color.primary_text'))
         // 按钮的光边来自这层材质（别加 backgroundColor，会把它盖住）。
@@ -1901,6 +2324,7 @@ export struct SettingsPanel {
       Select(this.qualityOptions())
         .selected(this.qualityIndex(this.imageQuality))
         .value(this.qualityDisplay(this.imageQuality))
+        .constraintSize({ maxWidth: '55%' })
         .font({ size: 15 })
         .fontColor($r('app.color.primary_text'))
         .attributeModifier(new SelectSurfaceModifier(this.materialThickness, this.selectWidthOf(this.qualityDisplay(this.imageQuality)),
@@ -1940,6 +2364,7 @@ export struct SettingsPanel {
       Select(this.qualityOptions())
         .selected(this.qualityIndex(this.videoQuality))
         .value(this.qualityDisplay(this.videoQuality))
+        .constraintSize({ maxWidth: '55%' })
         .font({ size: 15 })
         .fontColor($r('app.color.primary_text'))
         .attributeModifier(new SelectSurfaceModifier(this.materialThickness, this.selectWidthOf(this.qualityDisplay(this.videoQuality)),
@@ -2104,6 +2529,461 @@ export struct SettingsPanel {
     return PlatformCap.hasHdsMaterial() && PlatformCap.hasArkMaterial();
   }
 
+  /** 设置首页点一项：交给宿主 push 新页面。 */
+  private openSection(section: string): void {
+    this.onOpenSection(section);
+  }
+
+  /** 二级页标题（设置首页只显示分类）。 */
+  private detailTitle(): string {
+    switch (this.settingsPage) {
+      case 'bar': return '底栏';
+      case 'language': return '语言';
+      case 'media': return '图片和视频';
+      case 'appearance': return '外观';
+      case 'proxy': return '代理';
+      case 'doh': return '网络';
+      case 'relay': return '中转上报';
+      case 'diag': return '诊断';
+      case 'device': return '登录与设备';
+      case 'about': return '应用详情';
+      default: return '';
+    }
+  }
+
+  @Builder
+  detailHeader() {
+    Row({ space: 6 }) {
+      SymbolGlyph($r('sys.symbol.chevron_left'))
+        .fontSize(22)
+        .fontColor([$r('app.color.primary_text')])
+      Text(this.detailTitle())
+        .fontSize(26)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.primary_text'))
+    }
+    .width('100%')
+    .height(58)
+    .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+    .onClick((): void => {
+      this.settingsPage = 'root';
+    })
+  }
+
+  /** 设置首页：标题 + border list，每一项进二级页。 */
+  @Builder
+  rootList() {
+    List() {
+      ListItem() {
+        this.groupHeader('显示和外观')
+      }
+      ListItem() {
+        Column({ space: 0 }) {
+          if (this.barOptionsSupported()) {
+            this.actionRow('底栏', (): void => {
+              this.openSection('bar');
+            })
+            this.cardDivider()
+          }
+          this.actionRow('语言', (): void => {
+            this.openSection('language');
+          })
+          this.cardDivider()
+          this.actionRow('图片和视频', (): void => {
+            this.openSection('media');
+          })
+          if (this.materialOptionsSupported()) {
+            this.cardDivider()
+            this.actionRow('外观', (): void => {
+              this.openSection('appearance');
+            })
+          }
+        }
+        .cardStyle()
+      }
+      .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+
+      ListItem() {
+        this.groupHeader('网络')
+      }
+      ListItem() {
+        Column({ space: 0 }) {
+          this.actionRow('代理', (): void => {
+            this.openSection('proxy');
+          })
+          this.cardDivider()
+          this.actionRow('网络', (): void => {
+            this.openSection('doh');
+          })
+          this.cardDivider()
+          this.actionRow('中转上报', (): void => {
+            this.openSection('relay');
+          })
+          this.cardDivider()
+          this.actionRow('诊断', (): void => {
+            this.openSection('diag');
+          })
+        }
+        .cardStyle()
+      }
+      .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+
+      if (!this.signedIn) {
+        ListItem() {
+          this.groupHeader('账号与安全')
+        }
+        ListItem() {
+          Column({ space: 0 }) {
+            this.actionRow('登录与设备', (): void => {
+              this.openSection('device');
+            })
+          }
+          .cardStyle()
+        }
+        .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+      }
+
+      ListItem() {
+        this.groupHeader('关于和帮助')
+      }
+      ListItem() {
+        Column({ space: 0 }) {
+          this.actionRow('应用详情', (): void => {
+            this.openSection('about');
+          })
+        }
+        .cardStyle()
+      }
+      .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+
+      if (this.signedIn) {
+        ListItem() {
+          Toggle({ type: ToggleType.Button, isOn: false }) {
+            Text($r('app.string.sign_out'))
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.like_active'))
+          }
+          .width('100%')
+          .height(SIGN_OUT_HEIGHT)
+          .padding(0)
+          .borderRadius(SIGN_OUT_RADIUS)
+          .attributeModifier(new SurfaceModifier(this.materialThickness, true))
+          .backgroundColor($r('sys.color.comp_background_secondary'))
+          .onChange((): void => {
+            this.onSignOut();
+          })
+        }
+        .padding({ left: PAGE_PADDING, right: PAGE_PADDING, top: 28, bottom: 24 })
+      }
+
+      ListItem() {
+        Row().width('100%').height(SAFE_BOTTOM_VP)
+      }
+    }
+    .width('100%')
+    .layoutWeight(1)
+    .scrollBar(BarState.Off)
+    .clip(false)
+  }
+
+  @Builder
+  featureRow(icon: Resource, title: string, desc: string) {
+    Row({ space: 12 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        SymbolGlyph(icon)
+          .fontSize(22)
+          .fontColor([$r('app.color.accent')])
+      }
+      .width(42)
+      .height(42)
+      .borderRadius(12)
+      .backgroundColor($r('sys.color.comp_background_secondary'))
+
+      Column({ space: 3 }) {
+        Text(title)
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.primary_text'))
+          .width('100%')
+        Text(desc)
+          .fontSize(12)
+          .fontColor($r('app.color.secondary_text'))
+          .width('100%')
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+    }
+    .width('100%')
+  }
+
+  @Builder
+  aboutInfoRow(label: string, value: string) {
+    Row({ space: 12 }) {
+      Text(label)
+        .fontSize(15)
+        .fontColor($r('app.color.primary_text'))
+        .layoutWeight(1)
+      Text(value)
+        .fontSize(14)
+        .fontColor($r('app.color.secondary_text'))
+        .textAlign(TextAlign.End)
+    }
+    .width('100%')
+    .height(ROW_HEIGHT)
+    .padding({ left: CARD_ROW_PADDING, right: CARD_ROW_PADDING })
+  }
+
+  @Builder
+  aboutList() {
+    List() {
+      if (!this.standaloneDetail) {
+        ListItem() {
+          this.detailHeader()
+        }
+      }
+
+      ListItem() {
+        Row({ space: 16 }) {
+          Image($r('app.media.startIcon'))
+            .width(72)
+            .height(72)
+            .borderRadius(18)
+            .objectFit(ImageFit.Cover)
+          Column({ space: 4 }) {
+            Text($r('app.string.app_name'))
+              .fontSize(22)
+              .fontWeight(FontWeight.Bold)
+              .fontColor($r('app.color.primary_text'))
+            Text(this.appVersionText())
+              .fontSize(13)
+              .fontColor($r('app.color.secondary_text'))
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start)
+        }
+        .width('100%')
+        .padding(16)
+        .cardStyle()
+      }
+      .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+
+      ListItem() {
+        this.groupHeader('应用介绍')
+      }
+      ListItem() {
+        Column({ space: 14 }) {
+          Text('Instamony')
+            .fontSize(16)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.primary_text'))
+            .width('100%')
+          this.featureRow($r('sys.symbol.heart_fill'), '沉浸式浏览',
+            '信息流、快拍与 Reels 都按内容本身的比例展示，少一点边框，多一点画面。')
+          this.featureRow($r('sys.symbol.paperplane'), '私信与分享',
+            '私信、快拍回复与分享入口放在顺手的位置，看到什么就能直接发给朋友。')
+          this.featureRow($r('sys.symbol.person_2_fill'), '多账号',
+            '账号之间数据独立，切换账号不会串会话、串缓存。')
+        }
+        .cardStyle()
+        .padding(16)
+      }
+      .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+
+      ListItem() {
+        this.groupHeader('应用版本')
+      }
+      ListItem() {
+        Column({ space: 0 }) {
+          this.aboutInfoRow('当前版本', this.appVersionName())
+          this.cardDivider()
+          this.aboutInfoRow('构建版本', this.appBuildText())
+          this.cardDivider()
+          this.aboutInfoRow('开发者', 'YiJin')
+        }
+        .cardStyle()
+      }
+      .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+
+      ListItem() {
+        this.groupHeader('链接')
+      }
+      ListItem() {
+        Column({ space: 0 }) {
+          this.actionRow('项目主页', (): void => {
+            this.openProjectHome();
+          })
+          this.cardDivider()
+          this.actionRow('赞助开发者', (): void => {
+            this.onOpenSponsor();
+          })
+        }
+        .cardStyle()
+      }
+      .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+
+      ListItem() {
+        Row().width('100%').height(SAFE_BOTTOM_VP)
+      }
+    }
+    .width('100%')
+    .layoutWeight(1)
+    .scrollBar(BarState.Off)
+    .clip(false)
+  }
+
+  /** 每个设置项的二级页：标题 + 迁移进来的 border list。 */
+  @Builder
+  detailList() {
+    if (this.settingsPage === 'about') {
+      this.aboutList()
+    } else {
+      List() {
+        if (!this.standaloneDetail) {
+          ListItem() {
+            this.detailHeader()
+          }
+        }
+
+        if (this.settingsPage === 'bar') {
+          if (this.barOptionsSupported()) {
+            ListItem() {
+              Column({ space: 0 }) {
+                this.nativeAnimationRow()
+                this.cardDivider()
+                this.groupHint($r('app.string.settings_bar_native_animation_hint'))
+              }
+              .cardStyle()
+            }
+            .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+          } else {
+            ListItem() {
+              this.groupHint($r('app.string.settings_unsupported_hint'))
+            }
+          }
+        } else if (this.settingsPage === 'language') {
+          ListItem() {
+            Column({ space: 0 }) {
+              this.languageRow()
+              this.cardDivider()
+              this.groupHint($r('app.string.settings_language_hint'))
+            }
+            .cardStyle()
+          }
+          .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+        } else if (this.settingsPage === 'media') {
+          ListItem() {
+            Column({ space: 0 }) {
+              this.imageQualityRow()
+              this.cardDivider()
+              this.videoQualityRow()
+              this.cardDivider()
+              this.groupHint($r('app.string.settings_media_quality_hint'))
+            }
+            .cardStyle()
+          }
+          .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+        } else if (this.settingsPage === 'appearance') {
+          if (this.materialOptionsSupported()) {
+            ListItem() {
+              Column({ space: 0 }) {
+                this.thicknessRow()
+                this.cardDivider()
+                this.materialRow()
+                this.cardDivider()
+                this.groupHint($r('app.string.settings_material_hint'))
+              }
+              .cardStyle()
+            }
+            .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+          } else {
+            ListItem() {
+              this.groupHint($r('app.string.settings_unsupported_hint'))
+            }
+          }
+        } else if (this.settingsPage === 'proxy') {
+          ListItem() {
+            this.proxySection()
+          }
+          .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+        } else if (this.settingsPage === 'doh') {
+          ListItem() {
+            this.dohSection()
+          }
+          .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+        } else if (this.settingsPage === 'relay') {
+          ListItem() {
+            this.relaySection()
+          }
+          .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+        } else if (this.settingsPage === 'diag') {
+          ListItem() {
+            Column({ space: 0 }) {
+              this.actionRow('复制中转材料（会话 + 推送 token）', (): void => {
+                this.copyRelayMaterial();
+              })
+              this.cardDivider()
+              this.actionRow($r('app.string.settings_export_diag'), (): void => {
+                this.exportDiag();
+              })
+              this.cardDivider()
+              this.actionRow($r('app.string.settings_copy_diag'), (): void => {
+                this.copyDiag();
+              })
+              this.cardDivider()
+              this.actionRow('网络节点体检（出口 IP / 是否机房）', (): void => {
+                this.runNodeCheck();
+              })
+              this.cardDivider()
+              this.actionRow('登录通道自检（连接 / TLS / HTTP）', (): void => {
+                this.runLoginProbe();
+              })
+              this.cardDivider()
+              this.actionRow('复制登录日志', (): void => {
+                this.copyLoginLog();
+              })
+              this.cardDivider()
+              this.actionRow('推送登录日志（MeoW）', (): void => {
+                this.exportLoginLog();
+              })
+              this.cardDivider()
+              this.actionRow('推送 reels 崩溃日志（MeoW）', (): void => {
+                this.pushReelsCrashLog();
+              })
+              this.cardDivider()
+              this.loginLogHintRow()
+              this.cardDivider()
+              this.groupHint($r('app.string.settings_diag_hint'))
+            }
+            .cardStyle()
+          }
+          .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+        } else if (this.settingsPage === 'device') {
+          ListItem() {
+            Column({ space: 0 }) {
+              this.actionRow('清除设备认证（2FA 测试）', (): void => {
+                this.clearDeviceAuth();
+              })
+              this.cardDivider()
+              this.groupHint('把本机的设备身份整份换新（USDID + 8 个 UUID / mid）。'
+                + '清完之后，下一次登录在 Instagram 眼里就是一台新设备。')
+            }
+            .cardStyle()
+          }
+          .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+        }
+
+        ListItem() {
+          Row().width('100%').height(SAFE_BOTTOM_VP)
+        }
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .scrollBar(BarState.Off)
+      .clip(false)
+    }
+  }
+
   build() {
     // 和主页/通知/私信/搜索/我的统一成同一套结构：
     //   顶上垫一层**透明 Stack**（高度 = 标题栏那一段 LIST_TOP_OFFSET）→ 内容整体下移、
@@ -2116,10 +2996,18 @@ export struct SettingsPanel {
     // 页面顶部看着像被裁掉一块（用户报的"设置页面顶部被裁剪"）。通知页也是同一个思路
     // （根容器 background 铺满整页），所以它没有这个问题。
     Column() {
+      // 二级页的标题栏比设置首页多占一段，下推距离要更大才对齐。
       Stack()
         .width('100%')
-        .height(LIST_TOP_OFFSET)
+        .height(this.standaloneDetail ? LIST_TOP_OFFSET + 24 : LIST_TOP_OFFSET)
 
+      if (this.settingsPage === 'root') {
+        this.rootList()
+      } else {
+        this.detailList()
+      }
+
+      // 旧的一页式设置列表已迁移到 rootList / detailList；保留代码但不再参与布局。
       List() {
       // **两组入口按设备能力显示**（需求：不支持时隐藏）：
       //   · 「底栏」那组（原生隐藏动画）依赖 HDS 的 `barFloatingStyle`（6.1.0(23) 起）；
@@ -2143,6 +3031,23 @@ export struct SettingsPanel {
         }
         .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
       }
+
+      /*
+       * 「语言」：当前语言下拉按钮 → 系统半模态（HDS 标题 + 关闭 + 搜索 + 列表）。
+       * 不依赖设备能力，恒定显示。
+       */
+      ListItem() {
+        this.groupHeader($r('app.string.settings_group_language'))
+      }
+      ListItem() {
+        Column({ space: 0 }) {
+          this.languageRow()
+          this.cardDivider()
+          this.groupHint($r('app.string.settings_language_hint'))
+        }
+        .cardStyle()
+      }
+      .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
 
       /*
        * 「图片和视频」：清晰度两行（图片质量 / 视频质量），四档
@@ -2378,6 +3283,8 @@ export struct SettingsPanel {
       // **别裁内容**：列表可视区在顶部那层透明 Stack 下面，关掉裁剪后滚动的行才会画到标题栏
       // 底下去（和 FeedList 同一套结构：透明 Stack 避让 + 内容可穿过标题栏）。
       .clip(false)
+      // 旧列表已迁移，隐藏但保留代码（见 build 里的说明）。
+      .visibility(Visibility.None)
     }
     .width('100%')
     .height('100%')
@@ -2394,6 +3301,8 @@ export struct SettingsPanel {
         [$r('app.color.settings_gradient_bottom'), 1.0]
       ]
     })
+    // 系统半模态 + 显式 keyboardAvoidMode。
+    .bindSheet($$this.languageSheet, this.languageSheetBuilder(), this.languageSheetOptions())
   }
 }
 
