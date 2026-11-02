@@ -8782,6 +8782,8 @@ struct Index {
           mode: SEGMENT_MODE_REELS,
           // 标题栏那一行只有 56vp：胶囊 40vp，上下不留白。
           compact: true,
+          // 胶囊左右只缩 8，视觉右缘更靠右，和静音按钮的间距正好等于两颗菜单按钮的 8vp。
+          sideInset: 8,
           // **沉浸光感照旧**（需求："改回去沉浸光感效果"）：标题栏那一行是 stack 区、
           // 不是 bottomBuilder 那种被算进标题栏的行，实测这层材质在这里是生效的。
           availableWidthVp: REELS_SEGMENT_WIDTH_VP,
@@ -8792,8 +8794,8 @@ struct Index {
       }
       .width(REELS_SEGMENT_WIDTH_VP)
       .height(REELS_SEGMENT_HEIGHT_VP)
-      // 分段按钮放在第一颗 menus 按钮左边。
-      .margin({ right: 8 })
+      // 分段按钮放在第一颗 menus 按钮左边；8vp 间距由胶囊自身的 sideInset 给出。
+      .margin({ right: 0 })
 
       if (this.reelsActionVersion >= 0 && ReelsAction.visibleFor(ReelsAction.HOME)) {
         // 垂直堆放：第一颗和分段按钮同一行，第二颗在下面。
@@ -8820,7 +8822,6 @@ struct Index {
           })
         }
         .width(40)
-        .margin({ top: 8 })
       }
     }
     .width('100%')

@@ -128,6 +128,11 @@ export struct ProfileSegmentBar {
    * 再留白会把胶囊挤出那一条。左右仍然内缩 SEGMENT_SIDE（胶囊要比屏幕窄一点、居中）。
    */
   @Prop compact: boolean = false;
+  /**
+   * 胶囊左右内缩（vp）。默认 16；标题栏里要贴着右侧 menus 时传更小的值，
+   * 让胶囊视觉右缘更靠右、与菜单按钮的间距可调。
+   */
+  @Prop sideInset: number = SEGMENT_SIDE;
   /** 选了某一段（点击或拖动松手）。 */
   onSelect: (index: number) => void = (index: number): void => {
   };
@@ -142,7 +147,7 @@ export struct ProfileSegmentBar {
     if (total <= 0) {
       total = this.availableWidthVp > 0 ? this.availableWidthVp : FALLBACK_WIDTH_VP;
     }
-    const inner: number = total - SEGMENT_SIDE * 2;
+    const inner: number = total - this.sideInset * 2;
     const count: number = this.segmentCount();
     return inner > 0 ? inner / count : FALLBACK_WIDTH_VP / count;
   }
@@ -303,8 +308,8 @@ export struct ProfileSegmentBar {
     .width('100%')
     // 只留按钮自己的内边距：**不铺底色块**（需求："把分段按钮的背景色块去掉"）。
     .padding({
-      left: SEGMENT_SIDE,
-      right: SEGMENT_SIDE,
+      left: this.sideInset,
+      right: this.sideInset,
       top: this.compact ? 0 : 8,
       bottom: this.compact ? 0 : 12
     })
