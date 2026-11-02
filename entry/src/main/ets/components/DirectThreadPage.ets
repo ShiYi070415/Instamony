@@ -233,8 +233,6 @@ export struct DirectThreadPage {
   @State private screenWidthVp: number = FALLBACK_WIDTH_VP;
   /** 右栏内嵌时的实际宽度；0 = 按整屏。 */
   @Prop layoutWidthVp: number = 0;
-  /** 分享卡封面解码后的真实比例（高 / 宽），按消息 id 缓存。 */
-  @State private coverAspectById: Map<string, number> = new Map();
   /** 屏幕高度（vp）——只为诊断日志（对齐输入法坐标系用）。 */
   private windowHeightVp: number = 0;
   /** 屏幕高度（px）：与 `getRectangleById` 的窗口坐标同单位，自校正要用。 */
@@ -789,10 +787,7 @@ export struct DirectThreadPage {
   /** 卡片封面高度：优先用原图比例，宽度变化时按宽 × 比例自适应。 */
   private shareCardHeight(message: DirectMessage): number {
     const width: number = this.shareCardWidth(message);
-    const known: number | undefined = this.coverAspectById.get(message.id);
-    if (known !== undefined && known > 0) {
-      return Math.round(width * known);
-    }
+    // 单页 / 双页统一只用原始尺寸比例，不因图片解码时机不同而改变卡片比例。
     const raw: number = DirectThreadPage.rawAspect(message);
     if (raw > 0) {
       return Math.round(width * raw);
@@ -1559,16 +1554,6 @@ export struct DirectThreadPage {
           // 卡片宽度固定；图片宽 100%，高度由真实比例决定，因此 Cover 正好铺满不裁切。
           .objectFit(ImageFit.Cover)
           .draggable(false)
-          .onComplete((event): void => {
-            if (event !== undefined && event.width > 0 && event.height > 0) {
-              const ratio: number = event.height / event.width;
-              if (Math.abs((this.coverAspectById.get(message.id) ?? 0) - ratio) > 0.001) {
-                const next: Map<string, number> = new Map(this.coverAspectById);
-                next.set(message.id, ratio);
-                this.coverAspectById = next;
-              }
-            }
-          })
           .alt($r('app.media.grid_placeholder'))
       } else {
         SymbolGlyph($r(message.shareKind === 'video' ? 'sys.symbol.play_fill' : 'sys.symbol.photo'))
