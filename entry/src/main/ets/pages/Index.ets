@@ -7144,8 +7144,7 @@ struct Index {
   /** 所有"开新页"统一入口：平板首页走右栏，其余走全局导航栈。 */
   private pushPage(name: string, param: string = ''): void {
     if (this.tabletWideShell()) {
-      this.tabletRightName = name;
-      this.tabletProfileParam = param;
+      const alreadyOpen: boolean = this.tabletRightName.length > 0;
       if (name === USER_PROFILE_PAGE
         && this.tabletProfileStack.getAllPathName().indexOf(USER_PROFILE_PAGE) >= 0) {
         // 用户页只能存在一个：再开别的用户时覆盖上一个，而不是继续压栈。
@@ -7154,6 +7153,19 @@ struct Index {
         this.tabletProfileStack.clear();
       }
       this.tabletProfileStack.pushPath({ name: name, param: param });
+      if (alreadyOpen) {
+        this.tabletRightName = name;
+        this.tabletProfileParam = param;
+      } else {
+        // 单栏 -> 双栏：宽度变化和右栏滑入放在同一条弹簧动画里，避免先卡一下再弹。
+        this.getUIContext().animateTo({
+          duration: 340,
+          curve: curves.springMotion(0.38, 0.9)
+        }, (): void => {
+          this.tabletRightName = name;
+          this.tabletProfileParam = param;
+        });
+      }
       return;
     }
     this.navStack.pushPath({ name: name, param: param });
@@ -7161,9 +7173,21 @@ struct Index {
 
   /** 关闭右栏（HDS 返回键 / 自定义关闭共用）。 */
   private closeTabletRight(): void {
-    this.tabletRightName = '';
-    this.tabletProfileParam = '';
-    this.tabletProfileStack.clear();
+    if (this.tabletRightName.length === 0) {
+      return;
+    }
+    // 双栏 -> 单栏：先让宽度/右栏动画走完，再清空右栏路由，避免中间闪一帧空白。
+    const stack: NavPathStack = this.tabletProfileStack;
+    this.getUIContext().animateTo({
+      duration: 340,
+      curve: curves.springMotion(0.38, 0.9)
+    }, (): void => {
+      this.tabletRightName = '';
+      this.tabletProfileParam = '';
+    });
+    setTimeout((): void => {
+      stack.clear();
+    }, 360);
   }
 
   /** 打开/关闭右侧用户页：信息流平移和用户页挤入共用同一条动画。 */
@@ -7307,7 +7331,7 @@ struct Index {
     .backgroundColor($r('app.color.page_background'))
     .clip(true)
     .transition(TransitionEffect.translate({ x: '100%' })
-      .animation({ duration: 280, curve: Curve.EaseInOut }))
+      .animation({ duration: 340, curve: curves.springMotion(0.38, 0.9) }))
   }
 
   /**
@@ -7381,7 +7405,7 @@ struct Index {
         .clip(true)
         .border({ width: { left: 0.5 }, color: $r('app.color.divider') })
         .transition(TransitionEffect.translate({ x: '100%' })
-          .animation({ duration: 280, curve: Curve.EaseInOut }))
+          .animation({ duration: 340, curve: curves.springMotion(0.38, 0.9) }))
       }
     }
     .width('100%')
@@ -10692,7 +10716,6 @@ struct Index {
       .width(this.tabletHomeScoped() ? this.tabletLeftWidth() : '100%')
       .layoutWeight(this.tabletHomeScoped() ? 0 : 1)
       .height('100%')
-      .animation({ duration: 280, curve: Curve.EaseInOut })
 
       // 右栏在 HDS Navigation 之外：HDS 只覆盖帖子流那一列。
       if (this.tabletHomeScoped()) {
