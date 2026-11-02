@@ -11481,6 +11481,8 @@ struct Index {
     Column() {
       FeedList({
         posts: this.postPagePosts,
+        // 和首页同一套宽屏约束；多图媒体区也据此量实际宽度。
+        maxWidthVp: this.feedMaxWidth(),
         // 帖子页只有在自己是最上面那层时才播（被用户主页压住时要停）。
         active: this.topPage === POST_PAGE,
         // 一进来就定位到点进去的那一条（见 FeedList.restoreAnchor）。
