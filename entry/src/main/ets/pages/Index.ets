@@ -7624,14 +7624,23 @@ struct Index {
         .width(0.5)
         .height('100%')
         .backgroundColor($r('app.color.divider'))
-      // 拖动提示：中间的小白条，拖动时提亮。
-      Column()
-        .width(6)
-        .height(56)
-        .borderRadius(3)
-        .backgroundColor(Color.White)
-        .opacity(this.splitDragging ? 1 : 0.85)
-        .shadow({ radius: 6, color: '#33000000', offsetX: 0, offsetY: 1 })
+      // 底层：沉浸光感胶囊；里层：小白条。
+      Toggle({ type: ToggleType.Button, isOn: false }) {
+        Column()
+          .width(6)
+          .height(48)
+          .borderRadius(3)
+          .backgroundColor(Color.White)
+          .opacity(this.splitDragging ? 1 : 0.9)
+      }
+      .width(22)
+      .height(76)
+      .padding(0)
+      .borderRadius(11)
+      .backgroundColor(Color.Transparent)
+      .selectedColor(Color.Transparent)
+      .attributeModifier(new SurfaceModifier(Index.materialThicknessNow(), true, true))
+      .hitTestBehavior(HitTestMode.None)
     }
     .width(24)
     .height('100%')
