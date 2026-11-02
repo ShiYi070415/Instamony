@@ -7058,13 +7058,17 @@ struct Index {
     }
   }
 
-  /** 宽屏信息流的最大宽度：超过 760vp 时收在 720vp 内并居中。 */
+  /**
+   * 快拍 + 信息流整列按 16:9 收口：宽度取窗口高度 × 16/9，
+   * 再夹进可用宽度；手机竖屏不限制。
+   */
   private feedMaxWidth(): number {
-    const width: number = this.screenWidthVp;
-    if (width < 760) {
+    const width: number = this.shellWidthVp > 0 ? this.shellWidthVp : this.screenWidthVp;
+    const height: number = this.shellHeightVp;
+    if (width < 600 || height <= 0) {
       return 0;
     }
-    return Math.min(width - 48, 720);
+    return Math.min(width - 48, Math.round(height * 16 / 9));
   }
 
   /**
