@@ -1166,6 +1166,8 @@ struct Index {
   private tabRightNames: Array<string> = ['', '', '', '', ''];
   private tabRightParams: Array<string> = ['', '', '', '', ''];
   private tabDirectThreads: Array<string> = ['', '', '', '', ''];
+  /** 切页过程中不要因为 onHidden 自动收起右栏，否则会黑闪/误关会话。 */
+  private tabSwitching: boolean = false;
 
   /**
    * 底栏行为（设定页里的开关，见 AppSettings 的 BAR_HIDE_*）。**只有支持悬浮底栏的设备
@@ -1456,7 +1458,7 @@ struct Index {
     }
     // 右栏栈已经空了：连右栏一起收起，回到居中的首页。
     // 私信会话用的是常驻舞台，切换会话时 onHidden 也会触发，不能把舞台误关掉。
-    if (!this.directStageOpen && this.tabletRightName.length > 0
+    if (!this.tabSwitching && !this.directStageOpen && this.tabletRightName.length > 0
       && this.tabletProfileStack.getAllPathName().length === 0) {
       this.closeTabletRight();
     }
@@ -5432,8 +5434,15 @@ struct Index {
       this.directStageStack.clear();
       this.tabletRightName = name;
       this.tabletProfileParam = this.tabRightParams[index];
-      this.tabletProfileStack.clear();
-      this.tabletProfileStack.pushPath({ name: name, param: this.tabletProfileParam });
+      // 原地替换右栏栈顶：不先 clear 出一帧空白，切页不会黑闪。
+      if (this.tabletProfileStack.getAllPathName().length > 0) {
+        this.tabletProfileStack.replacePath({
+          name: name,
+          param: this.tabletProfileParam
+        }, false);
+      } else {
+        this.tabletProfileStack.pushPath({ name: name, param: this.tabletProfileParam }, false);
+      }
       return;
     }
     // 目标分页没有右侧页面才收起。
@@ -5450,11 +5459,15 @@ struct Index {
     const previous: number = this.tabIndexOf(this.selectedTab);
     const target: number = this.tabIndexOf(tab);
     if (previous !== target) {
+      this.tabSwitching = true;
       this.saveRightForTab(previous);
     }
     this.selectedTab = tab;
     if (previous !== target) {
       this.restoreRightForTab(target);
+      setTimeout((): void => {
+        this.tabSwitching = false;
+      }, 0);
     }
     // 用户动作：后台预热让路（切页后新页面自己要先读，别和它抢网络/线程）。
     this.lastInteractionMs = Date.now();
