@@ -81,7 +81,7 @@ import {
   TAB_TAP_KEYS
 } from '../core/AppSettings';
 // 沉浸光感材质：验证弹窗的外观（见 showChallengeDialog）与首页胶囊共用同一套档位。
-import { immersiveMaterial } from '../components/MaterialSurface';
+import { immersiveMaterial, MaterialIconButton } from '../components/MaterialSurface';
 // 沉浸光感的档位/类型换算（设定页里的字符串 → hdsMaterial 的枚举，含设备能力降级）。
 import { BarChromeModifier, immersiveLevel, immersiveMaterialType, titleScrollEffectType } from '../core/ImmersiveLight';
 import { PlatformCap } from '../core/PlatformCap';
@@ -1805,6 +1805,8 @@ struct Index {
               // 当前账号头像作为菜单按钮，点开仍是原来的账号选单浮层。
               icon: this.accountMenuIcon(),
               label: this.titleAccountName(),
+              // 头像用大图标档，尽量填满 40vp 的菜单按钮。
+              type: IconStyleMode.LARGE,
               action: (): void => {
                 this.openAccountMenu();
               }
@@ -8271,7 +8273,8 @@ struct Index {
       return {
         // 标题由 stackBuilder 里自己画（见 reelsTitleSegment），这里留空。
         title: { mainTitle: '' },
-        menu: this.menus(),
+        // Reels 的静音/下载改到页面右上角、分段按钮下方（见 reelsFloatingMenus）。
+        menu: { value: [] },
         /*
          * ⚠️ **必须包一层箭头函数**，不能直接写 `stackBuilder: this.reelsTitleSegment`。
          *
@@ -8789,8 +8792,8 @@ struct Index {
       }
       .width(REELS_SEGMENT_WIDTH_VP)
       .height(REELS_SEGMENT_HEIGHT_VP)
-      // 和菜单按钮之间留一点缝（菜单是 HDS 画的，位置我们摸不到，只能自己退一点）。
-      .margin({ right: REELS_SEGMENT_MENU_GAP_VP })
+      // menus 已移到页面内、分段按钮下方，这里贴右只剩标题栏自己的边距。
+      .margin({ right: 12 })
     }
     .width('100%')
     .height('100%')
@@ -8888,9 +8891,42 @@ struct Index {
     })
   }
 
+  /** Reels 标题栏分段按钮下方那两颗菜单按钮（静音 / 下载）。 */
+  @Builder
+  reelsFloatingMenus() {
+    if (!this.reelsChromeHidden && this.reelsActionVersion >= 0
+      && ReelsAction.visibleFor(ReelsAction.HOME)) {
+      Column({ space: 10 }) {
+        MaterialIconButton({
+          symbol: this.videoMuted ? $r('sys.symbol.speaker_slash') : $r('sys.symbol.speaker_wave_2'),
+          tint: '#FFFFFF',
+          autoInvert: false,
+          buttonSize: 40,
+          iconSize: 20,
+          onTap: (on: boolean): void => {
+            AppSettings.setVideoMuted(!this.videoMuted);
+          }
+        })
+        MaterialIconButton({
+          symbol: $r('sys.symbol.arrow_down_to_line'),
+          tint: '#FFFFFF',
+          autoInvert: false,
+          buttonSize: 40,
+          iconSize: 20,
+          onTap: (on: boolean): void => {
+            this.downloadReel(ReelsAction.HOME);
+          }
+        })
+      }
+      .margin({ top: 64, right: 12 })
+      .zIndex(20)
+    }
+  }
+
   /** Reels 标签：探索 / 关注两页（见 reelsSegment）。 */
   @Builder
   reelsTab() {
+    Stack({ alignContent: Alignment.TopEnd }) {
     /*
      * **两段用 Tabs + TabContent 承载**（原来是 `if/else + transition`）。
      *
@@ -8997,6 +9033,11 @@ struct Index {
       }
       AppStorage.setOrCreate('reels_active_segment', index);
     })
+    .width('100%')
+    .height('100%')
+
+      this.reelsFloatingMenus()
+    }
     .width('100%')
     .height('100%')
   }
