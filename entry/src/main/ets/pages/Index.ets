@@ -7517,6 +7517,23 @@ struct Index {
         onOpen: (post: ProfilePost): void => {
           this.openLoosePost(post.shortcode, post.isVideo);
         },
+        // 右栏用户页的帖子格子 → feeds 流（不能只接 onOpen 兜底）。
+        onOpenStream: (posts: Array<MediaPost>, index: number,
+                       loadMore: () => Promise<ProfileStreamPage>): void => {
+          this.openPostStream(posts, index, loadMore, false);
+        },
+        // 右栏用户页的视频/Reels 格子 → Reels 流。
+        onOpenReels: (posts: Array<MediaPost>, shortcode: string, hasMore: boolean,
+                      loadMore: () => Promise<ProfileStreamPage>): void => {
+          this.openProfileReels(posts, shortcode, hasMore, loadMore);
+        },
+        onFeedScroll: (deltaY: number, offsetY: number, scrollState: ScrollState): void => {
+          this.onFeedScroll(deltaY, offsetY, scrollState);
+        },
+        onOpenHighlight: (items: Array<ProfileHighlight>, index: number,
+                          rect: StoryHeroRect, rects: Map<string, StoryHeroRect>): void => {
+          this.openProfileHighlight(items, index, rect, rects);
+        },
         onFollowUser: (id: string, username: string, follow: boolean): Promise<boolean> => {
           return this.followUser(id, username, follow);
         },
