@@ -11340,6 +11340,8 @@ struct Index {
       HdsNavDestination() {
         DirectThreadPage({
           vm: this.directThreadVm,
+          layoutWidthVp: this.tabletHomeScoped()
+            ? Math.max(0, this.profileStageWidth() - 12) : 0,
           // 标题栏交给 HDS（头像 + 名字 + 用户名 + 返回键 + 菜单），页面不再自绘
           externalHeader: true,
           onOpenWeb: (): void => {

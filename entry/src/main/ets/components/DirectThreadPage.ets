@@ -231,6 +231,8 @@ export struct DirectThreadPage {
   @State private status: string = '';
   @State private busy: boolean = false;
   @State private screenWidthVp: number = FALLBACK_WIDTH_VP;
+  /** 右栏内嵌时的实际宽度；0 = 按整屏。 */
+  @Prop layoutWidthVp: number = 0;
   /** 屏幕高度（vp）——只为诊断日志（对齐输入法坐标系用）。 */
   private windowHeightVp: number = 0;
   /** 屏幕高度（px）：与 `getRectangleById` 的窗口坐标同单位，自校正要用。 */
@@ -301,6 +303,9 @@ export struct DirectThreadPage {
       this.screenHeightPx = dsp.height;
     } catch (error) {
       this.screenWidthVp = FALLBACK_WIDTH_VP;
+    }
+    if (this.layoutWidthVp > 0) {
+      this.screenWidthVp = this.layoutWidthVp;
     }
     // 输入法高度（见 keyboardVp 的说明）：弹起/收起时把输入条与列表一起抬/放。
     try {
