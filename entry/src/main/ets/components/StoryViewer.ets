@@ -619,19 +619,9 @@ export struct StoryViewer {
   }
 
   private animateFlipIn(): void {
-    // 翻出去已经到 180°（背面）；新数据到了继续同方向转到 360°，
-    // 再把角度归一化回 0，视觉上不会倒着弹回去。
+    // 180° 翻完就停住；新数据到了直接显示下一张的正面，不再做第二次翻页。
     this.pageAlpha = 1;
-    this.applyFlip(this.flipDir * 180);
-    animateTo({
-      duration: FLIP_IN_MS,
-      curve: curves.springMotion(0.45, 0.82)
-    }, (): void => {
-      this.applyFlip(this.flipDir * 360);
-    });
-    setTimeout((): void => {
-      this.applyFlip(0);
-    }, FLIP_IN_MS + 20);
+    this.applyFlip(0);
   }
 
   // ---------------------------------------------------------------- 翻卡片
@@ -646,11 +636,7 @@ export struct StoryViewer {
     this.flipAngle = angle;
   }
 
-  /** 转到背面时隐藏卡片，避免等待数据期间看到镜像内容。 */
-  private flipVisibleOpacity(): number {
-    const normalized: number = ((this.flipAngle % 360) + 360) % 360;
-    return normalized > 90 && normalized < 270 ? 0 : 1;
-  }
+
 
   // ---------------------------------------------------------------- 左右滑：跟手翻页
 
@@ -1943,7 +1929,7 @@ export struct StoryViewer {
         x: this.open ? this.cardX() : this.startX() + (this.startW() - this.cardClosedW()) / 2,
         y: this.open ? this.cardY() : this.startY() + (this.startW() - this.cardClosedW()) / 2
       })
-      .opacity(this.pageAlpha * this.flipVisibleOpacity())
+      .opacity(this.pageAlpha)
       /*
        * 半径：收起时是正圆（`cardClosedW()/2`），展开后是卡片圆角。
        * "圆形蒙版弹出卡片 / 收回圆形蒙版"就是靠**几何**做出来的（不靠透明度变化）。
