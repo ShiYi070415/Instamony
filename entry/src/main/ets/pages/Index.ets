@@ -8114,13 +8114,15 @@ struct Index {
    * 降级档下这个值用不上（`barFloatingStyle` 整个不生效），算出来是 0 也无人问津。
    */
   private barSideMargin(): number {
-    const screenVp: number = this.screenWidthVp;
+    const screenVp: number = this.shellWidthVp > 0 ? this.shellWidthVp : this.screenWidthVp;
     if (screenVp <= 0) {
       return 16;
     }
+    // 底栏占当前窗口宽度的 90%，居中；下沉收缩时在此基础上再收窄。
+    const base: number = screenVp * 0.9;
     const target: number = this.barHideMode === BAR_HIDE_SYSTEM
-      ? BAR_WIDTH + BAR_POCKET_GROW_W * this.storyPocket
-      : BAR_WIDTH - BAR_SINK_WIDTH * this.barSink + BAR_POCKET_GROW_W * this.storyPocket;
+      ? base + BAR_POCKET_GROW_W * this.storyPocket
+      : base - BAR_SINK_WIDTH * this.barSink + BAR_POCKET_GROW_W * this.storyPocket;
     return Math.max(8, (screenVp - target) / 2);
   }
 
