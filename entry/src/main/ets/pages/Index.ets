@@ -11766,6 +11766,7 @@ struct Index {
        *   - 承载 = **HdsNavDestination**（原生返回键在左上角、标题在 titleBar 里）；
        *   - 底部 = **CommentInputBar**（沉浸光感的评论输入框，压在视频上）。
        */
+      WithTheme({ colorMode: ThemeColorMode.DARK }) {
       HdsNavDestination() {
         this.reelsBody(this.profileReelsVm, ReelsAction.PROFILE)
       }
@@ -11775,7 +11776,7 @@ struct Index {
           // 需求："除了底栏 reels，其他 reels 页面右上角没有静音和下载按钮，添加一下"。
           menu: this.reelsMenu(ReelsAction.PROFILE)
         },
-        style: this.reelsDestinationTitleStyle(),
+        style: this.destinationTitleStyle(),
         avoidLayoutSafeArea: false,
         enableComponentSafeArea: false
       })
@@ -11803,6 +11804,7 @@ struct Index {
       })
       // 返回键：**评论浮层开着就先收评论**（需求："返回优先收起面板"），不再 pop 页面。
       .onBackPressed((): boolean => this.handleDestinationBack())
+      }
     } else if (name === SEARCH_REELS_PAGE) {
       /*
        * **搜索页推荐流的 Reels 页**（需求："把搜索页推荐流实现点击帖子进入带返回的 reels 页面，
@@ -11812,6 +11814,7 @@ struct Index {
        * 标题「Reels」、内容 ReelsPage、底部 CommentInputBar 评论输入框。
        * 差别只有数据来源与顺序（点的那条排第一，见 openSearchReels）。
        */
+      WithTheme({ colorMode: ThemeColorMode.DARK }) {
       HdsNavDestination() {
         this.reelsBody(this.searchReelsVm, ReelsAction.SEARCH)
       }
@@ -11821,7 +11824,7 @@ struct Index {
           // 同视频分页那一页：右上角补上静音 / 下载（需求）。
           menu: this.reelsMenu(ReelsAction.SEARCH)
         },
-        style: this.reelsDestinationTitleStyle(),
+        style: this.destinationTitleStyle(),
         avoidLayoutSafeArea: false,
         enableComponentSafeArea: false
       })
@@ -11842,6 +11845,7 @@ struct Index {
       })
       // 返回键：**评论浮层开着就先收评论**（需求："返回优先收起面板"），不再 pop 页面。
       .onBackPressed((): boolean => this.handleDestinationBack())
+      }
     } else if (name === DIRECT_THREAD_PAGE) {
       /*
        * **私信会话页**（点收件箱里的一行进来）。
