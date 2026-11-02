@@ -1149,6 +1149,8 @@ struct Index {
   @State private shellHeightVp: number = 0;
   /** 首页右侧挤入的用户主页（`用户名|id`，空 = 收起）。 */
   @State private tabletProfileParam: string = '';
+  /** 右栏当前路由名（空 = 收起；所有新页面都走这里）。 */
+  @State private tabletRightName: string = '';
   /** 右栏自己的 HDS 导航栈（和主内容完全隔离）。 */
   private tabletProfileStack: NavPathStack = new NavPathStack();
 
@@ -1434,6 +1436,10 @@ struct Index {
       if (this.reelsChromeHidden) {
         AppStorage.setOrCreate(REELS_CHROME_HIDDEN, false);
       }
+    }
+    // 右栏栈已经空了：连右栏一起收起，回到居中的首页。
+    if (this.tabletRightName.length > 0 && this.tabletProfileStack.getAllPathName().length === 0) {
+      this.closeTabletRight();
     }
   }
 
@@ -4429,7 +4435,7 @@ struct Index {
      * 面板本来就关着时同理 —— 两条路都是"推页面"。
      */
     this.suspendCommentsForProfile((): void => {
-      this.navStack.pushPath({ name: USER_PROFILE_PAGE, param: `${name}|${userId}` });
+      this.pushPage(USER_PROFILE_PAGE, `${name}|${userId}`);
     });
   }
 
@@ -4531,7 +4537,7 @@ struct Index {
     hilog.info(DOMAIN, TAG,
       'post page open n=%{public}d multi=%{public}d videos=%{public}d/%{public}d liked=%{public}d reposted=%{public}d anchor=%{public}s',
       posts.length, multi, withUrl, videos, likedKnown, repostedKnown, key);
-    this.navStack.pushPath({ name: POST_PAGE });
+    this.pushPage(POST_PAGE);
     // 这一页**不是**只有进页时那几条：先自己补一轮（见 fillPostPage）。
     // 用户报的"要在分页加载帖子后帖子页面才会显示"就是"网格翻到哪儿、帖子页才有多少"，
     // 现在数据源在视图模型里，帖子页可以自己往下要（触底也会继续要）。
@@ -4746,7 +4752,7 @@ struct Index {
     }
     hilog.info(DOMAIN, TAG, 'profile reels open n=%{public}d anchor=%{public}s more=%{public}s',
       vm.list().length, shortcode, `${hasMore}`);
-    this.navStack.pushPath({ name: PROFILE_REELS_PAGE });
+    this.pushPage(PROFILE_REELS_PAGE);
   }
 
   /**
@@ -4879,7 +4885,7 @@ struct Index {
       this.refreshNotifications();
       return;
     }
-    this.navStack.pushPath({ name: NOTIFICATIONS_PAGE });
+    this.pushPage(NOTIFICATIONS_PAGE);
     await this.loadNotifications();
   }
 
@@ -7128,29 +7134,48 @@ struct Index {
     return Math.max(0, this.contentAreaWidth() - this.feedMaxWidth());
   }
 
+  /** 所有"开新页"统一入口：平板首页走右栏，其余走全局导航栈。 */
+  private pushPage(name: string, param: string = ''): void {
+    if (this.tabletWideShell() && this.selectedIndex === 0) {
+      this.tabletRightName = name;
+      this.tabletProfileParam = param;
+      this.tabletProfileStack.clear();
+      this.tabletProfileStack.pushPath({ name: name, param: param });
+      return;
+    }
+    this.navStack.pushPath({ name: name, param: param });
+  }
+
+  /** 关闭右栏（HDS 返回键 / 自定义关闭共用）。 */
+  private closeTabletRight(): void {
+    this.tabletRightName = '';
+    this.tabletProfileParam = '';
+    this.tabletProfileStack.clear();
+  }
+
   /** 打开/关闭右侧用户页：信息流平移和用户页挤入共用同一条动画。 */
   private setTabletProfile(param: string): void {
-    if (param.length > 0) {
-      // 右栏有自己的 NavPathStack：先放好目标页，再让右栏出现。
-      this.tabletProfileStack.clear();
-      this.tabletProfileStack.pushPath({ name: 'tabletProfile', param: param });
-    } else {
-      this.tabletProfileStack.clear();
+    if (param.length === 0) {
+      this.closeTabletRight();
+      return;
     }
-    this.getUIContext().animateTo({ duration: 280, curve: Curve.EaseInOut }, (): void => {
-      this.tabletProfileParam = param;
-    });
+    this.pushPage(USER_PROFILE_PAGE, param);
   }
 
   /** 宽屏首页且右栏打开：此时 HDS Navigation 只包住帖子流这一列。 */
   private tabletHomeScoped(): boolean {
     return this.tabletWideShell() && this.selectedIndex === 0
-      && this.tabletProfileParam.length > 0;
+      && this.tabletRightName.length > 0;
   }
 
   @Builder
   tabletProfileDestinationBuilder(name: string, param: Object) {
-    this.tabletProfileDestination(name, param)
+    if (name === USER_PROFILE_PAGE) {
+      this.tabletProfileDestination(name, param)
+    } else {
+      // 其他新页面复用全局 destinationBuilder：帖子页 / 通知 / 设置 / 赞助等。
+      this.destinationBuilder(name, param)
+    }
   }
 
   /** 右栏自己的 HdsNavDestination：标题显示用户名，返回键由 HDS 提供。 */
@@ -8913,7 +8938,7 @@ struct Index {
    */
   private addAccount(): void {
     hilog.info(DOMAIN, TAG, 'add account → push login page');
-    this.navStack.pushPath({ name: ADD_ACCOUNT_PAGE });
+    this.pushPage(ADD_ACCOUNT_PAGE);
   }
 
 
@@ -9457,7 +9482,7 @@ struct Index {
     if (names.length > 0 && names[names.length - 1] === PROFILE_REELS_PAGE) {
       return;
     }
-    this.navStack.pushPath({ name: PROFILE_REELS_PAGE });
+    this.pushPage(PROFILE_REELS_PAGE);
   }
 
   private openDirectThread(thread: DirectThread): void {
@@ -9510,7 +9535,7 @@ struct Index {
     }).catch((error: Error): void => {
       hilog.warn(DOMAIN, TAG, 'thread preload failed: %{public}s', error.message);
     });
-    this.navStack.pushPath({ name: DIRECT_THREAD_PAGE, param: thread.id });
+    this.pushPage(DIRECT_THREAD_PAGE, thread.id);
   }
 
   // ---------------------------------------------------------------- 限时快拍（主页托盘）
@@ -10339,7 +10364,7 @@ struct Index {
 
   /** 打开设定页（NavDestination，见 destinationBuilder）。 */
   private openSettings(): void {
-    this.navStack.pushPath({ name: SETTINGS_PAGE });
+    this.pushPage(SETTINGS_PAGE);
   }
 
   /**
@@ -10831,10 +10856,10 @@ struct Index {
           },
           // 设置首页点一项：新开一个 NavDestination（返回键回设置首页）。
           onOpenSection: (section: string): void => {
-            this.navStack.pushPath({ name: SETTINGS_DETAIL_PAGE, param: section });
+            this.pushPage(SETTINGS_DETAIL_PAGE, section);
           },
           onOpenSponsor: (): void => {
-            this.navStack.pushPath({ name: SPONSOR_PAGE });
+            this.pushPage(SPONSOR_PAGE);
           }
         })
       }
@@ -10876,7 +10901,7 @@ struct Index {
             });
           },
           onOpenSponsor: (): void => {
-            this.navStack.pushPath({ name: SPONSOR_PAGE });
+            this.pushPage(SPONSOR_PAGE);
           }
         })
       }
@@ -10979,6 +11004,8 @@ struct Index {
       HdsNavDestination() {
         UserProfileRoute({
           param: `${param}`,
+          layoutWidthVp: this.tabletHomeScoped()
+            ? Math.max(0, this.profileStageWidth() - 12) : 0,
           onOpen: (post: ProfilePost): void => {
             // 点格子打开帖子页：**原生帖子页**（隐藏 WebView 只留给账号安全验证）。
             this.openLoosePost(post.shortcode, post.isVideo);
@@ -11488,7 +11515,7 @@ struct Index {
     if (names.length > 0 && names[names.length - 1] === SEARCH_REELS_PAGE) {
       return;
     }
-    this.navStack.pushPath({ name: SEARCH_REELS_PAGE });
+    this.pushPage(SEARCH_REELS_PAGE);
   }
 
   /**
@@ -11749,8 +11776,9 @@ struct Index {
     Column() {
       FeedList({
         posts: this.postPagePosts,
-        // 和首页同一套宽屏约束；多图媒体区也据此量实际宽度。
-        maxWidthVp: this.feedMaxWidth(),
+        // 右栏里按右栏宽度排版；普通整页仍用首页同一套约束。
+        maxWidthVp: this.tabletHomeScoped()
+          ? Math.max(0, this.profileStageWidth() - 12) : this.feedMaxWidth(),
         // 帖子页只有在自己是最上面那层时才播（被用户主页压住时要停）。
         active: this.topPage === POST_PAGE,
         // 一进来就定位到点进去的那一条（见 FeedList.restoreAnchor）。
