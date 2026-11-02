@@ -1158,6 +1158,8 @@ struct Index {
   private tabletProfileStack: NavPathStack = new NavPathStack();
   /** 私信会话常驻详情舞台：宽度变化时只改布局，不重建 DirectThreadPage。 */
   @State private directStageOpen: boolean = false;
+  /** 会话舞台是否可见（打开 Reels 等整页时暂时隐藏，返回后恢复）。 */
+  @State private directStageVisible: boolean = true;
   @State private directStageThread: string = '';
   private directStageStack: NavPathStack = new NavPathStack();
 
@@ -1443,6 +1445,10 @@ struct Index {
       if (this.reelsChromeHidden) {
         AppStorage.setOrCreate(REELS_CHROME_HIDDEN, false);
       }
+    }
+    // 从会话里打开的 Reels 页关闭：恢复会话舞台，而不是关闭会话。
+    if (name === PROFILE_REELS_PAGE && this.directStageOpen) {
+      this.directStageVisible = true;
     }
     // 右栏栈已经空了：连右栏一起收起，回到居中的首页。
     // 私信会话用的是常驻舞台，切换会话时 onHidden 也会触发，不能把舞台误关掉。
@@ -7165,6 +7171,12 @@ struct Index {
 
   /** 所有"开新页"统一入口：平板首页走右栏，其余走全局导航栈。 */
   private pushPage(name: string, param: string = ''): void {
+    if (this.directStageOpen && name === PROFILE_REELS_PAGE) {
+      // 会话里点分享卡进 Reels：隐藏舞台但不关闭会话，返回时恢复。
+      this.directStageVisible = false;
+      this.navStack.pushPath({ name: name, param: param });
+      return;
+    }
     if (this.directStageOpen) {
       // 会话是常驻舞台：从会话里再开别的页面时先收起它，避免两个详情层叠着。
       this.closeDirectStage();
@@ -7266,7 +7278,7 @@ struct Index {
 
   private tabletHomeScoped(): boolean {
     return this.tabletWideShell() && this.tabletSplitEnabled()
-      && this.tabletRightName.length > 0;
+      && this.directStageVisible && this.tabletRightName.length > 0;
   }
 
   /** 分栏左栏用固定断点宽度（vp），不按百分比。 */
@@ -7391,6 +7403,7 @@ struct Index {
   private openDirectStage(threadId: string): void {
     this.directStageThread = threadId;
     this.directStageOpen = true;
+    this.directStageVisible = true;
     this.tabletRightName = DIRECT_THREAD_PAGE;
     this.tabletProfileParam = threadId;
     this.directStageStack.clear();
@@ -7402,6 +7415,7 @@ struct Index {
       return;
     }
     this.directStageOpen = false;
+    this.directStageVisible = false;
     this.directStageThread = '';
     this.tabletRightName = '';
     this.tabletProfileParam = '';
@@ -7431,6 +7445,7 @@ struct Index {
     .position({ x: this.directStageX(), y: 0 })
     .zIndex(30)
     .clip(true)
+    .visibility(this.directStageVisible ? Visibility.Visible : Visibility.Hidden)
     .backgroundColor($r('app.color.page_background'))
   }
 
@@ -10852,6 +10867,11 @@ struct Index {
       .width(this.tabletHomeScoped() ? this.tabletLeftWidth() : '100%')
       .layoutWeight(this.tabletHomeScoped() ? 0 : 1)
       .height('100%')
+      // 双栏中间的分界线：画在左栏右边缘，不额外占宽度。
+      .border({
+        width: { right: this.tabletHomeScoped() ? 0.5 : 0 },
+        color: $r('app.color.divider')
+      })
 
       // 右栏在 HDS Navigation 之外：HDS 只覆盖帖子流那一列。
       if (this.tabletHomeScoped() && !this.directStageOpen) {
