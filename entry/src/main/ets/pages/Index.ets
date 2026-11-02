@@ -10581,7 +10581,10 @@ struct Index {
    */
   /** 宽屏壳：HDS Navigation 在侧边栏之外，底栏不再显示。 */
   private tabletWideShell(): boolean {
-    return this.screenWidthVp >= 600;
+    // 必须用“当前窗口宽度”，不能用整块屏幕的显示宽度：
+    // 桌面/小窗模式下把窗口拖窄后，屏幕宽度不变，侧边栏会一直留着。
+    const width: number = this.shellWidthVp > 0 ? this.shellWidthVp : this.screenWidthVp;
+    return width >= 600;
   }
 
   /** 侧栏控件随窗口宽度等比缩放：约为窗宽的 6%，上限锁死正常按钮的 56vp。 */
