@@ -1598,6 +1598,11 @@ struct Index {
   private reelsKbHandler: ((height: number) => void) | null = null;
 
   /** 信息层底部留白：有输入条时贴它上沿 +10vp；评论面板打开时（页面输入条隐藏）回默认。 */
+  /** Reels 全屏铺到侧边栏下面：侧边栏改为浮层，不占内容宽度。 */
+  private reelsFullBleed(): boolean {
+    return this.tabletWideShell() && this.reelsBackdropActive() && !this.tabletHomeScoped();
+  }
+
   /** Reels 类页面用黑色底：侧边栏也跟着铺黑，避免背景断层。 */
   private reelsBackdropActive(): boolean {
     return this.currentTab() === AppTab.Reels
@@ -7226,7 +7231,10 @@ struct Index {
   /** 侧边栏之外的可用宽度。 */
   private contentAreaWidth(): number {
     const total: number = this.shellWidthVp > 0 ? this.shellWidthVp : this.screenWidthVp;
-    return Math.max(0, total - (this.tabletWideShell() ? this.tabletSidebarWidth() : 0));
+    // Reels 全屏时侧边栏浮在内容之上，内容宽度按整窗算，背景才能铺到侧边栏。
+    const sidebar: number = this.tabletWideShell() && !this.reelsFullBleed()
+      ? this.tabletSidebarWidth() : 0;
+    return Math.max(0, total - sidebar);
   }
 
   /** 用户页挤入时，信息流从居中位置向左平移到贴侧边栏的距离。 */
@@ -7526,6 +7534,7 @@ struct Index {
     .position({ x: this.directStageX(), y: 0 })
     .zIndex(30)
     .clip(true)
+    .border({ width: { left: 0.5 }, color: $r('app.color.divider') })
     .visibility(this.directStageVisible ? Visibility.Visible : Visibility.Hidden)
     .backgroundColor($r('app.color.page_background'))
   }
@@ -7555,6 +7564,7 @@ struct Index {
     .height('100%')
     .padding({ right: 12 })
     .backgroundColor($r('app.color.page_background'))
+    .border({ width: { left: 0.5 }, color: $r('app.color.divider') })
     .clip(true)
     .transition(TransitionEffect.translate({ x: '100%' })
       .animation({ duration: 340, curve: curves.springMotion(0.38, 0.9) }))
@@ -10893,7 +10903,7 @@ struct Index {
   @Builder
   nativeShell() {
     Row() {
-      if (this.tabletWideShell()) {
+      if (this.tabletWideShell() && !this.reelsFullBleed()) {
         this.tabletSidebar()
       }
       Column() {
@@ -10949,11 +10959,6 @@ struct Index {
       .width(this.tabletHomeScoped() ? this.tabletLeftWidth() : '100%')
       .layoutWeight(this.tabletHomeScoped() ? 0 : 1)
       .height('100%')
-      // 双栏中间的分界线：画在左栏右边缘，不额外占宽度。
-      .border({
-        width: { right: this.tabletHomeScoped() ? 0.5 : 0 },
-        color: $r('app.color.divider')
-      })
 
       // 右栏在 HDS Navigation 之外：HDS 只覆盖帖子流那一列。
       if (this.tabletHomeScoped() && !this.directStageOpen) {
@@ -10962,6 +10967,16 @@ struct Index {
       // 私信会话常驻舞台：小窗铺满，双栏时只改位置/宽度，页面实例不重建。
       if (this.directStageOpen) {
         this.directThreadStage()
+      }
+      if (this.reelsFullBleed()) {
+        // Reels 背景已经铺满整窗；侧边栏作为透明浮层盖在上面。
+        Stack() {
+          this.tabletSidebar()
+        }
+        .width(this.tabletSidebarWidth())
+        .height('100%')
+        .position({ x: 0, y: 0 })
+        .zIndex(40)
       }
     }
     .width('100%')
