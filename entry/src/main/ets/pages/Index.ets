@@ -7091,15 +7091,13 @@ struct Index {
       }
     }
     // 侧栏占掉后，平板窗口的内容区可能只有 570vp 左右；不能用 600 当门槛。
-    if (width < 480) {
+    if (width < 540) {
       return 0;
     }
-    const minFeed: number = Math.round(width * 0.45);
-    if (height <= 0) {
-      // 最末兜底：即使高度一直量不到，也保证用户页只占右侧一部分。
-      return Math.max(minFeed, Math.round(width * 9 / 16));
-    }
-    return Math.max(minFeed, Math.min(width - 32, Math.round(height * 9 / 16)));
+    // 右栏至少要留 360vp 给 HDS Navigation；内容不够时优先保证右栏，帖子流相应收窄。
+    const maxFeed: number = width - 360;
+    const target: number = height > 0 ? Math.round(height * 9 / 16) : Math.round(width * 9 / 16);
+    return Math.max(180, Math.min(maxFeed, width - 32, target));
   }
 
   /** 侧边栏实际宽度（和 tabletSidebar 的 .width 同源）。 */
@@ -7161,7 +7159,8 @@ struct Index {
       UserProfileRoute({
         param: `${param}`,
         layoutWidthVp: this.profileStageWidth(),
-        embedded: true,
+        // 右栏本身也是 HDS 导航：资料区要避让它的标题栏，不能用 0。
+        embedded: false,
         onOpen: (post: ProfilePost): void => {
           this.openLoosePost(post.shortcode, post.isVideo);
         },
