@@ -219,6 +219,10 @@ class ProfileRowSource implements IDataSource {
     }
     this.columns = columns;
     this.apply(this.posts);
+    // 列数变化会改变每行包含的帖子数；只发 onDataAdd 会让旧行继续保留旧的
+    // 宽行内容（3 列切 4/5 列时飞出屏幕）。这里强制整份重载，让 LazyForEach
+    // 按新列数重建所有行。
+    this.notifyReload();
   }
 
   registerDataChangeListener(listener: DataChangeListener): void {
