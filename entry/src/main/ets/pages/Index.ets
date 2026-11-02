@@ -1594,7 +1594,23 @@ struct Index {
   private reelsKbHandler: ((height: number) => void) | null = null;
 
   /** 信息层底部留白：有输入条时贴它上沿 +10vp；评论面板打开时（页面输入条隐藏）回默认。 */
+  /** Reels 类页面用黑色底：侧边栏也跟着铺黑，避免背景断层。 */
+  private reelsBackdropActive(): boolean {
+    return this.currentTab() === AppTab.Reels
+      || this.topPage === PROFILE_REELS_PAGE
+      || this.topPage === SEARCH_REELS_PAGE;
+  }
+
   private reelsInfoBottom(): number {
+    /*
+     * **有底部悬浮页签栏时才需要 82 的避让**。
+     *
+     * 平板侧边栏布局没有底部 tab bar；Reels 页把全局控件藏起来时也没有。
+     * 这两种情况下作者行 / 正文 / 动作区直接贴底，不再留 82。
+     */
+    if (this.tabletWideShell() || this.reelsChromeHidesShell()) {
+      return 0;
+    }
     /*
      * **恒 82，不随键盘 / 面板变化**。
      *
@@ -10804,7 +10820,8 @@ struct Index {
     .width(this.tabletSidebarWidth())
     .height('100%')
     .padding({ top: 4 })
-    .backgroundColor($r('app.color.page_background'))
+    // Reels 页是黑色背景：侧边栏也铺同一块黑，避免中间露出页面底色。
+    .backgroundColor(this.reelsBackdropActive() ? Color.Black : $r('app.color.page_background'))
     .border({ width: { right: 0.5 }, color: $r('app.color.divider') })
   }
 
