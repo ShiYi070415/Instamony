@@ -1,0 +1,1248 @@
+{
+  "string": [
+    {
+      "name": "app_name",
+      "value": "Instamony"
+    },
+    {
+      "name": "common_cancel",
+      "value": "Hủy"
+    },
+    {
+      "name": "app_title",
+      "value": "Instamony"
+    },
+    {
+      "name": "module_desc",
+      "value": "Mô-đun chính của Instamony"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Mô-đun chính của Instamony"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Instamony"
+    },
+    {
+      "name": "login_title",
+      "value": "Instamony"
+    },
+    {
+      "name": "login_recheck",
+      "value": "Tôi đã đăng nhập — kiểm tra lại"
+    },
+    {
+      "name": "login_recheck_short",
+      "value": "Kiểm tra lại"
+    },
+    {
+      "name": "login_register",
+      "value": "Tạo tài khoản mới"
+    },
+    {
+      "name": "login_register_hint",
+      "value": "Bạn sẽ đăng ký trên trang web chính thức của Instagram. Quay lại trang này và đăng nhập bằng tài khoản mới."
+    },
+    {
+      "name": "feed_recommended_title",
+      "value": "Gợi ý cho bạn"
+    },
+    {
+      "name": "feed_recommended_hint",
+      "value": "Bạn đã xem hết bài mới từ những người mình theo dõi. Dưới đây là những nội dung được gợi ý cho bạn."
+    },
+    {
+      "name": "challenge_title",
+      "value": "Tài khoản cần xác minh"
+    },
+    {
+      "name": "challenge_hint",
+      "value": "Instagram yêu cầu xác minh người dùng hoặc thiết bị. Hãy hoàn tất trên trang web rồi quay lại ứng dụng."
+    },
+    {
+      "name": "challenge_action",
+      "value": "Xác minh"
+    },
+    {
+      "name": "challenge_action_verify",
+      "value": "Đi tới xác minh"
+    },
+    {
+      "name": "login_page_action",
+      "value": "Đăng nhập"
+    },
+    {
+      "name": "login_web_action",
+      "value": "Đăng nhập bằng trang web Instagram"
+    },
+    {
+      "name": "login_web_hint",
+      "value": "Đăng nhập trên web có thể vượt qua bước kiểm tra người dùng hoặc checkpoint của Instagram. Sau khi thành công, ứng dụng sẽ tự vào."
+    },
+    {
+      "name": "login_label_username",
+      "value": "Tên người dùng"
+    },
+    {
+      "name": "login_label_password",
+      "value": "Mật khẩu"
+    },
+    {
+      "name": "login_label_code",
+      "value": "Mã"
+    },
+    {
+      "name": "login_label_challenge_code",
+      "value": "Mã bảo mật"
+    },
+    {
+      "name": "login_web_short",
+      "value": "Đăng nhập web"
+    },
+    {
+      "name": "login_verify_title",
+      "value": "Xác minh hai bước"
+    },
+    {
+      "name": "login_verify_hint",
+      "value": "Tài khoản này bật xác minh bổ sung. Hãy nhập mã 6 chữ số Instagram gửi cho bạn (SMS, ứng dụng xác thực hoặc mã dự phòng)."
+    },
+    {
+      "name": "login_verify_approval_hint",
+      "value": "Nếu Instagram yêu cầu bạn phê duyệt đăng nhập trên thiết bị khác, hãy đồng ý ở đó rồi quay lại: ứng dụng sẽ tự thử lại, không cần nhập mã."
+    },
+    {
+      "name": "login_verify_action",
+      "value": "Xác minh và đăng nhập"
+    },
+    {
+      "name": "login_verify_cancel",
+      "value": "Hủy"
+    },
+    {
+      "name": "login_verify_web_title",
+      "value": "Cần xác minh bổ sung"
+    },
+    {
+      "name": "login_verify_web_hint",
+      "value": "Tài khoản này cần hoàn tất quy trình xác minh riêng của Instagram (khôi phục tài khoản hoặc kiểm tra bảo mật); ô nhập mã ở đây không dùng được. Nhấn nút bên dưới để hoàn tất trên web, sau đó ứng dụng vẫn giữ đăng nhập."
+    },
+    {
+      "name": "login_verify_web_action",
+      "value": "Xác minh trên web"
+    },
+    {
+      "name": "login_saved_accounts",
+      "value": "Tài khoản đã lưu (nhấn để chuyển)"
+    },
+    {
+      "name": "login_label_session",
+      "value": "sessionid"
+    },
+    {
+      "name": "login_session_hint",
+      "value": "Chuỗi bắt đầu bằng ID số của tài khoản (trong cookie trình duyệt gọi là sessionid)"
+    },
+    {
+      "name": "login_use_session",
+      "value": "Đăng nhập bằng sessionid"
+    },
+    {
+      "name": "login_use_session_action",
+      "value": "Đăng nhập bằng sessionid"
+    },
+    {
+      "name": "login_use_password",
+      "value": "Dùng tên người dùng và mật khẩu"
+    },
+    {
+      "name": "login_password_note",
+      "value": "Mặc định ứng dụng dùng giao thức đăng nhập riêng, không mở trang web. Nếu không vượt qua bước kiểm tra người dùng, hãy dùng «Đăng nhập web» ở trên; tài khoản bật xác minh hai bước sẽ hiện bảng nhập mã."
+    },
+    {
+      "name": "login_username_hint",
+      "value": "Tên người dùng Instagram"
+    },
+    {
+      "name": "login_password_hint",
+      "value": "Mật khẩu"
+    },
+    {
+      "name": "login_code_hint",
+      "value": "Mã xác minh hai bước"
+    },
+    {
+      "name": "login_challenge_code_hint",
+      "value": "Mã bảo mật"
+    },
+    {
+      "name": "login_submit_code",
+      "value": "Gửi mã"
+    },
+    {
+      "name": "login_web_fallback",
+      "value": "Đăng nhập trên web Instagram"
+    },
+    {
+      "name": "login_challenge_hint",
+      "value": "Instagram yêu cầu kiểm tra bảo mật cho tài khoản này. Hãy hoàn tất trong ứng dụng hoặc trang web chính thức của Instagram rồi quay lại đăng nhập."
+    },
+    {
+      "name": "login_upgrade_hint",
+      "value": "Instagram chỉ cho phép ứng dụng chính thức mới nhất đăng nhập bằng mật khẩu; ứng dụng bên thứ ba sẽ bị từ chối, bất kể thông tin đăng nhập. Nhấn nút ở trên để dùng đăng nhập web; sau đó ứng dụng hoạt động như bình thường."
+    },
+    {
+      "name": "login_challenge_web",
+      "value": "Xác minh trên web"
+    },
+    {
+      "name": "login_page_hint_account",
+      "value": "Tên người dùng và mật khẩu chỉ được nhập trên trang chính thức của Instagram; ứng dụng này không lưu hay đọc chúng."
+    },
+    {
+      "name": "login_page_hint_features",
+      "value": "Sau khi đăng nhập, bạn có thể xem bảng tin, tin và tin nhắn; dữ liệu được tải theo luồng bình thường."
+    },
+    {
+      "name": "login_page_hint_stuck",
+      "value": "Nếu bạn đã đăng nhập trên web nhưng trang này vẫn đứng yên, hãy nhấn «Tôi đã đăng nhập — kiểm tra lại» bên dưới."
+    },
+    {
+      "name": "sign_out",
+      "value": "Đăng xuất"
+    },
+    {
+      "name": "tab_home",
+      "value": "Trang chủ"
+    },
+    {
+      "name": "tab_reels",
+      "value": "Reels"
+    },
+    {
+      "name": "tab_direct",
+      "value": "Tin nhắn"
+    },
+    {
+      "name": "tab_search",
+      "value": "Tìm kiếm"
+    },
+    {
+      "name": "tab_profile",
+      "value": "Trang cá nhân"
+    },
+    {
+      "name": "tab_placeholder_hint",
+      "value": "Trang này chưa được kết nối"
+    },
+    {
+      "name": "status_ready",
+      "value": "Sẵn sàng"
+    },
+    {
+      "name": "status_failed",
+      "value": "Tải thất bại"
+    },
+    {
+      "name": "status_unparsable",
+      "value": "Không đọc được nội dung"
+    },
+    {
+      "name": "status_sign_in_required",
+      "value": "Cần đăng nhập trước"
+    },
+    {
+      "name": "status_session_expired",
+      "value": "Phiên đăng nhập đã hết hạn: hãy đăng xuất trong Cài đặt rồi đăng nhập lại."
+    },
+    {
+      "name": "status_page_not_ready",
+      "value": "Trang chưa sẵn sàng"
+    },
+    {
+      "name": "web_close",
+      "value": "Đóng trang web"
+    },
+    {
+      "name": "video_play_failed",
+      "value": "Phát video thất bại."
+    },
+    {
+      "name": "repost_unsupported",
+      "value": "Nội dung này không hỗ trợ đăng lại (Instagram chưa mở cho tài khoản)."
+    },
+    {
+      "name": "repost_done",
+      "value": "Đã đăng lại."
+    },
+    {
+      "name": "unrepost_done",
+      "value": "Đã bỏ đăng lại."
+    },
+    {
+      "name": "unfollow_done",
+      "value": "Đã bỏ theo dõi."
+    },
+    {
+      "name": "feature_pending",
+      "value": "Tính năng này chưa được kết nối."
+    },
+    {
+      "name": "save_failed",
+      "value": "Không lưu được bài viết này."
+    },
+    {
+      "name": "posted_ago_now",
+      "value": "Vừa xong"
+    },
+    {
+      "name": "posted_ago_minutes",
+      "value": "%d phút trước"
+    },
+    {
+      "name": "posted_ago_hours",
+      "value": "%d giờ trước"
+    },
+    {
+      "name": "posted_ago_days",
+      "value": "%d ngày trước"
+    },
+    {
+      "name": "posted_ago_weeks",
+      "value": "%d tuần trước"
+    },
+    {
+      "name": "posted_ago_months",
+      "value": "%d tháng trước"
+    },
+    {
+      "name": "posted_ago_years",
+      "value": "%d năm trước"
+    },
+    {
+      "name": "notify_today",
+      "value": "Hôm nay"
+    },
+    {
+      "name": "notify_yesterday",
+      "value": "Hôm qua"
+    },
+    {
+      "name": "notify_past_7d",
+      "value": "7 ngày qua"
+    },
+    {
+      "name": "notify_past_30d",
+      "value": "30 ngày qua"
+    },
+    {
+      "name": "notify_show_more",
+      "value": "Hiện thêm"
+    },
+    {
+      "name": "notify_suggested",
+      "value": "Gợi ý cho bạn"
+    },
+    {
+      "name": "notify_follow",
+      "value": "Theo dõi"
+    },
+    {
+      "name": "notify_follow_back",
+      "value": "Theo dõi lại"
+    },
+    {
+      "name": "notify_earlier",
+      "value": "Cũ hơn"
+    },
+    {
+      "name": "notify_this_month",
+      "value": "Tháng này"
+    },
+    {
+      "name": "notify_empty",
+      "value": "Không đọc được thông báo từ trang."
+    },
+    {
+      "name": "action_follow",
+      "value": "Theo dõi"
+    },
+    {
+      "name": "action_following",
+      "value": "Đang theo dõi"
+    },
+    {
+      "name": "action_more",
+      "value": "Thêm"
+    },
+    {
+      "name": "action_create",
+      "value": "Đăng"
+    },
+    {
+      "name": "action_download",
+      "value": "Tải xuống"
+    },
+    {
+      "name": "action_settings",
+      "value": "Cài đặt"
+    },
+    {
+      "name": "account_add",
+      "value": "Thêm tài khoản"
+    },
+    {
+      "name": "account_unnamed",
+      "value": "Tài khoản chưa đặt tên"
+    },
+    {
+      "name": "account_switch_failed",
+      "value": "Chuyển tài khoản thất bại. Vui lòng đăng nhập lại tài khoản này."
+    },
+    {
+      "name": "action_mute",
+      "value": "Tắt tiếng"
+    },
+    {
+      "name": "comments_title",
+      "value": "Bình luận"
+    },
+    {
+      "name": "comments_hint",
+      "value": "Thêm bình luận…"
+    },
+    {
+      "name": "comments_empty",
+      "value": "Chưa có bình luận"
+    },
+    {
+      "name": "comments_failed",
+      "value": "Tải bình luận thất bại"
+    },
+    {
+      "name": "comments_send",
+      "value": "Gửi"
+    },
+    {
+      "name": "comments_end",
+      "value": "Không còn bình luận"
+    },
+    {
+      "name": "comments_reply",
+      "value": "Trả lời"
+    },
+    {
+      "name": "comments_hide_replies",
+      "value": "Ẩn trả lời"
+    },
+    {
+      "name": "comments_replies_loading",
+      "value": "Đang tải trả lời…"
+    },
+    {
+      "name": "comments_view_replies",
+      "value": "Xem thêm %d trả lời"
+    },
+    {
+      "name": "comment_pending",
+      "value": "Tính năng bình luận chưa được kết nối — đây là ô nhập"
+    },
+    {
+      "name": "story_load_failed",
+      "value": "Không tải được tin này (lý do %s)"
+    },
+    {
+      "name": "story_action_pending",
+      "value": "Tương tác với tin chưa được kết nối — đây chỉ là nút"
+    },
+    {
+      "name": "story_message_hint",
+      "value": "Gửi tin nhắn"
+    },
+    {
+      "name": "story_your_story",
+      "value": "Tin của bạn"
+    },
+    {
+      "name": "profile_chip_add",
+      "value": "Thêm"
+    },
+    {
+      "name": "profile_action_edit",
+      "value": "Chỉnh sửa trang cá nhân"
+    },
+    {
+      "name": "profile_action_share",
+      "value": "Chia sẻ trang cá nhân"
+    },
+    {
+      "name": "profile_highlight_new",
+      "value": "Mới"
+    },
+    {
+      "name": "profile_highlight_suggest",
+      "value": "Gợi ý theo dõi"
+    },
+    {
+      "name": "story_create_pending",
+      "value": "Tính năng đăng tin chưa được kết nối — đây là lối vào"
+    },
+    {
+      "name": "translate_action",
+      "value": "Xem bản dịch"
+    },
+    {
+      "name": "translate_show_original",
+      "value": "Xem bản gốc"
+    },
+    {
+      "name": "translate_failed",
+      "value": "Dịch thất bại, vui lòng thử lại sau"
+    },
+    {
+      "name": "reels_page_title",
+      "value": "Reels"
+    },
+    {
+      "name": "post_page_title",
+      "value": "Bài viết"
+    },
+    {
+      "name": "create_post_title",
+      "value": "Bài viết mới"
+    },
+    {
+      "name": "create_post_hint",
+      "value": "Viết gì đó…"
+    },
+    {
+      "name": "search_hint",
+      "value": "Tìm kiếm"
+    },
+    {
+      "name": "search_empty",
+      "value": "Nhập tên tài khoản để bắt đầu tìm"
+    },
+    {
+      "name": "search_action",
+      "value": "Tìm kiếm"
+    },
+    {
+      "name": "count_thousands",
+      "value": "%sK"
+    },
+    {
+      "name": "profile_stat_posts",
+      "value": "Bài viết"
+    },
+    {
+      "name": "profile_stat_followers",
+      "value": "Người theo dõi"
+    },
+    {
+      "name": "profile_stat_following",
+      "value": "Đang theo dõi"
+    },
+    {
+      "name": "profile_loading_more",
+      "value": "Đang tải…"
+    },
+    {
+      "name": "profile_end",
+      "value": "Đã hết"
+    },
+    {
+      "name": "profile_empty",
+      "value": "Chưa có bài viết"
+    },
+    {
+      "name": "direct_empty",
+      "value": "Chưa có tin nhắn"
+    },
+    {
+      "name": "direct_kind_media",
+      "value": "[Ảnh/video]"
+    },
+    {
+      "name": "direct_kind_voice",
+      "value": "[Tin nhắn thoại]"
+    },
+    {
+      "name": "direct_kind_other",
+      "value": "[Tin nhắn]"
+    },
+    {
+      "name": "direct_thread_hint",
+      "value": "Nhắn tin…"
+    },
+    {
+      "name": "direct_thread_empty",
+      "value": "Chưa có tin nhắn — chào một câu nhé"
+    },
+    {
+      "name": "direct_send_failed",
+      "value": "Chưa gửi · Nhấn để thử lại"
+    },
+    {
+      "name": "direct_sending",
+      "value": "Đang gửi…"
+    },
+    {
+      "name": "direct_open_web",
+      "value": "Mở trong trang web"
+    },
+    {
+      "name": "settings_group_appearance",
+      "value": "Giao diện"
+    },
+    {
+      "name": "settings_group_bar",
+      "value": "Thanh tab"
+    },
+    {
+      "name": "settings_bar_native_animation",
+      "value": "Hiệu ứng gốc của thanh tab"
+    },
+    {
+      "name": "settings_bar_native_animation_hint",
+      "value": "Khi tắt, thanh tab chỉ dùng hiệu ứng mờ dần đơn giản."
+    },
+    {
+      "name": "settings_material_level",
+      "value": "Hiệu ứng vật liệu"
+    },
+    {
+      "name": "settings_material_hint",
+      "value": "Mức càng cao càng tinh tế nhưng tốn pin hơn. Thiết bị yếu sẽ tự hạ cấp; nếu không chắc, hãy chọn «Tự thích ứng»."
+    },
+    {
+      "name": "settings_material_adaptive",
+      "value": "Tự thích ứng"
+    },
+    {
+      "name": "settings_material_gentle",
+      "value": "Nhẹ nhàng"
+    },
+    {
+      "name": "settings_material_smooth",
+      "value": "Mượt mà"
+    },
+    {
+      "name": "settings_material_exquisite",
+      "value": "Tinh tế"
+    },
+    {
+      "name": "settings_material_thickness",
+      "value": "Độ dày vật liệu"
+    },
+    {
+      "name": "settings_thickness_ultra_thin",
+      "value": "Cực mỏng"
+    },
+    {
+      "name": "settings_thickness_thin",
+      "value": "Mỏng"
+    },
+    {
+      "name": "settings_thickness_regular",
+      "value": "Tiêu chuẩn"
+    },
+    {
+      "name": "settings_thickness_thick",
+      "value": "Dày"
+    },
+    {
+      "name": "settings_thickness_ultra_thick",
+      "value": "Cực dày"
+    },
+    {
+      "name": "settings_unsupported_hint",
+      "value": "Phiên bản hệ thống này không hỗ trợ thanh tab nổi và hiệu ứng vật liệu; các tùy chọn liên quan đã được ẩn và thanh tab dùng hiệu ứng mờ đơn giản."
+    },
+    {
+      "name": "probe_title",
+      "value": "Chẩn đoán"
+    },
+    {
+      "name": "probe_hint",
+      "value": "Hãy duyệt trang web trước, sau đó quay lại và làm mới."
+    },
+    {
+      "name": "probe_refresh",
+      "value": "Làm mới"
+    },
+    {
+      "name": "probe_dom",
+      "value": "Cấu trúc trang"
+    },
+    {
+      "name": "probe_copy",
+      "value": "Sao chép"
+    },
+    {
+      "name": "probe_save",
+      "value": "Lưu"
+    },
+    {
+      "name": "probe_clear",
+      "value": "Xóa"
+    },
+    {
+      "name": "probe_close",
+      "value": "Đóng"
+    },
+    {
+      "name": "probe_open_direct",
+      "value": "Tin nhắn"
+    },
+    {
+      "name": "probe_open_profile",
+      "value": "Trang cá nhân"
+    },
+    {
+      "name": "probe_open_reels",
+      "value": "Reels"
+    },
+    {
+      "name": "probe_open_search",
+      "value": "Tìm kiếm"
+    },
+    {
+      "name": "probe_open_hint",
+      "value": "Mở trang web để bắt API (sẽ che bảng điều khiển):"
+    },
+    {
+      "name": "probe_open_post",
+      "value": "Trang bài viết (bài ảnh đầu tiên)"
+    },
+    {
+      "name": "probe_comments_first",
+      "value": "Bình luận (bài đầu tiên)"
+    },
+    {
+      "name": "probe_comments_embed",
+      "value": "Bình luận nhúng"
+    },
+    {
+      "name": "probe_capture",
+      "value": "Lưu mẫu bảng tin"
+    },
+    {
+      "name": "probe_replay_stored",
+      "value": "Phát lại mẫu đã lưu"
+    },
+    {
+      "name": "probe_profile_templates",
+      "value": "Lưu mẫu các tab trang cá nhân"
+    },
+    {
+      "name": "probe_search_templates",
+      "value": "Lưu mẫu trang tìm kiếm"
+    },
+    {
+      "name": "probe_digest",
+      "value": "Tóm tắt API"
+    },
+    {
+      "name": "probe_direct_selftest",
+      "value": "Tự kiểm tra gửi tin nhắn"
+    },
+    {
+      "name": "reels_segment_explore",
+      "value": "Khám phá"
+    },
+    {
+      "name": "reels_segment_following",
+      "value": "Bạn bè"
+    },
+    {
+      "name": "reels_following_empty",
+      "value": "Bạn bè của bạn chưa đăng video"
+    },
+    {
+      "name": "reels_loading",
+      "value": "Đang tải video…"
+    },
+    {
+      "name": "engage_not_rendered",
+      "value": "Không đọc được nội dung đăng lại"
+    },
+    {
+      "name": "feed_empty",
+      "value": "Chưa có nội dung"
+    },
+    {
+      "name": "feed_load",
+      "value": "Tải"
+    },
+    {
+      "name": "feed_no_more",
+      "value": "Không còn bài viết"
+    },
+    {
+      "name": "feed_none_read",
+      "value": "Không đọc được bài viết từ trang"
+    },
+    {
+      "name": "feed_none_visible",
+      "value": "Không có bài viết nào hiển thị trên trang"
+    },
+    {
+      "name": "follow_done",
+      "value": "Đã theo dõi."
+    },
+    {
+      "name": "follow_failed",
+      "value": "Theo dõi thất bại"
+    },
+    {
+      "name": "like_failed",
+      "value": "Thích thất bại"
+    },
+    {
+      "name": "media_saved",
+      "value": "Đã lưu"
+    },
+    {
+      "name": "media_save_failed",
+      "value": "Lưu thất bại"
+    },
+    {
+      "name": "notifications",
+      "value": "Thông báo"
+    },
+    {
+      "name": "notify_greet",
+      "value": "Nhắn cho %s"
+    },
+    {
+      "name": "notify_greet_suggest",
+      "value": "Chào %s"
+    },
+    {
+      "name": "notify_loading",
+      "value": "Đang tải thông báo…"
+    },
+    {
+      "name": "notify_message",
+      "value": "Nhắn tin"
+    },
+    {
+      "name": "notify_message_hint",
+      "value": "Nhắn tin…"
+    },
+    {
+      "name": "notify_month",
+      "value": "Tháng %d"
+    },
+    {
+      "name": "direct_call",
+      "value": "Gọi"
+    },
+    {
+      "name": "direct_video_call",
+      "value": "Gọi video"
+    },
+    {
+      "name": "save_rate_limited",
+      "value": "Instagram đang giới hạn yêu cầu. Thử lại sau khoảng %d phút"
+    },
+    {
+      "name": "settings_group_media",
+      "value": "Ảnh và video"
+    },
+    {
+      "name": "settings_image_quality",
+      "value": "Chất lượng ảnh"
+    },
+    {
+      "name": "settings_video_quality",
+      "value": "Chất lượng video"
+    },
+    {
+      "name": "settings_quality_auto",
+      "value": "Tự động"
+    },
+    {
+      "name": "settings_quality_saver",
+      "value": "Tiết kiệm dữ liệu"
+    },
+    {
+      "name": "settings_quality_high",
+      "value": "HD"
+    },
+    {
+      "name": "settings_quality_original",
+      "value": "Bản gốc"
+    },
+    {
+      "name": "settings_media_quality_hint",
+      "value": "Chế độ tự động chọn theo mạng: HD trên Wi-Fi, tiết kiệm dữ liệu trên dữ liệu di động. Khi tải xuống luôn giữ ảnh/video gốc."
+    },
+    {
+      "name": "settings_group_diag",
+      "value": "Chẩn đoán"
+    },
+    {
+      "name": "settings_export_diag",
+      "value": "Xuất nhật ký chẩn đoán"
+    },
+    {
+      "name": "settings_copy_diag",
+      "value": "Sao chép tóm tắt chẩn đoán"
+    },
+    {
+      "name": "settings_diag_hint",
+      "value": "Khi gặp sự cố (ví dụ mở tin không được), hãy nhấn «Xuất nhật ký chẩn đoán», lưu tệp txt rồi gửi cho nhà phát triển từ ứng dụng Tệp; nếu không lưu được, nhấn «Sao chép tóm tắt chẩn đoán» và dán nội dung."
+    },
+    {
+      "name": "diag_exported",
+      "value": "Đã xuất %s"
+    },
+    {
+      "name": "diag_export_failed",
+      "value": "Xuất thất bại: %s"
+    },
+    {
+      "name": "diag_copied",
+      "value": "Đã sao chép tóm tắt chẩn đoán"
+    },
+    {
+      "name": "settings_capture_story",
+      "value": "Chụp mẫu trang tin (thử nghiệm)"
+    },
+    {
+      "name": "diag_story_captured",
+      "value": "Đã chụp mẫu trang tin — từ giờ tin sẽ mở được"
+    },
+    {
+      "name": "diag_story_capture_failed",
+      "value": "Không chụp được mẫu trang tin: %s"
+    },
+    {
+      "name": "settings_run_mobile_probe",
+      "value": "Chạy tự kiểm tra API di động (thử nghiệm)"
+    },
+    {
+      "name": "diag_mobile_running",
+      "value": "Đang chạy tự kiểm tra API di động (ba yêu cầu, vài giây)…"
+    },
+    {
+      "name": "diag_mobile_done",
+      "value": "Tự kiểm tra API di động xong: %d yêu cầu thành công — kết quả bên dưới"
+    },
+    {
+      "name": "diag_mobile_failed",
+      "value": "Tự kiểm tra API di động gặp lỗi: %s"
+    },
+    {
+      "name": "diag_mobile_result",
+      "value": "Kết quả tự kiểm tra API di động (nhấn để sao chép)"
+    },
+    {
+      "name": "story_need_challenge",
+      "value": "Instagram yêu cầu xác minh tài khoản này trước: hãy đăng nhập hoặc hoàn tất kiểm tra trên web rồi xem tin lại"
+    },
+    {
+      "name": "settings_proxy_title",
+      "value": "Proxy"
+    },
+    {
+      "name": "settings_proxy_host",
+      "value": "Máy chủ"
+    },
+    {
+      "name": "settings_proxy_port",
+      "value": "Cổng"
+    },
+    {
+      "name": "settings_proxy_user",
+      "value": "Tên người dùng"
+    },
+    {
+      "name": "settings_proxy_pass",
+      "value": "Mật khẩu"
+    },
+    {
+      "name": "settings_proxy_apply",
+      "value": "Áp dụng"
+    },
+    {
+      "name": "settings_proxy_off",
+      "value": "Tắt proxy"
+    },
+    {
+      "name": "settings_proxy_enable",
+      "value": "Bật proxy"
+    },
+    {
+      "name": "settings_proxy_saved",
+      "value": "Proxy đã lưu"
+    },
+    {
+      "name": "settings_proxy_none",
+      "value": "Không có"
+    },
+    {
+      "name": "settings_proxy_add_title",
+      "value": "Thêm proxy"
+    },
+    {
+      "name": "settings_proxy_name",
+      "value": "Tên"
+    },
+    {
+      "name": "settings_proxy_add",
+      "value": "Thêm"
+    },
+    {
+      "name": "settings_group_proxy",
+      "value": "Proxy"
+    },
+    {
+      "name": "settings_proxy_hint",
+      "value": "Proxy chỉ áp dụng cho ứng dụng này và có hiệu lực ngay; tắt công tắc để kết nối trực tiếp"
+    },
+    {
+      "name": "proxy_ph_name",
+      "value": "ví dụ: Proxy công ty"
+    },
+    {
+      "name": "proxy_ph_host",
+      "value": "ví dụ: 127.0.0.1"
+    },
+    {
+      "name": "proxy_ph_port",
+      "value": "ví dụ: 7890"
+    },
+    {
+      "name": "proxy_ph_optional",
+      "value": "Không bắt buộc"
+    },
+    {
+      "name": "settings_proxy_pick_title",
+      "value": "Chọn proxy"
+    },
+    {
+      "name": "settings_proxy_confirm",
+      "value": "Xác nhận"
+    },
+    {
+      "name": "settings_proxy_selected",
+      "value": "Đã chọn"
+    },
+    {
+      "name": "settings_proxy_manage_title",
+      "value": "Quản lý proxy"
+    },
+    {
+      "name": "settings_proxy_edit_title",
+      "value": "Sửa proxy"
+    },
+    {
+      "name": "settings_proxy_save",
+      "value": "Lưu"
+    },
+    {
+      "name": "settings_proxy_edit_action",
+      "value": "Sửa"
+    },
+    {
+      "name": "settings_proxy_delete_action",
+      "value": "Xóa"
+    },
+    {
+      "name": "settings_proxy_deleted",
+      "value": "Đã xóa"
+    },
+    {
+      "name": "settings_proxy_verifying",
+      "value": "Đang kiểm tra proxy…"
+    },
+    {
+      "name": "settings_proxy_verify_failed",
+      "value": "Không kết nối được proxy: %s"
+    },
+    {
+      "name": "settings_proxy_invalid",
+      "value": "Phải nhập máy chủ và cổng"
+    },
+    {
+      "name": "back_press_exit_hint",
+      "value": "Nhấn quay lại lần nữa để về màn hình chính"
+    },
+    {
+      "name": "login_probe_busy",
+      "value": "Đang kiểm tra…"
+    },
+    {
+      "name": "login_probe_hint",
+      "value": "Không chắc mật khẩu? Nhấn đây để kiểm tra bằng API web của Instagram."
+    },
+    {
+      "name": "login_web_retry_hint",
+      "value": "Vẫn không vào được? Hãy thử đăng nhập trên trang web (có thể vượt qua kiểm tra người dùng)."
+    },
+    {
+      "name": "settings_doh_scope_hint",
+      "value": "HTTP, trang web tích hợp và chuỗi đăng nhập đều dùng DNS mã hóa; trang web và chuỗi đăng nhập sẽ tự quay về DNS hệ thống nếu thất bại."
+    },
+    {
+      "name": "settings_relay_endpoint",
+      "value": "Địa chỉ báo cáo relay"
+    },
+    {
+      "name": "settings_relay_key",
+      "value": "Khóa chia sẻ (có thể để trống, khớp với relay)"
+    },
+    {
+      "name": "settings_relay_key_hint",
+      "value": "Một chuỗi bất kỳ, giống với cấu hình relay"
+    },
+    {
+      "name": "settings_relay_disabled",
+      "value": "Đã tắt báo cáo relay"
+    },
+    {
+      "name": "settings_clear_device_hint",
+      "value": "Hãy đăng xuất trước, rồi xóa thông tin thiết bị"
+    },
+    {
+      "name": "settings_login_help",
+      "value": "Nếu đăng nhập thất bại: chạy «Tự kiểm tra kênh đăng nhập», rồi «Sao chép nhật ký đăng nhập» và gửi nội dung cho tôi.\n"
+    },
+    {
+      "name": "settings_login_selftest_running",
+      "value": "Đang tự kiểm tra kênh đăng nhập (tối đa 15 giây)…"
+    },
+    {
+      "name": "settings_ip_check_running",
+      "value": "Đang kiểm tra IP đầu ra (tối đa 10 giây)…"
+    },
+    {
+      "name": "settings_ip_datacenter",
+      "value": "Đây là IP datacenter. Hãy thử một nút khác."
+    },
+    {
+      "name": "settings_ip_normal",
+      "value": "Đường kết nối này có vẻ bình thường"
+    },
+    {
+      "name": "settings_login_log_copied",
+      "value": "Đã sao chép nhật ký đăng nhập (dán cho nhà phát triển)"
+    },
+    {
+      "name": "settings_meow_login_sending",
+      "value": "Đang gửi nhật ký đăng nhập tới MeoW…"
+    },
+    {
+      "name": "settings_reels_log_empty",
+      "value": "Chưa có nhật ký sự cố Reels (chưa mở Reels hoặc nhật ký đã bị xóa)"
+    },
+    {
+      "name": "settings_reels_log_prefix",
+      "value": "(Thiết bị và phiên bản: %s)\n"
+    },
+    {
+      "name": "settings_meow_reels_sending",
+      "value": "Đang gửi nhật ký sự cố Reels tới MeoW…"
+    },
+    {
+      "name": "login_error_transport",
+      "value": "Yêu cầu đăng nhập gặp lỗi: %s"
+    },
+    {
+      "name": "login_ok_session_pending",
+      "value": "%s thành công (dữ liệu phiên di động chưa sẵn sàng)"
+    },
+    {
+      "name": "system_http_failed",
+      "value": "Ngăn xếp HTTP hệ thống cũng thất bại: %s"
+    },
+    {
+      "name": "notify_direct_fallback",
+      "value": "Tin nhắn trực tiếp"
+    },
+    {
+      "name": "notify_direct_count",
+      "value": "Bạn có %d tin nhắn trực tiếp mới"
+    },
+    {
+      "name": "notify_direct_one",
+      "value": "Bạn có một tin nhắn trực tiếp mới"
+    },
+    {
+      "name": "index_web_login_hint",
+      "value": "Đăng nhập trên trang (có thể cần vượt kiểm tra người dùng); sau đó ứng dụng sẽ tự vào."
+    },
+    {
+      "name": "index_open_link_failed",
+      "value": "Không mở được liên kết này (không có trình duyệt?)"
+    },
+    {
+      "name": "index_share_empty",
+      "value": "Nội dung chia sẻ này không có gì để mở"
+    },
+    {
+      "name": "linkin_title",
+      "value": "Mở bằng liên kết trực tiếp"
+    },
+    {
+      "name": "linkin_hint",
+      "value": "Hệ thống đã chuyển liên kết này tới ứng dụng qua Want. Dưới đây là nội dung được phân tích từ URI."
+    },
+    {
+      "name": "linkin_target_known",
+      "value": "✓ Đã nhận diện đích"
+    },
+    {
+      "name": "linkin_target_unknown",
+      "value": "✗ Đích không xác định"
+    },
+    {
+      "name": "linkin_params_ok",
+      "value": "✓ Tham số đầy đủ"
+    },
+    {
+      "name": "linkin_params_missing",
+      "value": "✗ Thiếu tham số"
+    },
+    {
+      "name": "linkin_open_action",
+      "value": "Mở và chạy liên kết này"
+    },
+    {
+      "name": "linkin_ignore",
+      "value": "Bỏ qua và về trang chủ"
+    },
+    {
+      "name": "linkin_supported",
+      "value": "Liên kết được hỗ trợ"
+    },
+    {
+      "name": "story_diag_guide",
+      "value": "2) Sau đó xem detail= và dấu vết từng yêu cầu: detail=empty nghĩa là máy chủ trả 200+JSON nhưng không có media."
+    },
+    {
+      "name": "settings_group_language",
+      "value": "Ngôn ngữ"
+    },
+    {
+      "name": "settings_language",
+      "value": "Ngôn ngữ"
+    },
+    {
+      "name": "settings_language_search",
+      "value": "Tìm ngôn ngữ"
+    },
+    {
+      "name": "settings_language_hint",
+      "value": "Chọn ngôn ngữ của ứng dụng. Chỉ ảnh hưởng tới ứng dụng này, không đổi ngôn ngữ hệ thống."
+    },
+    {
+      "name": "settings_language_changed",
+      "value": "Đã đổi ngôn ngữ"
+    }
+  ]
+}

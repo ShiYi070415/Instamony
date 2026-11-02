@@ -239,7 +239,9 @@ const LANGUAGES: Array<LanguageOption> = [
   new LanguageOption('ja_JP', 'ja-JP', '日本語', '日本語 日语 japanese ja_jp ja-jp'),
   new LanguageOption('ko_KR', 'ko-KR', '한국어', '한국어 韩语 korean ko_kr ko-kr'),
   new LanguageOption('es_ES', 'es-ES', 'Español', 'español 西班牙语 spanish es_es es-es'),
-  new LanguageOption('de_DE', 'de-DE', 'Deutsch', 'deutsch 德语 german de_de de-de')
+  new LanguageOption('de_DE', 'de-DE', 'Deutsch', 'deutsch 德语 german de_de de-de'),
+  new LanguageOption('it_IT', 'it-IT', 'Italiano', 'italiano 意大利语 italian it_it it-it'),
+  new LanguageOption('vi_VN', 'vi-VN', 'Tiếng Việt', 'tiếng việt 越南语 vietnamese vi_vn vi-vn')
 ];
 
 /** BCP 47 / 系统语言 → 资源目录。 */
@@ -266,6 +268,12 @@ function languageCodeOf(tag: string): string {
   }
   if (lower.indexOf('de') === 0) {
     return 'de_DE';
+  }
+  if (lower.indexOf('it') === 0) {
+    return 'it_IT';
+  }
+  if (lower.indexOf('vi') === 0) {
+    return 'vi_VN';
   }
   return 'zh_CN';
 }
