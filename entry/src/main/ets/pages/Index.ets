@@ -10216,23 +10216,23 @@ struct Index {
                   .fontSize(TAB_ICON_SIZE)
                   .fontColor([this.tabIconColor(this.selectedIndex === index)])
               }
-              .width(56)
-              .height(56)
-              .borderRadius(28)
+              .width(40)
+              .height(48)
+              .borderRadius(20)
               .backgroundColor(Color.Transparent)
               .onClick((): void => {
                 this.onTabBarClick(index);
               })
             }, (item: TabItem): string => `${item.tab}`)
           }
-          .width(56)
-          .height(5 * 56)
+          .width(40)
+          .height(5 * 48)
           .alignItems(HorizontalAlign.Center)
         }
-        .width(56)
-        .height(5 * 56)
+        .width(40)
+        .height(5 * 48)
         .padding(0)
-        .borderRadius(28)
+        .borderRadius(20)
         .clip(true)
         .backgroundColor(Color.Transparent)
         .selectedColor(Color.Transparent)
