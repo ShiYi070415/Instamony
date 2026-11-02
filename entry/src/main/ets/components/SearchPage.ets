@@ -447,21 +447,15 @@ export struct SearchPage {
     this.refreshRecommended();
   }
 
-  /** 按搜索结果区域的实际宽度决定列数，左右分栏收窄时也会自动减列。 */
+  /** 按搜索结果区域的实际宽度决定列数：3 / 4 / 5。 */
   private gridColumns(): number {
-    if (this.flowWidthVp >= 1200) {
-      return 6;
-    }
     if (this.flowWidthVp >= 960) {
       return 5;
     }
     if (this.flowWidthVp >= 720) {
       return 4;
     }
-    if (this.flowWidthVp >= 360) {
-      return COLUMNS;
-    }
-    return 2;
+    return COLUMNS;
   }
 
   /** Grid 的 columnsTemplate，随列数变化。 */
@@ -755,6 +749,15 @@ export struct SearchPage {
      * 网格可能塌成 0 高（一屏空白）。外层那颗 Refresh 自己吃 layoutWeight(1)。
      */
     .height('100%')
+    .onAreaChange((oldArea: Area, newArea: Area): void => {
+      // 分栏/窗口缩放会改变瀑布流实际宽度：列数和 tile 高度必须跟着重算，
+      // 否则格子会按旧宽度算高度，显示成细长竖条。
+      const width: number = typeof newArea.width === 'number'
+        ? newArea.width : parseFloat(`${newArea.width}`);
+      if (width > 0 && Math.abs(width - this.flowWidthVp) > 0.5) {
+        this.flowWidthVp = width;
+      }
+    })
     .scrollBar(BarState.Off)
     .edgeEffect(EdgeEffect.Spring)
     .contentEndOffset(SEARCH_BOTTOM_OFFSET)
