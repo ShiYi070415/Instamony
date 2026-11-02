@@ -7131,6 +7131,61 @@ struct Index {
     });
   }
 
+  /** 宽屏首页且右栏打开：此时 HDS Navigation 只包住帖子流这一列。 */
+  private tabletHomeScoped(): boolean {
+    return this.tabletWideShell() && this.selectedIndex === 0
+      && this.tabletProfileParam.length > 0;
+  }
+
+  /** 右栏用户页：在 HDS Navigation 之外，和帖子流并排。 */
+  @Builder
+  tabletProfilePane() {
+    Column() {
+      Row({ space: 8 }) {
+        MaterialIconButton({
+          symbol: $r('sys.symbol.chevron_left'),
+          buttonSize: 40,
+          iconSize: 20,
+          onTap: (on: boolean): void => {
+            this.setTabletProfile('');
+          }
+        })
+        Text($r('app.string.tab_profile'))
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.primary_text'))
+          .layoutWeight(1)
+      }
+      .width('100%')
+      .height(52)
+      .padding({ left: 8, right: 12 })
+      .alignItems(VerticalAlign.Center)
+
+      UserProfileRoute({
+        param: this.tabletProfileParam,
+        layoutWidthVp: this.profileStageWidth(),
+        onOpen: (post: ProfilePost): void => {
+          this.openLoosePost(post.shortcode, post.isVideo);
+        },
+        onFollowUser: (id: string, username: string, follow: boolean): Promise<boolean> => {
+          return this.followUser(id, username, follow);
+        },
+        onOpenUserProfile: (username: string): void => {
+          this.tabletProfileParam = `${username}|`;
+        }
+      })
+        .layoutWeight(1)
+    }
+    .width(this.profileStageWidth())
+    .height('100%')
+    .padding({ top: this.topSafeVp + 8 })
+    .backgroundColor($r('app.color.page_background'))
+    .clip(true)
+    .border({ width: { left: 0.5 }, color: $r('app.color.divider') })
+    .transition(TransitionEffect.translate({ x: '100%' })
+      .animation({ duration: 280, curve: Curve.EaseInOut }))
+  }
+
   /**
    * 宽屏首页：信息流居中；点用户资讯栏时信息流左移贴侧栏，
    * 用户页从右侧挤入；返回时反向。
@@ -7418,7 +7473,10 @@ struct Index {
    */
   @Builder
   nativeShellContent() {
-    if (this.loginPageShown()) {
+    if (this.tabletHomeScoped()) {
+      // HDS Navigation 缩到帖子流这一列时，内容也只画首页信息流。
+      this.homeTab()
+    } else if (this.loginPageShown()) {
       /*
        * **未登录 = 整页登录页**（见 components/LoginPage 的文件头）。
        *
@@ -10509,8 +10567,15 @@ struct Index {
     // 通知等整屏页面作为 NavDestination 压在这一层之上（见 destinationBuilder）。
     .navDestination(this.destinationBuilder)
       }
-      .layoutWeight(1)
+      .width(this.tabletHomeScoped() ? this.feedMaxWidth() : '100%')
+      .layoutWeight(this.tabletHomeScoped() ? 0 : 1)
       .height('100%')
+      .animation({ duration: 280, curve: Curve.EaseInOut })
+
+      // 右栏在 HDS Navigation 之外：HDS 只覆盖帖子流那一列。
+      if (this.tabletHomeScoped()) {
+        this.tabletProfilePane()
+      }
     }
     .width('100%')
     .height('100%')
