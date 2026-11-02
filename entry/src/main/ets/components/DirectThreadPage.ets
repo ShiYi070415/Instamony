@@ -889,7 +889,8 @@ export struct DirectThreadPage {
       : screen - SIDE_PADDING * 2 - AVATAR_SIZE - 8;
     let wanted: number = 0;
     if (message.mediaSticker) {
-      wanted = screen / 3;
+      // 贴图固定为页面宽度的 1/4。
+      wanted = screen / 4;
     } else {
       const ratio: number = DirectThreadPage.rawAspect(message);
       if (ratio > 0 && Math.abs(ratio - 1) <= 0.02) {
