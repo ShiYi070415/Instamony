@@ -15,6 +15,9 @@ param(
   [string]$SdkHome = 'C:\Program Files\Huawei\DevEco Studio\sdk',
   [string]$HvigorHome = "$PSScriptRoot\..\.hvigor-home",
   [string]$Bundle = 'com.yijin.instamony',
+  # release = no sourceMaps / optimized ABC, but still signed by the debug cert.
+  # Use debug only when readable stack traces are needed.
+  [string]$BuildMode = 'release',
   [switch]$SkipBuild
 )
 
@@ -36,7 +39,7 @@ if (-not $SkipBuild) {
     # PowerShell would turn a harmless warning into a terminating error.
     $ErrorActionPreference = 'Continue'
     & $Hvigor clean --no-daemon *> $null
-    & $Hvigor assembleApp --mode project -p product=default -p buildMode=debug --no-daemon
+    & $Hvigor assembleApp --mode project -p product=default -p buildMode=$BuildMode --no-daemon
     $buildCode = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
     if ($buildCode -ne 0) { throw "hvigor build failed (exit $buildCode)" }
@@ -56,6 +59,7 @@ $appSize = (Get-Item $app).Length
 Write-Host "app      : $app ($([math]::Round($appSize / 1KB, 0)) KB)" -ForegroundColor Green
 Write-Host "bundle   : $Bundle" -ForegroundColor Green
 Write-Host "version  : $version" -ForegroundColor Green
+Write-Host "mode     : $BuildMode (debug cert)" -ForegroundColor Green
 
 $targets = (& hdc list targets 2>&1) -join "`n"
 if ($targets -notmatch 'Empty' -and $targets.Trim().Length -gt 0) {
@@ -77,9 +81,9 @@ if ($LASTEXITCODE -ne 0 -or $upload -notmatch '^https?://') {
 }
 Write-Host "download : $upload" -ForegroundColor Green
 
-$msg = "Instamony debug build`nversion: $version`nbundle: $Bundle`nsize: $([math]::Round($appSize / 1KB, 0)) KB`ndownload: $upload`n`n(.app; debug cert; rename to .app after download if needed)"
+$msg = "Instamony debug-cert build`nmode: $BuildMode`nversion: $version`nbundle: $Bundle`nsize: $([math]::Round($appSize / 1KB, 0)) KB`ndownload: $upload`n`n(.app; debug cert; release-mode optimized)"
 $body = @{
-  title = "Instamony $version debug"
+  title = "Instamony $version debug-cert"
   msg = $msg
   msgType = 'text'
 }
