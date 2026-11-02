@@ -7195,6 +7195,9 @@ struct Index {
         .height('100%')
         // 明确放到信息流右侧（Stack 的 align 在部分 HDS 子树里不生效，实测会贴左）。
         .position({ x: this.feedMaxWidth(), y: 0 })
+        // 右栏是 HDS Navigation 的内容子节点，但它不该再占一条 HDS 标题栏；
+        // 顶部让出状态栏 + 主标题栏，标题落回内容区下沿，而不是被顶进避让区。
+        .padding({ top: this.topSafeVp + 56 })
         .backgroundColor($r('app.color.page_background'))
         .clip(true)
         .border({ width: { left: 0.5 }, color: $r('app.color.divider') })
