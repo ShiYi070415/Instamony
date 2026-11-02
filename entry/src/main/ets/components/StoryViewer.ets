@@ -1346,28 +1346,25 @@ export struct StoryViewer {
   // ------------------------------------------------- 卡片几何（都算在**浮层坐标**里）
   // 依赖 measureSpace() 量到的浮层尺寸，所以展开动画必须等它量完（见 build 的 onAppear）。
 
-  /** 卡片宽 = 屏幕宽 - 两侧留白。 */
+  /** 整张卡片（媒体 + 功能区）固定 9:16，并在窗口内取最大可用高度。 */
+  private cardBoxH(): number {
+    const maxH: number = Math.max(0, this.overlayH - CARD_SIDE_VP * 2);
+    const maxW: number = Math.max(0, this.overlayW - CARD_SIDE_VP * 2);
+    const byWidth: number = maxW * 16 / 9;
+    const h: number = Math.min(maxH, byWidth);
+    return Math.max(160 * 16 / 9, h);
+  }
+
   private cardW(): number {
-    const width: number = this.overlayW - CARD_SIDE_VP * 2;
-    // 平板宽屏也把快拍卡片收在 9:16 内，不再横向铺满。
-    const byNineSixteen: number = this.screenH > 0 ? Math.round(this.screenH * 9 / 16) : width;
-    const capped: number = Math.min(width, byNineSixteen);
-    return capped > 160 ? capped : 160;
+    return Math.round(this.cardBoxH() * 9 / 16);
   }
 
   /**
-   * 媒体区高：按**当前这一条的媒体比例**算，再被"可用高度"夹一次（别顶到屏幕边）。
-   *
-   * 为什么要按真实比例（原来是写死 9:16）：比例对不上时 `Cover` 会裁内容、`Contain` 会留黑边
-   * —— 用户报的"媒体区出现黑边"就是这个。现在媒体区 = 媒体本身的形状，于是可以放心用 `Cover`
-   * 铺满：既没有黑边，也不裁内容。
+   * 媒体区高 = 整卡 9:16 的高度 - 功能区。媒体画面自身仍按真实比例 Cover 填充，
+   * 但卡片外框永远是 9:16。
    */
   private mediaH(): number {
-    const room: number = this.overlayH - CARD_SIDE_VP * 2 - ACTION_TOP_VP - ACTION_H;
-    const aspect: number = this.mediaAspect();
-    // h = w / (w/h)
-    const byRatio: number = this.cardW() / aspect;
-    return room > 120 && byRatio > room ? room : byRatio;
+    return Math.max(120, this.cardBoxH() - ACTION_TOP_VP - ACTION_H);
   }
 
   /**
@@ -1390,8 +1387,9 @@ export struct StoryViewer {
     return this.mediaH() + ACTION_TOP_VP + ACTION_H;
   }
 
+  /** 横向居中。 */
   private cardX(): number {
-    return CARD_SIDE_VP;
+    return Math.max(CARD_SIDE_VP, (this.overlayW - this.cardW()) / 2);
   }
 
   /** 纵向居中（悬浮感就来自四周留出的空白）。 */
