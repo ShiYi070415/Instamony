@@ -69,6 +69,8 @@ export struct CommentInputBar {
    * 统一留白**（面板和输入条要等宽，见 pages/Index 的 commentsOverlay），传 0。
    */
   @Prop sideInset: number = SIDE_MARGIN;
+  /** 深色页面（Reels）里强制白字，不依赖全局深色模式。 */
+  @Prop dark: boolean = false;
   /**
    * 离底边的高度（vp）。
    *
@@ -228,7 +230,7 @@ export struct CommentInputBar {
             .fontSize(15)
             // 正文字色走**应用自己的主题资源**（浅色模式深字、深色模式浅字）：
             // `sys.color.*` 跟的是系统配色，和应用的材质/资源一旦不一致，字就飘了。
-            .fontColor($r('app.color.primary_text'))
+            .fontColor(this.dark ? Color.White : $r('app.color.primary_text'))
             .caretColor($r('app.color.accent'))
             /*
              * **提示（占位）文字放在最后设**：ArkUI 里 `fontColor` 会连占位文字一起影响，
@@ -236,7 +238,7 @@ export struct CommentInputBar {
              *
              * 颜色用 `comment_muted`（浅色模式 = 浅灰 #A8A8A8，深色模式 = #A8A8A8）。
              */
-            .placeholderColor($r('app.color.comment_muted'))
+            .placeholderColor(this.dark ? '#B3FFFFFF' : $r('app.color.comment_muted'))
             .placeholderFont({ size: 15 })
             .backgroundColor(Color.Transparent)
             .borderRadius(0)

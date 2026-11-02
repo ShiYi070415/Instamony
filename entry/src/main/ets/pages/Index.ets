@@ -28,6 +28,7 @@ import {
   HdsNavigation,
   HdsNavigationMenuContentOptions,
   HdsNavigationMenuItemOptions,
+  HdsNavigationTitleBarStyle,
   HdsNavigationTitleMode,
   TitleBarContentOptions,
   TitleBarStyleOptions,
@@ -1629,11 +1630,13 @@ struct Index {
       ? this.tabletSidebarWidth() : 0;
   }
 
-  /** Reels 类页面用黑色底：侧边栏也跟着铺黑，避免背景断层。 */
+  /** 只有左侧主 Reels 才让整个壳铺黑；右栏 Reels 只黑右栏自己。 */
   private reelsBackdropActive(): boolean {
-    return this.currentTab() === AppTab.Reels
-      || this.topPage === PROFILE_REELS_PAGE
-      || this.topPage === SEARCH_REELS_PAGE;
+    if (this.tabletWideShell()
+      && (this.topPage === PROFILE_REELS_PAGE || this.topPage === SEARCH_REELS_PAGE)) {
+      return false;
+    }
+    return this.currentTab() === AppTab.Reels;
   }
 
   private reelsInfoBottom(): number {
@@ -8481,6 +8484,28 @@ struct Index {
   }
 
   /** 二级页（通知 / 设定）标题栏样式：不做滚动模糊，其余同上。 */
+  /** 右栏 Reels 专用的深色 HDS 标题栏：不依赖全局深色模式。 */
+  private reelsDestinationTitleStyle(): TitleBarStyleOptions {
+    const style: TitleBarStyleOptions = {
+      scrollEffectOpts: {
+        enableScrollEffect: false,
+        scrollEffectType: ScrollEffectType.GRADIENT_BLUR
+      }
+    };
+    const darkBar: HdsNavigationTitleBarStyle = {
+      backgroundStyle: { backgroundColor: '#000000' },
+      contentStyle: {
+        titleStyle: { mainTitleColor: Color.White },
+        backIconStyle: { iconColor: Color.White },
+        menuStyle: { iconColor: Color.White },
+        dividerStyle: { dividerColor: '#33FFFFFF' }
+      }
+    };
+    style.originalStyle = darkBar;
+    style.scrollEffectStyle = darkBar;
+    return style;
+  }
+
   private destinationTitleStyle(): TitleBarStyleOptions {
     const style: TitleBarStyleOptions = {
       // 信息流式的长列表不做滚动模糊，短列表也不做。
@@ -11745,7 +11770,7 @@ struct Index {
           // 需求："除了底栏 reels，其他 reels 页面右上角没有静音和下载按钮，添加一下"。
           menu: this.reelsMenu(ReelsAction.PROFILE)
         },
-        style: this.destinationTitleStyle(),
+        style: this.reelsDestinationTitleStyle(),
         avoidLayoutSafeArea: false,
         enableComponentSafeArea: false
       })
@@ -11791,7 +11816,7 @@ struct Index {
           // 同视频分页那一页：右上角补上静音 / 下载（需求）。
           menu: this.reelsMenu(ReelsAction.SEARCH)
         },
-        style: this.destinationTitleStyle(),
+        style: this.reelsDestinationTitleStyle(),
         avoidLayoutSafeArea: false,
         enableComponentSafeArea: false
       })
@@ -11988,6 +12013,7 @@ struct Index {
       // 用 transition 而不是 animateTo —— 插入/移除自带动画，面板开关代码一行都不用改。
       if (!this.commentsVisible) {
         CommentInputBar({
+          dark: true,
           onSend: (text: string): void => {
             this.toast($r('app.string.comment_pending'));
             hilog.info(DOMAIN, TAG, 'reels draft comment len=%{public}d (not sent)', text.length);

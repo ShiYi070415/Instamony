@@ -1944,9 +1944,8 @@ struct ReelOverlay {
           lockMaterial: false,
           labelRes: this.following
             ? $r('app.string.action_following') : $r('app.string.action_follow'),
-          // 字色**始终走主题色（深色下就是白）**：需求"已关注字体颜色保持白色" ——
-          // 这里原来在已关注时压了一档灰（#737373），视频画面上看着像"禁用/没点成功"。
-          tint: '',
+          // 视频页自身永远是深色底，字色固定白色，不依赖全局深色模式。
+          tint: '#FFFFFF',
           pillWidth: FOLLOW_PILL_WIDTH,
           pillHeight: AUTHOR_ROW_HEIGHT,
           fontSize: 13,
@@ -2071,7 +2070,7 @@ struct ReelOverlay {
         MaterialIconButton({ autoInvert: false, swallowLongPress: true,
           symbol: $r('sys.symbol.message'),
           isOn: false,
-          tint: '',
+          tint: '#FFFFFF',
           buttonSize: ACTION_BUTTON_SIZE,
           iconSize: ACTION_ICON_SIZE,
           onTap: (on: boolean): void => {
@@ -2121,7 +2120,7 @@ struct ReelOverlay {
         MaterialIconButton({ autoInvert: false, swallowLongPress: true,
           symbol: $r('sys.symbol.share'),
           isOn: false,
-          tint: '',
+          tint: '#FFFFFF',
           buttonSize: ACTION_BUTTON_SIZE,
           iconSize: ACTION_ICON_SIZE,
           onTap: (on: boolean): void => {
@@ -2173,7 +2172,7 @@ struct ReelOverlay {
       MaterialIconButton({ autoInvert: false, swallowLongPress: true,
         symbol: $r('sys.symbol.sort'),
         isOn: false,
-        tint: '',
+        tint: '#FFFFFF',
         buttonSize: ACTION_BUTTON_SIZE,
         iconSize: ACTION_ICON_SIZE,
         onTap: (on: boolean): void => {
