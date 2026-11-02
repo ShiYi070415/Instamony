@@ -118,6 +118,7 @@ import { StoriesTray } from '../components/StoriesTray';
 // LOGIN_NEEDS_CODE：登录页那颗「登录」返回它 = 账号密码过了但 IG 要求两步验证（见 caaLogin）。
 import { LOGIN_NEEDS_CODE, LoginPage } from '../components/LoginPage';
 import { StoryViewer } from '../components/StoryViewer';
+import { CreatePostContent } from './CreatePost';
 import { ReelsPage } from '../components/ReelsPage';
 // 视频页"隐藏全局控件"这个开关（AppStorage 键，见 components/ReelsPage 的说明）：
 // 标题栏与底栏由外壳订阅它 —— 标题栏/底栏不在 ReelsPage 里，只能靠这个键跨层通知。
@@ -208,6 +209,8 @@ const DOMAIN: number = 0xFF00;
 const NOTIFICATIONS_PAGE: string = 'notifications';
 /** 设定页在 NavPathStack 里的名字（见 destinationBuilder）。 */
 const SETTINGS_PAGE: string = 'settings';
+/** 发布新帖子页（平板首页也走右栏）。 */
+const CREATE_POST_PAGE: string = 'createPost';
 /** 设置二级页（参数 = 分类 key，见 SettingsPanel 的 detailSection）。 */
 const SETTINGS_DETAIL_PAGE: string = 'settingsDetail';
 /** 赞助开发者页。 */
@@ -5230,6 +5233,10 @@ struct Index {
    * 页面自己的返回键 popUrl 回来即可。
    */
   private openCreatePost(): void {
+    if (this.tabletWideShell() && this.selectedIndex === 0) {
+      this.pushPage(CREATE_POST_PAGE);
+      return;
+    }
     if (this.webVisible) {
       // 正在看网页时先收起网页，免得返回栈里叠着一层网页 chrome。
       this.closeWeb();
@@ -7172,10 +7179,42 @@ struct Index {
   tabletProfileDestinationBuilder(name: string, param: Object) {
     if (name === USER_PROFILE_PAGE) {
       this.tabletProfileDestination(name, param)
+    } else if (name === CREATE_POST_PAGE) {
+      this.tabletCreatePostDestination()
     } else {
       // 其他新页面复用全局 destinationBuilder：帖子页 / 通知 / 设置 / 赞助等。
       this.destinationBuilder(name, param)
     }
+  }
+
+  /** 右栏里的发布新帖页：正文复用 CreatePostContent，标题栏由 HdsNavDestination 提供。 */
+  @Builder
+  tabletCreatePostDestination() {
+    HdsNavDestination() {
+      Column() {
+        CreatePostContent()
+      }
+      .width('100%')
+      .height('100%')
+      .padding({ top: 94 })
+    }
+    .titleBar({
+      content: {
+        title: { mainTitle: $r('app.string.create_post_title') },
+        menu: { value: [] }
+      },
+      style: this.destinationTitleStyle(),
+      avoidLayoutSafeArea: false,
+      enableComponentSafeArea: false
+    })
+    .hideBackButton(false)
+    .titleMode(HdsNavDestinationTitleMode.MINI)
+    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
+    .onHidden((): void => {
+      if (this.tabletProfileStack.getAllPathName().length === 0) {
+        this.closeTabletRight();
+      }
+    })
   }
 
   /** 右栏自己的 HdsNavDestination：标题显示用户名，返回键由 HDS 提供。 */

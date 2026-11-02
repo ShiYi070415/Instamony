@@ -34,6 +34,30 @@ const TAG: string = 'InstamonyCreatePost';
 /** 和首页一样的顶部留白算法：状态栏 38 + MINI 标题栏 56（见 FeedList 的 FEED_START_OFFSET）。 */
 const CONTENT_TOP_OFFSET: number = 94;
 
+/** 发布页的正文骨架（页面 / 右栏共用，不带自己的 HDS 标题）。 */
+@Component
+export struct CreatePostContent {
+  build() {
+    Column({ space: 14 }) {
+      SymbolGlyph($r('sys.symbol.plus_square_on_square'))
+        .fontSize(56)
+        .fontColor([$r('app.color.secondary_text')])
+      Text($r('app.string.create_post_title'))
+        .fontSize(20)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.primary_text'))
+      Text($r('app.string.create_post_hint'))
+        .fontSize(13)
+        .fontColor($r('app.color.secondary_text'))
+        .textAlign(TextAlign.Center)
+        .padding({ left: 32, right: 32 })
+    }
+    .width('100%')
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+  }
+}
+
 @Entry
 @Component
 struct CreatePost {
@@ -81,24 +105,8 @@ struct CreatePost {
   build() {
     HdsNavigation() {
       Column() {
-        // 空态骨架：一个图标 + 一句说明。真正的编辑器接上来之后替换这块。
-        Column({ space: 14 }) {
-          SymbolGlyph($r('sys.symbol.plus_square_on_square'))
-            .fontSize(56)
-            .fontColor([$r('app.color.secondary_text')])
-          Text($r('app.string.create_post_title'))
-            .fontSize(20)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.primary_text'))
-          Text($r('app.string.create_post_hint'))
-            .fontSize(13)
-            .fontColor($r('app.color.secondary_text'))
-            .textAlign(TextAlign.Center)
-            .padding({ left: 32, right: 32 })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
+        CreatePostContent()
+          .layoutWeight(1)
       }
       .width('100%')
       .height('100%')
