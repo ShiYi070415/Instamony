@@ -1445,7 +1445,9 @@ struct Index {
       }
     }
     // 右栏栈已经空了：连右栏一起收起，回到居中的首页。
-    if (this.tabletRightName.length > 0 && this.tabletProfileStack.getAllPathName().length === 0) {
+    // 私信会话用的是常驻舞台，切换会话时 onHidden 也会触发，不能把舞台误关掉。
+    if (!this.directStageOpen && this.tabletRightName.length > 0
+      && this.tabletProfileStack.getAllPathName().length === 0) {
       this.closeTabletRight();
     }
   }
