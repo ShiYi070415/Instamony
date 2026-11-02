@@ -2039,7 +2039,13 @@ export struct ProfilePage {
   @Builder
   tabContent() {
     Column() {
-      Tabs({ barPosition: BarPosition.Start, index: this.initialSegment, controller: this.tabsController }) {
+      // index 直接取"当前分页对应的分段"，而不是只读一次的 initialSegment：
+      // 页面重建/重挂载后也不会被拽回第一段。
+      Tabs({
+        barPosition: BarPosition.Start,
+        index: this.vm.segmentOfTab(this.tab),
+        controller: this.tabsController
+      }) {
         /*
          * 段数不写死：本主页 4 段（帖子/视频/收藏/被标注）、别人主页 3 段（没有收藏），
          * 由视图模型的 order 决定（见 ProfileViewModel.segmentCount）。ForEach 在 Tabs 里
