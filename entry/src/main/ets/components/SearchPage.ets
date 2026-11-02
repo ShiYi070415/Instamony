@@ -31,7 +31,7 @@
  * pages/Index（底栏那两套动画的判据，和 FeedList/ProfilePage 同一个约定）。
  */
 
-import { display } from '@kit.ArkUI';
+import { curves, display } from '@kit.ArkUI';
 import { SearchPost, SearchUser } from '../model/Search';
 import { SearchViewModel } from '../viewmodel/SearchViewModel';
 import { ScrollDelta } from '../core/ScrollReport';
@@ -744,6 +744,8 @@ export struct SearchPage {
     .columnsTemplate(this.gridTemplate())
     .columnsGap(GRID_GAP)
     .rowsGap(GRID_GAP)
+    // 3/4/5 列切换时让列宽、格子和位置一起走弹簧过渡，而不是瞬间跳变。
+    .animation({ duration: 260, curve: curves.springMotion(0.4, 0.9) })
     .width('100%')
     /*
      * **高度写 100% 而不是 layoutWeight(1)**：这条瀑布流现在住在 `Refresh` 里（见 build），
