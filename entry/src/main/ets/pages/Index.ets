@@ -7080,8 +7080,12 @@ struct Index {
         height = 0;
       }
     }
-    if (width < 600 || height <= 0) {
+    if (width < 600) {
       return 0;
+    }
+    if (height <= 0) {
+      // 最末兜底：即使高度一直量不到，也保证用户页只占右侧一部分。
+      return Math.round(width * 9 / 16);
     }
     return Math.min(width - 32, Math.round(height * 9 / 16));
   }
