@@ -3264,7 +3264,8 @@ export struct ReelsPage {
        * 圆角靠 `.borderRadius` + 已有的 `.clip(true)` 一起生效，
        * 于是里面的封面/播放器/首帧叠层都会跟着被裁成圆角。
        */
-      .width('calc(100% - 32vp)')
+      .width('calc(100% - ' + (32 + this.leftInsetVp) + 'vp)')
+      .margin({ left: this.leftInsetVp })
       .borderRadius(16)
       /*
        * **边缘阴影**（需求：视频卡片要有一圈外阴影 —— 卡片浮在模糊背景上，边界才立得住）。
