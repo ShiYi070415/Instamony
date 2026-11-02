@@ -1610,6 +1610,20 @@ struct Index {
     return this.tabletWideShell() && this.reelsBackdropActive();
   }
 
+  /** 当前 Reels 页是不是在右侧分页里（此时左侧不应再加侧边栏内缩）。 */
+  private reelsInRightPane(): boolean {
+    return this.tabletRightName === PROFILE_REELS_PAGE
+      || this.tabletRightName === SEARCH_REELS_PAGE
+      || (this.directStageOpen && this.topPage === PROFILE_REELS_PAGE)
+      || (this.directStageOpen && this.topPage === SEARCH_REELS_PAGE);
+  }
+
+  /** Reels 内容左侧要额外避让的侧边栏宽度（仅左侧主 Reels 需要）。 */
+  private reelsSidebarInset(): number {
+    return this.reelsFullBleed() && !this.reelsInRightPane()
+      ? this.tabletSidebarWidth() : 0;
+  }
+
   /** Reels 类页面用黑色底：侧边栏也跟着铺黑，避免背景断层。 */
   private reelsBackdropActive(): boolean {
     return this.currentTab() === AppTab.Reels
@@ -1624,8 +1638,12 @@ struct Index {
      * 平板侧边栏布局没有底部 tab bar；Reels 页把全局控件藏起来时也没有。
      * 这两种情况下作者行 / 正文 / 动作区直接贴底，不再留 82。
      */
+    // 右栏 Reels 底部仍有评论输入条，必须按输入条高度避让。
+    if (this.reelsInRightPane()) {
+      return 82;
+    }
     if (this.tabletWideShell() || this.reelsChromeHidesShell()) {
-      // 侧边栏模式没有底部 tab bar：只避让系统手势条/导航条。
+      // 左侧主 Reels / 侧边栏模式没有底部 tab bar：只避让系统手势条/导航条。
       return this.bottomSafeVp;
     }
     /*
@@ -7438,7 +7456,7 @@ struct Index {
   /** 双页左栏最小宽度：9:16；Reels 全屏时加上侧边栏宽度。 */
   private splitMinLeft(): number {
     const height: number = this.shellHeightVp > 0 ? this.shellHeightVp : 800;
-    return Math.round(height * 9 / 16) + (this.reelsFullBleed() ? this.tabletSidebarWidth() : 0);
+    return Math.round(height * 9 / 16) + this.reelsSidebarInset();
   }
 
   /** 双页右栏最小宽度：9:16。 */
@@ -9559,7 +9577,7 @@ struct Index {
     .height('100%')
     .alignItems(VerticalAlign.Top)
     .padding({
-      left: REELS_TITLE_LEFT_PAD_VP + (this.reelsFullBleed() ? this.tabletSidebarWidth() : 0),
+      left: REELS_TITLE_LEFT_PAD_VP + this.reelsSidebarInset(),
       right: 12,
       top: 8
     })
@@ -9631,7 +9649,7 @@ struct Index {
     .height('100%')
     .alignItems(VerticalAlign.Top)
     .padding({
-      left: REELS_TITLE_LEFT_PAD_VP + (this.reelsFullBleed() ? this.tabletSidebarWidth() : 0),
+      left: REELS_TITLE_LEFT_PAD_VP + this.reelsSidebarInset(),
       right: 12,
       top: 8
     })
@@ -9684,7 +9702,7 @@ struct Index {
       // 标题栏那两颗按钮按**来源**取用（见 core/ReelsAction）：这是底栏那一页。
       source: ReelsAction.HOME,
       // 侧边栏是全屏浮层：资讯栏/正文左侧让开它，视频本身仍铺满。
-      leftInsetVp: this.reelsFullBleed() ? this.tabletSidebarWidth() : 0,
+      leftInsetVp: this.reelsSidebarInset(),
       // 分段滑动时冻结所有视频播放（见 ReelsPage.freeze 与 reelsTab 的 Tabs 回调）。
       // 刷到自己的视频时不画关注按钮（同其它两页）。
       ownAuthor: this.profileVm.ownAccountName(),
@@ -11891,7 +11909,7 @@ struct Index {
         source: source,
         // 正文/作者行贴着下方评论输入框的上沿 + 10vp（见 ReelOverlay.infoBottomVp）。
         infoBottomVp: this.reelsInfoBottom(),
-        leftInsetVp: this.reelsFullBleed() ? this.tabletSidebarWidth() : 0,
+        leftInsetVp: this.reelsSidebarInset(),
         // 我自己的账号名：作者是我时不画关注按钮（"我的"页视频分页那一页就是这样）。
         ownAuthor: this.profileVm.ownAccountName(),
         // 这一页没有浮动底栏，所以"手指一动就沉栏"这件事这里什么都不用做；回调留着是为了
