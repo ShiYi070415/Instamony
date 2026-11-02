@@ -7146,7 +7146,11 @@ struct Index {
     if (this.tabletWideShell()) {
       this.tabletRightName = name;
       this.tabletProfileParam = param;
-      if (this.tabletProfileStack.getAllPathName().length === 0) {
+      if (name === USER_PROFILE_PAGE
+        && this.tabletProfileStack.getAllPathName().indexOf(USER_PROFILE_PAGE) >= 0) {
+        // 用户页只能存在一个：再开别的用户时覆盖上一个，而不是继续压栈。
+        this.tabletProfileStack.clear();
+      } else if (this.tabletProfileStack.getAllPathName().length === 0) {
         this.tabletProfileStack.clear();
       }
       this.tabletProfileStack.pushPath({ name: name, param: param });
