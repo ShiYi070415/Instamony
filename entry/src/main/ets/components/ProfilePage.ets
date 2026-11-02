@@ -185,6 +185,10 @@ const PIN_SLACK_VP: number = 0;
 class ProfileRowSource implements IDataSource {
   private rows: Array<Array<ProfilePost>> = [];
   private listeners: Array<DataChangeListener> = [];
+  /** 每行几格（手机 3、平板 4/5，见 ProfilePage.gridColumns）。 */
+  private columns: number = GRID_COLUMNS;
+  /** 最近一次拿到的完整帖子列表；列数变化时用它重新分行。 */
+  private posts: Array<ProfilePost> = [];
   /**
    * 代次：**列表头变了**（切分页、收藏后刷新后新帖子排到了最前面）+1，并拼进 LazyForEach 的键。
    *
@@ -206,6 +210,15 @@ class ProfileRowSource implements IDataSource {
   /** 当前代次（拼进键用，见 generation 的说明）。 */
   gen(): number {
     return this.generation;
+  }
+
+  /** 窗口宽度变了：列数不同就按新列数重新分行。 */
+  setColumns(columns: number): void {
+    if (this.columns === columns) {
+      return;
+    }
+    this.columns = columns;
+    this.apply(this.posts);
   }
 
   registerDataChangeListener(listener: DataChangeListener): void {
@@ -233,9 +246,10 @@ class ProfileRowSource implements IDataSource {
    *   · 变短（取消收藏 / 刷新后变少）→ 只能整份重载。
    */
   apply(posts: Array<ProfilePost>): void {
+    this.posts = posts;
     const rows: Array<Array<ProfilePost>> = [];
-    for (let index: number = 0; index < posts.length; index += GRID_COLUMNS) {
-      rows.push(posts.slice(index, index + GRID_COLUMNS));
+    for (let index: number = 0; index < posts.length; index += this.columns) {
+      rows.push(posts.slice(index, index + this.columns));
     }
     const before: Array<Array<ProfilePost>> = this.rows;
     // 头变了（第一条不是原来那条）= 换了一整份内容：代次 +1（见 generation）。
@@ -932,6 +946,8 @@ export struct ProfilePage {
       this.screenWidthVp = FALLBACK_WIDTH_VP;
       this.screenHeightVp = 0;
     }
+    // 先确定网格列数，后面 apply 帖子时按这个列数分行。
+    this.applyGridColumns();
     /*
      * **先把"上次停在哪"接回来**。
      *
@@ -1139,10 +1155,30 @@ export struct ProfilePage {
     return tab >= 0 && tab < this.tabMores.length ? this.tabMores[tab] : false;
   }
 
+  /** 网格列数：手机 3、小平板 4、宽平板 5。 */
+  private gridColumns(): number {
+    if (this.screenWidthVp >= 1000) {
+      return 5;
+    }
+    if (this.screenWidthVp >= 700) {
+      return 4;
+    }
+    return GRID_COLUMNS;
+  }
+
+  /** 把当前列数同步给四份行数据源（宽度变化时重新分行）。 */
+  private applyGridColumns(): void {
+    const columns: number = this.gridColumns();
+    for (let i: number = 0; i < this.rowSources.length; i++) {
+      this.rowSources[i].setColumns(columns);
+    }
+  }
+
   /** 格子宽度：等分屏宽（减去间隔），这样最后一行不满也不会被拉宽。 */
   private cellWidth(): number {
-    const total: number = this.screenWidthVp - GRID_GAP * (GRID_COLUMNS - 1);
-    return total > 0 ? total / GRID_COLUMNS : 0;
+    const columns: number = this.gridColumns();
+    const total: number = this.screenWidthVp - GRID_GAP * (columns - 1);
+    return total > 0 ? total / columns : 0;
   }
 
   /**
@@ -2172,7 +2208,7 @@ export struct ProfilePage {
     })
     .onScrollIndex((start: number, end: number): void => {
       // 这个容器里只有网格行 + 末尾哨兵，下标从 0 开始。
-      const rows: number = Math.ceil(this.pageCount(tab) / GRID_COLUMNS);
+      const rows: number = Math.ceil(this.pageCount(tab) / this.gridColumns());
       if (end + PROFILE_LOAD_AHEAD >= rows) {
         this.askMore(tab);
       }

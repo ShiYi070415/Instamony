@@ -18,6 +18,7 @@ param(
   # release = no sourceMaps / optimized ABC, but still signed by the debug cert.
   # Use debug only when readable stack traces are needed.
   [string]$BuildMode = 'release',
+  [string]$Recipient = 'yijin',
   [switch]$SkipBuild
 )
 
@@ -87,6 +88,6 @@ $body = @{
   msg = $msg
   msgType = 'text'
 }
-$resp = Invoke-RestMethod -Uri 'https://api.chuckfang.com/yijin' -Method Post -Body $body -TimeoutSec 60
+$resp = Invoke-RestMethod -Uri "https://api.chuckfang.com/$Recipient" -Method Post -Body $body -TimeoutSec 60
 $resp | ConvertTo-Json -Compress
-Write-Host "MeoW push sent to yijin" -ForegroundColor Green
+Write-Host "MeoW push sent to $Recipient" -ForegroundColor Green

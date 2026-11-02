@@ -447,10 +447,32 @@ export struct SearchPage {
     this.refreshRecommended();
   }
 
+  /** 平板/折叠屏按宽度加列：手机 3、窄平板 4、宽平板 5。 */
+  private gridColumns(): number {
+    if (this.flowWidthVp >= 1000) {
+      return 5;
+    }
+    if (this.flowWidthVp >= 840) {
+      return 4;
+    }
+    return COLUMNS;
+  }
+
+  /** Grid 的 columnsTemplate，随列数变化。 */
+  private gridTemplate(): string {
+    const count: number = this.gridColumns();
+    let template: string = '1fr';
+    for (let i: number = 1; i < count; i++) {
+      template += ' 1fr';
+    }
+    return template;
+  }
+
   /** 一列的宽度（vp）：(瀑布流宽 − 列缝) ÷ 列数。 */
   private columnWidth(): number {
-    const inner: number = this.flowWidthVp - GRID_GAP * (COLUMNS - 1);
-    return inner > 0 ? inner / COLUMNS : FALLBACK_WIDTH_VP / COLUMNS;
+    const columns: number = this.gridColumns();
+    const inner: number = this.flowWidthVp - GRID_GAP * (columns - 1);
+    return inner > 0 ? inner / columns : FALLBACK_WIDTH_VP / columns;
   }
 
   /**
@@ -717,7 +739,7 @@ export struct SearchPage {
         .height(this.tileHeight(post))
       }, (post: SearchPost): string => post.code)
     }
-    .columnsTemplate('1fr 1fr 1fr')
+    .columnsTemplate(this.gridTemplate())
     .columnsGap(GRID_GAP)
     .rowsGap(GRID_GAP)
     .width('100%')
