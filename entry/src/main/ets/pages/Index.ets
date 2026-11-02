@@ -1600,7 +1600,8 @@ struct Index {
   /** 信息层底部留白：有输入条时贴它上沿 +10vp；评论面板打开时（页面输入条隐藏）回默认。 */
   /** Reels 全屏铺到侧边栏下面：侧边栏改为浮层，不占内容宽度。 */
   private reelsFullBleed(): boolean {
-    return this.tabletWideShell() && this.reelsBackdropActive() && !this.tabletHomeScoped();
+    // 单/双页 Reels 都把背景铺到侧边栏下面；双页时右侧页面仍从左侧内容宽度之后开始。
+    return this.tabletWideShell() && this.reelsBackdropActive();
   }
 
   /** Reels 类页面用黑色底：侧边栏也跟着铺黑，避免背景断层。 */
@@ -10900,9 +10901,12 @@ struct Index {
     .width(this.tabletSidebarWidth())
     .height('100%')
     .padding({ top: 4 })
-    // Reels 时侧边栏透明，让外层 Reels 黑底直接铺到侧边栏区域。
+    // Reels 时侧边栏透明，让外层 Reels 黑底直接铺到侧边栏区域，并去掉侧边栏分割线。
     .backgroundColor(this.reelsBackdropActive() ? Color.Transparent : $r('app.color.page_background'))
-    .border({ width: { right: 0.5 }, color: $r('app.color.divider') })
+    .border({
+      width: { right: this.reelsBackdropActive() ? 0 : 0.5 },
+      color: $r('app.color.divider')
+    })
   }
 
   @Builder
