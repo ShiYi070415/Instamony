@@ -7303,6 +7303,14 @@ struct Index {
     return Math.max(0, this.contentAreaWidth() - this.tabletLeftWidth());
   }
 
+  /** 右栏 feeds 流最大宽度：限制在 9:16，超过就左右留白。 */
+  private rightFeedMaxWidth(): number {
+    const pane: number = Math.max(0, this.profileStageWidth() - 12);
+    const byHeight: number = this.shellHeightVp > 0
+      ? Math.round(this.shellHeightVp * 9 / 16) : pane;
+    return Math.min(pane, byHeight);
+  }
+
   /** 所有"开新页"统一入口：平板首页走右栏，其余走全局导航栈。 */
   private pushPage(name: string, param: string = '', stackOnRight: boolean = false): void {
     if (this.directStageOpen && name === PROFILE_REELS_PAGE) {
@@ -12339,7 +12347,7 @@ struct Index {
         posts: this.postPagePosts,
         // 右栏里按右栏宽度排版；普通整页仍用首页同一套约束。
         maxWidthVp: this.tabletHomeScoped()
-          ? Math.max(0, this.profileStageWidth() - 12) : this.feedMaxWidth(),
+          ? this.rightFeedMaxWidth() : this.feedMaxWidth(),
         // 帖子页只有在自己是最上面那层时才播（被用户主页压住时要停）。
         active: this.topPage === POST_PAGE,
         // 一进来就定位到点进去的那一条（见 FeedList.restoreAnchor）。
