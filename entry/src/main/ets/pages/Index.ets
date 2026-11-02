@@ -7138,15 +7138,17 @@ struct Index {
 
   /** 右侧用户页宽度 = 内容区减去信息流列宽。 */
   private profileStageWidth(): number {
-    return Math.max(0, this.contentAreaWidth() - this.feedMaxWidth());
+    return Math.max(0, this.contentAreaWidth() - this.tabletLeftWidth());
   }
 
   /** 所有"开新页"统一入口：平板首页走右栏，其余走全局导航栈。 */
   private pushPage(name: string, param: string = ''): void {
-    if (this.tabletWideShell() && this.selectedIndex === 0) {
+    if (this.tabletWideShell()) {
       this.tabletRightName = name;
       this.tabletProfileParam = param;
-      this.tabletProfileStack.clear();
+      if (this.tabletProfileStack.getAllPathName().length === 0) {
+        this.tabletProfileStack.clear();
+      }
       this.tabletProfileStack.pushPath({ name: name, param: param });
       return;
     }
@@ -7171,8 +7173,18 @@ struct Index {
 
   /** 宽屏首页且右栏打开：此时 HDS Navigation 只包住帖子流这一列。 */
   private tabletHomeScoped(): boolean {
-    return this.tabletWideShell() && this.selectedIndex === 0
-      && this.tabletRightName.length > 0;
+    return this.tabletWideShell() && this.tabletRightName.length > 0;
+  }
+
+  /** 平板分栏时左栏宽度：首页按 9:16 帖子流；其余四个主页各占 45%。 */
+  private tabletLeftWidth(): number {
+    if (!this.tabletHomeScoped()) {
+      return this.contentAreaWidth();
+    }
+    if (this.selectedIndex === 0) {
+      return this.feedMaxWidth();
+    }
+    return Math.max(320, Math.round(this.contentAreaWidth() * 0.45));
   }
 
   @Builder
@@ -7579,11 +7591,27 @@ struct Index {
    *     底栏；栏靠自己的底边加高来避让系统条（见 degradedBarHeight），栏高写成
    *     AttributeModifier 里的常量。
    */
+  /** 当前主页面内容（不带底栏）；平板分栏时放左栏，手机时放内容层。 */
+  @Builder
+  mainTabContent() {
+    if (this.selectedIndex === 0) {
+      this.homeTab()
+    } else if (this.currentTab() === AppTab.Profile) {
+      this.profilePage()
+    } else if (this.currentTab() === AppTab.Reels) {
+      this.reelsTab()
+    } else if (this.currentTab() === AppTab.Direct) {
+      this.directPage()
+    } else {
+      this.searchPage()
+    }
+  }
+
   @Builder
   nativeShellContent() {
     if (this.tabletHomeScoped()) {
-      // HDS Navigation 缩到帖子流这一列时，内容也只画首页信息流。
-      this.homeTab()
+      // HDS Navigation 缩到左栏时，内容只画当前主页面。
+      this.mainTabContent()
     } else if (this.loginPageShown()) {
       /*
        * **未登录 = 整页登录页**（见 components/LoginPage 的文件头）。
@@ -7662,25 +7690,7 @@ struct Index {
          * 现在是**置中弹窗**（见 challengeDialog / components/ChallengeDialog），
          * 由 refreshChallengeState 触发；挑战不是"首页才有"，弹窗天然覆盖五个页签。
          */        Column() {
-          if (this.selectedIndex === 0) {
-            if (this.tabletWideShell()) {
-              this.homeSplit()
-            } else {
-              this.homeTab()
-            }
-          } else if (this.currentTab() === AppTab.Profile) {
-            // 「我的」有原生实现，不走占位页。
-            this.profilePage()
-          } else if (this.currentTab() === AppTab.Reels) {
-            // Reels 现在只做视频流（见 ReelsPage 的说明）。
-            this.reelsTab()
-          } else if (this.currentTab() === AppTab.Direct) {
-            // 私信：原生收件箱（只读，不做发送，见 DirectPage 的说明）。
-            this.directPage()
-          } else {
-            // 搜索：原生搜索框 + 账号结果（见 SearchPage 的说明）。
-            this.searchPage()
-          }
+          this.mainTabContent()
         }
         .width('100%')
         .layoutWeight(1)
@@ -10675,7 +10685,7 @@ struct Index {
     // 通知等整屏页面作为 NavDestination 压在这一层之上（见 destinationBuilder）。
     .navDestination(this.destinationBuilder)
       }
-      .width(this.tabletHomeScoped() ? this.feedMaxWidth() : '100%')
+      .width(this.tabletHomeScoped() ? this.tabletLeftWidth() : '100%')
       .layoutWeight(this.tabletHomeScoped() ? 0 : 1)
       .height('100%')
       .animation({ duration: 280, curve: Curve.EaseInOut })
