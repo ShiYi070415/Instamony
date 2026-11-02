@@ -3009,11 +3009,18 @@ export struct SettingsPanel {
         .width('100%')
         .height(this.standaloneDetail ? LIST_TOP_OFFSET + 24 : LIST_TOP_OFFSET)
 
-      if (this.settingsPage === 'root') {
-        this.rootList()
-      } else {
-        this.detailList()
+      // 平板/宽屏：只收窄设置内容，根容器仍铺满全屏（渐变背景不受影响）。
+      Column() {
+        if (this.settingsPage === 'root') {
+          this.rootList()
+        } else {
+          this.detailList()
+        }
       }
+      .width('100%')
+      .layoutWeight(1)
+      .constraintSize({ maxWidth: 720 })
+      .alignSelf(ItemAlign.Center)
 
       // 旧的一页式设置列表已迁移到 rootList / detailList；保留代码但不再参与布局。
       List() {
