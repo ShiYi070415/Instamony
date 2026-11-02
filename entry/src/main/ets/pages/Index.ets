@@ -2058,7 +2058,9 @@ struct Index {
       value: [
         {
           content: {
-            icon: this.videoMuted ? $r('sys.symbol.speaker_slash') : $r('sys.symbol.speaker_wave_2'),
+            icon: new SymbolGlyphModifier(this.videoMuted
+              ? $r('sys.symbol.speaker_slash') : $r('sys.symbol.speaker_wave_2'))
+              .fontColor([Color.White]),
             label: $r('app.string.action_mute'),
             action: (): void => {
               AppSettings.setVideoMuted(!this.videoMuted);
@@ -2067,7 +2069,8 @@ struct Index {
         },
         {
           content: {
-            icon: $r('sys.symbol.arrow_down_to_line'),
+            icon: new SymbolGlyphModifier($r('sys.symbol.arrow_down_to_line'))
+              .fontColor([Color.White]),
             label: $r('app.string.action_download'),
             action: (): void => {
               this.downloadReel(source);
@@ -8488,16 +8491,16 @@ struct Index {
   private reelsDestinationTitleStyle(): TitleBarStyleOptions {
     const style: TitleBarStyleOptions = {
       scrollEffectOpts: {
-        enableScrollEffect: false,
-        scrollEffectType: ScrollEffectType.GRADIENT_BLUR
+        enableScrollEffect: true,
+        scrollEffectType: ScrollEffectType.COMMON_BLUR
       }
     };
     const darkBar: HdsNavigationTitleBarStyle = {
       backgroundStyle: { backgroundColor: '#000000' },
       contentStyle: {
         titleStyle: { mainTitleColor: Color.White },
-        backIconStyle: { iconColor: Color.White },
-        menuStyle: { iconColor: Color.White },
+        backIconStyle: { iconColor: Color.White, textColor: Color.White },
+        menuStyle: { iconColor: Color.White, textColor: Color.White },
         dividerStyle: { dividerColor: '#33FFFFFF' }
       }
     };

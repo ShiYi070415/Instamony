@@ -260,7 +260,9 @@ export struct CommentInputBar {
           Text($r('app.string.comments_send'))
             .fontSize(15)
             .fontWeight(FontWeight.Medium)
-            .fontColor(this.canSend() ? $r('app.color.accent') : $r('app.color.comment_muted'))
+            .fontColor(this.dark
+              ? (this.canSend() ? Color.White : '#66FFFFFF')
+              : (this.canSend() ? $r('app.color.accent') : $r('app.color.comment_muted')))
             .textAlign(TextAlign.Center)
             .width(SEND_WIDTH)
             .height(BAR_HEIGHT)
