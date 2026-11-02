@@ -700,6 +700,8 @@ export struct FeedList {
    * 避免一张卡片横跨 1000+vp。
    */
   @Prop maxWidthVp: number = 0;
+  /** 信息流实际内容宽度（vp）：多图帖按"最高那张"算盒子高度时要用它，不能用整屏宽。 */
+  @State private contentWidthVp: number = 0;
   /**
    * 回到这个列表时要停在**哪一条**（用帖子 key，不是下标）。
    *
@@ -1563,7 +1565,8 @@ export struct FeedList {
        * 拿不到（0）时退回第一张的比例（老行为）。
        */
       const tallest: number = post.imageAspectMin > 0 ? post.imageAspectMin : aspect;
-      const widthVp: number = px2vp(this.screenWidthPx);
+      const widthVp: number = this.contentWidthVp > 0
+        ? this.contentWidthVp : px2vp(this.screenWidthPx);
       if (this.carouselAspectLogged.indexOf(FeedMapper.keyOf(post)) < 0) {
         // 只记一次（每张卡片）：多图帖的盒子到底按哪张图钉高，日志里一眼能看出来。
         this.carouselAspectLogged.push(FeedMapper.keyOf(post));
@@ -1591,7 +1594,8 @@ export struct FeedList {
    */
   private carouselAspect(post: MediaPost): number {
     const box: number = this.mediaBoxAspect(post);
-    const widthVp: number = px2vp(this.screenWidthPx);
+    const widthVp: number = this.contentWidthVp > 0
+      ? this.contentWidthVp : px2vp(this.screenWidthPx);
     if (widthVp <= 0 || box <= 0) {
       return box;
     }
@@ -3553,5 +3557,12 @@ export struct FeedList {
     .height('100%')
     .constraintSize({ maxWidth: this.maxWidthVp > 0 ? this.maxWidthVp : 10000 })
     .alignSelf(ItemAlign.Center)
+    .onAreaChange((oldArea: Area, newArea: Area): void => {
+      const width: number = typeof newArea.width === 'number'
+        ? newArea.width : parseFloat(`${newArea.width}`);
+      if (width > 0 && Math.abs(width - this.contentWidthVp) > 0.5) {
+        this.contentWidthVp = width;
+      }
+    })
   }
 }
