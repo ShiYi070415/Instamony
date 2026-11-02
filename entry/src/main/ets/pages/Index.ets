@@ -8305,26 +8305,26 @@ struct Index {
    * 只能按 HDS 的观感再画一遍 —— 字号/左边距沿用 Reels 那条标题的常量，两页看起来一致
    * （见 reelsTitleSegment）。
    *
-   * 布局：Stack 叠两层 —— 底层是"标题贴左"的一行，上层是居中的账号按钮；
-   * 按钮按 20vp？不，按标题栏内的最大宽度收窄（见 AccountSwitcher 的 Select 宽度），
-   * 「我的」两个字只有两个汉字，和居中的按钮不会打架。
+   * 布局：一行 Row —— 标题贴左、占据剩余宽度（超长省略），账号按钮贴右，
+   * 正好落在 HDS menus 的左边；标题再长也不会穿到按钮下面。
    */
   @Builder
   profileTitleAccount() {
-    Stack({ alignContent: Alignment.Center }) {
-      Row() {
-        Text(this.pageTitle())
-          .fontSize(REELS_TITLE_SIZE)
-          .fontWeight(FontWeight.Bold)
-          .fontColor($r('app.color.primary_text'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-        Blank()
-      }
-      .width('100%')
-      .height('100%')
-      .alignItems(VerticalAlign.Center)
-      .padding({ left: REELS_TITLE_LEFT_PAD_VP })
+    /*
+     * 标题占剩余宽度，账号按钮放在**菜单按钮左边**（同一行右端）。
+     *
+     * 之前账号按钮是居中的叠层：长标题（越南语尤其明显）会从按钮底下穿过去。
+     * 现在改成 Row：标题 layoutWeight(1) + 省略号，按钮 flexShrink(0) 贴右，
+     * 永远在 HDS menus 左侧，不会再遮挡。
+     */
+    Row({ space: 8 }) {
+      Text(this.pageTitle())
+        .fontSize(REELS_TITLE_SIZE)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.primary_text'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .layoutWeight(1)
 
       AccountSwitcher({
         onToggle: (): void => {
@@ -8334,6 +8334,8 @@ struct Index {
     }
     .width('100%')
     .height('100%')
+    .padding({ left: REELS_TITLE_LEFT_PAD_VP, right: 4 })
+    .alignItems(VerticalAlign.Center)
   }
 
   /**
