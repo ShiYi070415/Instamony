@@ -233,6 +233,10 @@ export struct DirectThreadPage {
   @State private screenWidthVp: number = FALLBACK_WIDTH_VP;
   /** 右栏内嵌时的实际宽度；0 = 按整屏。 */
   @Prop layoutWidthVp: number = 0;
+  /** 是否处于双栏右 pane：双栏时分享卡宽度档位更小。 */
+  @Prop dualPane: boolean = false;
+  /** 分享封面解码后的真实比例（高 / 宽），修正元数据比例不准的卡片。 */
+  @State private coverAspectById: Map<string, number> = new Map();
   /** 屏幕高度（vp）——只为诊断日志（对齐输入法坐标系用）。 */
   private windowHeightVp: number = 0;
   /** 屏幕高度（px）：与 `getRectangleById` 的窗口坐标同单位，自校正要用。 */
@@ -780,14 +784,22 @@ export struct DirectThreadPage {
    */
   private shareCardWidth(message: DirectMessage): number {
     const width: number = this.screenWidthVp > 0 ? this.screenWidthVp : FALLBACK_WIDTH_VP;
+    if (this.dualPane) {
+      // 双栏：帖子卡 1/2 页宽，Reels/视频卡 1/3 页宽。
+      return message.shareKind === 'video' ? width / 3 : width / 2;
+    }
+    // 单页：帖子卡 2/3 页宽，Reels/视频卡是帖子卡的 2/3。
     const postWidth: number = width * 2 / 3;
     return message.shareKind === 'video' ? postWidth * 2 / 3 : postWidth;
   }
 
-  /** 卡片封面高度：优先用原图比例，宽度变化时按宽 × 比例自适应。 */
+  /** 卡片封面高度：优先用真实解码比例，元数据缺失时再退回原始尺寸。 */
   private shareCardHeight(message: DirectMessage): number {
     const width: number = this.shareCardWidth(message);
-    // 单页 / 双页统一只用原始尺寸比例，不因图片解码时机不同而改变卡片比例。
+    const known: number | undefined = this.coverAspectById.get(message.id);
+    if (known !== undefined && known > 0) {
+      return Math.round(width * known);
+    }
     const raw: number = DirectThreadPage.rawAspect(message);
     if (raw > 0) {
       return Math.round(width * raw);
@@ -1553,6 +1565,16 @@ export struct DirectThreadPage {
           .height('100%')
           .objectFit(ImageFit.Fill)
           .draggable(false)
+          .onComplete((event): void => {
+            if (event !== undefined && event.width > 0 && event.height > 0) {
+              const ratio: number = event.height / event.width;
+              if (Math.abs((this.coverAspectById.get(message.id) ?? 0) - ratio) > 0.001) {
+                const next: Map<string, number> = new Map(this.coverAspectById);
+                next.set(message.id, ratio);
+                this.coverAspectById = next;
+              }
+            }
+          })
           .alt($r('app.media.grid_placeholder'))
       } else {
         Column()
