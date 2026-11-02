@@ -1149,6 +1149,8 @@ struct Index {
   @State private shellHeightVp: number = 0;
   /** 首页右侧挤入的用户主页（`用户名|id`，空 = 收起）。 */
   @State private tabletProfileParam: string = '';
+  /** 右栏自己的 HDS 导航栈（和主内容完全隔离）。 */
+  private tabletProfileStack: NavPathStack = new NavPathStack();
 
   /**
    * 底栏行为（设定页里的开关，见 AppSettings 的 BAR_HIDE_*）。**只有支持悬浮底栏的设备
@@ -7129,6 +7131,13 @@ struct Index {
 
   /** 打开/关闭右侧用户页：信息流平移和用户页挤入共用同一条动画。 */
   private setTabletProfile(param: string): void {
+    if (param.length > 0) {
+      // 右栏有自己的 NavPathStack：先放好目标页，再让右栏出现。
+      this.tabletProfileStack.clear();
+      this.tabletProfileStack.pushPath({ name: 'tabletProfile', param: param });
+    } else {
+      this.tabletProfileStack.clear();
+    }
     this.getUIContext().animateTo({ duration: 280, curve: Curve.EaseInOut }, (): void => {
       this.tabletProfileParam = param;
     });
@@ -7140,34 +7149,17 @@ struct Index {
       && this.tabletProfileParam.length > 0;
   }
 
-  /** 右栏用户页：在 HDS Navigation 之外，和帖子流并排。 */
   @Builder
-  tabletProfilePane() {
-    Column() {
-      Row({ space: 8 }) {
-        MaterialIconButton({
-          symbol: $r('sys.symbol.chevron_left'),
-          buttonSize: 40,
-          iconSize: 20,
-          onTap: (on: boolean): void => {
-            this.setTabletProfile('');
-          }
-        })
-        Text(Index.userNameOf(this.tabletProfileParam))
-          .fontSize(16)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.primary_text'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .layoutWeight(1)
-      }
-      .width('100%')
-      .height(56)
-      .padding({ left: 8, right: 12 })
-      .alignItems(VerticalAlign.Center)
+  tabletProfileDestinationBuilder(name: string, param: Object) {
+    this.tabletProfileDestination(name, param)
+  }
 
+  /** 右栏自己的 HdsNavDestination：标题显示用户名，返回键由 HDS 提供。 */
+  @Builder
+  tabletProfileDestination(name: string, param: Object) {
+    HdsNavDestination() {
       UserProfileRoute({
-        param: this.tabletProfileParam,
+        param: `${param}`,
         layoutWidthVp: this.profileStageWidth(),
         embedded: true,
         onOpen: (post: ProfilePost): void => {
@@ -7178,16 +7170,54 @@ struct Index {
         },
         onOpenUserProfile: (username: string): void => {
           this.tabletProfileParam = `${username}|`;
+          this.setTabletProfile(this.tabletProfileParam);
         }
       })
-        .layoutWeight(1)
+        .width('100%')
+        .height('100%')
     }
-    .width(this.profileStageWidth())
+    .titleBar({
+      content: {
+        title: { mainTitle: Index.userNameOf(`${param}`) },
+        menu: { value: [] }
+      },
+      style: this.destinationTitleStyle(),
+      avoidLayoutSafeArea: false,
+      enableComponentSafeArea: false
+    })
+    .hideBackButton(false)
+    .titleMode(HdsNavDestinationTitleMode.MINI)
+    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
+    .onBackPressed((): boolean => {
+      this.tabletProfileParam = '';
+      return false;
+    })
+  }
+
+  /** 右栏：独立 HdsNavigation，和左侧主 HdsNavigation 同高、同材质。 */
+  @Builder
+  tabletProfilePane() {
+    HdsNavigation(this.tabletProfileStack) {
+      Column()
+        .width('100%')
+        .height('100%')
+    }
+    .width('100%')
     .height('100%')
-    .padding({ top: this.topSafeVp })
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .titleBar({
+      content: { title: { mainTitle: '' }, menu: { value: [] } },
+      style: this.destinationTitleStyle(),
+      avoidLayoutSafeArea: false,
+      enableComponentSafeArea: false
+    })
+    .navDestination(this.tabletProfileDestinationBuilder)
+    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
+    .width('100%')
+    .height('100%')
     .backgroundColor($r('app.color.page_background'))
     .clip(true)
-    .border({ width: { left: 0.5 }, color: $r('app.color.divider') })
     .transition(TransitionEffect.translate({ x: '100%' })
       .animation({ duration: 280, curve: Curve.EaseInOut }))
   }
