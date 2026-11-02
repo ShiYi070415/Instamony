@@ -1543,26 +1543,28 @@ export struct DirectThreadPage {
   @Builder
   shareCover(message: DirectMessage, width: number, height: number) {
     Stack({ alignContent: Alignment.Center }) {
-      Column()
-        .width('100%')
-        .height('100%')
-        .backgroundColor(FALLBACK_SURFACE)
       if (message.shareCover.length > 0) {
+        /*
+         * 只给宽度，不给高度：Image 按自身原始比例决定高度。
+         * 卡片宽度固定，所以图片宽度永远等于卡片宽度，高度随图片比例走，
+         * 不会因为单双页切换出现 Contain 黑边或 Cover 压缩。
+         */
         Image(message.shareCover)
           .width('100%')
-          .height('100%')
-          // 卡片宽度固定；图片宽 100%，高度由真实比例决定，因此 Cover 正好铺满不裁切。
-          .objectFit(ImageFit.Cover)
+          .objectFit(ImageFit.Fill)
           .draggable(false)
           .alt($r('app.media.grid_placeholder'))
       } else {
+        Column()
+          .width('100%')
+          .height(height)
+          .backgroundColor(FALLBACK_SURFACE)
         SymbolGlyph($r(message.shareKind === 'video' ? 'sys.symbol.play_fill' : 'sys.symbol.photo'))
           .fontSize(26)
           .fontColor([$r('app.color.secondary_text')])
       }
     }
     .width(width)
-    .height(height)
   }
 
   /**
@@ -1661,7 +1663,6 @@ export struct DirectThreadPage {
         .hitTestBehavior(HitTestMode.None)
     }
     .width(this.shareCardWidth(message))
-    .height(this.shareCardHeight(message))
     .borderRadius(CARD_RADIUS)
     .clip(true)
     .backgroundColor($r('app.color.field_background'))
