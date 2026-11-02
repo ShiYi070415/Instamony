@@ -8782,7 +8782,7 @@ struct Index {
       const followingPx: number = this.getUIContext().getMeasureUtils()
         .measureText({ textContent: following, fontSize: 14 });
       const textWidth: number = this.getUIContext().px2vp(Math.max(explorePx, followingPx));
-      return Math.max(96, Math.ceil(textWidth * 2 + 48));
+      return Math.max(160, Math.ceil(textWidth * 2 + 48));
     } catch (error) {
       return 120;
     }
