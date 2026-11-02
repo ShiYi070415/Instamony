@@ -10195,8 +10195,8 @@ struct Index {
       Row() {
         MaterialIconButton({
           symbol: $r('sys.symbol.line_3_horizontal'),
-          buttonSize: 40,
-          iconSize: 20,
+          buttonSize: 56,
+          iconSize: 22,
           onTap: (on: boolean): void => {
             this.tabletSidebarExpanded = !this.tabletSidebarExpanded;
           }
@@ -10216,23 +10216,23 @@ struct Index {
                   .fontSize(TAB_ICON_SIZE)
                   .fontColor([this.tabIconColor(this.selectedIndex === index)])
               }
-              .width(40)
-              .height(48)
-              .borderRadius(20)
+              .width(56)
+              .height(56)
+              .borderRadius(28)
               .backgroundColor(Color.Transparent)
               .onClick((): void => {
                 this.onTabBarClick(index);
               })
             }, (item: TabItem): string => `${item.tab}`)
           }
-          .width(40)
-          .height(5 * 48)
+          .width(56)
+          .height(5 * 56)
           .alignItems(HorizontalAlign.Center)
         }
-        .width(40)
-        .height(5 * 48)
+        .width(56)
+        .height(5 * 56)
         .padding(0)
-        .borderRadius(20)
+        .borderRadius(28)
         .clip(true)
         .backgroundColor(Color.Transparent)
         .selectedColor(Color.Transparent)
@@ -10246,16 +10246,16 @@ struct Index {
       Column({ space: 8 }) {
         MaterialIconButton({
           symbol: $r('sys.symbol.heart'),
-          buttonSize: 40,
-          iconSize: 20,
+          buttonSize: 56,
+          iconSize: 22,
           onTap: (on: boolean): void => {
             this.openNotifications();
           }
         })
         MaterialIconButton({
           symbol: $r('sys.symbol.more'),
-          buttonSize: 40,
-          iconSize: 20,
+          buttonSize: 56,
+          iconSize: 22,
           onTap: (on: boolean): void => {
             this.openSettings();
           }
