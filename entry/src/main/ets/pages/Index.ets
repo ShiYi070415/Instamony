@@ -7213,10 +7213,13 @@ struct Index {
   }
 
   /** 宽屏首页且右栏打开：此时 HDS Navigation 只包住帖子流这一列。 */
-  /** 只有窗口足够宽才启用双栏；小窗保持单栏，而不是按比例硬挤。 */
+  /**
+   * 官方栅格断点：xs < 320、sm 320–599、md 600–839、lg 840–1079、xl 1080–1439、xxl ≥1440。
+   * 侧栏从 md 开始，双栏从 lg 开始；不按比例硬挤。
+   */
   private tabletSplitEnabled(): boolean {
     const width: number = this.shellWidthVp > 0 ? this.shellWidthVp : this.screenWidthVp;
-    return width >= 900;
+    return width >= 840;
   }
 
   private tabletHomeScoped(): boolean {
@@ -7234,9 +7237,9 @@ struct Index {
     }
     const width: number = this.shellWidthVp > 0 ? this.shellWidthVp : this.screenWidthVp;
     let target: number = 400;
-    if (width >= 1600) {
+    if (width >= 1440) {
       target = 640;
-    } else if (width >= 1200) {
+    } else if (width >= 1080) {
       target = 520;
     }
     // 右栏至少留 360vp，避免 HDS Navigation 被挤到屏幕外。
