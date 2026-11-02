@@ -583,11 +583,12 @@ export struct StoryViewer {
     this.switching = true;
     this.flipDir = dir;
     this.flipAt = Date.now();
-    // 角度取**反方向**：接下一位是往左翻、回上一位往右翻（用户反馈原来的方向是反的）。
-    // 从**当前角度**接着转（跟手拖到一半松手时就是从这里继续），不是从 0 重来。
-    animateTo({ duration: FLIP_OUT_MS, curve: Curve.Friction }, (): void => {
-      this.applyFlip(-dir * FLIP_MAX_ANGLE);
+    // 不用 3D 翻面（复杂卡片在真机上旋转会掉帧）：像 Highlight 换组一样，
+    // 只做一次很轻的透明度过渡，新数据到了再淡回来。
+    animateTo({ duration: 140, curve: Curve.EaseOut }, (): void => {
+      this.pageAlpha = 0.65;
     });
+    this.applyFlip(0);
   }
 
   /**
@@ -618,14 +619,13 @@ export struct StoryViewer {
   }
 
   private animateFlipIn(): void {
-    // 先"瞬移"到另一面（这一刻卡片是侧对着的，看不出跳变），再翻回 0。
-    this.applyFlip(this.flipDir * FLIP_MAX_ANGLE);
+    this.applyFlip(0);
+    this.pageAlpha = 0.65;
     animateTo({
       duration: FLIP_IN_MS,
-      // 阻尼调大一点（0.68 → 0.82）：回弹别那么"猛"（用户反馈）。
       curve: curves.springMotion(0.45, 0.82)
     }, (): void => {
-      this.applyFlip(0);
+      this.pageAlpha = 1;
     });
   }
 
@@ -638,7 +638,8 @@ export struct StoryViewer {
    * 之前那套"自己算 dx·(cosθ-1) 位移 + cosθ 压扁"的手工合成已删掉（用户建议的包一层更干净）。
    */
   private applyFlip(angle: number): void {
-    this.flipAngle = angle;
+    // 翻面已改成淡入淡出；角度固定 0，避免复杂卡片旋转掉帧。
+    this.flipAngle = 0;
   }
 
   // ---------------------------------------------------------------- 左右滑：跟手翻页
