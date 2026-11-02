@@ -1156,6 +1156,10 @@ struct Index {
   @State private tabletRightName: string = '';
   /** 右栏自己的 HDS 导航栈（和主内容完全隔离）。 */
   private tabletProfileStack: NavPathStack = new NavPathStack();
+  /** 私信会话常驻详情舞台：宽度变化时只改布局，不重建 DirectThreadPage。 */
+  @State private directStageOpen: boolean = false;
+  @State private directStageThread: string = '';
+  private directStageStack: NavPathStack = new NavPathStack();
 
   /**
    * 底栏行为（设定页里的开关，见 AppSettings 的 BAR_HIDE_*）。**只有支持悬浮底栏的设备
@@ -5329,6 +5333,9 @@ struct Index {
    * 可能还要用（现在是没人引用了）。
    */
   private selectTab(tab: AppTab): void {
+    if (this.directStageOpen && tab !== AppTab.Direct) {
+      this.closeDirectStage();
+    }
     this.selectedTab = tab;
     // 用户动作：后台预热让路（切页后新页面自己要先读，别和它抢网络/线程）。
     this.lastInteractionMs = Date.now();
@@ -7156,6 +7163,10 @@ struct Index {
 
   /** 所有"开新页"统一入口：平板首页走右栏，其余走全局导航栈。 */
   private pushPage(name: string, param: string = ''): void {
+    if (this.directStageOpen) {
+      // 会话是常驻舞台：从会话里再开别的页面时先收起它，避免两个详情层叠着。
+      this.closeDirectStage();
+    }
     if (this.tabletWideShell() && this.tabletSplitEnabled()) {
       const alreadyOpen: boolean = this.tabletRightName.length > 0;
       if (name === USER_PROFILE_PAGE
@@ -7362,6 +7373,63 @@ struct Index {
         this.closeTabletRight();
       }
     })
+  }
+
+  /** 私信会话舞台宽度：小窗整页，双栏时右栏。 */
+  private directStageWidth(): number {
+    return this.tabletHomeScoped()
+      ? Math.max(0, this.profileStageWidth() - 12) : this.contentAreaWidth();
+  }
+
+  private directStageX(): number {
+    const sidebar: number = this.tabletWideShell() ? this.tabletSidebarWidth() : 0;
+    return sidebar + (this.tabletHomeScoped() ? this.tabletLeftWidth() : 0);
+  }
+
+  private openDirectStage(threadId: string): void {
+    this.directStageThread = threadId;
+    this.directStageOpen = true;
+    this.tabletRightName = DIRECT_THREAD_PAGE;
+    this.tabletProfileParam = threadId;
+    this.directStageStack.clear();
+    this.directStageStack.pushPath({ name: DIRECT_THREAD_PAGE, param: threadId });
+  }
+
+  private closeDirectStage(): void {
+    if (!this.directStageOpen) {
+      return;
+    }
+    this.directStageOpen = false;
+    this.directStageThread = '';
+    this.tabletRightName = '';
+    this.tabletProfileParam = '';
+    this.directStageStack.clear();
+  }
+
+  /** 会话常驻舞台：HDS 标题栏 + DirectThreadPage；宽度变化不会销毁页面。 */
+  @Builder
+  directThreadStage() {
+    HdsNavigation(this.directStageStack) {
+      Column()
+        .width('100%')
+        .height('100%')
+    }
+    .width(this.directStageWidth())
+    .height('100%')
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .titleBar({
+      content: { title: { mainTitle: '' }, menu: { value: [] } },
+      style: this.destinationTitleStyle(),
+      avoidLayoutSafeArea: false,
+      enableComponentSafeArea: false
+    })
+    .navDestination(this.destinationBuilder)
+    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
+    .position({ x: this.directStageX(), y: 0 })
+    .zIndex(30)
+    .clip(true)
+    .backgroundColor($r('app.color.page_background'))
   }
 
   /** 右栏：独立 HdsNavigation，和左侧主 HdsNavigation 同高、同材质。 */
@@ -9680,7 +9748,8 @@ struct Index {
     }).catch((error: Error): void => {
       hilog.warn(DOMAIN, TAG, 'thread preload failed: %{public}s', error.message);
     });
-    this.pushPage(DIRECT_THREAD_PAGE, thread.id);
+    // 会话页走常驻舞台：小窗铺满，双栏时直接移到右侧，组件实例不重建。
+    this.openDirectStage(thread.id);
   }
 
   // ---------------------------------------------------------------- 限时快拍（主页托盘）
@@ -10783,8 +10852,12 @@ struct Index {
       .height('100%')
 
       // 右栏在 HDS Navigation 之外：HDS 只覆盖帖子流那一列。
-      if (this.tabletHomeScoped()) {
+      if (this.tabletHomeScoped() && !this.directStageOpen) {
         this.tabletProfilePane()
+      }
+      // 私信会话常驻舞台：小窗铺满，双栏时只改位置/宽度，页面实例不重建。
+      if (this.directStageOpen) {
+        this.directThreadStage()
       }
     }
     .width('100%')
@@ -10802,10 +10875,13 @@ struct Index {
         this.shellHeightVp = height;
       }
       const isSplit: boolean = this.tabletSplitEnabled();
-      if (!wasSplit && isSplit) {
-        this.migrateGlobalPageToRight();
-      } else if (wasSplit && !isSplit) {
-        this.migrateRightToGlobal();
+      // 私信会话有常驻舞台：跨断点只改舞台布局，不做路由迁移，避免重建页面。
+      if (!this.directStageOpen) {
+        if (!wasSplit && isSplit) {
+          this.migrateGlobalPageToRight();
+        } else if (wasSplit && !isSplit) {
+          this.migrateRightToGlobal();
+        }
       }
     })
   }
@@ -11376,8 +11452,8 @@ struct Index {
       HdsNavDestination() {
         DirectThreadPage({
           vm: this.directThreadVm,
-          layoutWidthVp: this.tabletHomeScoped()
-            ? Math.max(0, this.profileStageWidth() - 12) : 0,
+          layoutWidthVp: this.directStageOpen
+            ? Math.max(0, this.directStageWidth()) : 0,
           // 标题栏交给 HDS（头像 + 名字 + 用户名 + 返回键 + 菜单），页面不再自绘
           externalHeader: true,
           onOpenWeb: (): void => {
@@ -11400,7 +11476,9 @@ struct Index {
           },
           // 自绘标题（头像 + 名字 + 用户名）替代 HDS 标题栏，返回键由页面自己画。
           onBack: (): void => {
-            if (this.navStack.size() > 0) {
+            if (this.directStageOpen) {
+              this.closeDirectStage();
+            } else if (this.navStack.size() > 0) {
               this.navStack.pop();
             }
           }
@@ -11456,7 +11534,13 @@ struct Index {
       .onHidden((): void => {
         this.onPageHidden(DIRECT_THREAD_PAGE);
       })
-      .onBackPressed((): boolean => this.handleDestinationBack())
+      .onBackPressed((): boolean => {
+        if (this.directStageOpen) {
+          this.closeDirectStage();
+          return true;
+        }
+        return this.handleDestinationBack();
+      })
     }
   }
 
