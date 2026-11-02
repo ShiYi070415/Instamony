@@ -784,10 +784,14 @@ export struct DirectThreadPage {
     return message.shareKind === 'video' ? postWidth * 2 / 3 : postWidth;
   }
 
-  /** 卡片封面高度：按"视频 16:9 竖屏 / 帖子方图略竖"给一个稳定比例（不做裁剪跳变）。 */
+  /** 卡片封面高度：优先用原图比例，宽度变化时按宽 × 比例自适应。 */
   private shareCardHeight(message: DirectMessage): number {
     const width: number = this.shareCardWidth(message);
-    return width * (message.shareKind === 'video' ? 1.78 : 1.25);
+    const raw: number = DirectThreadPage.rawAspect(message);
+    if (raw > 0) {
+      return Math.round(width * raw);
+    }
+    return Math.round(width * (message.shareKind === 'video' ? 1.78 : 1.25));
   }
 
   private bubbleMaxVp(): number {
@@ -894,9 +898,11 @@ export struct DirectThreadPage {
     return Math.round(target > 0 ? Math.min(usable, target) : wanted);
   }
 
-  /** 气泡里图片的高度：宽度 × 比例（见 mediaAspect）。 */
+  /** 气泡里图片的高度：宽度 × 原图真实比例，高度随宽度自适应，不压缩、不裁切。 */
   private mediaBoxHeight(message: DirectMessage): number {
-    return Math.round(this.mediaBoxWidth(message) * DirectThreadPage.mediaAspect(message));
+    const raw: number = DirectThreadPage.rawAspect(message);
+    const aspect: number = raw > 0 ? raw : DirectThreadPage.mediaAspect(message);
+    return Math.round(this.mediaBoxWidth(message) * aspect);
   }
 
   /** 气泡缩略图节点 id：展开时量它的窗口矩形，作为卡片动画起点。 */
@@ -1544,7 +1550,8 @@ export struct DirectThreadPage {
         Image(message.shareCover)
           .width('100%')
           .height('100%')
-          .objectFit(ImageFit.Cover)
+          // 高度已经按原图比例算好，这里不用 Cover 再裁一次。
+          .objectFit(ImageFit.Contain)
           .draggable(false)
           .alt($r('app.media.grid_placeholder'))
       } else {
