@@ -1137,6 +1137,8 @@ struct Index {
   @State selectedIndex: number = 0;
   /** 平板侧边栏是否展开（宽屏专用）。 */
   @State private tabletSidebarExpanded: boolean = false;
+  /** 壳子的实际窗口宽度（vp），窗口缩放时更新；侧栏按钮按它等比缩放。 */
+  @State private shellWidthVp: number = 0;
 
   /**
    * 底栏行为（设定页里的开关，见 AppSettings 的 BAR_HIDE_*）。**只有支持悬浮底栏的设备
@@ -10188,6 +10190,19 @@ struct Index {
     return this.screenWidthVp >= 600;
   }
 
+  /** 侧栏控件随窗口宽度等比缩放：约为窗宽的 6%，限制在 40–72vp。 */
+  private tabletButtonSize(): number {
+    const width: number = this.shellWidthVp > 0 ? this.shellWidthVp : this.screenWidthVp;
+    if (width <= 0) {
+      return 56;
+    }
+    return Math.round(Math.min(72, Math.max(40, width * 0.06)));
+  }
+
+  private tabletUiScale(): number {
+    return this.tabletButtonSize() / 56;
+  }
+
   /** 平板左侧栏：展开按钮 → 垂直页签 → 底部通知/设置，全部竖排。 */
   @Builder
   tabletSidebar() {
@@ -10195,15 +10210,15 @@ struct Index {
       Row() {
         MaterialIconButton({
           symbol: $r('sys.symbol.line_3_horizontal'),
-          buttonSize: 56,
-          iconSize: 22,
+          buttonSize: this.tabletButtonSize(),
+          iconSize: Math.round(22 * this.tabletUiScale()),
           onTap: (on: boolean): void => {
             this.tabletSidebarExpanded = !this.tabletSidebarExpanded;
           }
         })
       }
       .width('100%')
-      .height(56)
+      .height(this.tabletButtonSize() + 8)
       .justifyContent(FlexAlign.Center)
 
       // 和底部悬浮栏同一种胶囊：把宽高对换后竖着放，材质直接挂在整颗胶囊上。
@@ -10213,27 +10228,30 @@ struct Index {
             ForEach(TAB_ITEMS, (item: TabItem, index: number): void => {
               Stack({ alignContent: Alignment.Center }) {
                 SymbolGlyph(this.selectedIndex === index ? item.iconSelected : item.iconNormal)
-                  .fontSize(TAB_ICON_SIZE)
+                  .fontSize(Math.round(TAB_ICON_SIZE * this.tabletUiScale()))
                   .fontColor([this.tabIconColor(this.selectedIndex === index)])
               }
-              .width(56)
-              .height(56)
-              .borderRadius(28)
+              .width(this.tabletButtonSize())
+              .height(this.tabletButtonSize())
+              .borderRadius(this.tabletButtonSize() / 2)
               .backgroundColor(Color.Transparent)
               .onClick((): void => {
                 this.onTabBarClick(index);
               })
             }, (item: TabItem): string => `${item.tab}`)
           }
-          .width(56)
-          .height(5 * 56 + 24)
-          .padding({ top: 12, bottom: 12 })
+          .width(this.tabletButtonSize())
+          .height(5 * this.tabletButtonSize() + Math.round(24 * this.tabletUiScale()))
+          .padding({
+            top: Math.round(12 * this.tabletUiScale()),
+            bottom: Math.round(12 * this.tabletUiScale())
+          })
           .alignItems(HorizontalAlign.Center)
         }
-        .width(56)
-        .height(5 * 56 + 24)
+        .width(this.tabletButtonSize())
+        .height(5 * this.tabletButtonSize() + Math.round(24 * this.tabletUiScale()))
         .padding(0)
-        .borderRadius(28)
+        .borderRadius(this.tabletButtonSize() / 2)
         .clip(true)
         .backgroundColor(Color.Transparent)
         .selectedColor(Color.Transparent)
@@ -10244,29 +10262,31 @@ struct Index {
 
       Blank()
 
-      Column({ space: 8 }) {
+      Column({ space: Math.round(8 * this.tabletUiScale()) }) {
         MaterialIconButton({
           symbol: $r('sys.symbol.heart'),
-          buttonSize: 56,
-          iconSize: 22,
+          buttonSize: this.tabletButtonSize(),
+          iconSize: Math.round(22 * this.tabletUiScale()),
           onTap: (on: boolean): void => {
             this.openNotifications();
           }
         })
         MaterialIconButton({
           symbol: $r('sys.symbol.more'),
-          buttonSize: 56,
-          iconSize: 22,
+          buttonSize: this.tabletButtonSize(),
+          iconSize: Math.round(22 * this.tabletUiScale()),
           onTap: (on: boolean): void => {
             this.openSettings();
           }
         })
       }
       .width('100%')
-      .padding({ bottom: 16 })
+      .padding({ bottom: Math.round(16 * this.tabletUiScale()) })
       .alignItems(HorizontalAlign.Center)
     }
-    .width(this.tabletSidebarExpanded ? 220 : 84)
+    .width(this.tabletSidebarExpanded
+      ? Math.round(220 * this.tabletUiScale())
+      : this.tabletButtonSize() + 28)
     .height('100%')
     .padding({ top: 4 })
     .backgroundColor($r('app.color.page_background'))
@@ -10334,6 +10354,13 @@ struct Index {
     }
     .width('100%')
     .height('100%')
+    .onAreaChange((oldArea: Area, newArea: Area): void => {
+      const width: number = typeof newArea.width === 'number'
+        ? newArea.width : parseFloat(`${newArea.width}`);
+      if (width > 0 && Math.abs(width - this.shellWidthVp) > 0.5) {
+        this.shellWidthVp = width;
+      }
+    })
   }
 
   /**
