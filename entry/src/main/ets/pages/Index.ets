@@ -4368,6 +4368,11 @@ struct Index {
     if (name.length === 0) {
       return;
     }
+    // 平板首页：用户主页只挤进右栏，绝不 push 整页。
+    if (this.tabletWideShell() && this.selectedIndex === 0) {
+      this.setTabletProfile(`${name}|${userId}`);
+      return;
+    }
     /*
      * **只有账号名时先补数字 id**（简介里的 `@账号` 点进来就是这种情况）。
      *
