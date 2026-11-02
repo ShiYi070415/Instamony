@@ -7094,8 +7094,9 @@ struct Index {
     if (width < 540) {
       return 0;
     }
-    // 右栏至少要留 360vp 给 HDS Navigation；内容不够时优先保证右栏，帖子流相应收窄。
-    const maxFeed: number = width - 360;
+    // 右栏至少要留 400vp（HDS Navigation 自身的最小宽度 + 右侧安全留白）；
+    // 内容不够时优先保证右栏，帖子流相应收窄。
+    const maxFeed: number = width - 412;
     const target: number = height > 0 ? Math.round(height * 9 / 16) : Math.round(width * 9 / 16);
     return Math.max(180, Math.min(maxFeed, width - 32, target));
   }
@@ -7158,7 +7159,7 @@ struct Index {
     HdsNavDestination() {
       UserProfileRoute({
         param: `${param}`,
-        layoutWidthVp: this.profileStageWidth(),
+        layoutWidthVp: Math.max(0, this.profileStageWidth() - 12),
         // 右栏本身也是 HDS 导航：资料区要避让它的标题栏，不能用 0。
         embedded: false,
         onOpen: (post: ProfilePost): void => {
@@ -7215,6 +7216,7 @@ struct Index {
     .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
     .width('100%')
     .height('100%')
+    .padding({ right: 12 })
     .backgroundColor($r('app.color.page_background'))
     .clip(true)
     .transition(TransitionEffect.translate({ x: '100%' })
