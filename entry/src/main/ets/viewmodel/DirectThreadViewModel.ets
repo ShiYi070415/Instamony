@@ -113,6 +113,11 @@ export class DirectThreadViewModel {
   /** 当前会话 id（空 = 还没选会话）。 */
   private threadId: string = '';
   /**
+   * 会话列表的滚动位移（px）。页面在“整页 ↔ 右栏”之间迁移会销毁重建，
+   * 但 ViewModel 不销毁：由它把位置带过去，新页面挂载后恢复。
+   */
+  scrollYForRestore: number = 0;
+  /**
    * **会话代数**：每换一次会话 / 每次 reset 都 +1（见 stale 相关判断）。
    *
    * 为什么要它：这个视图模型是全 App 共用的**一份实例**，而"读一条会话"是一个网络往返
@@ -247,6 +252,10 @@ export class DirectThreadViewModel {
       if (owner === undefined || owner === threadId) {
         kept.push(one);
       }
+    }
+    if (this.threadId !== threadId) {
+      // 换会话才清位置；同一条会话跨断点迁移时必须保留。
+      this.scrollYForRestore = 0;
     }
     this.threadId = threadId;
     // 换了会话：之前所有在飞的请求（首屏/翻页/轮询/发送后的刷新）一律作废。

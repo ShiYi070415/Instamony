@@ -294,6 +294,30 @@ export struct DirectThreadPage {
   private lastOffsetY: number = 0;
   private readonly listScroller: Scroller = new Scroller();
   private readonly scrollDelta: ScrollDelta = new ScrollDelta();
+  /** 跨断点迁移时从 ViewModel 带来的滚动位移（px）。 */
+  private restoreY: number = 0;
+
+  /** 列表刚挂载时内容可能还没排完，分几次重试把位置锚回去。 */
+  private restoreScrollPosition(): void {
+    if (this.restoreY <= 0) {
+      return;
+    }
+    const target: number = this.restoreY;
+    const run: (attempt: number) => void = (attempt: number): void => {
+      try {
+        this.listScroller.scrollTo({ xOffset: 0, yOffset: target, animation: false });
+      } catch (error) {
+      }
+      if (attempt < 2) {
+        this.scrollTimers.push(setTimeout((): void => {
+          run(attempt + 1);
+        }, 120));
+      }
+    };
+    this.scrollTimers.push(setTimeout((): void => {
+      run(0);
+    }, 80));
+  }
 
   aboutToAppear(): void {
     try {
@@ -306,6 +330,11 @@ export struct DirectThreadPage {
     }
     if (this.layoutWidthVp > 0) {
       this.screenWidthVp = this.layoutWidthVp;
+    }
+    this.restoreY = this.vm.scrollYForRestore;
+    if (this.restoreY > 0) {
+      // 有历史位置时不要自动贴底，否则加载完成会跳到最后一条。
+      this.pinnedToBottom = false;
     }
     // 输入法高度（见 keyboardVp 的说明）：弹起/收起时把输入条与列表一起抬/放。
     try {
@@ -1963,6 +1992,9 @@ export struct DirectThreadPage {
          */
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring)
+        .onAppear((): void => {
+          this.restoreScrollPosition();
+        })
         .clip(false)
         .onDidScroll((scrollOffset: number, scrollState: ScrollState): void => {
           const y: number = this.listScroller.currentOffset().yOffset;
@@ -1982,6 +2014,7 @@ export struct DirectThreadPage {
             this.reachArmed = true;
           }
           this.lastOffsetY = y;
+          this.vm.scrollYForRestore = y;
           this.scrollDelta.report(y, scrollState, this.onFeedScroll);
         })
         /*
