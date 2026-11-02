@@ -5465,9 +5465,11 @@ struct Index {
     this.selectedTab = tab;
     if (previous !== target) {
       this.restoreRightForTab(target);
+      // 等右栏切换动画/onHidden 回调走完再解除保护，避免旧页面的 onHidden 把
+      // 刚恢复的会话舞台误判成"右栏空了"而关成整页。
       setTimeout((): void => {
         this.tabSwitching = false;
-      }, 0);
+      }, 350);
     }
     // 用户动作：后台预热让路（切页后新页面自己要先读，别和它抢网络/线程）。
     this.lastInteractionMs = Date.now();
@@ -7414,7 +7416,8 @@ struct Index {
 
   private tabletHomeScoped(): boolean {
     return this.tabletWideShell() && this.tabletSplitEnabled()
-      && this.directStageVisible && this.tabletRightName.length > 0;
+      && this.directStageVisible
+      && (this.tabletRightName.length > 0 || this.directStageOpen);
   }
 
   /** 分栏左栏用固定断点宽度（vp），不按百分比。 */
