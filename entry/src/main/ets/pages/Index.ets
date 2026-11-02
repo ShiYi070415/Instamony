@@ -8495,12 +8495,14 @@ struct Index {
       backgroundStyle: { backgroundColor: '#66000000' },
       contentStyle: {
         titleStyle: { mainTitleColor: Color.White },
-        // 和动作区按钮一致：不额外铺深色底，只保留 HDS 的浅白沉浸光感 + 白色图标。
+        // 和动作区一致：按钮自身透明，只留白色图标；不要 HDS 默认的纯白胶囊底。
         backIconStyle: {
+          backgroundColor: Color.Transparent,
           iconColor: Color.White,
           textColor: Color.White
         },
         menuStyle: {
+          backgroundColor: Color.Transparent,
           iconColor: Color.White,
           textColor: Color.White
         }
