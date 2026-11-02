@@ -1564,8 +1564,10 @@ export struct DirectThreadPage {
           .fontColor([$r('app.color.secondary_text')])
       }
     }
-    .width(width)
-    .height(height)
+    // 宽度跟随卡片实际可用宽度；高度由宽高比自动推导，宽度被压缩时高度同步缩，
+    // 不会再出现“宽度变小、高度不变”的拉伸。
+    .width('100%')
+    .aspectRatio(height > 0 ? width / height : 1)
   }
 
   /**
