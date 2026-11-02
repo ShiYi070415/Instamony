@@ -23,10 +23,10 @@ import { StoryItem, StoryReel, StoryTrayItem } from '../model/Story';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'StoryCache';
-/** 缓存几个用户的 story（需求："大概缓存五个用户的 story 就够了"）。 */
-const DEPTH: number = 5;
-/** 每一页预下载头几条媒体（再多就是替用户白下了，反正他会停在第一条）。 */
-const PREFETCH_ITEMS: number = 3;
+/** 预取窗口：当前用户之后的 8 位，覆盖快速连续切换。 */
+const DEPTH: number = 8;
+/** 只预下载每位用户第一条的封面，不再替后面的 story 白下流量。 */
+const PREFETCH_ITEMS: number = 1;
 
 /** 排队等闸门的一个请求。 */
 class InflightPage {
