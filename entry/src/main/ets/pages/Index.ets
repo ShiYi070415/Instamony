@@ -1139,8 +1139,6 @@ struct Index {
   @State private tabletSidebarExpanded: boolean = false;
   /** 壳子的实际窗口宽度（vp），窗口缩放时更新；侧栏按钮按它等比缩放。 */
   @State private shellWidthVp: number = 0;
-  /** 壳子的实际窗口高度（vp）：主体宽度按 16:9 收口时要用。 */
-  @State private shellHeightVp: number = 0;
 
   /**
    * 底栏行为（设定页里的开关，见 AppSettings 的 BAR_HIDE_*）。**只有支持悬浮底栏的设备
@@ -10213,19 +10211,6 @@ struct Index {
     return this.tabletButtonSize() / 56;
   }
 
-  /** 所有页面主体统一收在 16:9 宽度内（窗口比 16:9 更宽时居中留边）。 */
-  private contentStageWidth(): number {
-    const width: number = this.shellWidthVp > 0 ? this.shellWidthVp : this.screenWidthVp;
-    const height: number = this.shellHeightVp;
-    if (width <= 0) {
-      return 10000;
-    }
-    if (width < 600 || height <= 0) {
-      return width;
-    }
-    return Math.min(width, Math.round(height * 16 / 9));
-  }
-
   /** 平板左侧栏：展开按钮 → 垂直页签 → 底部通知/设置，全部竖排。 */
   @Builder
   tabletSidebar() {
@@ -10322,8 +10307,6 @@ struct Index {
       if (this.tabletWideShell()) {
         this.tabletSidebar()
       }
-      // 所有页面主体统一 16:9 宽度；比 16:9 更宽的窗口居中留边。
-      Row() {
       Column() {
         // 传入页面栈：通知页是它的一个 NavDestination（见 destinationBuilder）。
         HdsNavigation(this.navStack) {
@@ -10374,25 +10357,16 @@ struct Index {
     // 通知等整屏页面作为 NavDestination 压在这一层之上（见 destinationBuilder）。
     .navDestination(this.destinationBuilder)
       }
-      .width(this.contentStageWidth())
-      .height('100%')
-      }
       .layoutWeight(1)
       .height('100%')
-      .justifyContent(FlexAlign.Center)
     }
     .width('100%')
     .height('100%')
     .onAreaChange((oldArea: Area, newArea: Area): void => {
       const width: number = typeof newArea.width === 'number'
         ? newArea.width : parseFloat(`${newArea.width}`);
-      const height: number = typeof newArea.height === 'number'
-        ? newArea.height : parseFloat(`${newArea.height}`);
       if (width > 0 && Math.abs(width - this.shellWidthVp) > 0.5) {
         this.shellWidthVp = width;
-      }
-      if (height > 0 && Math.abs(height - this.shellHeightVp) > 0.5) {
-        this.shellHeightVp = height;
       }
     })
   }
