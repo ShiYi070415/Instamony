@@ -1530,9 +1530,10 @@ export struct FeedList {
     if (this.isInlineVideo(post)) {
       return raw;
     }
-    if (this.minMediaAspect > 0 && raw < this.minMediaAspect) {
-      return this.minMediaAspect;
-    }
+    /*
+     * 图片也**不再压高度**：媒体区高度按图片自身宽度/比例走，竖图该多高就多高，
+     * 超出屏幕由信息流滚动承载。多图帖继续用 imageAspectMin（最高那张）钉盒子。
+     */
     return raw;
   }
 
