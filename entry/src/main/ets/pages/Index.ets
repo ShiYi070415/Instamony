@@ -81,7 +81,7 @@ import {
   TAB_TAP_KEYS
 } from '../core/AppSettings';
 // 沉浸光感材质：验证弹窗的外观（见 showChallengeDialog）与首页胶囊共用同一套档位。
-import { immersiveMaterial, MaterialIconButton } from '../components/MaterialSurface';
+import { immersiveMaterial, MaterialIconButton, SurfaceModifier } from '../components/MaterialSurface';
 // 沉浸光感的档位/类型换算（设定页里的字符串 → hdsMaterial 的枚举，含设备能力降级）。
 import { BarChromeModifier, immersiveLevel, immersiveMaterialType, titleScrollEffectType } from '../core/ImmersiveLight';
 import { PlatformCap } from '../core/PlatformCap';
@@ -1137,8 +1137,7 @@ struct Index {
   @State selectedIndex: number = 0;
   /** 平板侧边栏是否展开（宽屏专用）。 */
   @State private tabletSidebarExpanded: boolean = false;
-  /** 侧边栏那条竖向 HDS 页签栏的控制器。 */
-  private sidebarTabsController: HdsTabsController = new HdsTabsController();
+
   /**
    * 底栏行为（设定页里的开关，见 AppSettings 的 BAR_HIDE_*）。**只有支持悬浮底栏的设备
    * （API ≥ 23）才用得上**：降级档下栏是普通页签栏，滚动一律不碰它（见 onFeedScroll）。
@@ -7596,22 +7595,6 @@ struct Index {
    * @param sinkable true = 下沉收缩那套：离底距离随下沉程度变小（栏高走调用处的直接属性）；
    *                 false = 系统显隐那套 / 降级档：位置固定。
    */
-  /** 侧边栏竖向悬浮栏的样式：和底栏同一套材质，只把边距换成竖向的小留白。 */
-  private sidebarFloatingStyle(): HdsTabsFloatingStyle {
-    const style: HdsTabsFloatingStyle = {
-      barSideMargin: 4,
-      barBottomMargin: 4,
-      adaptToHandedness: false
-    };
-    if (PlatformCap.hasHdsMaterial()) {
-      style.systemMaterialEffect = {
-        materialType: immersiveMaterialType(),
-        materialLevel: immersiveLevel(this.materialLevel)
-      };
-    }
-    return style;
-  }
-
   private floatingStyle(sinkable: boolean): HdsTabsFloatingStyle {
     const style: HdsTabsFloatingStyle = {
       // 胶囊宽度靠左右留白控制：留白 = (屏宽 - 目标宽度) / 2，见 barSideMargin()。
@@ -10223,26 +10206,36 @@ struct Index {
       .height(56)
       .justifyContent(FlexAlign.Center)
 
-      // 和底部那条悬浮栏同一个 HdsTabs，只是 vertical(true)：高宽对换。
-      HdsTabs({
-        barPosition: BarPosition.Start,
-        index: this.selectedIndex,
-        controller: this.sidebarTabsController
-      }) {
-        this.tabsBody()
+      // 和底部悬浮栏同一种胶囊：把宽高对换后竖着放，材质直接挂在整颗胶囊上。
+      Stack({ alignContent: Alignment.Center }) {
+        Toggle({ type: ToggleType.Button, isOn: false }) {
+          Column() {
+            ForEach(TAB_ITEMS, (item: TabItem, index: number): void => {
+              Stack({ alignContent: Alignment.Center }) {
+                SymbolGlyph(this.selectedIndex === index ? item.iconSelected : item.iconNormal)
+                  .fontSize(TAB_ICON_SIZE)
+                  .fontColor([this.tabIconColor(this.selectedIndex === index)])
+              }
+              .width(56)
+              .height(56)
+              .borderRadius(28)
+              .backgroundColor(Color.Transparent)
+              .onClick((): void => {
+                this.onTabBarClick(index);
+              })
+            }, (item: TabItem): string => `${item.tab}`)
+          }
+          .width(64)
+          .height(5 * 56)
+          .alignItems(HorizontalAlign.Center)
+        }
+        .width(64)
+        .height(5 * 56)
+        .padding(0)
+        .backgroundColor(Color.Transparent)
+        .selectedColor(Color.Transparent)
+        .attributeModifier(new SurfaceModifier(Index.materialThicknessNow(), false, true))
       }
-      .vertical(true)
-      .barOverlap(true)
-      .scrollable(false)
-      .barHeight(300)
-      .barWidth(64)
-      .attributeModifier(new BarChromeModifier(this.sidebarFloatingStyle(), 300))
-      .onTabBarClick((index: number): void => {
-        this.onTabBarClick(index);
-      })
-      .onChange((index: number): void => {
-        this.onTabsChanged(index);
-      })
       .width('100%')
       .layoutWeight(1)
 
