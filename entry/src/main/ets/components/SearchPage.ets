@@ -205,6 +205,8 @@ export struct SearchPage {
    * 直接量屏幕（和 ProfilePage 量法一致），不靠 onAreaChange 事后回填 —— 事后回填等于
    * "先进布局、再改尺寸"，正是官方说的位置跳动。
    */
+  /** 侧边栏浮层宽度：搜索页内容整体右侧让开它。 */
+  @Prop leftInsetVp: number = 0;
   @State private flowWidthVp: number = FALLBACK_WIDTH_VP;
   /** 推荐流的数据源（LazyForEach 要它，见 SearchPostSource）。 */
   private readonly postSource: SearchPostSource = new SearchPostSource();
@@ -902,12 +904,17 @@ export struct SearchPage {
           }
         }
       }
-      .width('100%')
+      .width('calc(100% - ' + this.leftInsetVp + 'vp)')
       .height('100%')
+      .margin({ left: this.leftInsetVp })
 
       // 搜索框：**本页的浮层**，画在内容之上、标题栏之下（见 searchBoxOverlay）。
       if (!this.searchBoxCollapsed) {
-        this.searchBoxOverlay()
+        Stack() {
+          this.searchBoxOverlay()
+        }
+        .width('calc(100% - ' + this.leftInsetVp + 'vp)')
+        .margin({ left: this.leftInsetVp })
       }
     }
     .width('100%')

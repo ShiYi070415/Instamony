@@ -10710,6 +10710,7 @@ struct Index {
   searchPage() {
     SearchPage({
       vm: this.searchVm,
+      leftInsetVp: this.reelsFullBleed() ? this.tabletSidebarWidth() : 0,
       // 探索流那条瀑布流的控制器交给标题栏（见 searchFlowScroller 的说明）。
       flowScroller: this.searchFlowScroller,
       onFeedScroll: (deltaY: number, offsetY: number, scrollState: ScrollState): void => {
