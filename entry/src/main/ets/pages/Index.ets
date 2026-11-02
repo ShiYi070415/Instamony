@@ -4584,7 +4584,12 @@ struct Index {
            * 在那些帖子上几乎恒真，所以请求本来就会发，多图与时间就顺手一起补上了。
            */
           const needTime: boolean = post.takenAtMs <= 0;
-          if (!needVideo && !needAvatar && !needTime) {
+          /*
+           * 个人页分页的条目只带了网格封面（imageUrls 往往只有一张），但 imageAspectMin
+           * 说明它其实是多图帖：必须补一次详情，否则帖子页永远只显示第一张。
+           */
+          const needImages: boolean = post.imageAspectMin > 0 && post.imageUrls.length <= 1;
+          if (!needVideo && !needAvatar && !needTime && !needImages) {
             continue;
           }
           if (ApiThrottle.blocked(ApiThrottle.MEDIA_INFO)) {
@@ -4592,7 +4597,7 @@ struct Index {
             return;
           }
           let detail: MediaDetail | null = null;
-          if (needVideo || needAvatar || needTime) {
+          if (needVideo || needAvatar || needTime || needImages) {
             const known: MediaDetail | undefined = this.mediaDetails.get(post.shortcode);
             if (known !== undefined) {
               // 以前取过（同一个 shortcode）：**直接用，不再发请求**。
@@ -4680,6 +4685,9 @@ struct Index {
         continue;
       }
       if (post.isVideo() && post.videoUrl.length === 0) {
+        return true;
+      }
+      if (post.imageAspectMin > 0 && post.imageUrls.length <= 1) {
         return true;
       }
       if (post.ownerAvatarUrl.length === 0 && post.ownerId.length > 0) {
