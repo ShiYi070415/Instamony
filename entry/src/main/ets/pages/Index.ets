@@ -7323,7 +7323,7 @@ struct Index {
 
   /** 右栏 feeds 流最大宽度：限制在 9:16，超过就左右留白。 */
   private rightFeedMaxWidth(): number {
-    const pane: number = Math.max(0, this.profileStageWidth() - 12);
+    const pane: number = Math.max(0, this.profileStageWidth());
     const byHeight: number = this.shellHeightVp > 0
       ? Math.round(this.shellHeightVp * 9 / 16) : pane;
     return Math.min(pane, byHeight);
@@ -7539,7 +7539,7 @@ struct Index {
     HdsNavDestination() {
       UserProfileRoute({
         param: `${param}`,
-        layoutWidthVp: Math.max(0, this.profileStageWidth() - 12),
+        layoutWidthVp: Math.max(0, this.profileStageWidth()),
         // 右栏本身也是 HDS 导航：资料区要避让它的标题栏，不能用 0。
         embedded: false,
         onOpen: (post: ProfilePost): void => {
@@ -7601,7 +7601,7 @@ struct Index {
   /** 私信会话舞台宽度：小窗整页，双栏时右栏。 */
   private directStageWidth(): number {
     return this.tabletHomeScoped()
-      ? Math.max(0, this.profileStageWidth() - 12) : this.contentAreaWidth();
+      ? Math.max(0, this.profileStageWidth()) : this.contentAreaWidth();
   }
 
   private directStageX(): number {
@@ -7736,7 +7736,6 @@ struct Index {
     // 右栏根节点必须用右栏实际宽度，不能用 100%（100% 会按整窗算，只露一半）。
     .width(this.profileStageWidth())
     .height('100%')
-    .padding({ right: 12 })
     .backgroundColor($r('app.color.page_background'))
     .clip(true)
     .transition(TransitionEffect.translate({ x: '100%' })
@@ -9649,7 +9648,8 @@ struct Index {
     .height('100%')
     .alignItems(VerticalAlign.Top)
     .padding({
-      left: REELS_TITLE_LEFT_PAD_VP + this.reelsSidebarInset(),
+      left: REELS_TITLE_LEFT_PAD_VP
+        + (this.reelsFullBleed() ? this.tabletSidebarWidth() : 0),
       right: 12,
       top: 8
     })
@@ -9701,8 +9701,9 @@ struct Index {
       segment: segment,
       // 标题栏那两颗按钮按**来源**取用（见 core/ReelsAction）：这是底栏那一页。
       source: ReelsAction.HOME,
-      // 侧边栏是全屏浮层：资讯栏/正文左侧让开它，视频本身仍铺满。
-      leftInsetVp: this.reelsSidebarInset(),
+      // 左侧主 Reels 始终避让侧边栏；右栏 Reels 由另一个实例单独处理。
+      leftInsetVp: this.reelsFullBleed() ? this.tabletSidebarWidth() : 0,
+      infoBottomVp: this.tabletWideShell() ? this.bottomSafeVp : 82,
       // 分段滑动时冻结所有视频播放（见 ReelsPage.freeze 与 reelsTab 的 Tabs 回调）。
       // 刷到自己的视频时不画关注按钮（同其它两页）。
       ownAuthor: this.profileVm.ownAccountName(),
@@ -11580,7 +11581,7 @@ struct Index {
         UserProfileRoute({
           param: `${param}`,
           layoutWidthVp: this.tabletHomeScoped()
-            ? Math.max(0, this.profileStageWidth() - 12) : 0,
+            ? Math.max(0, this.profileStageWidth()) : 0,
           onOpen: (post: ProfilePost): void => {
             // 点格子打开帖子页：**原生帖子页**（隐藏 WebView 只留给账号安全验证）。
             this.openLoosePost(post.shortcode, post.isVideo);
@@ -11907,9 +11908,9 @@ struct Index {
         // 标题栏那两颗按钮（静音 / 下载）按**来源**取用（见 core/ReelsAction）：
         // 三个 reels 类页面各存一份，免得下载下到另一条视频。
         source: source,
-        // 正文/作者行贴着下方评论输入框的上沿 + 10vp（见 ReelOverlay.infoBottomVp）。
-        infoBottomVp: this.reelsInfoBottom(),
-        leftInsetVp: this.reelsSidebarInset(),
+        // 右栏 Reels：底部有评论输入条，固定避让 82；左侧不再加侧边栏内缩。
+        infoBottomVp: 82,
+        leftInsetVp: 0,
         // 我自己的账号名：作者是我时不画关注按钮（"我的"页视频分页那一页就是这样）。
         ownAuthor: this.profileVm.ownAccountName(),
         // 这一页没有浮动底栏，所以"手指一动就沉栏"这件事这里什么都不用做；回调留着是为了
