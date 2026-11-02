@@ -168,7 +168,7 @@ const FLIP_IN_MS: number = 360;
  * 不用 90：那样卡片会完全侧对屏幕看不见 —— 命中不了缓存时要等网络（半秒上下），
  * 中间那段就是全黑。45 是"看得出在翻面、但不夸张"的量（用户反馈 75 太猛）。
  */
-const FLIP_MAX_ANGLE: number = 45;
+const FLIP_MAX_ANGLE: number = 90;
 /** 左右滑切换用户的最小位移（vp）。 */
 const SWIPE_SWITCH_VP: number = 60;
 // ---------------------------------------------------------------- 头像不在屏幕时的收起
@@ -583,12 +583,12 @@ export struct StoryViewer {
     this.switching = true;
     this.flipDir = dir;
     this.flipAt = Date.now();
-    // 先完整播完"翻出去"：固定用满 FLIP_OUT_MS，淡到 0 后停住等数据，
-    // 不能因为下一条 story 还没到就卡在半透明的一半。
+    // 3D 翻页必须完整播完：一直转到 90°（侧对屏幕），再停住等数据。
+    // 不能因为下一条 story 还没加载好就停在 45° 的半翻状态。
+    this.pageAlpha = 1;
     animateTo({ duration: FLIP_OUT_MS, curve: Curve.Friction }, (): void => {
-      this.pageAlpha = 0;
+      this.applyFlip(-dir * FLIP_MAX_ANGLE);
     });
-    this.applyFlip(0);
   }
 
   /**
@@ -619,13 +619,14 @@ export struct StoryViewer {
   }
 
   private animateFlipIn(): void {
-    this.applyFlip(0);
-    this.pageAlpha = 0;
+    // 先瞬移到另一面（这一刻卡片侧对屏幕，看不出跳变），再完整翻回 0。
+    this.pageAlpha = 1;
+    this.applyFlip(this.flipDir * FLIP_MAX_ANGLE);
     animateTo({
       duration: FLIP_IN_MS,
       curve: curves.springMotion(0.45, 0.82)
     }, (): void => {
-      this.pageAlpha = 1;
+      this.applyFlip(0);
     });
   }
 
@@ -638,8 +639,7 @@ export struct StoryViewer {
    * 之前那套"自己算 dx·(cosθ-1) 位移 + cosθ 压扁"的手工合成已删掉（用户建议的包一层更干净）。
    */
   private applyFlip(angle: number): void {
-    // 翻面已改成淡入淡出；角度固定 0，避免复杂卡片旋转掉帧。
-    this.flipAngle = 0;
+    this.flipAngle = angle;
   }
 
   // ---------------------------------------------------------------- 左右滑：跟手翻页
