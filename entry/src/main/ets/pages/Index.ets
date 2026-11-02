@@ -1135,6 +1135,8 @@ struct Index {
   @State selectedTab: AppTab = AppTab.Home;
   /** 当前 tab 下标（和 selectedTab 同步）。栏里的图标高亮、内容层切页都按它判断。 */
   @State selectedIndex: number = 0;
+  /** 平板侧边栏是否展开（宽屏专用）。 */
+  @State private tabletSidebarExpanded: boolean = false;
   /**
    * 底栏行为（设定页里的开关，见 AppSettings 的 BAR_HIDE_*）。**只有支持悬浮底栏的设备
    * （API ≥ 23）才用得上**：降级档下栏是普通页签栏，滚动一律不碰它（见 onFeedScroll）。
@@ -1811,31 +1813,13 @@ struct Index {
                 this.openAccountMenu();
               }
             }
-          },
-          {
-            content: {
-              icon: $r('sys.symbol.more'),
-              label: $r('app.string.action_settings'),
-              action: (): void => {
-                this.openSettings();
-              }
-            }
           }
         ]
       };
     }
     if (tab === AppTab.Home) {
-      // 从左到右：通知（爱心）/ 上传（加号）；探针入口默认**不显示**（见 PROBE_MENU_VISIBLE）。
+      // 只留上传（加号）：通知入口已移到平板侧边栏底部。
       const items: Array<HdsNavigationMenuItemOptions> = [];
-      items.push({
-        content: {
-          icon: $r('sys.symbol.heart'),
-          label: $r('app.string.notifications'),
-          action: (): void => {
-            this.openNotifications();
-          }
-        }
-      });
       items.push({
         content: {
           icon: $r('sys.symbol.plus'),
@@ -1891,19 +1875,8 @@ struct Index {
    * 用我的页面一样的"）。早先这里用的是齿轮，两处观感不一致。
    */
   private loginSettingsMenu(): HdsNavigationMenuContentOptions {
-    return {
-      value: [
-        {
-          content: {
-            icon: $r('sys.symbol.more'),
-            label: $r('app.string.action_settings'),
-            action: (): void => {
-              this.openSettings();
-            }
-          }
-        }
-      ]
-    };
+    // 设置入口已移到平板侧边栏底部；登录页不再在 HDS menus 里重复一颗。
+    return { value: [] };
   }
 
   /**
@@ -7399,6 +7372,8 @@ struct Index {
       .height('100%')
 
       // ---- 底栏那一层：栏单独待在这一层里，内容层是它的兄弟节点 ----
+      // 宽屏改用左侧栏，原来的底部 HDS 悬浮页签整条不建。
+      if (!this.tabletWideShell()) {
       Stack({ alignContent: Alignment.Bottom }) {
         if (PlatformCap.hasHdsMaterial()) {
           // ============ 悬浮档：系统胶囊 + 下沉收缩 / 系统显隐 ============
@@ -7471,6 +7446,7 @@ struct Index {
       .translate({ y: this.barChromeShift() })
       .enabled(!this.reelsChromeHidesShell())
       .animation({ duration: 180, curve: Curve.EaseOut })
+      }
     }
     .width('100%')
     .height('100%')
@@ -10206,12 +10182,95 @@ struct Index {
    * titleMode 取 MINI（固定 56vp）：FREE 模式下大标题会随滚动变大缩小，
    * 那需要额外绑定滚动容器，这里不引入这个变数。
    */
+  /** 宽屏壳：HDS Navigation 在侧边栏之外，底栏不再显示。 */
+  private tabletWideShell(): boolean {
+    return this.screenWidthVp >= 600;
+  }
+
+  /** 平板左侧栏：展开按钮 → 垂直页签 → 底部通知/设置，全部竖排。 */
+  @Builder
+  tabletSidebar() {
+    Column() {
+      Row() {
+        MaterialIconButton({
+          symbol: $r('sys.symbol.line_3_horizontal'),
+          buttonSize: 40,
+          iconSize: 20,
+          onTap: (on: boolean): void => {
+            this.tabletSidebarExpanded = !this.tabletSidebarExpanded;
+          }
+        })
+      }
+      .width('100%')
+      .height(56)
+      .justifyContent(FlexAlign.Center)
+
+      ForEach(TAB_ITEMS, (item: TabItem, index: number): void => {
+        Column({ space: 2 }) {
+          MaterialIconButton({
+            symbol: this.selectedIndex === index ? item.iconSelected : item.iconNormal,
+            isOn: this.selectedIndex === index,
+            buttonSize: 40,
+            iconSize: 20,
+            onTap: (on: boolean): void => {
+              this.onTabBarClick(index);
+            }
+          })
+          if (this.tabletSidebarExpanded) {
+            Text(item.label)
+              .fontSize(11)
+              .fontColor(this.selectedIndex === index
+                ? $r('app.color.primary_text') : $r('app.color.secondary_text'))
+              .maxLines(1)
+          }
+        }
+        .width('100%')
+        .padding({ top: 6, bottom: 6 })
+        .alignItems(HorizontalAlign.Center)
+      }, (item: TabItem): string => `${item.tab}`)
+
+      Blank()
+
+      Column({ space: 8 }) {
+        MaterialIconButton({
+          symbol: $r('sys.symbol.heart'),
+          buttonSize: 40,
+          iconSize: 20,
+          onTap: (on: boolean): void => {
+            this.openNotifications();
+          }
+        })
+        MaterialIconButton({
+          symbol: $r('sys.symbol.more'),
+          buttonSize: 40,
+          iconSize: 20,
+          onTap: (on: boolean): void => {
+            this.openSettings();
+          }
+        })
+      }
+      .width('100%')
+      .padding({ bottom: 16 })
+      .alignItems(HorizontalAlign.Center)
+    }
+    .width(this.tabletSidebarExpanded ? 220 : 84)
+    .height('100%')
+    .padding({ top: 4 })
+    .backgroundColor($r('app.color.page_background'))
+    .border({ width: { right: 0.5 }, color: $r('app.color.divider') })
+  }
+
   @Builder
   nativeShell() {
-    // 传入页面栈：通知页是它的一个 NavDestination（见 destinationBuilder）。
-    HdsNavigation(this.navStack) {
-      this.nativeShellContent()
-    }
+    Row() {
+      if (this.tabletWideShell()) {
+        this.tabletSidebar()
+      }
+      Column() {
+        // 传入页面栈：通知页是它的一个 NavDestination（见 destinationBuilder）。
+        HdsNavigation(this.navStack) {
+          this.nativeShellContent()
+        }
     // 示例里 HdsNavigation 是 build() 的根，所以不写尺寸；这里是 Stack 的子节点，
     // 必须显式撑满，否则会缩到内容大小。
     .width('100%')
@@ -10256,6 +10315,12 @@ struct Index {
     .zIndex(10)
     // 通知等整屏页面作为 NavDestination 压在这一层之上（见 destinationBuilder）。
     .navDestination(this.destinationBuilder)
+      }
+      .layoutWeight(1)
+      .height('100%')
+    }
+    .width('100%')
+    .height('100%')
   }
 
   /**
