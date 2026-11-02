@@ -27,7 +27,7 @@ param(
   [string]$HvigorHome = "$PSScriptRoot\..\.hvigor-home",
   # Launch bundle id (com.yijin.instamony for the new debug package; the old
   # oneleaf debug package used com.oneleaf.instamony).
-  [string]$Bundle = 'com.oneleaf.instamony',
+  [string]$Bundle = 'com.yijin.instamony',
   # Optional bundleName override. Leave empty to use AppScope/app.json5.
   # A non-oneleaf bundle name needs a matching debug .p7b profile.
   [string]$BundleName = '',

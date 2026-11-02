@@ -32,9 +32,14 @@ $Bundle = 'com.yijin.instamony'
 if (-not $SkipBuild) {
   Push-Location $projectRoot
   try {
+    # Native tools write warnings to stderr; with ErrorActionPreference=Stop
+    # PowerShell would turn a harmless warning into a terminating error.
+    $ErrorActionPreference = 'Continue'
     & $Hvigor clean --no-daemon *> $null
     & $Hvigor assembleApp --mode project -p product=default -p buildMode=debug --no-daemon
-    if ($LASTEXITCODE -ne 0) { throw "hvigor build failed (exit $LASTEXITCODE)" }
+    $buildCode = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    if ($buildCode -ne 0) { throw "hvigor build failed (exit $buildCode)" }
   } finally {
     Pop-Location
   }
@@ -61,10 +66,14 @@ if ($targets -notmatch 'Empty' -and $targets.Trim().Length -gt 0) {
   exit 0
 }
 
-Write-Host "no device connected, uploading .app to catbox..." -ForegroundColor Yellow
+Write-Host "no device connected, uploading .app..." -ForegroundColor Yellow
 $upload = (& curl.exe -sS -F 'reqtype=fileupload' -F "fileToUpload=@$app" 'https://catbox.moe/user/api.php') -join ''
 if ($LASTEXITCODE -ne 0 -or $upload -notmatch '^https?://') {
-  throw "catbox upload failed: $upload"
+  Write-Host "catbox unavailable, falling back to litterbox (72h)..." -ForegroundColor Yellow
+  $upload = (& curl.exe -sS -F 'reqtype=fileupload' -F 'time=72h' -F "fileToUpload=@$app" 'https://litterbox.catbox.moe/resources/internals/api.php') -join ''
+}
+if ($LASTEXITCODE -ne 0 -or $upload -notmatch '^https?://') {
+  throw "upload failed: $upload"
 }
 Write-Host "download : $upload" -ForegroundColor Green
 
