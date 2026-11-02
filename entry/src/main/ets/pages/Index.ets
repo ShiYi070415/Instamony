@@ -10190,13 +10190,13 @@ struct Index {
     return this.screenWidthVp >= 600;
   }
 
-  /** 侧栏控件随窗口宽度等比缩放：约为窗宽的 6%，限制在 40–72vp。 */
+  /** 侧栏控件随窗口宽度等比缩放：约为窗宽的 6%，上限锁死正常按钮的 56vp。 */
   private tabletButtonSize(): number {
     const width: number = this.shellWidthVp > 0 ? this.shellWidthVp : this.screenWidthVp;
     if (width <= 0) {
       return 56;
     }
-    return Math.round(Math.min(72, Math.max(40, width * 0.06)));
+    return Math.round(Math.min(56, Math.max(40, width * 0.06)));
   }
 
   private tabletUiScale(): number {
