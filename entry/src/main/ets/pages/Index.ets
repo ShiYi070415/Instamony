@@ -8490,6 +8490,11 @@ struct Index {
   /** 右栏 Reels：标题栏保持原样，只把返回/菜单按钮的材质改成深色。 */
   private reelsDestinationTitleStyle(): TitleBarStyleOptions {
     const style: TitleBarStyleOptions = this.destinationTitleStyle();
+    // 动态样式只有开启 scrollEffect 时 HDS 才会读取 originalStyle/scrollEffectStyle。
+    style.scrollEffectOpts = {
+      enableScrollEffect: true,
+      scrollEffectType: ScrollEffectType.COMMON_BLUR
+    };
     const darkButtons: HdsNavigationTitleBarStyle = {
       // 半透明深色压在系统模糊材质上：不是整条纯黑，而是"深色模糊"。
       backgroundStyle: { backgroundColor: '#66000000' },
@@ -9765,7 +9770,8 @@ struct Index {
       // **动作区 + 资讯区跟着栏一起下沉**（需求）：栏沉 10vp 时这两块跟着往下走
       // OVERLAY_SINK_DISTANCE（见那个常量）。`barSink` 是 0→1 的两态量，中间值由下面那条
       // 弹簧曲线补出来（见 applyBarSink），所以这里直接乘出距离即可 —— 动画是同一条。
-      overlaySink: OVERLAY_SINK_DISTANCE * this.barSink,
+      // 侧边栏模式没有底部悬浮栏，资讯/关注/正文/动作区不应再随着 barSink 下沉。
+      overlaySink: this.tabletWideShell() ? 0 : OVERLAY_SINK_DISTANCE * this.barSink,
       onLike: (reel: Reel, like: boolean): Promise<boolean> => {
         return this.likeReel(reel, like);
       },
