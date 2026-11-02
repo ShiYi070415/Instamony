@@ -10784,7 +10784,8 @@ struct Index {
     this.storyAvatar = hit.avatarUrl;
     this.storyName = hit.username;
     this.storyUserId = hit.userId;
-    this.storyReel = EMPTY_REEL;
+    // 和 highlight 换组一样：**先保留当前 reel**，新数据到了再整体替换。
+    // 这里清空会让卡片在收起/展开途中变成空白，看起来就是卡顿。
     if (!StoryCache.has(hit.userId)) {
       StoryCache.reset(this.storyQueue, at >= 0 ? at : 0);
     }
