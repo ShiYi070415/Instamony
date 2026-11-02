@@ -2082,6 +2082,14 @@ export struct DirectThreadPage {
      * （见 onDidScroll 里那条），程序化的锚位滚动不许武装 —— 否则
      * "加载 → 锚回 → 又被当成离开顶部 → 再加载"就是那个死循环。
      */
+    .onAreaChange((oldArea: Area, newArea: Area): void => {
+      // 窗口/右栏宽度变化时，分享卡、贴图、图片的宽度都要跟着重新算。
+      const width: number = typeof newArea.width === 'number'
+        ? newArea.width : parseFloat(`${newArea.width}`);
+      if (width > 0 && Math.abs(width - this.screenWidthVp) > 0.5) {
+        this.screenWidthVp = width;
+      }
+    })
     .onTouch((event: TouchEvent): void => {
       if (event.type === TouchType.Down) {
         this.userTouching = true;
