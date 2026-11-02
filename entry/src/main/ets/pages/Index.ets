@@ -5385,6 +5385,16 @@ struct Index {
       return;
     }
     this.tabDirectThreads[index] = '';
+    // 以右栏栈顶为准保存，避免页面切换瞬间 tabletProfileParam 被清空导致
+    // 恢复时用户主页退化成"我的"。
+    const names: Array<string> = this.tabletProfileStack.getAllPathName();
+    if (names.length > 0) {
+      const top: number = names.length - 1;
+      const raw: Object = this.tabletProfileStack.getParamByIndex(top) as Object;
+      this.tabRightNames[index] = names[top];
+      this.tabRightParams[index] = raw === undefined || raw === null ? '' : `${raw}`;
+      return;
+    }
     this.tabRightNames[index] = this.tabletRightName;
     this.tabRightParams[index] = this.tabletProfileParam;
   }
@@ -5402,17 +5412,38 @@ struct Index {
   private restoreRightForTab(index: number): void {
     const thread: string = this.tabDirectThreads[index];
     if (thread.length > 0) {
-      this.openDirectStage(thread);
+      // 直接切到目标会话舞台，不先清空再弹出，避免右栏收缩一下。
+      this.tabletRightName = DIRECT_THREAD_PAGE;
+      this.tabletProfileParam = thread;
+      this.tabletProfileStack.clear();
+      this.directStageOpen = true;
+      this.directStageVisible = true;
+      this.directStageThread = thread;
+      this.directStageStack.clear();
+      this.directStageStack.pushPath({ name: DIRECT_THREAD_PAGE, param: thread });
       return;
     }
     const name: string = this.tabRightNames[index];
-    if (name.length === 0) {
+    if (name.length > 0) {
+      // 目标分页有右侧页面：原地替换，不先收起再打开。
+      this.directStageOpen = false;
+      this.directStageVisible = true;
+      this.directStageThread = '';
+      this.directStageStack.clear();
+      this.tabletRightName = name;
+      this.tabletProfileParam = this.tabRightParams[index];
+      this.tabletProfileStack.clear();
+      this.tabletProfileStack.pushPath({ name: name, param: this.tabletProfileParam });
       return;
     }
-    this.tabletRightName = name;
-    this.tabletProfileParam = this.tabRightParams[index];
+    // 目标分页没有右侧页面才收起。
+    this.tabletRightName = '';
+    this.tabletProfileParam = '';
     this.tabletProfileStack.clear();
-    this.tabletProfileStack.pushPath({ name: name, param: this.tabletProfileParam });
+    this.directStageOpen = false;
+    this.directStageVisible = true;
+    this.directStageThread = '';
+    this.directStageStack.clear();
   }
 
   private selectTab(tab: AppTab): void {
@@ -5420,7 +5451,6 @@ struct Index {
     const target: number = this.tabIndexOf(tab);
     if (previous !== target) {
       this.saveRightForTab(previous);
-      this.clearRightForTabSwitch();
     }
     this.selectedTab = tab;
     if (previous !== target) {
