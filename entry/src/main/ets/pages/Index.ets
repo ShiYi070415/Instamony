@@ -10226,11 +10226,12 @@ struct Index {
             }, (item: TabItem): string => `${item.tab}`)
           }
           .width(56)
-          .height(5 * 56)
+          .height(5 * 56 + 24)
+          .padding({ top: 12, bottom: 12 })
           .alignItems(HorizontalAlign.Center)
         }
         .width(56)
-        .height(5 * 56)
+        .height(5 * 56 + 24)
         .padding(0)
         .borderRadius(28)
         .clip(true)
