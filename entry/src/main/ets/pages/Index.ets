@@ -7156,7 +7156,7 @@ struct Index {
 
   /** 所有"开新页"统一入口：平板首页走右栏，其余走全局导航栈。 */
   private pushPage(name: string, param: string = ''): void {
-    if (this.tabletWideShell()) {
+    if (this.tabletWideShell() && this.tabletSplitEnabled()) {
       const alreadyOpen: boolean = this.tabletRightName.length > 0;
       if (name === USER_PROFILE_PAGE
         && this.tabletProfileStack.getAllPathName().indexOf(USER_PROFILE_PAGE) >= 0) {
@@ -7213,11 +7213,18 @@ struct Index {
   }
 
   /** 宽屏首页且右栏打开：此时 HDS Navigation 只包住帖子流这一列。 */
-  private tabletHomeScoped(): boolean {
-    return this.tabletWideShell() && this.tabletRightName.length > 0;
+  /** 只有窗口足够宽才启用双栏；小窗保持单栏，而不是按比例硬挤。 */
+  private tabletSplitEnabled(): boolean {
+    const width: number = this.shellWidthVp > 0 ? this.shellWidthVp : this.screenWidthVp;
+    return width >= 900;
   }
 
-  /** 平板分栏时左栏宽度：首页按 9:16 帖子流；其余四个主页各占 45%。 */
+  private tabletHomeScoped(): boolean {
+    return this.tabletWideShell() && this.tabletSplitEnabled()
+      && this.tabletRightName.length > 0;
+  }
+
+  /** 分栏左栏用固定断点宽度（vp），不按百分比。 */
   private tabletLeftWidth(): number {
     if (!this.tabletHomeScoped()) {
       return this.contentAreaWidth();
@@ -7225,7 +7232,15 @@ struct Index {
     if (this.selectedIndex === 0) {
       return this.feedMaxWidth();
     }
-    return Math.max(320, Math.round(this.contentAreaWidth() * 0.45));
+    const width: number = this.shellWidthVp > 0 ? this.shellWidthVp : this.screenWidthVp;
+    let target: number = 400;
+    if (width >= 1600) {
+      target = 640;
+    } else if (width >= 1200) {
+      target = 520;
+    }
+    // 右栏至少留 360vp，避免 HDS Navigation 被挤到屏幕外。
+    return Math.min(target, Math.max(0, this.contentAreaWidth() - 360));
   }
 
   @Builder
