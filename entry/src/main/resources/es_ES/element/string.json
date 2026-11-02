@@ -1243,6 +1243,38 @@
     {
       "name": "settings_language_changed",
       "value": "Idioma cambiado"
+    },
+    {
+      "name": "settings_section_display",
+      "value": "Apariencia y pantalla"
+    },
+    {
+      "name": "settings_section_network",
+      "value": "Red"
+    },
+    {
+      "name": "settings_section_account",
+      "value": "Cuenta y seguridad"
+    },
+    {
+      "name": "settings_section_about",
+      "value": "Acerca de y ayuda"
+    },
+    {
+      "name": "settings_item_network",
+      "value": "Red"
+    },
+    {
+      "name": "settings_item_relay",
+      "value": "Informes relay"
+    },
+    {
+      "name": "settings_item_device",
+      "value": "Acceso y dispositivo"
+    },
+    {
+      "name": "settings_item_app_details",
+      "value": "Detalles de la app"
     }
   ]
 }

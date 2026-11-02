@@ -1243,6 +1243,38 @@
     {
       "name": "settings_language_changed",
       "value": "语言已切换"
+    },
+    {
+      "name": "settings_section_display",
+      "value": "显示和外观"
+    },
+    {
+      "name": "settings_section_network",
+      "value": "网络"
+    },
+    {
+      "name": "settings_section_account",
+      "value": "账号与安全"
+    },
+    {
+      "name": "settings_section_about",
+      "value": "关于和帮助"
+    },
+    {
+      "name": "settings_item_network",
+      "value": "网络"
+    },
+    {
+      "name": "settings_item_relay",
+      "value": "中转上报"
+    },
+    {
+      "name": "settings_item_device",
+      "value": "登录与设备"
+    },
+    {
+      "name": "settings_item_app_details",
+      "value": "应用详情"
     }
   ]
 }

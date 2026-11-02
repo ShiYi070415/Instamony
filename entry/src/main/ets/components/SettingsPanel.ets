@@ -2543,18 +2543,18 @@ export struct SettingsPanel {
   }
 
   /** 二级页标题（设置首页只显示分类）。 */
-  private detailTitle(): string {
+  private detailTitle(): ResourceStr {
     switch (this.settingsPage) {
-      case 'bar': return '底栏';
-      case 'language': return '语言';
-      case 'media': return '图片和视频';
-      case 'appearance': return '外观';
-      case 'proxy': return '代理';
-      case 'doh': return '网络';
-      case 'relay': return '中转上报';
-      case 'diag': return '诊断';
-      case 'device': return '登录与设备';
-      case 'about': return '应用详情';
+      case 'bar': return $r('app.string.settings_group_bar');
+      case 'language': return $r('app.string.settings_group_language');
+      case 'media': return $r('app.string.settings_group_media');
+      case 'appearance': return $r('app.string.settings_group_appearance');
+      case 'proxy': return $r('app.string.settings_group_proxy');
+      case 'doh': return $r('app.string.settings_item_network');
+      case 'relay': return $r('app.string.settings_item_relay');
+      case 'diag': return $r('app.string.settings_group_diag');
+      case 'device': return $r('app.string.settings_item_device');
+      case 'about': return $r('app.string.settings_item_app_details');
       default: return '';
     }
   }
@@ -2583,26 +2583,26 @@ export struct SettingsPanel {
   rootList() {
     List() {
       ListItem() {
-        this.groupHeader('显示和外观')
+        this.groupHeader($r('app.string.settings_section_display'))
       }
       ListItem() {
         Column({ space: 0 }) {
           if (this.barOptionsSupported()) {
-            this.actionRow('底栏', (): void => {
+            this.actionRow($r('app.string.settings_group_bar'), (): void => {
               this.openSection('bar');
             })
             this.cardDivider()
           }
-          this.actionRow('语言', (): void => {
+          this.actionRow($r('app.string.settings_group_language'), (): void => {
             this.openSection('language');
           })
           this.cardDivider()
-          this.actionRow('图片和视频', (): void => {
+          this.actionRow($r('app.string.settings_group_media'), (): void => {
             this.openSection('media');
           })
           if (this.materialOptionsSupported()) {
             this.cardDivider()
-            this.actionRow('外观', (): void => {
+            this.actionRow($r('app.string.settings_group_appearance'), (): void => {
               this.openSection('appearance');
             })
           }
@@ -2612,23 +2612,23 @@ export struct SettingsPanel {
       .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
 
       ListItem() {
-        this.groupHeader('网络')
+        this.groupHeader($r('app.string.settings_section_network'))
       }
       ListItem() {
         Column({ space: 0 }) {
-          this.actionRow('代理', (): void => {
+          this.actionRow($r('app.string.settings_group_proxy'), (): void => {
             this.openSection('proxy');
           })
           this.cardDivider()
-          this.actionRow('网络', (): void => {
+          this.actionRow($r('app.string.settings_item_network'), (): void => {
             this.openSection('doh');
           })
           this.cardDivider()
-          this.actionRow('中转上报', (): void => {
+          this.actionRow($r('app.string.settings_item_relay'), (): void => {
             this.openSection('relay');
           })
           this.cardDivider()
-          this.actionRow('诊断', (): void => {
+          this.actionRow($r('app.string.settings_group_diag'), (): void => {
             this.openSection('diag');
           })
         }
@@ -2638,11 +2638,11 @@ export struct SettingsPanel {
 
       if (!this.signedIn) {
         ListItem() {
-          this.groupHeader('账号与安全')
+          this.groupHeader($r('app.string.settings_section_account'))
         }
         ListItem() {
           Column({ space: 0 }) {
-            this.actionRow('登录与设备', (): void => {
+            this.actionRow($r('app.string.settings_item_device'), (): void => {
               this.openSection('device');
             })
           }
@@ -2652,11 +2652,11 @@ export struct SettingsPanel {
       }
 
       ListItem() {
-        this.groupHeader('关于和帮助')
+        this.groupHeader($r('app.string.settings_section_about'))
       }
       ListItem() {
         Column({ space: 0 }) {
-          this.actionRow('应用详情', (): void => {
+          this.actionRow($r('app.string.settings_item_app_details'), (): void => {
             this.openSection('about');
           })
         }

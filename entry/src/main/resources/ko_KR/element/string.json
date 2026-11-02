@@ -1243,6 +1243,38 @@
     {
       "name": "settings_language_changed",
       "value": "언어가 변경되었습니다"
+    },
+    {
+      "name": "settings_section_display",
+      "value": "표시 및 테마"
+    },
+    {
+      "name": "settings_section_network",
+      "value": "네트워크"
+    },
+    {
+      "name": "settings_section_account",
+      "value": "계정 및 보안"
+    },
+    {
+      "name": "settings_section_about",
+      "value": "정보 및 도움말"
+    },
+    {
+      "name": "settings_item_network",
+      "value": "네트워크"
+    },
+    {
+      "name": "settings_item_relay",
+      "value": "중계 보고"
+    },
+    {
+      "name": "settings_item_device",
+      "value": "로그인 및 기기"
+    },
+    {
+      "name": "settings_item_app_details",
+      "value": "앱 정보"
     }
   ]
 }

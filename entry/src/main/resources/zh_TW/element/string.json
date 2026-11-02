@@ -1243,6 +1243,38 @@
     {
       "name": "settings_language_changed",
       "value": "語言已切換"
+    },
+    {
+      "name": "settings_section_display",
+      "value": "顯示和外觀"
+    },
+    {
+      "name": "settings_section_network",
+      "value": "網路"
+    },
+    {
+      "name": "settings_section_account",
+      "value": "帳號與安全"
+    },
+    {
+      "name": "settings_section_about",
+      "value": "關於與說明"
+    },
+    {
+      "name": "settings_item_network",
+      "value": "網路"
+    },
+    {
+      "name": "settings_item_relay",
+      "value": "中轉回報"
+    },
+    {
+      "name": "settings_item_device",
+      "value": "登入與裝置"
+    },
+    {
+      "name": "settings_item_app_details",
+      "value": "應用程式詳情"
     }
   ]
 }

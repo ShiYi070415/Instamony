@@ -163,17 +163,25 @@ export class Translator {
   }
 
   /**
-   * 目标语言 = **系统语言**（需求）。
+   * 目标语言 = **用户在设置里选择的 App 语言**（没有单独设置时退回系统语言）。
    *
-   * `getSystemLanguage()` 给的是 'zh-Hans-CN' / 'en-US' 这种；在线端点认 'zh-CN' / 'zh-TW' / 'en'，
-   * 所以这里归一一下（简繁要分开，不然繁体用户会被翻成简体）。
+   * 之前只读 `getSystemLanguage()`：设置里切到意大利语/越南语后，正文仍被翻成系统语言，
+   * 用户看到的译文和界面语言不一致。`getAppPreferredLanguage()` 正是 setAppPreferredLanguage
+   * 写入的那一份，优先用它。
    */
   static targetLang(): string {
     let lang: string = '';
     try {
-      lang = i18n.System.getSystemLanguage();
+      lang = i18n.System.getAppPreferredLanguage();
     } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'system language failed: %{public}s', (error as Error).message ?? '-');
+      hilog.warn(DOMAIN, TAG, 'app language failed: %{public}s', (error as Error).message ?? '-');
+    }
+    if (lang.length === 0 || lang.toLowerCase() === 'default') {
+      try {
+        lang = i18n.System.getSystemLanguage();
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'system language failed: %{public}s', (error as Error).message ?? '-');
+      }
     }
     return Translator.normalizeLang(lang);
   }

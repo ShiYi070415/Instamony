@@ -1243,6 +1243,38 @@
     {
       "name": "settings_language_changed",
       "value": "言語を切り替えました"
+    },
+    {
+      "name": "settings_section_display",
+      "value": "表示と外観"
+    },
+    {
+      "name": "settings_section_network",
+      "value": "ネットワーク"
+    },
+    {
+      "name": "settings_section_account",
+      "value": "アカウントとセキュリティ"
+    },
+    {
+      "name": "settings_section_about",
+      "value": "アプリ情報とヘルプ"
+    },
+    {
+      "name": "settings_item_network",
+      "value": "ネットワーク"
+    },
+    {
+      "name": "settings_item_relay",
+      "value": "中継レポート"
+    },
+    {
+      "name": "settings_item_device",
+      "value": "ログインとデバイス"
+    },
+    {
+      "name": "settings_item_app_details",
+      "value": "アプリの詳細"
     }
   ]
 }

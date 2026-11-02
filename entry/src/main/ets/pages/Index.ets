@@ -812,6 +812,14 @@ const REELS_TITLE_SIZE: number = 28;
 /** 标题左边距（vp）：和 HDS 原生标题的左边距对齐（16）。 */
 const REELS_TITLE_LEFT_PAD_VP: number = 16;
 /**
+ * 「我的」标题行右侧给 HDS menus 预留的宽度（vp）：
+ *   左侧空隙 8 + 菜单按钮 40 + 账号按钮与 menus 的间隙 8 = 56。
+ *
+ * HDS 不暴露菜单按钮的实时矩形，stackBuilder 的右边界也不包含它；不预留的话
+ * 账号下拉按钮会直接和 menus 叠在一起（真机截图确认）。
+ */
+const PROFILE_TITLE_MENU_RESERVE_VP: number = 8 + 40 + 8;
+/**
  * 分段按钮与右侧菜单（静音/下载）之间留的缝（vp）。
  *
  * 菜单是 HDS 自己画的，位置摸不到；实测两个按钮约占 100vp 宽，而 stackBuilder 的可用宽度
@@ -8334,7 +8342,7 @@ struct Index {
     }
     .width('100%')
     .height('100%')
-    .padding({ left: REELS_TITLE_LEFT_PAD_VP, right: 4 })
+    .padding({ left: REELS_TITLE_LEFT_PAD_VP, right: PROFILE_TITLE_MENU_RESERVE_VP })
     .alignItems(VerticalAlign.Center)
   }
 
@@ -10289,19 +10297,19 @@ struct Index {
    * 路由栈 pop，不需要页面再兜一层 onBackPress（这正是换掉模态的收益之一）。
    */
   /** 设置二级页的 HDS 标题。 */
-  private settingsDetailTitle(section: string): string {
+  private settingsDetailTitle(section: string): ResourceStr {
     switch (section) {
-      case 'bar': return '底栏';
-      case 'language': return '语言';
-      case 'media': return '图片和视频';
-      case 'appearance': return '外观';
-      case 'proxy': return '代理';
-      case 'doh': return '网络';
-      case 'relay': return '中转上报';
-      case 'diag': return '诊断';
-      case 'device': return '登录与设备';
-      case 'about': return '应用详情';
-      default: return '设置';
+      case 'bar': return $r('app.string.settings_group_bar');
+      case 'language': return $r('app.string.settings_group_language');
+      case 'media': return $r('app.string.settings_group_media');
+      case 'appearance': return $r('app.string.settings_group_appearance');
+      case 'proxy': return $r('app.string.settings_group_proxy');
+      case 'doh': return $r('app.string.settings_item_network');
+      case 'relay': return $r('app.string.settings_item_relay');
+      case 'diag': return $r('app.string.settings_group_diag');
+      case 'device': return $r('app.string.settings_item_device');
+      case 'about': return $r('app.string.settings_item_app_details');
+      default: return $r('app.string.action_settings');
     }
   }
 

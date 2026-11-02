@@ -1,4 +1,4 @@
-﻿{
+{
   "string": [
     {
       "name": "app_name",
@@ -1243,6 +1243,38 @@
     {
       "name": "settings_language_changed",
       "value": "Đã đổi ngôn ngữ"
+    },
+    {
+      "name": "settings_section_display",
+      "value": "Giao diện và hiển thị"
+    },
+    {
+      "name": "settings_section_network",
+      "value": "Mạng"
+    },
+    {
+      "name": "settings_section_account",
+      "value": "Tài khoản & bảo mật"
+    },
+    {
+      "name": "settings_section_about",
+      "value": "Giới thiệu & trợ giúp"
+    },
+    {
+      "name": "settings_item_network",
+      "value": "Mạng"
+    },
+    {
+      "name": "settings_item_relay",
+      "value": "Báo cáo relay"
+    },
+    {
+      "name": "settings_item_device",
+      "value": "Đăng nhập & thiết bị"
+    },
+    {
+      "name": "settings_item_app_details",
+      "value": "Chi tiết ứng dụng"
     }
   ]
 }

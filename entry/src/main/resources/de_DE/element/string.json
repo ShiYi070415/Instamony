@@ -1243,6 +1243,38 @@
     {
       "name": "settings_language_changed",
       "value": "Sprache geändert"
+    },
+    {
+      "name": "settings_section_display",
+      "value": "Darstellung & Design"
+    },
+    {
+      "name": "settings_section_network",
+      "value": "Netzwerk"
+    },
+    {
+      "name": "settings_section_account",
+      "value": "Konto & Sicherheit"
+    },
+    {
+      "name": "settings_section_about",
+      "value": "Über & Hilfe"
+    },
+    {
+      "name": "settings_item_network",
+      "value": "Netzwerk"
+    },
+    {
+      "name": "settings_item_relay",
+      "value": "Relay-Bericht"
+    },
+    {
+      "name": "settings_item_device",
+      "value": "Anmeldung & Gerät"
+    },
+    {
+      "name": "settings_item_app_details",
+      "value": "App-Details"
     }
   ]
 }
