@@ -1349,7 +1349,10 @@ export struct StoryViewer {
   /** 卡片宽 = 屏幕宽 - 两侧留白。 */
   private cardW(): number {
     const width: number = this.overlayW - CARD_SIDE_VP * 2;
-    return width > 160 ? width : 160;
+    // 平板宽屏也把快拍卡片收在 9:16 内，不再横向铺满。
+    const byNineSixteen: number = this.screenH > 0 ? Math.round(this.screenH * 9 / 16) : width;
+    const capped: number = Math.min(width, byNineSixteen);
+    return capped > 160 ? capped : 160;
   }
 
   /**

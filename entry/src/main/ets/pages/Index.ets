@@ -7092,6 +7092,19 @@ struct Index {
    * 快拍 + 信息流整列按 9:16 收口：宽度取窗口高度 × 9/16，
    * 再夹进可用宽度；手机竖屏不限制。
    */
+  /** 评论面板宽度：按 9:16 收口，手机竖屏仍全宽。 */
+  private commentsPanelWidth(): number {
+    const width: number = this.shellWidthVp > 0 ? this.shellWidthVp : this.screenWidthVp;
+    const height: number = this.shellHeightVp;
+    if (width <= 0) {
+      return 360;
+    }
+    if (height <= 0) {
+      return width;
+    }
+    return Math.min(width, Math.round(height * 9 / 16));
+  }
+
   private feedMaxWidth(): number {
     const width: number = this.contentAreaWidth();
     let height: number = this.shellHeightVp;
@@ -12614,7 +12627,7 @@ struct Index {
         })
           .margin({ top: COMMENTS_GAP_VP })
       }
-      .width('100%')
+      .width(this.commentsPanelWidth())
       .padding({ left: COMMENTS_SIDE_VP, right: COMMENTS_SIDE_VP })
       .height(this.commentsHeightVp > 0 ? this.commentsHeightVp : this.commentsMidVp())
       // 弹出/收起 + 下拉越界：整块一起走（两个位移相加，见各自的说明）。
