@@ -4515,7 +4515,7 @@ struct Index {
    */
   private openPostStream(posts: Array<MediaPost>, index: number,
                          loadMore: () => Promise<ProfileStreamPage>,
-                         fromOwnProfile: boolean = false): void {
+                         fromOwnProfile: boolean = false, stackOnRight: boolean = false): void {
     if (posts.length === 0 || index < 0 || index >= posts.length) {
       return;
     }
@@ -4585,7 +4585,7 @@ struct Index {
     hilog.info(DOMAIN, TAG,
       'post page open n=%{public}d multi=%{public}d videos=%{public}d/%{public}d liked=%{public}d reposted=%{public}d anchor=%{public}s',
       posts.length, multi, withUrl, videos, likedKnown, repostedKnown, key);
-    this.pushPage(POST_PAGE);
+    this.pushPage(POST_PAGE, '', stackOnRight);
     // 这一页**不是**只有进页时那几条：先自己补一轮（见 fillPostPage）。
     // 用户报的"要在分页加载帖子后帖子页面才会显示"就是"网格翻到哪儿、帖子页才有多少"，
     // 现在数据源在视图模型里，帖子页可以自己往下要（触底也会继续要）。
@@ -4783,7 +4783,8 @@ struct Index {
    * 的 toReels），所以按 shortcode 定位，不能按下标。
    */
   private openProfileReels(posts: Array<MediaPost>, shortcode: string, hasMore: boolean,
-                           loadMore: () => Promise<ProfileStreamPage>): void {
+                           loadMore: () => Promise<ProfileStreamPage>,
+                           stackOnRight: boolean = false): void {
     const vm: ProfileReelsViewModel =
       new ProfileReelsViewModel(posts, shortcode, hasMore, loadMore);
     if (vm.list().length === 0) {
@@ -4800,7 +4801,7 @@ struct Index {
     }
     hilog.info(DOMAIN, TAG, 'profile reels open n=%{public}d anchor=%{public}s more=%{public}s',
       vm.list().length, shortcode, `${hasMore}`);
-    this.pushPage(PROFILE_REELS_PAGE);
+    this.pushPage(PROFILE_REELS_PAGE, '', stackOnRight);
   }
 
   /**
@@ -7303,7 +7304,7 @@ struct Index {
   }
 
   /** 所有"开新页"统一入口：平板首页走右栏，其余走全局导航栈。 */
-  private pushPage(name: string, param: string = ''): void {
+  private pushPage(name: string, param: string = '', stackOnRight: boolean = false): void {
     if (this.directStageOpen && name === PROFILE_REELS_PAGE) {
       // 会话里点分享卡：Reels 压进会话舞台自己的栈，覆盖右侧会话页；
       // 返回时 pop 回会话页，左侧私信列表始终不动。
@@ -7323,8 +7324,9 @@ struct Index {
       } else if (this.tabletProfileStack.getAllPathName().length === 0) {
         this.tabletProfileStack.clear();
       }
-      if (alreadyOpen && this.tabletProfileStack.getAllPathName().length > 0) {
-        // 右栏已经开着一个页面：新页面原地替换旧的，旧页面收起，不叠在下面。
+      if (alreadyOpen && !stackOnRight
+        && this.tabletProfileStack.getAllPathName().length > 0) {
+        // 普通入口仍原地替换；从用户页格子进入 feeds/Reels 时允许压栈，返回可回到用户页。
         this.tabletProfileStack.replacePath({ name: name, param: param });
       } else {
         this.tabletProfileStack.pushPath({ name: name, param: param });
@@ -7520,12 +7522,13 @@ struct Index {
         // 右栏用户页的帖子格子 → feeds 流（不能只接 onOpen 兜底）。
         onOpenStream: (posts: Array<MediaPost>, index: number,
                        loadMore: () => Promise<ProfileStreamPage>): void => {
-          this.openPostStream(posts, index, loadMore, false);
+          // 压入右栏栈：返回时回到当前用户页，而不是直接关掉右栏。
+          this.openPostStream(posts, index, loadMore, false, true);
         },
         // 右栏用户页的视频/Reels 格子 → Reels 流。
         onOpenReels: (posts: Array<MediaPost>, shortcode: string, hasMore: boolean,
                       loadMore: () => Promise<ProfileStreamPage>): void => {
-          this.openProfileReels(posts, shortcode, hasMore, loadMore);
+          this.openProfileReels(posts, shortcode, hasMore, loadMore, true);
         },
         onFeedScroll: (deltaY: number, offsetY: number, scrollState: ScrollState): void => {
           this.onFeedScroll(deltaY, offsetY, scrollState);
