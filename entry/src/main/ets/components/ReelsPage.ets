@@ -1905,7 +1905,8 @@ struct ReelOverlay {
           Text(this.reel.author)
             .fontSize(15)
             .fontWeight(FontWeight.Medium)
-            .fontColor($r('sys.color.font_primary'))
+            // Reels 页面自身始终是深色底，不依赖全局深色模式。
+            .fontColor(Color.White)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .constraintSize({ maxWidth: this.nameMaxWidth() })
@@ -3381,11 +3382,11 @@ export struct ReelsPage {
             LoadingProgress()
               .width(32)
               .height(32)
-              .color($r('app.color.secondary_text'))
+              .color('#BFBFBF')
           }
           Text(this.status.length > 0 ? this.status : $r('app.string.reels_loading'))
             .fontSize(13)
-            .fontColor($r('app.color.secondary_text'))
+            .fontColor('#BFBFBF')
             .textAlign(TextAlign.Center)
             .padding({ left: 24, right: 24 })
         }

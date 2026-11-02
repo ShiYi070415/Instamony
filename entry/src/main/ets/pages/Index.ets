@@ -1617,8 +1617,10 @@ struct Index {
   private reelsInRightPane(): boolean {
     return this.tabletRightName === PROFILE_REELS_PAGE
       || this.tabletRightName === SEARCH_REELS_PAGE
-      || (this.directStageOpen && this.topPage === PROFILE_REELS_PAGE)
-      || (this.directStageOpen && this.topPage === SEARCH_REELS_PAGE);
+      || (this.tabletHomeScoped()
+        && (this.topPage === PROFILE_REELS_PAGE || this.topPage === SEARCH_REELS_PAGE))
+      || (this.directStageOpen
+        && (this.topPage === PROFILE_REELS_PAGE || this.topPage === SEARCH_REELS_PAGE));
   }
 
   /** Reels 内容左侧要额外避让的侧边栏宽度（仅左侧主 Reels 需要）。 */
@@ -11278,6 +11280,14 @@ struct Index {
    * 深色的用户离开 Reels 依旧深色。
    */
   private syncReelsColorMode(): void {
+    // 右栏里的 Reels 只让右栏自身保持深色，不切全局应用配色。
+    if (this.reelsInRightPane()) {
+      if (this.reelsDarkForced) {
+        this.reelsDarkForced = false;
+        this.applyAppColorMode(false);
+      }
+      return;
+    }
     const onReels: boolean = this.reelsLikeOnScreen();
     // 判据本身也记一行（debug 级）：浅色模式下"进/出 Reels 类页面"有没有走到这里，
     // 看日志就清楚（真机浅色不好造，只能靠这一行 + AppSettings 那行一起判断）。
