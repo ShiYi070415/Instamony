@@ -11776,7 +11776,7 @@ struct Index {
           // 需求："除了底栏 reels，其他 reels 页面右上角没有静音和下载按钮，添加一下"。
           menu: this.reelsMenu(ReelsAction.PROFILE)
         },
-        style: this.destinationTitleStyle(),
+        style: this.reelsDestinationTitleStyle(),
         avoidLayoutSafeArea: false,
         enableComponentSafeArea: false
       })
@@ -11824,7 +11824,7 @@ struct Index {
           // 同视频分页那一页：右上角补上静音 / 下载（需求）。
           menu: this.reelsMenu(ReelsAction.SEARCH)
         },
-        style: this.destinationTitleStyle(),
+        style: this.reelsDestinationTitleStyle(),
         avoidLayoutSafeArea: false,
         enableComponentSafeArea: false
       })
