@@ -10225,13 +10225,15 @@ struct Index {
               })
             }, (item: TabItem): string => `${item.tab}`)
           }
-          .width(64)
+          .width(56)
           .height(5 * 56)
           .alignItems(HorizontalAlign.Center)
         }
-        .width(64)
+        .width(56)
         .height(5 * 56)
         .padding(0)
+        .borderRadius(28)
+        .clip(true)
         .backgroundColor(Color.Transparent)
         .selectedColor(Color.Transparent)
         .attributeModifier(new SurfaceModifier(Index.materialThicknessNow(), false, true))
