@@ -1139,6 +1139,8 @@ struct Index {
   @State private tabletSidebarExpanded: boolean = false;
   /** 壳子的实际窗口宽度（vp），窗口缩放时更新；侧栏按钮按它等比缩放。 */
   @State private shellWidthVp: number = 0;
+  /** 壳子的实际窗口高度（vp）：快拍/信息流按 16:9 收口时要用。 */
+  @State private shellHeightVp: number = 0;
 
   /**
    * 底栏行为（设定页里的开关，见 AppSettings 的 BAR_HIDE_*）。**只有支持悬浮底栏的设备
@@ -10369,8 +10371,13 @@ struct Index {
     .onAreaChange((oldArea: Area, newArea: Area): void => {
       const width: number = typeof newArea.width === 'number'
         ? newArea.width : parseFloat(`${newArea.width}`);
+      const height: number = typeof newArea.height === 'number'
+        ? newArea.height : parseFloat(`${newArea.height}`);
       if (width > 0 && Math.abs(width - this.shellWidthVp) > 0.5) {
         this.shellWidthVp = width;
+      }
+      if (height > 0 && Math.abs(height - this.shellHeightVp) > 0.5) {
+        this.shellHeightVp = height;
       }
     })
   }
