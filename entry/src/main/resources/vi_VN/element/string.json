@@ -1,4 +1,4 @@
-{
+﻿{
   "string": [
     {
       "name": "app_name",
@@ -230,7 +230,7 @@
     },
     {
       "name": "tab_profile",
-      "value": "Trang cá nhân"
+      "value": "Cá nhân"
     },
     {
       "name": "tab_placeholder_hint",
@@ -698,7 +698,7 @@
     },
     {
       "name": "probe_open_profile",
-      "value": "Trang cá nhân"
+      "value": "Cá nhân"
     },
     {
       "name": "probe_open_reels",
