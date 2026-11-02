@@ -7184,6 +7184,35 @@ struct Index {
     this.navStack.pushPath({ name: name, param: param });
   }
 
+  /** 小窗放大成双栏：把当前整页详情迁到右栏，左侧回到主页面。 */
+  private migrateGlobalPageToRight(): void {
+    const names: Array<string> = this.navStack.getAllPathName();
+    if (names.length === 0) {
+      return;
+    }
+    const name: string = names[names.length - 1];
+    const raw: Object = this.navStack.getParamByIndex(names.length - 1) as Object;
+    const param: string = raw === undefined || raw === null ? '' : `${raw}`;
+    this.navStack.clear();
+    this.tabletRightName = name;
+    this.tabletProfileParam = param;
+    this.tabletProfileStack.clear();
+    this.tabletProfileStack.pushPath({ name: name, param: param });
+  }
+
+  /** 双栏缩回小窗：把右栏详情迁回整页路由，右栏收起。 */
+  private migrateRightToGlobal(): void {
+    if (this.tabletRightName.length === 0) {
+      return;
+    }
+    const name: string = this.tabletRightName;
+    const param: string = this.tabletProfileParam;
+    this.tabletRightName = '';
+    this.tabletProfileParam = '';
+    this.tabletProfileStack.clear();
+    this.navStack.pushPath({ name: name, param: param });
+  }
+
   /** 关闭右栏（HDS 返回键 / 自定义关闭共用）。 */
   private closeTabletRight(): void {
     if (this.tabletRightName.length === 0) {
@@ -10761,6 +10790,7 @@ struct Index {
     .width('100%')
     .height('100%')
     .onAreaChange((oldArea: Area, newArea: Area): void => {
+      const wasSplit: boolean = this.tabletSplitEnabled();
       const width: number = typeof newArea.width === 'number'
         ? newArea.width : parseFloat(`${newArea.width}`);
       const height: number = typeof newArea.height === 'number'
@@ -10770,6 +10800,12 @@ struct Index {
       }
       if (height > 0 && Math.abs(height - this.shellHeightVp) > 0.5) {
         this.shellHeightVp = height;
+      }
+      const isSplit: boolean = this.tabletSplitEnabled();
+      if (!wasSplit && isSplit) {
+        this.migrateGlobalPageToRight();
+      } else if (wasSplit && !isSplit) {
+        this.migrateRightToGlobal();
       }
     })
   }
