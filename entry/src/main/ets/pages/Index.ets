@@ -1168,6 +1168,9 @@ struct Index {
   private tabDirectThreads: Array<string> = ['', '', '', '', ''];
   /** 切页过程中不要因为 onHidden 自动收起右栏，否则会黑闪/误关会话。 */
   private tabSwitching: boolean = false;
+  /** 手动拖拽后的左栏宽度（0 = 用默认分页档位）。 */
+  @State private splitLeftWidth: number = 0;
+  private splitDragStart: number = 0;
 
   /**
    * 底栏行为（设定页里的开关，见 AppSettings 的 BAR_HIDE_*）。**只有支持悬浮底栏的设备
@@ -7421,12 +7424,33 @@ struct Index {
   }
 
   /** 分栏左栏用固定断点宽度（vp），不按百分比。 */
+  /** 双页左栏最小宽度：9:16；Reels 全屏时加上侧边栏宽度。 */
+  private splitMinLeft(): number {
+    const height: number = this.shellHeightVp > 0 ? this.shellHeightVp : 800;
+    return Math.round(height * 9 / 16) + (this.reelsFullBleed() ? this.tabletSidebarWidth() : 0);
+  }
+
+  /** 双页右栏最小宽度：9:16。 */
+  private splitMinRight(): number {
+    const height: number = this.shellHeightVp > 0 ? this.shellHeightVp : 800;
+    return Math.round(height * 9 / 16);
+  }
+
+  private splitMaxLeft(): number {
+    return Math.max(this.splitMinLeft(), this.contentAreaWidth() - this.splitMinRight());
+  }
+
   private tabletLeftWidth(): number {
     if (!this.tabletHomeScoped()) {
       return this.contentAreaWidth();
     }
+    const minLeft: number = this.splitMinLeft();
+    const maxLeft: number = this.splitMaxLeft();
+    if (this.splitLeftWidth > 0) {
+      return Math.max(minLeft, Math.min(maxLeft, this.splitLeftWidth));
+    }
     if (this.selectedIndex === 0) {
-      return this.feedMaxWidth();
+      return Math.max(minLeft, Math.min(maxLeft, this.feedMaxWidth()));
     }
     const width: number = this.shellWidthVp > 0 ? this.shellWidthVp : this.screenWidthVp;
     let target: number = 400;
@@ -7435,8 +7459,7 @@ struct Index {
     } else if (width >= 1080) {
       target = 520;
     }
-    // 右栏至少留 360vp，避免 HDS Navigation 被挤到屏幕外。
-    return Math.min(target, Math.max(0, this.contentAreaWidth() - 360));
+    return Math.max(minLeft, Math.min(maxLeft, target));
   }
 
   @Builder
@@ -7589,6 +7612,28 @@ struct Index {
     .clip(true)
     .visibility(this.directStageVisible ? Visibility.Visible : Visibility.Hidden)
     .backgroundColor($r('app.color.page_background'))
+  }
+
+  /** 双页中间的可拖动分隔条：左栏最小 9:16（Reels 加侧边栏），右栏最小 9:16。 */
+  @Builder
+  splitDragHandle() {
+    Column()
+      .width(12)
+      .height('100%')
+      .position({ x: this.tabletLeftWidth() - 6, y: 0 })
+      .zIndex(35)
+      .backgroundColor(Color.Transparent)
+      .gesture(
+        PanGesture({ direction: PanDirection.Horizontal })
+          .onActionStart((): void => {
+            this.splitDragStart = this.tabletLeftWidth();
+          })
+          .onActionUpdate((event: GestureEvent): void => {
+            const wanted: number = this.splitDragStart + event.offsetX;
+            this.splitLeftWidth = Math.max(this.splitMinLeft(),
+              Math.min(this.splitMaxLeft(), wanted));
+          })
+      )
   }
 
   /** 右栏：独立 HdsNavigation，和左侧主 HdsNavigation 同高、同材质。 */
@@ -11058,6 +11103,9 @@ struct Index {
       // 私信会话常驻舞台：小窗铺满，双栏时只改位置/宽度，页面实例不重建。
       if (this.directStageOpen) {
         this.directThreadStage()
+      }
+      if (this.tabletHomeScoped()) {
+        this.splitDragHandle()
       }
       }
       .width(this.tabletWideShell() ? this.contentAreaWidth() : '100%')
