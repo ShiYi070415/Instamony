@@ -7482,8 +7482,8 @@ struct Index {
   }
 
   private directStageX(): number {
-    const sidebar: number = this.tabletWideShell() ? this.tabletSidebarWidth() : 0;
-    return sidebar + (this.tabletHomeScoped() ? this.tabletLeftWidth() : 0);
+    // Row 本身已经通过 margin-left 让开侧边栏，舞台坐标只算内容区内部。
+    return this.tabletHomeScoped() ? this.tabletLeftWidth() : 0;
   }
 
   private openDirectStage(threadId: string): void {
@@ -10902,11 +10902,11 @@ struct Index {
 
   @Builder
   nativeShell() {
-    Row() {
-      if (this.tabletWideShell() && !this.reelsFullBleed()) {
-        this.tabletSidebar()
-      }
-      Column() {
+    Stack({ alignContent: Alignment.TopStart }) {
+      // 主体：侧边栏不再是 Row 的第一列，而是外面浮的一层；
+      // 普通页面用 margin-left 让开它，Reels 全屏时 margin = 0，背景可铺到侧边栏下面。
+      Row() {
+        Column() {
         // 传入页面栈：通知页是它的一个 NavDestination（见 destinationBuilder）。
         HdsNavigation(this.navStack) {
           this.nativeShellContent()
@@ -10968,8 +10968,17 @@ struct Index {
       if (this.directStageOpen) {
         this.directThreadStage()
       }
-      if (this.reelsFullBleed()) {
-        // Reels 背景已经铺满整窗；侧边栏作为透明浮层盖在上面。
+      }
+      .width(this.tabletWideShell() ? this.contentAreaWidth() : '100%')
+      .height('100%')
+      // 普通页面让开侧边栏；Reels 全屏时 margin 为 0，内容铺到侧边栏下面。
+      .margin({
+        left: this.tabletWideShell() && !this.reelsFullBleed()
+          ? this.tabletSidebarWidth() : 0
+      })
+
+      if (this.tabletWideShell()) {
+        // 侧边栏融入主体：永远作为左侧浮层，不参与主体宽度计算。
         Stack() {
           this.tabletSidebar()
         }
