@@ -1139,8 +1139,10 @@ struct Index {
   @State private tabletSidebarExpanded: boolean = false;
   /** 壳子的实际窗口宽度（vp），窗口缩放时更新；侧栏按钮按它等比缩放。 */
   @State private shellWidthVp: number = 0;
-  /** 壳子的实际窗口高度（vp）：快拍/信息流按 16:9 收口时要用。 */
+  /** 壳子的实际窗口高度（vp）：快拍/信息流按 9:16 收口时要用。 */
   @State private shellHeightVp: number = 0;
+  /** 首页右侧挤入的用户主页（`用户名|id`，空 = 收起）。 */
+  @State private tabletProfileParam: string = '';
 
   /**
    * 底栏行为（设定页里的开关，见 AppSettings 的 BAR_HIDE_*）。**只有支持悬浮底栏的设备
@@ -7065,12 +7067,112 @@ struct Index {
    * 再夹进可用宽度；手机竖屏不限制。
    */
   private feedMaxWidth(): number {
-    const width: number = this.shellWidthVp > 0 ? this.shellWidthVp : this.screenWidthVp;
+    const width: number = this.contentAreaWidth();
     const height: number = this.shellHeightVp;
     if (width < 600 || height <= 0) {
       return 0;
     }
-    return Math.min(width - 48, Math.round(height * 9 / 16));
+    return Math.min(width - 32, Math.round(height * 9 / 16));
+  }
+
+  /** 侧边栏实际宽度（和 tabletSidebar 的 .width 同源）。 */
+  private tabletSidebarWidth(): number {
+    return this.tabletSidebarExpanded
+      ? Math.round(220 * this.tabletUiScale())
+      : this.tabletButtonSize() + 28;
+  }
+
+  /** 侧边栏之外的可用宽度。 */
+  private contentAreaWidth(): number {
+    const total: number = this.shellWidthVp > 0 ? this.shellWidthVp : this.screenWidthVp;
+    return Math.max(0, total - (this.tabletWideShell() ? this.tabletSidebarWidth() : 0));
+  }
+
+  /** 用户页挤入时，信息流从居中位置向左平移到贴侧边栏的距离。 */
+  private feedShift(): number {
+    const feed: number = this.feedMaxWidth();
+    if (feed <= 0) {
+      return 0;
+    }
+    return Math.max(0, (this.contentAreaWidth() - feed) / 2);
+  }
+
+  /** 右侧用户页宽度 = 内容区减去信息流列宽。 */
+  private profileStageWidth(): number {
+    return Math.max(0, this.contentAreaWidth() - this.feedMaxWidth());
+  }
+
+  /**
+   * 宽屏首页：信息流居中；点用户资讯栏时信息流左移贴侧栏，
+   * 用户页从右侧挤入；返回时反向。
+   */
+  @Builder
+  homeSplit() {
+    Stack({ alignContent: Alignment.TopStart }) {
+      Row() {
+        Blank()
+          .layoutWeight(1)
+        Column() {
+          this.homeTab()
+        }
+        .width(this.feedMaxWidth())
+        .height('100%')
+        Blank()
+          .layoutWeight(1)
+      }
+      .width('100%')
+      .height('100%')
+      .translate({ x: this.tabletProfileParam.length > 0 ? -this.feedShift() : 0 })
+      .animation({ duration: 280, curve: Curve.EaseInOut })
+
+      if (this.tabletProfileParam.length > 0) {
+        Column() {
+          Row({ space: 8 }) {
+            MaterialIconButton({
+              symbol: $r('sys.symbol.chevron_left'),
+              buttonSize: 40,
+              iconSize: 20,
+              onTap: (on: boolean): void => {
+                this.tabletProfileParam = '';
+              }
+            })
+            Text($r('app.string.tab_profile'))
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.primary_text'))
+              .layoutWeight(1)
+          }
+          .width('100%')
+          .height(52)
+          .padding({ left: 8, right: 12 })
+          .alignItems(VerticalAlign.Center)
+
+          UserProfileRoute({
+            param: this.tabletProfileParam,
+            onOpen: (post: ProfilePost): void => {
+              this.openLoosePost(post.shortcode, post.isVideo);
+            },
+            onFollowUser: (id: string, username: string, follow: boolean): Promise<boolean> => {
+              return this.followUser(id, username, follow);
+            },
+            onOpenUserProfile: (username: string): void => {
+              this.tabletProfileParam = `${username}|`;
+            }
+          })
+            .layoutWeight(1)
+        }
+        .width(this.profileStageWidth())
+        .height('100%')
+        .align(Alignment.TopEnd)
+        .backgroundColor($r('app.color.page_background'))
+        .border({ width: { left: 0.5 }, color: $r('app.color.divider') })
+        .transition(TransitionEffect.translate({ x: '100%' })
+          .animation({ duration: 280, curve: Curve.EaseInOut }))
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor($r('app.color.page_background'))
   }
 
   /**
@@ -7207,6 +7309,10 @@ struct Index {
           },
           // 用户资讯模块（头像 + 用户名）→ 打开用户主页（NavDestination，见 openUserProfile）。
           onOpenUser: (post: MediaPost): void => {
+            if (this.tabletWideShell()) {
+              this.tabletProfileParam = `${post.ownerUsername}|${post.ownerId}`;
+              return;
+            }
             this.openUserProfile(post.ownerUsername, post.ownerId);
           },
           onLike: (post: MediaPost): void => {
@@ -7356,7 +7462,11 @@ struct Index {
          * 由 refreshChallengeState 触发；挑战不是"首页才有"，弹窗天然覆盖五个页签。
          */        Column() {
           if (this.selectedIndex === 0) {
-            this.homeTab()
+            if (this.tabletWideShell()) {
+              this.homeSplit()
+            } else {
+              this.homeTab()
+            }
           } else if (this.currentTab() === AppTab.Profile) {
             // 「我的」有原生实现，不走占位页。
             this.profilePage()
@@ -10250,6 +10360,9 @@ struct Index {
               .borderRadius(this.tabletButtonSize() / 2)
               .backgroundColor(Color.Transparent)
               .onClick((): void => {
+                if (index !== 0) {
+                  this.tabletProfileParam = '';
+                }
                 this.onTabBarClick(index);
               })
             }, (item: TabItem): string => `${item.tab}`)
@@ -10298,9 +10411,7 @@ struct Index {
       .padding({ bottom: Math.round(16 * this.tabletUiScale()) })
       .alignItems(HorizontalAlign.Center)
     }
-    .width(this.tabletSidebarExpanded
-      ? Math.round(220 * this.tabletUiScale())
-      : this.tabletButtonSize() + 28)
+    .width(this.tabletSidebarWidth())
     .height('100%')
     .padding({ top: 4 })
     .backgroundColor($r('app.color.page_background'))
