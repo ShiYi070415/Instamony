@@ -916,6 +916,8 @@ class DelayStep {
 struct UserProfileRoute {
   /** 路由参数：`用户名|数字id`（见 Index.parseUserParam）。 */
   @Prop param: string = '';
+  /** 嵌在首页平行视界右栏时的实际宽度（0 = 整屏路由）。 */
+  @Prop layoutWidthVp: number = 0;
   private vm: ProfileViewModel = new ProfileViewModel();
   /** 打开一条帖子：交给隐藏网页（同「我的」页）。 */
   onOpen: (post: ProfilePost) => void = (post: ProfilePost): void => {
@@ -972,6 +974,7 @@ struct UserProfileRoute {
   build() {
     ProfilePage({
       vm: this.vm,
+      layoutWidthVp: this.layoutWidthVp,
       segmentMode: SEGMENT_MODE_USER,
       // 简介里的 @账号：开那个人的主页（需求："点击后进入该用户主页"）。
       onOpenUser: (username: string): void => {
@@ -7102,6 +7105,13 @@ struct Index {
     return Math.max(0, this.contentAreaWidth() - this.feedMaxWidth());
   }
 
+  /** 打开/关闭右侧用户页：信息流平移和用户页挤入共用同一条动画。 */
+  private setTabletProfile(param: string): void {
+    this.getUIContext().animateTo({ duration: 280, curve: Curve.EaseInOut }, (): void => {
+      this.tabletProfileParam = param;
+    });
+  }
+
   /**
    * 宽屏首页：信息流居中；点用户资讯栏时信息流左移贴侧栏，
    * 用户页从右侧挤入；返回时反向。
@@ -7133,7 +7143,7 @@ struct Index {
               buttonSize: 40,
               iconSize: 20,
               onTap: (on: boolean): void => {
-                this.tabletProfileParam = '';
+                this.setTabletProfile('');
               }
             })
             Text($r('app.string.tab_profile'))
@@ -7149,6 +7159,7 @@ struct Index {
 
           UserProfileRoute({
             param: this.tabletProfileParam,
+            layoutWidthVp: this.profileStageWidth(),
             onOpen: (post: ProfilePost): void => {
               this.openLoosePost(post.shortcode, post.isVideo);
             },
@@ -7165,6 +7176,7 @@ struct Index {
         .height('100%')
         .align(Alignment.TopEnd)
         .backgroundColor($r('app.color.page_background'))
+        .clip(true)
         .border({ width: { left: 0.5 }, color: $r('app.color.divider') })
         .transition(TransitionEffect.translate({ x: '100%' })
           .animation({ duration: 280, curve: Curve.EaseInOut }))
@@ -7310,7 +7322,7 @@ struct Index {
           // 用户资讯模块（头像 + 用户名）→ 打开用户主页（NavDestination，见 openUserProfile）。
           onOpenUser: (post: MediaPost): void => {
             if (this.tabletWideShell()) {
-              this.tabletProfileParam = `${post.ownerUsername}|${post.ownerId}`;
+              this.setTabletProfile(`${post.ownerUsername}|${post.ownerId}`);
               return;
             }
             this.openUserProfile(post.ownerUsername, post.ownerId);

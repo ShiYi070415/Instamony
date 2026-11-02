@@ -407,6 +407,8 @@ export struct ProfilePage {
   @State private tabCounts: Array<number> = [0, 0, 0, 0];
   @State private tabMores: Array<boolean> = [true, true, true, true];
   @State private screenWidthVp: number = FALLBACK_WIDTH_VP;
+  /** 嵌在首页平行视界右栏时的实际宽度（0 = 按整屏算）。 */
+  @Prop layoutWidthVp: number = 0;
   /** 当前分页（见 PROFILE_TAB_*，和分段按钮的四段一一对应）。 */
   @State private tab: number = 0;
   /**
@@ -945,6 +947,9 @@ export struct ProfilePage {
     } catch (error) {
       this.screenWidthVp = FALLBACK_WIDTH_VP;
       this.screenHeightVp = 0;
+    }
+    if (this.layoutWidthVp > 0) {
+      this.screenWidthVp = this.layoutWidthVp;
     }
     // 先确定网格列数，后面 apply 帖子时按这个列数分行。
     this.applyGridColumns();
