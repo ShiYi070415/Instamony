@@ -2848,6 +2848,9 @@ export struct FeedList {
     // 按钮就落到图片下边去了（用户报的"部分图片帖子下载按钮下沉、超出图片边界"）。
     // 钉死之后子节点再也改不了盒子高度，媒体与按钮的相对位置就固定了。
     .aspectRatio(this.mediaBoxAspect(post))
+    // 媒体区统一圆角；裁一下，图片/视频/轮播都收进同一个圆角里。
+    .borderRadius(12)
+    .clip(true)
     // 媒体内容铺满盒子，所以这个对齐只对"叠在媒体上的按钮行/爱心"起作用。
     .alignContent(Alignment.BottomEnd)
     // 双击媒体点赞。用 parallelGesture 而不是 gesture：视频那一条里放的是 Video
