@@ -7624,18 +7624,18 @@ struct Index {
         .width(0.5)
         .height('100%')
         .backgroundColor($r('app.color.divider'))
-      // 拖动提示：中间的小胶囊，拖动时高亮。
+      // 拖动提示：中间的小白条，拖动时提亮。
       Column()
-        .width(4)
-        .height(40)
-        .borderRadius(2)
-        .backgroundColor(this.splitDragging
-          ? $r('app.color.accent') : $r('app.color.secondary_text'))
-        .opacity(this.splitDragging ? 1 : 0.55)
+        .width(6)
+        .height(56)
+        .borderRadius(3)
+        .backgroundColor(Color.White)
+        .opacity(this.splitDragging ? 1 : 0.85)
+        .shadow({ radius: 6, color: '#33000000', offsetX: 0, offsetY: 1 })
     }
-    .width(12)
+    .width(24)
     .height('100%')
-    .position({ x: this.tabletLeftWidth() - 6, y: 0 })
+    .position({ x: this.tabletLeftWidth() - 12, y: 0 })
     .zIndex(35)
     .backgroundColor(Color.Transparent)
     .gesture(
