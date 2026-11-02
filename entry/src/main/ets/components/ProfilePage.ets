@@ -2143,7 +2143,14 @@ export struct ProfilePage {
           }
           .width('100%')
           .justifyContent(FlexAlign.Start)
+          // 列数变化时格子宽度/行高走弹簧过渡；LazyForEach 重建的新行再淡入，
+          // 和搜索页的列切换保持同一条动画节奏。
+          .animation({ duration: 260, curve: curves.springMotion(0.4, 0.9) })
         }
+        .transition(TransitionEffect.OPACITY.animation({
+          duration: 220,
+          curve: curves.springMotion(0.4, 0.9)
+        }))
       }, (row: Array<ProfilePost>, rowIndex: number): string => {
         /*
          * 键 = **这一行的内容签名**（代次 + 行号 + 每格的 shortcode/封面长度/是不是视频）。
