@@ -1170,6 +1170,7 @@ struct Index {
   private tabSwitching: boolean = false;
   /** 手动拖拽后的左栏宽度（0 = 用默认分页档位）。 */
   @State private splitLeftWidth: number = 0;
+  @State private splitDragging: boolean = false;
   private splitDragStart: number = 0;
 
   /**
@@ -7617,23 +7618,44 @@ struct Index {
   /** 双页中间的可拖动分隔条：左栏最小 9:16（Reels 加侧边栏），右栏最小 9:16。 */
   @Builder
   splitDragHandle() {
-    Column()
-      .width(12)
-      .height('100%')
-      .position({ x: this.tabletLeftWidth() - 6, y: 0 })
-      .zIndex(35)
-      .backgroundColor(Color.Transparent)
-      .gesture(
-        PanGesture({ direction: PanDirection.Horizontal })
-          .onActionStart((): void => {
-            this.splitDragStart = this.tabletLeftWidth();
-          })
-          .onActionUpdate((event: GestureEvent): void => {
-            const wanted: number = this.splitDragStart + event.offsetX;
-            this.splitLeftWidth = Math.max(this.splitMinLeft(),
-              Math.min(this.splitMaxLeft(), wanted));
-          })
-      )
+    Stack({ alignContent: Alignment.Center }) {
+      // 分隔线：贯穿双页高度。
+      Column()
+        .width(0.5)
+        .height('100%')
+        .backgroundColor($r('app.color.divider'))
+      // 拖动提示：中间的小胶囊，拖动时高亮。
+      Column()
+        .width(4)
+        .height(40)
+        .borderRadius(2)
+        .backgroundColor(this.splitDragging
+          ? $r('app.color.accent') : $r('app.color.secondary_text'))
+        .opacity(this.splitDragging ? 1 : 0.55)
+    }
+    .width(12)
+    .height('100%')
+    .position({ x: this.tabletLeftWidth() - 6, y: 0 })
+    .zIndex(35)
+    .backgroundColor(Color.Transparent)
+    .gesture(
+      PanGesture({ direction: PanDirection.Horizontal })
+        .onActionStart((): void => {
+          this.splitDragging = true;
+          this.splitDragStart = this.tabletLeftWidth();
+        })
+        .onActionUpdate((event: GestureEvent): void => {
+          const wanted: number = this.splitDragStart + event.offsetX;
+          this.splitLeftWidth = Math.max(this.splitMinLeft(),
+            Math.min(this.splitMaxLeft(), wanted));
+        })
+        .onActionEnd((): void => {
+          this.splitDragging = false;
+        })
+        .onActionCancel((): void => {
+          this.splitDragging = false;
+        })
+    )
   }
 
   /** 右栏：独立 HdsNavigation，和左侧主 HdsNavigation 同高、同材质。 */
