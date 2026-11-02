@@ -696,6 +696,11 @@ const ICON_BOOKMARK: number = 27;
 export struct FeedList {
   @Prop @Watch('onPostsChanged') posts: MediaPost[] = [];
   /**
+   * 信息流最大宽度（vp，0 = 不限制）。平板/宽屏上把整列限制在 720vp 左右并居中，
+   * 避免一张卡片横跨 1000+vp。
+   */
+  @Prop maxWidthVp: number = 0;
+  /**
    * 回到这个列表时要停在**哪一条**（用帖子 key，不是下标）。
    *
    * 为什么需要：切 tab 会把整个内容层销毁重建（见 Index 的内容层），List 是新实例、从头开始，
@@ -3546,5 +3551,7 @@ export struct FeedList {
     }
     .width('100%')
     .height('100%')
+    .constraintSize({ maxWidth: this.maxWidthVp > 0 ? this.maxWidthVp : 10000 })
+    .alignSelf(ItemAlign.Center)
   }
 }

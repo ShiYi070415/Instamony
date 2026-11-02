@@ -1135,10 +1135,6 @@ struct Index {
   @State selectedTab: AppTab = AppTab.Home;
   /** 当前 tab 下标（和 selectedTab 同步）。栏里的图标高亮、内容层切页都按它判断。 */
   @State selectedIndex: number = 0;
-  /** 平板首页侧边栏是否展开（宽屏专用）。 */
-  @State private tabletSidebarExpanded: boolean = false;
-  /** 平板首页右栏正在看的用户（`用户名|id`，空 = 右栏空着）。 */
-  @State private tabletProfileParam: string = '';
   /**
    * 底栏行为（设定页里的开关，见 AppSettings 的 BAR_HIDE_*）。**只有支持悬浮底栏的设备
    * （API ≥ 23）才用得上**：降级档下栏是普通页签栏，滚动一律不碰它（见 onFeedScroll）。
@@ -7078,6 +7074,15 @@ struct Index {
     }
   }
 
+  /** 宽屏信息流的最大宽度：超过 760vp 时收在 720vp 内并居中。 */
+  private feedMaxWidth(): number {
+    const width: number = this.screenWidthVp;
+    if (width < 760) {
+      return 0;
+    }
+    return Math.min(width - 48, 720);
+  }
+
   /**
    * 信息流那一个页签的内容。
    *
@@ -7087,6 +7092,7 @@ struct Index {
   @Builder
   homeTab() {
     Column() {
+      /* 宽屏信息流由 FeedList 自己收窄居中（见 maxWidthVp）。 */
       if (!this.sessionChecked) {
         // 还在核对登录态：先铺信息流骨架屏，别让用户对着白屏等。
         FeedSkeleton()
@@ -7109,6 +7115,8 @@ struct Index {
          */
         FeedList({
           posts: this.posts,
+          // 宽屏上整列收窄居中；手机为 0，保持原来的满宽。
+          maxWidthVp: this.feedMaxWidth(),
           // 提示卡片位置：关注流 → 卡片 → 探索流（-1 = 不画，见 feedHintAt）。
           hintAt: this.feedHintAt,
           // 列表顶部放那条托盘（数据由托盘自己拉）。
@@ -7209,10 +7217,6 @@ struct Index {
           },
           // 用户资讯模块（头像 + 用户名）→ 打开用户主页（NavDestination，见 openUserProfile）。
           onOpenUser: (post: MediaPost): void => {
-            if (this.tabletWideHome()) {
-              this.tabletProfileParam = `${post.ownerUsername}|${post.ownerId}`;
-              return;
-            }
             this.openUserProfile(post.ownerUsername, post.ownerId);
           },
           onLike: (post: MediaPost): void => {
@@ -7281,166 +7285,6 @@ struct Index {
    *     底栏；栏靠自己的底边加高来避让系统条（见 degradedBarHeight），栏高写成
    *     AttributeModifier 里的常量。
    */
-  /** 宽屏首页：侧边栏 + 平行视界（左信息流 / 右用户主页）。 */
-  private tabletWideHome(): boolean {
-    return this.screenWidthVp >= 600 && this.selectedIndex === 0;
-  }
-
-  /** 平板首页左侧栏：展开按钮 + 垂直页签 + 底部两颗首页菜单。 */
-  @Builder
-  tabletSidebar() {
-    Column() {
-      Row({ space: 8 }) {
-        MaterialIconButton({
-          symbol: $r('sys.symbol.line_3_horizontal'),
-          buttonSize: 40,
-          iconSize: 20,
-          onTap: (on: boolean): void => {
-            this.tabletSidebarExpanded = !this.tabletSidebarExpanded;
-          }
-        })
-        if (this.tabletSidebarExpanded) {
-          Text('Instamony')
-            .fontSize(18)
-            .fontWeight(FontWeight.Bold)
-            .fontColor($r('app.color.primary_text'))
-            .maxLines(1)
-        }
-      }
-      .width('100%')
-      .height(56)
-      .padding({ left: 10, right: 12 })
-      .alignItems(VerticalAlign.Center)
-
-      ForEach(TAB_ITEMS, (item: TabItem, index: number): void => {
-        Row({ space: 12 }) {
-          SymbolGlyph(this.selectedIndex === index ? item.iconSelected : item.iconNormal)
-            .fontSize(22)
-            .fontColor([this.selectedIndex === index
-              ? $r('app.color.primary_text') : $r('app.color.secondary_text')])
-          if (this.tabletSidebarExpanded) {
-            Text(item.label)
-              .fontSize(15)
-              .fontWeight(this.selectedIndex === index ? FontWeight.Medium : FontWeight.Regular)
-              .fontColor($r('app.color.primary_text'))
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-          }
-        }
-        .width('100%')
-        .height(48)
-        .padding({ left: this.tabletSidebarExpanded ? 16 : 24, right: 12 })
-        .borderRadius(12)
-        .backgroundColor(this.selectedIndex === index
-          ? $r('app.color.card_background') : Color.Transparent)
-        .alignItems(VerticalAlign.Center)
-        .onClick((): void => {
-          if (index !== 0) {
-            this.tabletProfileParam = '';
-          }
-          this.onTabBarClick(index);
-        })
-      }, (item: TabItem): string => `${item.tab}`)
-
-      Blank()
-
-      if (this.currentTab() === AppTab.Home) {
-        Row({ space: 10 }) {
-          MaterialIconButton({
-            symbol: $r('sys.symbol.heart'),
-            buttonSize: 40,
-            iconSize: 20,
-            onTap: (on: boolean): void => {
-              this.openNotifications();
-            }
-          })
-          MaterialIconButton({
-            symbol: $r('sys.symbol.plus'),
-            buttonSize: 40,
-            iconSize: 20,
-            onTap: (on: boolean): void => {
-              this.openCreatePost();
-            }
-          })
-        }
-        .width('100%')
-        .height(56)
-        .justifyContent(FlexAlign.Center)
-      }
-    }
-    .width(this.tabletSidebarExpanded ? 220 : 76)
-    .height('100%')
-    .padding({ top: 4, bottom: 12 })
-    .backgroundColor($r('app.color.page_background'))
-    .border({ width: { right: 0.5 }, color: $r('app.color.divider') })
-  }
-
-  /** 宽屏首页主体：左信息流占一半，右侧可塞入用户主页。 */
-  @Builder
-  tabletSplitHome() {
-    Row() {
-      this.tabletSidebar()
-
-      Row() {
-        Column() {
-          this.homeTab()
-        }
-        .width('50%')
-        .height('100%')
-
-        Column() {
-          if (this.tabletProfileParam.length > 0) {
-            Row({ space: 8 }) {
-              MaterialIconButton({
-                symbol: $r('sys.symbol.chevron_left'),
-                buttonSize: 40,
-                iconSize: 20,
-                onTap: (on: boolean): void => {
-                  this.tabletProfileParam = '';
-                }
-              })
-              Text($r('app.string.tab_profile'))
-                .fontSize(16)
-                .fontWeight(FontWeight.Medium)
-                .fontColor($r('app.color.primary_text'))
-                .layoutWeight(1)
-            }
-            .width('100%')
-            .height(52)
-            .padding({ left: 8, right: 12 })
-            .alignItems(VerticalAlign.Center)
-
-            UserProfileRoute({
-              param: this.tabletProfileParam,
-              onOpen: (post: ProfilePost): void => {
-                this.openLoosePost(post.shortcode, post.isVideo);
-              },
-              onFollowUser: (id: string, username: string, follow: boolean): Promise<boolean> => {
-                return this.followUser(id, username, follow);
-              },
-              onOpenUserProfile: (username: string): void => {
-                this.tabletProfileParam = `${username}|`;
-              }
-            })
-              .layoutWeight(1)
-          } else {
-            Column()
-              .width('100%')
-              .height('100%')
-          }
-        }
-        .layoutWeight(1)
-        .height('100%')
-        .border({ width: { left: 0.5 }, color: $r('app.color.divider') })
-      }
-      .layoutWeight(1)
-      .height('100%')
-    }
-    .width('100%')
-    .height('100%')
-    .backgroundColor($r('app.color.page_background'))
-  }
-
   @Builder
   nativeShellContent() {
     if (this.loginPageShown()) {
@@ -7511,8 +7355,6 @@ struct Index {
          */
       // 「在另一台设备上同意」实测在第三方客户端走不通（见 LoginPage 里那段对照表），这里不做任何事。
       })
-    } else if (this.tabletWideHome()) {
-      this.tabletSplitHome()
     } else {
       Stack({ alignContent: Alignment.Bottom }) {
       // ---- 内容层：按 selectedIndex 切页（栏那层不参与切页）----

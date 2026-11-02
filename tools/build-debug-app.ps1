@@ -19,6 +19,8 @@ param(
   # Use debug only when readable stack traces are needed.
   [string]$BuildMode = 'release',
   [string]$Recipient = 'yijin',
+  # hdc target key (e.g. 192.168.3.105:12345). Required when more than one device is connected.
+  [string]$Device = '',
   [switch]$SkipBuild
 )
 
@@ -62,11 +64,19 @@ Write-Host "bundle   : $Bundle" -ForegroundColor Green
 Write-Host "version  : $version" -ForegroundColor Green
 Write-Host "mode     : $BuildMode (debug cert)" -ForegroundColor Green
 
-$targets = (& hdc list targets 2>&1) -join "`n"
-if ($targets -notmatch 'Empty' -and $targets.Trim().Length -gt 0) {
-  Write-Host "device connected, installing HAP..." -ForegroundColor Cyan
-  & hdc install -r $hap
-  if ($LASTEXITCODE -ne 0) { throw "hdc install failed" }
+$targetList = @((& hdc list targets 2>&1) | Where-Object { $_.Trim().Length -gt 0 -and $_ -notmatch 'Empty' })
+if ($targetList.Count -gt 0) {
+  if ($Device -eq '') {
+    if ($targetList.Count -gt 1) {
+      throw "multiple devices connected; pass -Device <key>. targets: $($targetList -join ', ')"
+    }
+    $Device = $targetList[0].Trim()
+  }
+  Write-Host "device connected ($Device), installing HAP..." -ForegroundColor Cyan
+  $installOut = (& hdc -t $Device install -r $hap 2>&1) -join "`n"
+  if ($LASTEXITCODE -ne 0 -or $installOut -notmatch 'successfully') {
+    throw "hdc install failed: $installOut"
+  }
   Write-Host "installed on device" -ForegroundColor Green
   exit 0
 }
