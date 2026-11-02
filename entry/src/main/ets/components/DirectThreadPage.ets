@@ -1545,12 +1545,12 @@ export struct DirectThreadPage {
     Stack({ alignContent: Alignment.Center }) {
       if (message.shareCover.length > 0) {
         /*
-         * 只给宽度，不给高度：Image 按自身原始比例决定高度。
-         * 卡片宽度固定，所以图片宽度永远等于卡片宽度，高度随图片比例走，
-         * 不会因为单双页切换出现 Contain 黑边或 Cover 压缩。
+         * 宽度绑定卡片，高度强制 = 宽度 × 原图比例；
+         * 图片铺满这个外框，避免 Contain 黑边，也避免只给宽度时高度不跟随。
          */
         Image(message.shareCover)
           .width('100%')
+          .height('100%')
           .objectFit(ImageFit.Fill)
           .draggable(false)
           .alt($r('app.media.grid_placeholder'))
@@ -1565,6 +1565,7 @@ export struct DirectThreadPage {
       }
     }
     .width(width)
+    .height(height)
   }
 
   /**
