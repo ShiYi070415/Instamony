@@ -1137,6 +1137,8 @@ struct Index {
   @State selectedIndex: number = 0;
   /** 平板侧边栏是否展开（宽屏专用）。 */
   @State private tabletSidebarExpanded: boolean = false;
+  /** 侧边栏那条竖向 HDS 页签栏的控制器。 */
+  private sidebarTabsController: HdsTabsController = new HdsTabsController();
   /**
    * 底栏行为（设定页里的开关，见 AppSettings 的 BAR_HIDE_*）。**只有支持悬浮底栏的设备
    * （API ≥ 23）才用得上**：降级档下栏是普通页签栏，滚动一律不碰它（见 onFeedScroll）。
@@ -7594,6 +7596,22 @@ struct Index {
    * @param sinkable true = 下沉收缩那套：离底距离随下沉程度变小（栏高走调用处的直接属性）；
    *                 false = 系统显隐那套 / 降级档：位置固定。
    */
+  /** 侧边栏竖向悬浮栏的样式：和底栏同一套材质，只把边距换成竖向的小留白。 */
+  private sidebarFloatingStyle(): HdsTabsFloatingStyle {
+    const style: HdsTabsFloatingStyle = {
+      barSideMargin: 4,
+      barBottomMargin: 4,
+      adaptToHandedness: false
+    };
+    if (PlatformCap.hasHdsMaterial()) {
+      style.systemMaterialEffect = {
+        materialType: immersiveMaterialType(),
+        materialLevel: immersiveLevel(this.materialLevel)
+      };
+    }
+    return style;
+  }
+
   private floatingStyle(sinkable: boolean): HdsTabsFloatingStyle {
     const style: HdsTabsFloatingStyle = {
       // 胶囊宽度靠左右留白控制：留白 = (屏宽 - 目标宽度) / 2，见 barSideMargin()。
@@ -10205,29 +10223,28 @@ struct Index {
       .height(56)
       .justifyContent(FlexAlign.Center)
 
-      ForEach(TAB_ITEMS, (item: TabItem, index: number): void => {
-        Column({ space: 2 }) {
-          MaterialIconButton({
-            symbol: this.selectedIndex === index ? item.iconSelected : item.iconNormal,
-            isOn: this.selectedIndex === index,
-            buttonSize: 40,
-            iconSize: 20,
-            onTap: (on: boolean): void => {
-              this.onTabBarClick(index);
-            }
-          })
-          if (this.tabletSidebarExpanded) {
-            Text(item.label)
-              .fontSize(11)
-              .fontColor(this.selectedIndex === index
-                ? $r('app.color.primary_text') : $r('app.color.secondary_text'))
-              .maxLines(1)
-          }
-        }
-        .width('100%')
-        .padding({ top: 6, bottom: 6 })
-        .alignItems(HorizontalAlign.Center)
-      }, (item: TabItem): string => `${item.tab}`)
+      // 和底部那条悬浮栏同一个 HdsTabs，只是 vertical(true)：高宽对换。
+      HdsTabs({
+        barPosition: BarPosition.Start,
+        index: this.selectedIndex,
+        controller: this.sidebarTabsController
+      }) {
+        this.tabsBody()
+      }
+      .vertical(true)
+      .barOverlap(true)
+      .scrollable(false)
+      .barHeight(300)
+      .barWidth(64)
+      .attributeModifier(new BarChromeModifier(this.sidebarFloatingStyle(), 300))
+      .onTabBarClick((index: number): void => {
+        this.onTabBarClick(index);
+      })
+      .onChange((index: number): void => {
+        this.onTabsChanged(index);
+      })
+      .width('100%')
+      .layoutWeight(1)
 
       Blank()
 
