@@ -409,6 +409,8 @@ export struct ProfilePage {
   @State private screenWidthVp: number = FALLBACK_WIDTH_VP;
   /** 嵌在首页平行视界右栏时的实际宽度（0 = 按整屏算）。 */
   @Prop layoutWidthVp: number = 0;
+  /** 顶部避让高度（默认 94vp 给 HDS 标题栏；嵌在右栏时传 0，标题由右栏自己画）。 */
+  @Prop topOffsetVp: number = PROFILE_TOP_OFFSET;
   /** 当前分页（见 PROFILE_TAB_*，和分段按钮的四段一一对应）。 */
   @State private tab: number = 0;
   /**
@@ -1289,7 +1291,7 @@ export struct ProfilePage {
       // 占位：把这条压到标题栏正下方（和上一版 bottomBuilder 的落点一致）。
       Stack()
         .width('100%')
-        .height(PROFILE_TOP_OFFSET)
+        .height(this.topOffsetVp)
         .hitTestBehavior(HitTestMode.None)
       Column() {
         this.segmentBar()
@@ -1633,7 +1635,7 @@ export struct ProfilePage {
       Column() {
         Stack()
           .width('100%')
-          .height(PROFILE_TOP_OFFSET)
+          .height(this.topOffsetVp)
 
         this.profileList()
       }
@@ -2244,7 +2246,7 @@ export struct ProfilePage {
     if (this.screenHeightVp <= 0) {
       return 0;
     }
-    const viewport: number = this.screenHeightVp - PROFILE_TOP_OFFSET;
+    const viewport: number = this.screenHeightVp - this.topOffsetVp;
     const inner: number = viewport - SEGMENT_BLOCK_HEIGHT;
     return inner > 0 ? inner : 0;
   }

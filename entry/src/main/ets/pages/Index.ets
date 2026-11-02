@@ -918,6 +918,8 @@ struct UserProfileRoute {
   @Prop param: string = '';
   /** 嵌在首页平行视界右栏时的实际宽度（0 = 整屏路由）。 */
   @Prop layoutWidthVp: number = 0;
+  /** 嵌在右栏时标题由右栏画，ProfilePage 不再额外避让 HDS 标题栏。 */
+  @Prop embedded: boolean = false;
   private vm: ProfileViewModel = new ProfileViewModel();
   /** 打开一条帖子：交给隐藏网页（同「我的」页）。 */
   onOpen: (post: ProfilePost) => void = (post: ProfilePost): void => {
@@ -975,6 +977,7 @@ struct UserProfileRoute {
     ProfilePage({
       vm: this.vm,
       layoutWidthVp: this.layoutWidthVp,
+      topOffsetVp: this.embedded ? 0 : 94,
       segmentMode: SEGMENT_MODE_USER,
       // 简介里的 @账号：开那个人的主页（需求："点击后进入该用户主页"）。
       onOpenUser: (username: string): void => {
@@ -7150,20 +7153,23 @@ struct Index {
             this.setTabletProfile('');
           }
         })
-        Text($r('app.string.tab_profile'))
+        Text(Index.userNameOf(this.tabletProfileParam))
           .fontSize(16)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.primary_text'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
           .layoutWeight(1)
       }
       .width('100%')
-      .height(52)
+      .height(56)
       .padding({ left: 8, right: 12 })
       .alignItems(VerticalAlign.Center)
 
       UserProfileRoute({
         param: this.tabletProfileParam,
         layoutWidthVp: this.profileStageWidth(),
+        embedded: true,
         onOpen: (post: ProfilePost): void => {
           this.openLoosePost(post.shortcode, post.isVideo);
         },
@@ -7178,7 +7184,7 @@ struct Index {
     }
     .width(this.profileStageWidth())
     .height('100%')
-    .padding({ top: this.topSafeVp + 8 })
+    .padding({ top: this.topSafeVp })
     .backgroundColor($r('app.color.page_background'))
     .clip(true)
     .border({ width: { left: 0.5 }, color: $r('app.color.divider') })
