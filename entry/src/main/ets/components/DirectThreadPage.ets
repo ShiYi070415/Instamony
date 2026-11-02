@@ -1595,37 +1595,40 @@ export struct DirectThreadPage {
    */
   @Builder
   sharePostCard(message: DirectMessage) {
-    Column() {
-      Toggle({ type: ToggleType.Button, isOn: false }) {
-        Column() {
-          if (message.shareUser.length > 0 || message.shareAvatar.length > 0) {
-            Column() {
-              // 需求："帖子卡片的用户资讯栏内容大小增加"（头像 26、名字 15）。
-              this.shareUserRow(message, 15, 26, this.shareCardWidth(message) - 20)
-            }
-            .width(this.shareCardWidth(message))
-            .alignItems(HorizontalAlign.Start)
-            .padding({ left: 10, right: 10, top: 9, bottom: 9 })
+    Stack({ alignContent: Alignment.TopStart }) {
+      // 图片铺满整张卡片：宽 = 卡片宽，高 = 宽 × 原图比例。
+      this.shareCover(message, this.shareCardWidth(message), this.shareCardHeight(message))
+
+      Column() {
+        if (message.shareUser.length > 0 || message.shareAvatar.length > 0) {
+          Toggle({ type: ToggleType.Button, isOn: false }) {
+            this.shareUserRow(message, 15, 26, this.shareCardWidth(message) - 20)
           }
-          this.shareCover(message, this.shareCardWidth(message), this.shareCardHeight(message))
-          if (message.shareCaption.length > 0) {
+          .padding({ left: 10, right: 10, top: 9, bottom: 9 })
+          .borderRadius(13)
+          .backgroundColor(Color.Transparent)
+          .selectedColor(Color.Transparent)
+          .attributeModifier(new SurfaceModifier(this.cardThickness, true))
+          .hitTestBehavior(HitTestMode.None)
+        }
+
+        Blank()
+
+        if (message.shareCaption.length > 0) {
+          Column() {
             this.shareCaptionText(message)
           }
+          .width('100%')
+          .backgroundColor('#66000000')
         }
-        .width(this.shareCardWidth(message))
       }
       .width(this.shareCardWidth(message))
-      .padding(0)
-      .borderRadius(CARD_RADIUS)
-      .clip(true)
-      // 底色交给材质：材质自己画背板；不支持材质时 SurfaceModifier 退回低透明度中性底。
-      .backgroundColor(Color.Transparent)
-      .selectedColor(Color.Transparent)
-      .attributeModifier(new SurfaceModifier(this.cardThickness, true))
-      // 不吃触摸：点击统一落在最外层卡片上。
+      .height(this.shareCardHeight(message))
+      .alignItems(HorizontalAlign.Start)
       .hitTestBehavior(HitTestMode.None)
     }
     .width(this.shareCardWidth(message))
+    .height(this.shareCardHeight(message))
     .borderRadius(CARD_RADIUS)
     .clip(true)
     .backgroundColor($r('app.color.field_background'))
