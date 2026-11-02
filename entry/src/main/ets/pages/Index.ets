@@ -7873,10 +7873,9 @@ struct Index {
 
   @Builder
   nativeShellContent() {
-    if (this.tabletHomeScoped()) {
-      // HDS Navigation 缩到左栏时，内容只画当前主页面。
-      this.mainTabContent()
-    } else if (this.loginPageShown()) {
+    // 始终走同一棵内容树：单/双页只改 HDS 宽度和右侧兄弟节点，
+    // 不根据 tabletHomeScoped 切换分支，主页面组件因此不会被销毁重建。
+    if (this.loginPageShown()) {
       /*
        * **未登录 = 整页登录页**（见 components/LoginPage 的文件头）。
        *
