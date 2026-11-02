@@ -7071,7 +7071,15 @@ struct Index {
    */
   private feedMaxWidth(): number {
     const width: number = this.contentAreaWidth();
-    const height: number = this.shellHeightVp;
+    let height: number = this.shellHeightVp;
+    if (height <= 0) {
+      // 首帧 onAreaChange 还没回来时，用整屏高度兜底，避免右栏一开就占满全宽。
+      try {
+        height = this.getUIContext().px2vp(display.getDefaultDisplaySync().height);
+      } catch (error) {
+        height = 0;
+      }
+    }
     if (width < 600 || height <= 0) {
       return 0;
     }
