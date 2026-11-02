@@ -7085,14 +7085,16 @@ struct Index {
         height = 0;
       }
     }
-    if (width < 600) {
+    // 侧栏占掉后，平板窗口的内容区可能只有 570vp 左右；不能用 600 当门槛。
+    if (width < 480) {
       return 0;
     }
+    const minFeed: number = Math.round(width * 0.45);
     if (height <= 0) {
       // 最末兜底：即使高度一直量不到，也保证用户页只占右侧一部分。
-      return Math.round(width * 9 / 16);
+      return Math.max(minFeed, Math.round(width * 9 / 16));
     }
-    return Math.min(width - 32, Math.round(height * 9 / 16));
+    return Math.max(minFeed, Math.min(width - 32, Math.round(height * 9 / 16)));
   }
 
   /** 侧边栏实际宽度（和 tabletSidebar 的 .width 同源）。 */
@@ -7191,7 +7193,8 @@ struct Index {
         }
         .width(this.profileStageWidth())
         .height('100%')
-        .align(Alignment.TopEnd)
+        // 明确放到信息流右侧（Stack 的 align 在部分 HDS 子树里不生效，实测会贴左）。
+        .position({ x: this.feedMaxWidth(), y: 0 })
         .backgroundColor($r('app.color.page_background'))
         .clip(true)
         .border({ width: { left: 0.5 }, color: $r('app.color.divider') })
