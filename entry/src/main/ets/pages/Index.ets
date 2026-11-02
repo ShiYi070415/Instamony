@@ -8491,7 +8491,10 @@ struct Index {
   private reelsDestinationTitleStyle(): TitleBarStyleOptions {
     const style: TitleBarStyleOptions = this.destinationTitleStyle();
     const darkButtons: HdsNavigationTitleBarStyle = {
+      // 半透明深色压在系统模糊材质上：不是整条纯黑，而是"深色模糊"。
+      backgroundStyle: { backgroundColor: '#66000000' },
       contentStyle: {
+        titleStyle: { mainTitleColor: Color.White },
         backIconStyle: {
           backgroundColor: '#66000000',
           iconColor: Color.White,
