@@ -923,7 +923,7 @@ struct UserProfileRoute {
   @Prop layoutWidthVp: number = 0;
   /** 嵌在右栏时标题由右栏画，ProfilePage 不再额外避让 HDS 标题栏。 */
   @Prop embedded: boolean = false;
-  private vm: ProfileViewModel = new ProfileViewModel();
+  vm: ProfileViewModel = new ProfileViewModel();
   /** 打开一条帖子：交给隐藏网页（同「我的」页）。 */
   onOpen: (post: ProfilePost) => void = (post: ProfilePost): void => {
   };
@@ -1166,6 +1166,8 @@ struct Index {
   private tabRightNames: Array<string> = ['', '', '', '', ''];
   private tabRightParams: Array<string> = ['', '', '', '', ''];
   private tabDirectThreads: Array<string> = ['', '', '', '', ''];
+  /** 右栏用户页的视图模型缓存：Reels 返回后分段/滚动状态仍保留。 */
+  private userProfileVms: Map<string, ProfileViewModel> = new Map();
   /** 切页过程中不要因为 onHidden 自动收起右栏，否则会黑闪/误关会话。 */
   private tabSwitching: boolean = false;
   /** 手动拖拽后的左栏宽度（0 = 用默认分页档位）。 */
@@ -1606,8 +1608,9 @@ struct Index {
   /** 信息层底部留白：有输入条时贴它上沿 +10vp；评论面板打开时（页面输入条隐藏）回默认。 */
   /** Reels 全屏铺到侧边栏下面：侧边栏改为浮层，不占内容宽度。 */
   private reelsFullBleed(): boolean {
-    // 单/双页 Reels 都把背景铺到侧边栏下面；双页时右侧页面仍从左侧内容宽度之后开始。
-    return this.tabletWideShell() && this.reelsBackdropActive();
+    // 右栏 Reels 时左页仍要按侧边栏宽度整体让位，不能再全屏铺过去。
+    return this.tabletWideShell() && this.reelsBackdropActive()
+      && !this.reelsInRightPane();
   }
 
   /** 当前 Reels 页是不是在右侧分页里（此时左侧不应再加侧边栏内缩）。 */
@@ -7453,6 +7456,18 @@ struct Index {
   }
 
   /** 分栏左栏用固定断点宽度（vp），不按百分比。 */
+  /** 同一个用户主页复用同一份视图模型：Reels 返回后分段和滚动位置不丢。 */
+  private profileVmFor(param: string): ProfileViewModel {
+    const key: string = param;
+    const cached: ProfileViewModel | undefined = this.userProfileVms.get(key);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const vm: ProfileViewModel = new ProfileViewModel();
+    this.userProfileVms.set(key, vm);
+    return vm;
+  }
+
   /** 双页左栏最小宽度：9:16；Reels 全屏时加上侧边栏宽度。 */
   private splitMinLeft(): number {
     const height: number = this.shellHeightVp > 0 ? this.shellHeightVp : 800;
@@ -7539,6 +7554,7 @@ struct Index {
     HdsNavDestination() {
       UserProfileRoute({
         param: `${param}`,
+        vm: this.profileVmFor(`${param}`),
         layoutWidthVp: Math.max(0, this.profileStageWidth()),
         // 右栏本身也是 HDS 导航：资料区要避让它的标题栏，不能用 0。
         embedded: false,
@@ -7789,6 +7805,7 @@ struct Index {
 
           UserProfileRoute({
             param: this.tabletProfileParam,
+            vm: this.profileVmFor(this.tabletProfileParam),
             layoutWidthVp: this.profileStageWidth(),
             onOpen: (post: ProfilePost): void => {
               this.openLoosePost(post.shortcode, post.isVideo);
@@ -11580,6 +11597,7 @@ struct Index {
       HdsNavDestination() {
         UserProfileRoute({
           param: `${param}`,
+          vm: this.profileVmFor(`${param}`),
           layoutWidthVp: this.tabletHomeScoped()
             ? Math.max(0, this.profileStageWidth()) : 0,
           onOpen: (post: ProfilePost): void => {
