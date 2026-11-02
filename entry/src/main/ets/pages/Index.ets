@@ -7217,6 +7217,12 @@ struct Index {
       this.tabletProfileParam = '';
       return false;
     })
+    .onHidden((): void => {
+      // 右栏栈真的空了才收起右栏；如果下面还有帖子页，应停在帖子页。
+      if (this.tabletProfileStack.getAllPathName().length === 0) {
+        this.closeTabletRight();
+      }
+    })
   }
 
   /** 右栏：独立 HdsNavigation，和左侧主 HdsNavigation 同高、同材质。 */
