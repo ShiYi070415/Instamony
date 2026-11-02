@@ -1618,7 +1618,8 @@ struct Index {
      * 这两种情况下作者行 / 正文 / 动作区直接贴底，不再留 82。
      */
     if (this.tabletWideShell() || this.reelsChromeHidesShell()) {
-      return 0;
+      // 侧边栏模式没有底部 tab bar：只避让系统手势条/导航条。
+      return this.bottomSafeVp;
     }
     /*
      * **恒 82，不随键盘 / 面板变化**。
@@ -7534,7 +7535,6 @@ struct Index {
     .position({ x: this.directStageX(), y: 0 })
     .zIndex(30)
     .clip(true)
-    .border({ width: { left: 0.5 }, color: $r('app.color.divider') })
     .visibility(this.directStageVisible ? Visibility.Visible : Visibility.Hidden)
     .backgroundColor($r('app.color.page_background'))
   }
@@ -7564,7 +7564,6 @@ struct Index {
     .height('100%')
     .padding({ right: 12 })
     .backgroundColor($r('app.color.page_background'))
-    .border({ width: { left: 0.5 }, color: $r('app.color.divider') })
     .clip(true)
     .transition(TransitionEffect.translate({ x: '100%' })
       .animation({ duration: 340, curve: curves.springMotion(0.38, 0.9) }))
@@ -9445,7 +9444,11 @@ struct Index {
     .width('100%')
     .height('100%')
     .alignItems(VerticalAlign.Top)
-    .padding({ left: REELS_TITLE_LEFT_PAD_VP, right: 12, top: 8 })
+    .padding({
+      left: REELS_TITLE_LEFT_PAD_VP + (this.reelsFullBleed() ? this.tabletSidebarWidth() : 0),
+      right: 12,
+      top: 8
+    })
   }
 
   /**
@@ -9494,6 +9497,8 @@ struct Index {
       segment: segment,
       // 标题栏那两颗按钮按**来源**取用（见 core/ReelsAction）：这是底栏那一页。
       source: ReelsAction.HOME,
+      // 侧边栏是全屏浮层：资讯栏/正文左侧让开它，视频本身仍铺满。
+      leftInsetVp: this.reelsFullBleed() ? this.tabletSidebarWidth() : 0,
       // 分段滑动时冻结所有视频播放（见 ReelsPage.freeze 与 reelsTab 的 Tabs 回调）。
       // 刷到自己的视频时不画关注按钮（同其它两页）。
       ownAuthor: this.profileVm.ownAccountName(),
@@ -11693,6 +11698,7 @@ struct Index {
         source: source,
         // 正文/作者行贴着下方评论输入框的上沿 + 10vp（见 ReelOverlay.infoBottomVp）。
         infoBottomVp: this.reelsInfoBottom(),
+        leftInsetVp: this.reelsFullBleed() ? this.tabletSidebarWidth() : 0,
         // 我自己的账号名：作者是我时不画关注按钮（"我的"页视频分页那一页就是这样）。
         ownAuthor: this.profileVm.ownAccountName(),
         // 这一页没有浮动底栏，所以"手指一动就沉栏"这件事这里什么都不用做；回调留着是为了

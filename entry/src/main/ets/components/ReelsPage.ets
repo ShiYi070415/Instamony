@@ -435,6 +435,7 @@ struct ReelSlide {
   @State private measuredWidthVp: number = 0;
   /** 信息层底部留白 + 护栏余量（vp，见 OVERLAY_GUARD_EXTRA_VP 与 overOverlay）。 */
   @Prop overlayGuardBottomVp: number = INFO_BOTTOM + OVERLAY_GUARD_EXTRA_VP;
+  @Prop leftInsetVp: number = 0;
   /**
    * **全局控件藏起来了没有**（见 REELS_CHROME_HIDDEN）。
    *
@@ -1432,6 +1433,8 @@ struct ReelOverlay {
    * 保持适当距离"）。宿主按输入框实际高度算一个值传进来即可。
    */
   @Prop infoBottomVp: number = 0;
+  /** 侧边栏浮层宽度：资讯栏/正文左侧让开它。 */
+  @Prop leftInsetVp: number = 0;
   /** 材质厚度（和全 app 的材质组件同一份设定）。 */
   @StorageProp(SETTING_MATERIAL_THICKNESS) materialThickness: string = MATERIAL_THICKNESS_ULTRA_THIN;
   /**
@@ -2192,7 +2195,11 @@ struct ReelOverlay {
       .width('100%')
       .alignItems(HorizontalAlign.Start)
       // 底边留白：和右边动作区**用同一个值**（见 infoPadding 的说明）。
-      .padding({ left: SIDE_PADDING, right: ACTION_COLUMN_WIDTH, bottom: this.infoPadding() })
+      .padding({
+        left: SIDE_PADDING + this.leftInsetVp,
+        right: ACTION_COLUMN_WIDTH,
+        bottom: this.infoPadding()
+      })
       // 跟着底栏下沉（需求："动作区和资讯区跟随 tabbar 下沉"）：整块往下挪，和栏同一条曲线。
       // 全局控件隐藏时再多挪 CHROME_SHIFT_VP（"淡出 + 轻微位移"，见 onChromeHiddenChanged）。
       /*
@@ -2304,6 +2311,8 @@ export struct ReelsPage {
   @Prop source: string = ReelsAction.HOME;
   /** 信息层底部留白（vp；0 = 用 ReelOverlay 的默认值 INFO_BOTTOM，见那里的说明）。 */
   @Prop infoBottomVp: number = 0;
+  /** 侧边栏浮层宽度：资讯栏/正文左侧让开它，视频背景仍然全屏。 */
+  @Prop leftInsetVp: number = 0;
   /**
    * **我自己的账号名**（宿主传进来，见 ReelOverlay.ownAuthor）。
    */
@@ -3287,6 +3296,7 @@ export struct ReelsPage {
         // 动作区 / 资讯区跟着底栏下沉（外壳那页传得进来，整屏页是 0，见 overlaySink）。
         overlaySink: this.overlaySink,
         infoBottomVp: this.infoBottomVp,
+        leftInsetVp: this.leftInsetVp,
         // 当前这条才去单独问关注状态（见 ReelOverlay.ensureFollowState）。
         active: index === this.activeIndex,
         onLike: this.onLike,
