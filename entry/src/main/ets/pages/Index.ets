@@ -7317,7 +7317,12 @@ struct Index {
       } else if (this.tabletProfileStack.getAllPathName().length === 0) {
         this.tabletProfileStack.clear();
       }
-      this.tabletProfileStack.pushPath({ name: name, param: param });
+      if (alreadyOpen && this.tabletProfileStack.getAllPathName().length > 0) {
+        // 右栏已经开着一个页面：新页面原地替换旧的，旧页面收起，不叠在下面。
+        this.tabletProfileStack.replacePath({ name: name, param: param });
+      } else {
+        this.tabletProfileStack.pushPath({ name: name, param: param });
+      }
       if (alreadyOpen) {
         this.tabletRightName = name;
         this.tabletProfileParam = param;
