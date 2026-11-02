@@ -2049,6 +2049,7 @@ struct ReelOverlay {
           isOn: this.reel.liked,
           // 带动画的图标自己管颜色（已赞红、未赞主题色），这里不需要再给 tint。
           animated: 'like',
+          tint: '#FFFFFF',
           buttonSize: ACTION_BUTTON_SIZE,
           iconSize: ACTION_ICON_SIZE,
           onTap: (on: boolean): void => {
@@ -2094,6 +2095,7 @@ struct ReelOverlay {
           symbol: $r('sys.symbol.transfer_station'),
           isOn: this.reel.reposted,
           animated: 'repost',
+          tint: '#FFFFFF',
           buttonSize: ACTION_BUTTON_SIZE,
           iconSize: ACTION_ICON_SIZE,
           onTap: (on: boolean): void => {
@@ -2152,6 +2154,7 @@ struct ReelOverlay {
           symbol: $r('sys.symbol.bookmark'),
           isOn: this.saved,
           animated: 'save',
+          tint: '#FFFFFF',
           buttonSize: ACTION_BUTTON_SIZE,
           iconSize: ACTION_ICON_SIZE,
           onTap: (on: boolean): void => {
