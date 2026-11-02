@@ -7214,7 +7214,8 @@ struct Index {
     })
     .navDestination(this.tabletProfileDestinationBuilder)
     .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
-    .width('100%')
+    // 右栏根节点必须用右栏实际宽度，不能用 100%（100% 会按整窗算，只露一半）。
+    .width(this.profileStageWidth())
     .height('100%')
     .padding({ right: 12 })
     .backgroundColor($r('app.color.page_background'))
