@@ -8487,25 +8487,25 @@ struct Index {
   }
 
   /** 二级页（通知 / 设定）标题栏样式：不做滚动模糊，其余同上。 */
-  /** 右栏 Reels 专用的深色 HDS 标题栏：不依赖全局深色模式。 */
+  /** 右栏 Reels：标题栏保持原样，只把返回/菜单按钮的材质改成深色。 */
   private reelsDestinationTitleStyle(): TitleBarStyleOptions {
-    const style: TitleBarStyleOptions = {
-      scrollEffectOpts: {
-        enableScrollEffect: true,
-        scrollEffectType: ScrollEffectType.COMMON_BLUR
-      }
-    };
-    const darkBar: HdsNavigationTitleBarStyle = {
-      backgroundStyle: { backgroundColor: '#000000' },
+    const style: TitleBarStyleOptions = this.destinationTitleStyle();
+    const darkButtons: HdsNavigationTitleBarStyle = {
       contentStyle: {
-        titleStyle: { mainTitleColor: Color.White },
-        backIconStyle: { iconColor: Color.White, textColor: Color.White },
-        menuStyle: { iconColor: Color.White, textColor: Color.White },
-        dividerStyle: { dividerColor: '#33FFFFFF' }
+        backIconStyle: {
+          backgroundColor: '#66000000',
+          iconColor: Color.White,
+          textColor: Color.White
+        },
+        menuStyle: {
+          backgroundColor: '#66000000',
+          iconColor: Color.White,
+          textColor: Color.White
+        }
       }
     };
-    style.originalStyle = darkBar;
-    style.scrollEffectStyle = darkBar;
+    style.originalStyle = darkButtons;
+    style.scrollEffectStyle = darkButtons;
     return style;
   }
 
