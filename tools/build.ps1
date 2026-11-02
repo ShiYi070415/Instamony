@@ -25,7 +25,12 @@ param(
   [string]$SdkHome = 'C:\Program Files\Huawei\DevEco Studio\sdk',
   # Build cache location (inside the workspace, see the note above).
   [string]$HvigorHome = "$PSScriptRoot\..\.hvigor-home",
-  [string]$Bundle = 'com.fanha.instarmony',
+  # Launch bundle id (com.yijin.instamony for the new debug package; the old
+  # oneleaf debug package used com.oneleaf.instamony).
+  [string]$Bundle = 'com.oneleaf.instamony',
+  # Optional bundleName override. Leave empty to use AppScope/app.json5.
+  # A non-oneleaf bundle name needs a matching debug .p7b profile.
+  [string]$BundleName = '',
   [switch]$Install,
   [switch]$KeepCache,
   # Optional path to tee the build output into (useful when the caller cannot capture stderr).
@@ -35,6 +40,14 @@ param(
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path "$PSScriptRoot\..").Path
 $env:DEVECO_SDK_HOME = $SdkHome
+# hvigorfile.ts reads this and overrides AppScope/app.json5's bundleName.
+# Only set it when explicitly requested: the bundled debug profile is bound to
+# com.oneleaf.instamony, so an override needs a matching profile.
+if ($BundleName.Length -gt 0) {
+  $env:INSTAMONY_BUNDLE_NAME = $BundleName
+} else {
+  Remove-Item Env:INSTAMONY_BUNDLE_NAME -ErrorAction SilentlyContinue
+}
 $env:HVIGOR_USER_HOME = (New-Item -ItemType Directory -Force -Path $HvigorHome).FullName
 # npm/pnpm caches live under %LOCALAPPDATA%\npm-cache by default, i.e. also outside the
 # workspace. hvigor's bootstrap runs `npm install pnpm`, so that cache must be redirected
