@@ -1162,6 +1162,10 @@ struct Index {
   @State private directStageVisible: boolean = true;
   @State private directStageThread: string = '';
   private directStageStack: NavPathStack = new NavPathStack();
+  /** 每个主页面各自保存一份右侧详情，切 tab 时不共享。 */
+  private tabRightNames: Array<string> = ['', '', '', '', ''];
+  private tabRightParams: Array<string> = ['', '', '', '', ''];
+  private tabDirectThreads: Array<string> = ['', '', '', '', ''];
 
   /**
    * 底栏行为（设定页里的开关，见 AppSettings 的 BAR_HIDE_*）。**只有支持悬浮底栏的设备
@@ -5356,11 +5360,65 @@ struct Index {
    * AppConfig 里的 SEARCH / REELS / DIRECT 地址也留着，等这几个标签做出原生实现时
    * 可能还要用（现在是没人引用了）。
    */
+  private tabIndexOf(tab: AppTab): number {
+    for (let index: number = 0; index < TAB_ITEMS.length; index++) {
+      if (TAB_ITEMS[index].tab === tab) {
+        return index;
+      }
+    }
+    return 0;
+  }
+
+  /** 切 tab 前保存当前页的右侧详情，切过去后恢复目标页自己的那一份。 */
+  private saveRightForTab(index: number): void {
+    if (this.directStageOpen) {
+      this.tabDirectThreads[index] = this.directStageThread;
+      this.tabRightNames[index] = '';
+      this.tabRightParams[index] = '';
+      return;
+    }
+    this.tabDirectThreads[index] = '';
+    this.tabRightNames[index] = this.tabletRightName;
+    this.tabRightParams[index] = this.tabletProfileParam;
+  }
+
+  private clearRightForTabSwitch(): void {
+    this.tabletRightName = '';
+    this.tabletProfileParam = '';
+    this.tabletProfileStack.clear();
+    this.directStageOpen = false;
+    this.directStageVisible = true;
+    this.directStageThread = '';
+    this.directStageStack.clear();
+  }
+
+  private restoreRightForTab(index: number): void {
+    const thread: string = this.tabDirectThreads[index];
+    if (thread.length > 0) {
+      this.openDirectStage(thread);
+      return;
+    }
+    const name: string = this.tabRightNames[index];
+    if (name.length === 0) {
+      return;
+    }
+    this.tabletRightName = name;
+    this.tabletProfileParam = this.tabRightParams[index];
+    this.tabletProfileStack.clear();
+    this.tabletProfileStack.pushPath({ name: name, param: this.tabletProfileParam });
+  }
+
   private selectTab(tab: AppTab): void {
-    if (this.directStageOpen && tab !== AppTab.Direct) {
-      this.closeDirectStage();
+    const previous: number = this.tabIndexOf(this.selectedTab);
+    const target: number = this.tabIndexOf(tab);
+    if (previous !== target) {
+      this.saveRightForTab(previous);
+      this.clearRightForTabSwitch();
     }
     this.selectedTab = tab;
+    if (previous !== target) {
+      this.restoreRightForTab(target);
+    }
     // 用户动作：后台预热让路（切页后新页面自己要先读，别和它抢网络/线程）。
     this.lastInteractionMs = Date.now();
     // 换页面就把底栏复位（上一页可能把它沉下去/藏起来了；新页面还没滚过，
@@ -7256,6 +7314,10 @@ struct Index {
 
   /** 关闭右栏（HDS 返回键 / 自定义关闭共用）。 */
   private closeTabletRight(): void {
+    if (this.selectedIndex >= 0 && this.selectedIndex < this.tabRightNames.length) {
+      this.tabRightNames[this.selectedIndex] = '';
+      this.tabRightParams[this.selectedIndex] = '';
+    }
     if (this.tabletRightName.length === 0) {
       return;
     }
@@ -7429,6 +7491,9 @@ struct Index {
   private closeDirectStage(): void {
     if (!this.directStageOpen) {
       return;
+    }
+    if (this.selectedIndex >= 0 && this.selectedIndex < this.tabDirectThreads.length) {
+      this.tabDirectThreads[this.selectedIndex] = '';
     }
     this.directStageOpen = false;
     this.directStageVisible = false;
@@ -10820,8 +10885,8 @@ struct Index {
     .width(this.tabletSidebarWidth())
     .height('100%')
     .padding({ top: 4 })
-    // Reels 页是黑色背景：侧边栏也铺同一块黑，避免中间露出页面底色。
-    .backgroundColor(this.reelsBackdropActive() ? Color.Black : $r('app.color.page_background'))
+    // Reels 时侧边栏透明，让外层 Reels 黑底直接铺到侧边栏区域。
+    .backgroundColor(this.reelsBackdropActive() ? Color.Transparent : $r('app.color.page_background'))
     .border({ width: { right: 0.5 }, color: $r('app.color.divider') })
   }
 
@@ -10901,6 +10966,7 @@ struct Index {
     }
     .width('100%')
     .height('100%')
+    .backgroundColor(this.reelsBackdropActive() ? Color.Black : $r('app.color.page_background'))
     .onAreaChange((oldArea: Area, newArea: Area): void => {
       const wasSplit: boolean = this.tabletSplitEnabled();
       const width: number = typeof newArea.width === 'number'
