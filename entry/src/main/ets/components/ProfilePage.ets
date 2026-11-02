@@ -409,6 +409,8 @@ export struct ProfilePage {
    * `if (条数 > 0)` 这种分支读它永远不会重建；这里整份重新赋值一次，框架才看得到变化。
    */
   @State private tabCounts: Array<number> = [0, 0, 0, 0];
+  /** 每个分页的扁平帖子列表：Grid 直接用它，列数变化时节点保留、只重排位置。 */
+  @State private flatPosts: Array<Array<ProfilePost>> = [[], [], [], []];
   @State private tabMores: Array<boolean> = [true, true, true, true];
   @State private screenWidthVp: number = FALLBACK_WIDTH_VP;
   /** 嵌在首页平行视界右栏时的实际宽度（0 = 按整屏算）。 */
@@ -1122,6 +1124,9 @@ export struct ProfilePage {
     }
     // 换一批帖子：`apply` 内部会按需 +1 代次并 notifyDataReload（见 ProfileRowSource）。
     this.rowSources[tab].apply(posts);
+    const flats: Array<Array<ProfilePost>> = this.flatPosts.slice(0);
+    flats[tab] = posts.slice(0);
+    this.flatPosts = flats;
     const counts: Array<number> = this.tabCounts.slice(0);
     counts[tab] = posts.length;
     this.tabCounts = counts;
@@ -2131,72 +2136,32 @@ export struct ProfilePage {
    */
   @Builder
   pageGrid(tab: number) {
-    List({ space: GRID_GAP, scroller: this.listScrollerOf(tab) }) {
-      // **LazyForEach**：只建可见的那几行（见 ProfileRowSource 的说明）。行内的格子仍然用
-      // ForEach —— 一行最多三格，没必要再懒一层。
-      LazyForEach(this.rowSourceOf(tab), (row: Array<ProfilePost>, rowIndex: number): void => {
-        ListItem() {
-          Row({ space: GRID_GAP }) {
-            ForEach(row, (post: ProfilePost): void => {
-              this.gridCell(post, tab)
-            }, (post: ProfilePost): string => post.shortcode)
-          }
-          .width('100%')
-          .justifyContent(FlexAlign.Start)
-          // 列数变化时格子宽度/行高走弹簧过渡；LazyForEach 重建的新行再淡入，
-          // 和搜索页的列切换保持同一条动画节奏。
-          .animation({ duration: 260, curve: curves.springMotion(0.4, 0.9) })
+    Grid() {
+      ForEach(this.flatPosts[tab], (post: ProfilePost): void => {
+        GridItem() {
+          this.gridCell(post, tab)
         }
-        .transition(TransitionEffect.OPACITY.animation({
-          duration: 220,
-          curve: curves.springMotion(0.4, 0.9)
-        }))
-      }, (row: Array<ProfilePost>, rowIndex: number): string => {
-        /*
-         * 键 = **这一行的内容签名**（代次 + 行号 + 每格的 shortcode/封面长度/是不是视频）。
-         *
-         * 为什么不用"行号 + 第一条 shortcode"那么简：封面回填（见 ProfileViewModel.
-         * backfillVideoCovers）只换封面、不动 shortcode，那种改动也要让这一行重建，否则
-         * 补到的封面画不出来（格子还是黑的）。带上封面长度就够了，不用整条地址（键太长没意义）。
-         */
-        let signature: string = '';
-        for (let at: number = 0; at < row.length; at++) {
-          const one: ProfilePost = row[at];
-          signature += `${one.shortcode.length}.${one.coverUrl.length}.${one.isVideo ? 1 : 0}|`;
-        }
-        return `g${this.rowSourceOf(tab).gen()}:row:${rowIndex}:${signature}`;
-      })
+      }, (post: ProfilePost): string => post.shortcode)
 
-      /*
-       * ---- 触底哨兵 / 空态：按**这一页自己**的条数判（见 tabCounts）----
-       *
-       * 不能读"当前分页那一条数"：几页同时在树上时，另外几页会一直显示
-       * "还没有帖子"（哪怕数据早就到了）。
-       */
-      if (this.pageCount(tab) > 0) {
-        ListItem() {
+      if (this.busy && this.pageMore(tab)) {
+        GridItem() {
           Row({ space: 8 }) {
-            if (this.busy && this.pageMore(tab)) {
-              LoadingProgress()
-                .width(22)
-                .height(22)
-                .color($r('app.color.secondary_text'))
-            }
-            Text(this.pageMore(tab) ? $r('app.string.profile_loading_more') : $r('app.string.profile_end'))
+            LoadingProgress()
+              .width(22)
+              .height(22)
+              .color($r('app.color.secondary_text'))
+            Text($r('app.string.profile_loading_more'))
               .fontSize(12)
               .fontColor($r('app.color.secondary_text'))
           }
-          .width('100%')
           .height(56)
           .justifyContent(FlexAlign.Center)
           .onAppear((): void => {
-            // 哨兵只是**顺带**的一个触发点；真正可靠的是内层的 onReachEnd / onScrollIndex
-            // （onAppear 只报一次，很容易在加载中被吞掉）。
             this.askMore(tab);
           })
         }
-      } else if (!this.busy) {
-        ListItem() {
+      } else if (this.pageCount(tab) === 0 && !this.busy) {
+        GridItem() {
           Column({ space: 8 }) {
             SymbolGlyph($r('sys.symbol.camera'))
               .fontSize(34)
@@ -2211,74 +2176,46 @@ export struct ProfilePage {
         }
       }
     }
+    .columnsTemplate(this.gridTemplate())
+    .columnsGap(GRID_GAP)
+    .rowsGap(GRID_GAP)
     .width('100%')
-    // 撑满 TabContent（TabContent 又撑满那个**固定高度**的内层容器，见 tabContent 的说明）。
     .height('100%')
-    // 3/4/5 列切换时格子宽度和位置走同一套弹簧动画。
+    // 列数切换时 Grid 直接让 item 位移到新行列位置，不做渐隐渐显。
     .animation({ duration: 260, curve: curves.springMotion(0.4, 0.9) })
     .scrollBar(BarState.Off)
     .edgeEffect(EdgeEffect.Spring)
-    /*
-     * 内外层的**滚动优先级**（这一段是"固定时卡手"的修复点）。
-     *
-     * 规则（静态，不随状态切换）：
-     *   - `scrollForward`（上滑、内容往上走）= **PARENT_FIRST**：外层还能滚时先滚外层 ——
-     *     也就是"分段按钮先顶上去"；外层滚到底之后，同一个手势会**接着传给内层**
-     *     （嵌套滚动是逐帧接力的，不用抬手重滑）；
-     *   - `scrollBackward`（下滑）= **SELF_FIRST**：先滚内层，内层回到顶部之后才轮到外层
-     *     （头部滑回来、分段按钮松开）—— 正是需求："固定时下滑优先滚动内部容器，
-     *     到顶部后才能滚动外部容器"。
-     *
-     * 为什么**不用 `enableScrollInteraction(this.barPinned)` 开关**（上一版那么写的）：
-     * 那个开关会在"钉住"那一帧**中途改掉内层的识别器**，正在滑的手势会被丢掉 ——
-     * 表现就是"固定时无法继续滑动、卡手"（用户报的）。优先级是静态的，手势一路不断。
-     * 未固定时内层之所以不抢：`PARENT_FIRST` 已经保证外层优先，外层没到底内层拿不到手势。
-     *
-     * 这条**每一页的 List 都照挂**（几页同时在树上，谁都不能抢）：它只约束**纵向**，
-     * 横向的切段手势归 Tabs，两个方向不同，互不影响。
-     */
     .nestedScroll({
       scrollForward: NestedScrollMode.PARENT_FIRST,
       scrollBackward: NestedScrollMode.SELF_FIRST
     })
-    // 底部悬浮 tab 栏是浮在内容上的，不内缩最后一行会被它压住。
     .contentEndOffset(PROFILE_BOTTOM_OFFSET)
-    /*
-     * 触底翻页：挂两个**会反复触发**的判据（`onReachEnd` 真的到底了、`onScrollIndex` 还剩
-     * 几条时提前拉），哨兵的 onAppear 只是顺带的一个触发点 —— 它只报一次，很容易在加载中
-     * 被吞掉（那正是"收藏分页无法上滑继续加载"的原因，见 ProfileViewModel.requestMore）。
-     *
-     * 这里传的是**这一页**的分页号：几页同时在树上，谁触底就翻谁（`requestMoreForTab`）。
-     */
     .onReachEnd((): void => {
       this.askMore(tab);
     })
     .onScrollIndex((start: number, end: number): void => {
-      // 这个容器里只有网格行 + 末尾哨兵，下标从 0 开始。
-      const rows: number = Math.ceil(this.pageCount(tab) / this.gridColumns());
-      if (end + PROFILE_LOAD_AHEAD >= rows) {
+      const total: number = this.pageCount(tab);
+      if (total > 0 && end + this.gridColumns() * PROFILE_LOAD_AHEAD >= total) {
         this.askMore(tab);
       }
     })
-    // 内层滚动：记**这一页自己**的位置（切页要恢复）并上报给底栏动画。
     .onDidScroll((scrollOffset: number, scrollState: ScrollState): void => {
       const y: number = this.listScrollerOf(tab).currentOffset().yOffset;
       this.vm.rememberOffset(tab, y);
-      // 用户还在滑：允许自动翻页（见 askMore）。程序化恢复位置也会走到这里，同样算"在动"，
-      // 但那种情况只持续一两帧，不会把列表拉长。
       this.lastScrollMs = Date.now();
       this.scrollDelta.report(y, scrollState, this.onFeedScroll);
     })
-    /*
-     * **别裁**（需求："让分页帖子可以穿过分段按钮到屏幕顶层"）。
-     *
-     * 这一层是"当前分页的窗口"，但关掉裁剪之后，滚出窗口上沿的那几行**照样会被画出来**：
-     * 于是分页帖子会穿过分段按钮、一直画到屏幕最顶上（标题栏的材质是半透明的，透出来就是
-     * 首页那种"内容从标题栏底下过"的观感）。
-     * 顺序上不会乱：分段按钮那一条 `.zIndex(2)` 在它之上，标题栏又是另一棵树（更高），
-     * 所以帖子是**从它们底下穿过去**，而不是盖住它们 —— 这正是要的效果（和首页 FeedList 同一套）。
-     */
     .clip(false)
+  }
+
+  /** Grid 的列模板：按当前列数生成等宽列。 */
+  private gridTemplate(): string {
+    const count: number = this.gridColumns();
+    let template: string = '1fr';
+    for (let index: number = 1; index < count; index++) {
+      template += ' 1fr';
+    }
+    return template;
   }
 
   /** 内层容器的高度（vp）= 视口 − 分段条那一块（见 tabContent 的说明）。 */
