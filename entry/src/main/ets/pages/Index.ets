@@ -8792,13 +8792,41 @@ struct Index {
       }
       .width(REELS_SEGMENT_WIDTH_VP)
       .height(REELS_SEGMENT_HEIGHT_VP)
-      // menus 已移到页面内、分段按钮下方，这里贴右只剩标题栏自己的边距。
-      .margin({ right: 12 })
+      // 分段按钮放在第一颗 menus 按钮左边。
+      .margin({ right: 8 })
+
+      if (this.reelsActionVersion >= 0 && ReelsAction.visibleFor(ReelsAction.HOME)) {
+        // 垂直堆放：第一颗和分段按钮同一行，第二颗在下面。
+        Column({ space: 8 }) {
+          MaterialIconButton({
+            symbol: this.videoMuted ? $r('sys.symbol.speaker_slash') : $r('sys.symbol.speaker_wave_2'),
+            tint: '#FFFFFF',
+            autoInvert: false,
+            buttonSize: 40,
+            iconSize: 20,
+            onTap: (on: boolean): void => {
+              AppSettings.setVideoMuted(!this.videoMuted);
+            }
+          })
+          MaterialIconButton({
+            symbol: $r('sys.symbol.arrow_down_to_line'),
+            tint: '#FFFFFF',
+            autoInvert: false,
+            buttonSize: 40,
+            iconSize: 20,
+            onTap: (on: boolean): void => {
+              this.downloadReel(ReelsAction.HOME);
+            }
+          })
+        }
+        .width(40)
+        .margin({ top: 8 })
+      }
     }
     .width('100%')
     .height('100%')
-    .alignItems(VerticalAlign.Center)
-    .padding({ left: REELS_TITLE_LEFT_PAD_VP })
+    .alignItems(VerticalAlign.Top)
+    .padding({ left: REELS_TITLE_LEFT_PAD_VP, right: 12, top: 8 })
   }
 
   /**
@@ -8891,42 +8919,9 @@ struct Index {
     })
   }
 
-  /** Reels 标题栏分段按钮下方那两颗菜单按钮（静音 / 下载）。 */
-  @Builder
-  reelsFloatingMenus() {
-    if (!this.reelsChromeHidden && this.reelsActionVersion >= 0
-      && ReelsAction.visibleFor(ReelsAction.HOME)) {
-      Column({ space: 10 }) {
-        MaterialIconButton({
-          symbol: this.videoMuted ? $r('sys.symbol.speaker_slash') : $r('sys.symbol.speaker_wave_2'),
-          tint: '#FFFFFF',
-          autoInvert: false,
-          buttonSize: 40,
-          iconSize: 20,
-          onTap: (on: boolean): void => {
-            AppSettings.setVideoMuted(!this.videoMuted);
-          }
-        })
-        MaterialIconButton({
-          symbol: $r('sys.symbol.arrow_down_to_line'),
-          tint: '#FFFFFF',
-          autoInvert: false,
-          buttonSize: 40,
-          iconSize: 20,
-          onTap: (on: boolean): void => {
-            this.downloadReel(ReelsAction.HOME);
-          }
-        })
-      }
-      .margin({ top: 64, right: 12 })
-      .zIndex(20)
-    }
-  }
-
   /** Reels 标签：探索 / 关注两页（见 reelsSegment）。 */
   @Builder
   reelsTab() {
-    Stack({ alignContent: Alignment.TopEnd }) {
     /*
      * **两段用 Tabs + TabContent 承载**（原来是 `if/else + transition`）。
      *
@@ -9033,11 +9028,6 @@ struct Index {
       }
       AppStorage.setOrCreate('reels_active_segment', index);
     })
-    .width('100%')
-    .height('100%')
-
-      this.reelsFloatingMenus()
-    }
     .width('100%')
     .height('100%')
   }
