@@ -8929,6 +8929,16 @@ struct Index {
         }
       };
     }
+    if (this.currentTab() === AppTab.Search) {
+      // 搜索页标题同样要避开侧边栏浮层，并保留标题左侧留白。
+      return {
+        title: { mainTitle: '' },
+        menu: this.menus(),
+        stackBuilder: (): void => {
+          this.searchTitleSegment();
+        }
+      };
+    }
     if (this.currentTab() === AppTab.Profile) {
       /*
        * 「我的」：标题栏**置中**放账号下拉按钮（需求：显示当前账号的头像与账号名，点开选单）。
@@ -9425,6 +9435,27 @@ struct Index {
     } catch (error) {
       return 120;
     }
+  }
+
+  /** 搜索页标题：侧边栏宽度 + 原标题留白。 */
+  @Builder
+  searchTitleSegment() {
+    Row() {
+      Text(this.pageTitle())
+        .fontSize(REELS_TITLE_SIZE)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.primary_text'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .width('100%')
+    .height('100%')
+    .alignItems(VerticalAlign.Top)
+    .padding({
+      left: REELS_TITLE_LEFT_PAD_VP + (this.reelsFullBleed() ? this.tabletSidebarWidth() : 0),
+      right: 12,
+      top: 8
+    })
   }
 
   @Builder
