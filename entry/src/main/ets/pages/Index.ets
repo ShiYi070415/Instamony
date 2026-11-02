@@ -101,8 +101,7 @@ import {
   ACCOUNT_OTHERS,
   ACCOUNT_TITLE_AVATAR,
   ACCOUNT_TITLE_NAME,
-  AccountMenu,
-  AccountSwitcher
+  AccountMenu
 } from '../components/AccountSwitcher';
 import { CommentItem, CommentsPayload, LikePayload } from '../model/Comment';
 import { FeedMapper } from '../model/FeedMapper';
@@ -811,14 +810,7 @@ const REELS_SEGMENT_HEIGHT_VP: number = 40;
 const REELS_TITLE_SIZE: number = 28;
 /** 标题左边距（vp）：和 HDS 原生标题的左边距对齐（16）。 */
 const REELS_TITLE_LEFT_PAD_VP: number = 16;
-/**
- * 「我的」标题行右侧给 HDS menus 预留的宽度（vp）：
- *   左侧空隙 8 + 菜单按钮 40 + 账号按钮与 menus 的间隙 8 = 56。
- *
- * HDS 不暴露菜单按钮的实时矩形，stackBuilder 的右边界也不包含它；不预留的话
- * 账号下拉按钮会直接和 menus 叠在一起（真机截图确认）。
- */
-const PROFILE_TITLE_MENU_RESERVE_VP: number = 8 + 40 + 8;
+
 /**
  * 分段按钮与右侧菜单（静音/下载）之间留的缝（vp）。
  *
@@ -1808,6 +1800,16 @@ struct Index {
       // 「我的」页自己的动作绑到标题栏菜单上（页内右上角那颗 more 按钮保留，两处都能进设定）。
       return {
         value: [
+          {
+            content: {
+              // 当前账号头像作为菜单按钮，点开仍是原来的账号选单浮层。
+              icon: this.accountMenuIcon(),
+              label: this.titleAccountName(),
+              action: (): void => {
+                this.openAccountMenu();
+              }
+            }
+          },
           {
             content: {
               icon: $r('sys.symbol.more'),
@@ -8306,26 +8308,20 @@ struct Index {
   }
 
   /**
-   * 「我的」标题栏那一行：**左边标题「我的」+ 正中账号下拉按钮**（需求）。
+   * 「我的」标题栏那一行：**只画标题**；账号切换入口收进 HDS menus（见 menus()）。
    *
    * 为什么标题要自己画一份：这一档用了 `stackBuilder`，而 stackBuilder 会**顶掉** HDS 自己的
    * mainTitle（给 `title.mainTitle` 也看不见，Reels 那里早就踩过）。想要"标题留着"，
    * 只能按 HDS 的观感再画一遍 —— 字号/左边距沿用 Reels 那条标题的常量，两页看起来一致
    * （见 reelsTitleSegment）。
-   *
-   * 布局：一行 Row —— 标题贴左、占据剩余宽度（超长省略），账号按钮贴右，
-   * 正好落在 HDS menus 的左边；标题再长也不会穿到按钮下面。
    */
   @Builder
   profileTitleAccount() {
     /*
-     * 标题占剩余宽度，账号按钮放在**菜单按钮左边**（同一行右端）。
-     *
-     * 之前账号按钮是居中的叠层：长标题（越南语尤其明显）会从按钮底下穿过去。
-     * 现在改成 Row：标题 layoutWeight(1) + 省略号，按钮 flexShrink(0) 贴右，
-     * 永远在 HDS menus 左侧，不会再遮挡。
+     * 账号入口已经收进 HDS menus（见 menus()），标题不再需要给按钮让位；
+     * 长标题只受标题栏自己的边界约束，超长时省略。
      */
-    Row({ space: 8 }) {
+    Row() {
       Text(this.pageTitle())
         .fontSize(REELS_TITLE_SIZE)
         .fontWeight(FontWeight.Bold)
@@ -8333,16 +8329,10 @@ struct Index {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .layoutWeight(1)
-
-      AccountSwitcher({
-        onToggle: (): void => {
-          this.openAccountMenu();
-        }
-      })
     }
     .width('100%')
     .height('100%')
-    .padding({ left: REELS_TITLE_LEFT_PAD_VP, right: PROFILE_TITLE_MENU_RESERVE_VP })
+    .padding({ left: REELS_TITLE_LEFT_PAD_VP })
     .alignItems(VerticalAlign.Center)
   }
 
@@ -8362,6 +8352,19 @@ struct Index {
     }
     const entry: AccountEntry | null = AccountBook.find(this.currentAccountId());
     return entry === null ? '' : entry.username;
+  }
+
+  /** HDS menus 里账号按钮的头像（没拿到头像时用应用图标兜底）。 */
+  private accountMenuIcon(): ResourceStr {
+    const own: string = this.selfAvatarUrl;
+    if (own.length > 0) {
+      return own;
+    }
+    const entry: AccountEntry | null = AccountBook.find(this.currentAccountId());
+    if (entry !== null && entry.avatarUrl.length > 0) {
+      return entry.avatarUrl;
+    }
+    return $r('app.media.startIcon');
   }
 
   /**

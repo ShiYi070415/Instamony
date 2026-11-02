@@ -283,8 +283,8 @@ export struct AccountMenu {
     .width('100%')
     .height('100%')
     // 贴着标题栏下面（不是屏幕正中）：顶部留白 = 状态栏 + 标题栏，内容从那里往下排。
-    .padding({ top: ACCOUNT_MENU_TOP_VP })
-    .alignItems(HorizontalAlign.Center)
+    .padding({ top: ACCOUNT_MENU_TOP_VP, right: 12 })
+    .alignItems(HorizontalAlign.End)
     .justifyContent(FlexAlign.Start)
     .backgroundColor(Color.Transparent)
     .onClick((): void => {
