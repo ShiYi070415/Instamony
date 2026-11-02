@@ -8495,15 +8495,12 @@ struct Index {
       backgroundStyle: { backgroundColor: '#66000000' },
       contentStyle: {
         titleStyle: { mainTitleColor: Color.White },
-        // 官方文档：按钮底色/图标色由 backgroundColor/iconColor 控制，
-        // 没有单独的“按钮深色材质”开关；半透明深色保留光感。
+        // 和动作区按钮一致：不额外铺深色底，只保留 HDS 的浅白沉浸光感 + 白色图标。
         backIconStyle: {
-          backgroundColor: '#40000000',
           iconColor: Color.White,
           textColor: Color.White
         },
         menuStyle: {
-          backgroundColor: '#40000000',
           iconColor: Color.White,
           textColor: Color.White
         }
