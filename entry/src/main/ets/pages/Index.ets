@@ -8765,6 +8765,29 @@ struct Index {
    * 想要"标题留着"，只能在这儿按 HDS 的观感再画一遍（字号/字重见 REELS_TITLE_*）。
    * 分段按钮套「我的」页那一款（ProfileSegmentBar：沉浸光感材质 + 会滑动的灰底药丸 + 点按/横拖）。
    */
+  /**
+   * Reels 分段按钮宽度：按当前语言两个标签的实际文本宽度算，不写死 160。
+   * 每个标签左右各留 12vp，总宽 = 2 × 最长标签 + 48。
+   */
+  private reelsSegmentWidth(): number {
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const explore: string = context.resourceManager.getStringSync(
+        $r('app.string.reels_segment_explore').id);
+      const following: string = context.resourceManager.getStringSync(
+        $r('app.string.reels_segment_following').id);
+      const explorePx: number = this.getUIContext().getMeasureUtils()
+        .measureText({ textContent: explore, fontSize: 14 });
+      const followingPx: number = this.getUIContext().getMeasureUtils()
+        .measureText({ textContent: following, fontSize: 14 });
+      const textWidth: number = this.getUIContext().px2vp(Math.max(explorePx, followingPx));
+      return Math.max(96, Math.ceil(textWidth * 2 + 48));
+    } catch (error) {
+      return 120;
+    }
+  }
+
   @Builder
   reelsTitleSegment() {
     Row() {
@@ -8782,20 +8805,23 @@ struct Index {
           mode: SEGMENT_MODE_REELS,
           // 标题栏那一行只有 56vp：胶囊 40vp，上下不留白。
           compact: true,
-          // 胶囊左右只缩 8，视觉右缘更靠右，和静音按钮的间距正好等于两颗菜单按钮的 8vp。
-          sideInset: 8,
+          // 胶囊不再留左右内缩；宽度由下面按文本量出来的值决定。
+          sideInset: 0,
           // **沉浸光感照旧**（需求："改回去沉浸光感效果"）：标题栏那一行是 stack 区、
           // 不是 bottomBuilder 那种被算进标题栏的行，实测这层材质在这里是生效的。
-          availableWidthVp: REELS_SEGMENT_WIDTH_VP,
+          availableWidthVp: this.reelsSegmentWidth(),
           onSelect: (segment: number): void => {
             this.selectReelsSegment(segment);
           }
         })
       }
-      .width(REELS_SEGMENT_WIDTH_VP)
+      .width(this.reelsSegmentWidth())
       .height(REELS_SEGMENT_HEIGHT_VP)
-      // 分段按钮放在第一颗 menus 按钮左边；8vp 间距由胶囊自身的 sideInset 给出。
-      .margin({ right: 0 })
+
+      // 显式的 8vp 间隙：和静音/下载之间的 8vp 完全一致。
+      Column()
+        .width(8)
+        .height(1)
 
       if (this.reelsActionVersion >= 0 && ReelsAction.visibleFor(ReelsAction.HOME)) {
         // 垂直堆放：第一颗和分段按钮同一行，第二颗在下面。
