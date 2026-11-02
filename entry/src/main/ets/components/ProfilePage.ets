@@ -2237,6 +2237,9 @@ export struct ProfilePage {
   private selectTab(segment: number): void {
     // 进来的是**第几段**（本人 4 段 / 别人主页 3 段），先映射成内部分页号（见 ProfileViewModel.order）。
     const index: number = this.vm.tabAtSegment(segment);
+    // Tabs 的 index 是 initialSegment：不跟着用户切段更新的话，页面任何一次重建
+    // （例如压入 Reels 再返回）都会把 Tabs 拽回第一段。
+    this.initialSegment = segment;
     if (index === this.tab) {
       return;
     }
@@ -2267,6 +2270,7 @@ export struct ProfilePage {
    * 通知（滑动一次会来好几个），`switchToTab` 自己会挡住。
    */
   private settleSegment(segment: number): void {
+    this.initialSegment = segment;
     const tab: number = this.vm.tabAtSegment(segment);
     this.switchToTab(tab);
     if (this.vm.tabNow() !== tab) {
