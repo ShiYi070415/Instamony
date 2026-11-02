@@ -2780,6 +2780,8 @@ export struct FeedList {
             }
             .width('100%')
             .aspectRatio(this.mediaAspect(post))
+            .borderRadius(12)
+            .clip(true)
           } else {
             Image(post.displayUrl)
               .draggable(false)
@@ -2787,6 +2789,8 @@ export struct FeedList {
               .aspectRatio(this.mediaAspect(post))
               .objectFit(immersive ? ImageFit.Cover : ImageFit.Contain)
               .backgroundColor($r('app.color.field_background'))
+              .borderRadius(12)
+              .clip(true)
           }
         }
       } else {
@@ -2852,6 +2856,8 @@ export struct FeedList {
     // 媒体区统一圆角；裁一下，图片/视频/轮播都收进同一个圆角里。
     .borderRadius(12)
     .clip(true)
+    // 纯图片/轮播在宽度过渡时用离屏合成保住圆角；含视频的不用，避免 XComponent 离屏。
+    .renderGroup(!post.hasVideo())
     // 媒体内容铺满盒子，所以这个对齐只对"叠在媒体上的按钮行/爱心"起作用。
     .alignContent(Alignment.BottomEnd)
     // 双击媒体点赞。用 parallelGesture 而不是 gesture：视频那一条里放的是 Video

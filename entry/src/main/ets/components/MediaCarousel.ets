@@ -297,6 +297,8 @@ export struct MediaCarousel {
       }
       .width('100%')
       .aspectRatio(this.aspect)
+      .borderRadius(12)
+      .clip(true)
       .loop(false)
       // 起始页 = 上次看到的那张。initialPage 在组件生命周期内不变，所以这条属性只会在
       // Swiper 创建时生效一次，不会在滑动过程中把页面拽回去。
@@ -335,5 +337,7 @@ export struct MediaCarousel {
     }
     .width('100%')
     .alignItems(HorizontalAlign.Center)
+    .borderRadius(12)
+    .clip(true)
   }
 }
