@@ -7061,7 +7061,7 @@ struct Index {
   }
 
   /**
-   * 快拍 + 信息流整列按 16:9 收口：宽度取窗口高度 × 16/9，
+   * 快拍 + 信息流整列按 9:16 收口：宽度取窗口高度 × 9/16，
    * 再夹进可用宽度；手机竖屏不限制。
    */
   private feedMaxWidth(): number {
@@ -7070,7 +7070,7 @@ struct Index {
     if (width < 600 || height <= 0) {
       return 0;
     }
-    return Math.min(width - 48, Math.round(height * 16 / 9));
+    return Math.min(width - 48, Math.round(height * 9 / 16));
   }
 
   /**
