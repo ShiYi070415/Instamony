@@ -447,15 +447,21 @@ export struct SearchPage {
     this.refreshRecommended();
   }
 
-  /** 平板/折叠屏按宽度加列：手机 3、窄平板 4、宽平板 5。 */
+  /** 按搜索结果区域的实际宽度决定列数，左右分栏收窄时也会自动减列。 */
   private gridColumns(): number {
-    if (this.flowWidthVp >= 1000) {
+    if (this.flowWidthVp >= 1200) {
+      return 6;
+    }
+    if (this.flowWidthVp >= 960) {
       return 5;
     }
-    if (this.flowWidthVp >= 840) {
+    if (this.flowWidthVp >= 720) {
       return 4;
     }
-    return COLUMNS;
+    if (this.flowWidthVp >= 360) {
+      return COLUMNS;
+    }
+    return 2;
   }
 
   /** Grid 的 columnsTemplate，随列数变化。 */
