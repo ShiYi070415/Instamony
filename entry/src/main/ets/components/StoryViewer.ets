@@ -583,10 +583,10 @@ export struct StoryViewer {
     this.switching = true;
     this.flipDir = dir;
     this.flipAt = Date.now();
-    // 不用 3D 翻面（复杂卡片在真机上旋转会掉帧）：像 Highlight 换组一样，
-    // 只做一次很轻的透明度过渡，新数据到了再淡回来。
-    animateTo({ duration: 140, curve: Curve.EaseOut }, (): void => {
-      this.pageAlpha = 0.65;
+    // 先完整播完"翻出去"：固定用满 FLIP_OUT_MS，淡到 0 后停住等数据，
+    // 不能因为下一条 story 还没到就卡在半透明的一半。
+    animateTo({ duration: FLIP_OUT_MS, curve: Curve.Friction }, (): void => {
+      this.pageAlpha = 0;
     });
     this.applyFlip(0);
   }
@@ -620,7 +620,7 @@ export struct StoryViewer {
 
   private animateFlipIn(): void {
     this.applyFlip(0);
-    this.pageAlpha = 0.65;
+    this.pageAlpha = 0;
     animateTo({
       duration: FLIP_IN_MS,
       curve: curves.springMotion(0.45, 0.82)
