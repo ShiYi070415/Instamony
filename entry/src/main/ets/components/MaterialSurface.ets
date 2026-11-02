@@ -838,8 +838,12 @@ export struct MaterialLabelButton {
       this.lightEffect))
     // 开启时吞掉长按（见 swallowLongPress 的说明）。
     .gesture(this.swallowLongPress ? LongPressGesture({ repeat: false, duration: 300 }) : null)
-    .onChange((): void => {
-      this.fire();
+    .onChange((isOn: boolean): void => {
+      // 只在真正切到选中时触发；Toggle 复位成 false 时也会回调 onChange，
+      // 以前无条件 fire()，列表重建/复用时就会“没点关注却自动关注”。
+      if (isOn) {
+        this.fire();
+      }
     })
     .onClick((): void => {
       this.fire();

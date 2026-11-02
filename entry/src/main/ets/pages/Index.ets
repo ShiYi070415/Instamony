@@ -7627,24 +7627,24 @@ struct Index {
       // 底层：沉浸光感胶囊；里层：小白条。
       Toggle({ type: ToggleType.Button, isOn: false }) {
         Column()
-          .width(6)
-          .height(48)
-          .borderRadius(3)
+          .width(4)
+          .height(40)
+          .borderRadius(2)
           .backgroundColor(Color.White)
-          .opacity(this.splitDragging ? 1 : 0.9)
+          .opacity(this.splitDragging ? 0.95 : 0.65)
       }
-      .width(22)
-      .height(76)
+      .width(18)
+      .height(68)
       .padding(0)
-      .borderRadius(11)
+      .borderRadius(9)
       .backgroundColor(Color.Transparent)
       .selectedColor(Color.Transparent)
       .attributeModifier(new SurfaceModifier(Index.materialThicknessNow(), true, true))
       .hitTestBehavior(HitTestMode.None)
     }
-    .width(24)
+    .width(18)
     .height('100%')
-    .position({ x: this.tabletLeftWidth() - 12, y: 0 })
+    .position({ x: this.tabletLeftWidth() - 9, y: 0 })
     .zIndex(35)
     .backgroundColor(Color.Transparent)
     .gesture(

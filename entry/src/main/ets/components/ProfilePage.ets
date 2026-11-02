@@ -22,7 +22,7 @@
  * hds title 下方"。浮层落在内容区，按钮自己那层沉浸光感材质照样生效（Toggle 全页面生效）。
  */
 
-import { display } from '@kit.ArkUI';
+import { curves, display } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { media } from '@kit.MediaKit';
 import { ProfileHeader, ProfileHighlight, ProfileMapper, ProfilePost, ProfileStreamPage, BioSegment, splitMentions } from '../model/Profile';
@@ -1649,6 +1649,26 @@ export struct ProfilePage {
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.page_background'))
+    .onAreaChange((oldArea: Area, newArea: Area): void => {
+      const width: number = typeof newArea.width === 'number'
+        ? newArea.width : parseFloat(`${newArea.width}`);
+      if (width <= 0 || Math.abs(width - this.screenWidthVp) <= 0.5) {
+        return;
+      }
+      const oldColumns: number = this.gridColumns();
+      const nextColumns: number = width >= 1000 ? 5 : (width >= 700 ? 4 : GRID_COLUMNS);
+      if (nextColumns !== oldColumns) {
+        this.getUIContext().animateTo({
+          duration: 260,
+          curve: curves.springMotion(0.4, 0.9)
+        }, (): void => {
+          this.screenWidthVp = width;
+          this.applyGridColumns();
+        });
+      } else {
+        this.screenWidthVp = width;
+      }
+    })
   }
 
   /**
@@ -1667,28 +1687,35 @@ export struct ProfilePage {
   @Builder
   followRow() {
     Row({ space: FOLLOW_GAP }) {
-      MaterialLabelButton({
-        // 文案走资源（en_US 也有）：未关注 = 关注，已关注 = 已关注。
-        labelRes: this.following
-          ? $r('app.string.action_following') : $r('app.string.action_follow'),
-        // 已关注用次要前景色（和首页那颗 FollowPill 的观感一致），未关注用主题正文色。
-        tint: this.following ? '#737373' : '',
-        pillWidth: this.followButtonWidth(),
-        pillHeight: FOLLOW_BUTTON_HEIGHT,
-        fontSize: 14,
-        onTap: (): void => {
-          this.tapFollowUser();
-        }
-      })
-      MaterialLabelButton({
-        labelRes: $r('app.string.notify_message'),
-        pillWidth: this.followButtonWidth(),
-        pillHeight: FOLLOW_BUTTON_HEIGHT,
-        fontSize: 14,
-        onTap: (): void => {
-          // 需求：这颗按钮暂时不做功能。
-        }
-      })
+      Row() {
+        MaterialLabelButton({
+          // 文案走资源（en_US 也有）：未关注 = 关注，已关注 = 已关注。
+          labelRes: this.following
+            ? $r('app.string.action_following') : $r('app.string.action_follow'),
+          // 已关注用次要前景色（和首页那颗 FollowPill 的观感一致），未关注用主题正文色。
+          tint: this.following ? '#737373' : '',
+          fullWidth: true,
+          pillHeight: FOLLOW_BUTTON_HEIGHT,
+          fontSize: 14,
+          onTap: (): void => {
+            this.tapFollowUser();
+          }
+        })
+      }
+      .layoutWeight(1)
+
+      Row() {
+        MaterialLabelButton({
+          labelRes: $r('app.string.notify_message'),
+          fullWidth: true,
+          pillHeight: FOLLOW_BUTTON_HEIGHT,
+          fontSize: 14,
+          onTap: (): void => {
+            // 需求：这颗按钮暂时不做功能。
+          }
+        })
+      }
+      .layoutWeight(1)
       /*
        * 「推荐关注」（圆形）——需求："将…推荐关注按钮接入其他用户主页"。
        * 本人主页那颗画在功能区（见 actionRow），别人主页就挂在关注 / 发消息这一行的末尾。
@@ -2176,6 +2203,8 @@ export struct ProfilePage {
     .width('100%')
     // 撑满 TabContent（TabContent 又撑满那个**固定高度**的内层容器，见 tabContent 的说明）。
     .height('100%')
+    // 3/4/5 列切换时格子宽度和位置走同一套弹簧动画。
+    .animation({ duration: 260, curve: curves.springMotion(0.4, 0.9) })
     .scrollBar(BarState.Off)
     .edgeEffect(EdgeEffect.Spring)
     /*
