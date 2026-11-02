@@ -7172,9 +7172,9 @@ struct Index {
   /** 所有"开新页"统一入口：平板首页走右栏，其余走全局导航栈。 */
   private pushPage(name: string, param: string = ''): void {
     if (this.directStageOpen && name === PROFILE_REELS_PAGE) {
-      // 会话里点分享卡进 Reels：隐藏舞台但不关闭会话，返回时恢复。
-      this.directStageVisible = false;
-      this.navStack.pushPath({ name: name, param: param });
+      // 会话里点分享卡：Reels 压进会话舞台自己的栈，覆盖右侧会话页；
+      // 返回时 pop 回会话页，左侧私信列表始终不动。
+      this.directStageStack.pushPath({ name: name, param: param });
       return;
     }
     if (this.directStageOpen) {
