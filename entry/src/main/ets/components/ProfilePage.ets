@@ -335,7 +335,6 @@ export struct ProfilePage {
    */
   @Prop segmentMode: string = SEGMENT_MODE_SELF;
   /** 右栏浅色模式：不用 app 的深色资源，强制浅色文字/背景。 */
-  @Prop lightMode: boolean = false;
   /** 点一个格子：交给页面打开那条帖子。 */
   onOpen: (post: ProfilePost) => void = (post: ProfilePost): void => {
   };
@@ -1636,23 +1635,23 @@ export struct ProfilePage {
   }
 
   private primaryTextColor(): ResourceColor {
-    return this.lightMode ? '#111111' : $r('app.color.primary_text');
+    return $r('app.color.primary_text');
   }
 
   private secondaryTextColor(): ResourceColor {
-    return this.lightMode ? '#666666' : $r('app.color.secondary_text');
+    return $r('app.color.secondary_text');
   }
 
   private pageBackgroundColor(): ResourceColor {
-    return this.lightMode ? '#FFFFFF' : $r('app.color.page_background');
+    return $r('app.color.page_background');
   }
 
   private fieldBackgroundColor(): ResourceColor {
-    return this.lightMode ? '#F2F2F2' : $r('app.color.field_background');
+    return $r('app.color.field_background');
   }
 
   private dividerColor(): ResourceColor {
-    return this.lightMode ? '#E5E5E5' : $r('app.color.divider');
+    return $r('app.color.divider');
   }
 
   build() {

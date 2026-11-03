@@ -925,7 +925,6 @@ struct UserProfileRoute {
   /** 嵌在右栏时标题由右栏画，ProfilePage 不再额外避让 HDS 标题栏。 */
   @Prop embedded: boolean = false;
   /** 右栏 Reels 背景下的其他页面：强制浅色。 */
-  @Prop lightMode: boolean = false;
   vm: ProfileViewModel = new ProfileViewModel();
   /** 打开一条帖子：交给隐藏网页（同「我的」页）。 */
   onOpen: (post: ProfilePost) => void = (post: ProfilePost): void => {
@@ -984,7 +983,6 @@ struct UserProfileRoute {
       vm: this.vm,
       layoutWidthVp: this.layoutWidthVp,
       topOffsetVp: this.embedded ? 0 : 94,
-      lightMode: this.lightMode,
       segmentMode: SEGMENT_MODE_USER,
       // 简介里的 @账号：开那个人的主页（需求："点击后进入该用户主页"）。
       onOpenUser: (username: string): void => {
@@ -1527,8 +1525,6 @@ struct Index {
    * 标题栏样式才会跟着换（不然要等下一次别的重建）。
    */
   @StorageProp(SETTING_DARK_UI) @Watch('onThemeChanged') isDarkUi: boolean = true;
-  /** 系统本身的深浅（Reels 强制深色时 isDarkUi 会变，拿它判断右栏是否该浅色）。 */
-  @State private systemDarkUi: boolean = false;
   /**
    * 搜索框**收起来了没有**（需求："上滑搜索框收缩成按钮到右上角，点击或者回到顶部时才展开"）。
    *
@@ -1539,17 +1535,8 @@ struct Index {
    */
   @StorageProp(SEARCH_BOX_COLLAPSED) searchBoxCollapsed: boolean = false;
 
-  /**
-   * 系统明暗变了：如果**正停在 Reels 上**，要重新判定一次（见 syncReelsColorMode）。
-   *
-   * 场景：用户停在 Reels 页时把系统从深色切成浅色 —— 没有切页事件，得靠这个 @Watch
-   * 把"Reels 要深色"重新落实一次。反过来（浅→深）也走这里，而那种情况本来就该是深色，
-   * syncReelsColorMode 里会自然什么都不做；两边都不会来回抖（它只在需要时改一次配置）。
-   */
+  /** 系统明暗变了：全局本来就跟随系统，这里只清一次历史强制配置。 */
   private onThemeChanged(): void {
-    if (!this.reelsDarkForced) {
-      this.systemDarkUi = this.isDarkUi;
-    }
     this.syncReelsColorMode();
   }
   /**
@@ -2378,7 +2365,6 @@ struct Index {
   }
 
   aboutToAppear(): void {
-    this.systemDarkUi = this.isDarkUi;
     // ---- 材质能力诊断（放在最前面：后面任何一步抛异常都不会把它挡掉）----
     // 标题栏背板一直是一块偏黑的板子、看不到"渐变模糊"：官方 FAQ 说材质的**模糊/折射**
     // （materialFilter）只在**高/中算力**设备上渲染，低算力设备只保留背景色/边框/阴影。
@@ -7632,7 +7618,6 @@ struct Index {
         layoutWidthVp: Math.max(0, this.profileStageWidth()),
         // 右栏本身也是 HDS 导航：资料区要避让它的标题栏，不能用 0。
         embedded: false,
-        lightMode: this.rightPaneNeedsLight(),
         onOpen: (post: ProfilePost): void => {
           this.openLoosePost(post.shortcode, post.isVideo);
         },
@@ -8550,68 +8535,10 @@ struct Index {
         materialLevel: immersiveLevel(this.materialLevel)
       };
     }
-    if (this.rightPaneNeedsLight()) {
-      // 左栏 Reels 强制深色时，右栏其他页面仍保持浅色标题栏。
-      const lightBar: HdsNavigationTitleBarStyle = {
-        backgroundStyle: { backgroundColor: '#F2FFFFFF' },
-        contentStyle: {
-          titleStyle: { mainTitleColor: '#111111' },
-          backIconStyle: { iconColor: '#111111', textColor: '#111111' },
-          menuStyle: { iconColor: '#111111', textColor: '#111111' },
-          dividerStyle: { dividerColor: '#1A000000' }
-        }
-      };
-      style.originalStyle = lightBar;
-      style.scrollEffectStyle = lightBar;
-    }
     return style;
   }
 
   /** 二级页（通知 / 设定）标题栏样式：不做滚动模糊，其余同上。 */
-  /** 右栏 Reels：本地浅色标题栏（不跟着系统深色模式变黑）。 */
-  private reelsDestinationTitleStyle(): TitleBarStyleOptions {
-    const style: TitleBarStyleOptions = this.destinationTitleStyle();
-    style.scrollEffectOpts = {
-      enableScrollEffect: true,
-      scrollEffectType: ScrollEffectType.COMMON_BLUR
-    };
-    const lightBar: HdsNavigationTitleBarStyle = {
-      // 高不透明度白色压在模糊层上，视觉上是浅色标题栏。
-      backgroundStyle: { backgroundColor: '#F2FFFFFF' },
-      contentStyle: {
-        titleStyle: { mainTitleColor: '#111111' },
-        backIconStyle: {
-          backgroundColor: Color.Transparent,
-          iconColor: '#111111',
-          textColor: '#111111'
-        },
-        menuStyle: {
-          backgroundColor: Color.Transparent,
-          iconColor: '#111111',
-          textColor: '#111111'
-        },
-        dividerStyle: { dividerColor: '#1A000000' }
-      }
-    };
-    style.originalStyle = lightBar;
-    style.scrollEffectStyle = lightBar;
-    return style;
-  }
-
-  /** 当前左栏是 Reels、右栏开的是别的页面：右栏要用浅色。 */
-  private rightPaneNeedsLight(): boolean {
-    /*
-     * 系统深色时 isDarkUi=true 且不是我们强制的（reelsDarkForced=false）；
-     * 系统浅色进 Reels 时 isDarkUi=true，但 reelsDarkForced=true —— 这两种要分开。
-     */
-    // 右栏非 Reels 页面打开时 syncReelsColorMode 会让应用跟随系统，
-    // 所以这里直接读系统生效的 isDarkUi 即可。
-    return this.tabletHomeScoped()
-      && !this.isDarkUi
-      && this.currentTab() === AppTab.Reels
-      && !this.reelsInRightPane();
-  }
-
   private destinationTitleStyle(): TitleBarStyleOptions {
     const style: TitleBarStyleOptions = {
       // 信息流式的长列表不做滚动模糊，短列表也不做。
@@ -11535,13 +11462,7 @@ struct Index {
 
       // 右栏在 HDS Navigation 之外：HDS 只覆盖帖子流那一列。
       if (this.tabletHomeScoped() && !this.directStageOpen) {
-        if (this.rightPaneNeedsLight()) {
-          WithTheme({ colorMode: ThemeColorMode.LIGHT }) {
-            this.tabletProfilePane()
-          }
-        } else {
-          this.tabletProfilePane()
-        }
+        this.tabletProfilePane()
       }
       // 私信会话常驻舞台：小窗铺满，双栏时只改位置/宽度，页面实例不重建。
       if (this.directStageOpen) {
@@ -11614,53 +11535,12 @@ struct Index {
   }
 
   /**
-   * Reels 页的明暗：**进去把应用切成深色，离开交回系统**（需求）。
+   * **全局明暗只跟随系统**：不再为 Reels 或右栏单独强制深色/浅色。
    *
-   * 为什么要整页切深色、而不是只把顶部/底部那两条栏涂黑：Reels 整屏都是视频，浅色主题下
-   * 系统栏材质是白的（压在画面上又脏又读不清），而"只涂黑两条栏"既要跟材质打架（材质优先于
-   * 背景色），我们自己画的图标/文字也还是浅色主题那一套。切应用配色一次解决全部：
-   * HDS 材质、标题栏、底栏、我们自己的图标文字会一起走深色。
-   *
-   * 只在"当前是浅色"时切；`reelsDarkForced` 记账是为了**只在需要时**动配置 ——
-   * 离开 Reels 时设置的是 `COLOR_MODE_NOT_SET`（跟系统），不是硬写浅色，所以系统本来就是
-   * 深色的用户离开 Reels 依旧深色。
+   * 以前这里是"进 Reels 把应用切成深色"，会在系统浅色时把 HDS、侧边栏、右栏
+   * 一起带黑，还导致右栏得再套一层页面级浅色。现在只负责撤销历史遗留的强制配置。
    */
   private syncReelsColorMode(): void {
-    /*
-     * 左栏是 Reels、右栏打开的是**别的页面**：右栏页面必须按系统明暗走。
-     * 此时不能继续把整个应用强制深色，否则系统浅色下右栏也变黑；
-     * 先撤销强制，让应用跟随系统（左栏 Reels 内容本身仍是深色视频）。
-     */
-    const rightOther: boolean = this.tabletHomeScoped()
-      && this.currentTab() === AppTab.Reels
-      && !this.reelsInRightPane();
-    if (rightOther) {
-      if (this.reelsDarkForced) {
-        this.reelsDarkForced = false;
-        this.applyAppColorMode(false);
-      }
-      return;
-    }
-    // 右栏里的 Reels 只让右栏自身保持深色，不切全局应用配色。
-    if (this.reelsInRightPane()) {
-      if (this.reelsDarkForced) {
-        this.reelsDarkForced = false;
-        this.applyAppColorMode(false);
-      }
-      return;
-    }
-    const onReels: boolean = this.reelsLikeOnScreen();
-    // 判据本身也记一行（debug 级）：浅色模式下"进/出 Reels 类页面"有没有走到这里，
-    // 看日志就清楚（真机浅色不好造，只能靠这一行 + AppSettings 那行一起判断）。
-    hilog.debug(DOMAIN, TAG, 'reels color: reels=%{public}s dark=%{public}s forced=%{public}s',
-      `${onReels}`, `${this.isDarkUi}`, `${this.reelsDarkForced}`);
-    if (onReels) {
-      if (!this.isDarkUi && !this.reelsDarkForced) {
-        this.reelsDarkForced = true;
-        this.applyAppColorMode(true);
-      }
-      return;
-    }
     if (this.reelsDarkForced) {
       this.reelsDarkForced = false;
       this.applyAppColorMode(false);
