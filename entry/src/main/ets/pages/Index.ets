@@ -8540,6 +8540,20 @@ struct Index {
         materialLevel: immersiveLevel(this.materialLevel)
       };
     }
+    if (this.rightPaneNeedsLight()) {
+      // 左栏 Reels 强制深色时，右栏其他页面仍保持浅色标题栏。
+      const lightBar: HdsNavigationTitleBarStyle = {
+        backgroundStyle: { backgroundColor: '#F2FFFFFF' },
+        contentStyle: {
+          titleStyle: { mainTitleColor: '#111111' },
+          backIconStyle: { iconColor: '#111111', textColor: '#111111' },
+          menuStyle: { iconColor: '#111111', textColor: '#111111' },
+          dividerStyle: { dividerColor: '#1A000000' }
+        }
+      };
+      style.originalStyle = lightBar;
+      style.scrollEffectStyle = lightBar;
+    }
     return style;
   }
 
@@ -8572,6 +8586,13 @@ struct Index {
     style.originalStyle = lightBar;
     style.scrollEffectStyle = lightBar;
     return style;
+  }
+
+  /** 当前左栏是 Reels、右栏开的是别的页面：右栏要用浅色。 */
+  private rightPaneNeedsLight(): boolean {
+    return this.tabletHomeScoped()
+      && this.currentTab() === AppTab.Reels
+      && !this.reelsInRightPane();
   }
 
   private destinationTitleStyle(): TitleBarStyleOptions {
@@ -11497,7 +11518,13 @@ struct Index {
 
       // 右栏在 HDS Navigation 之外：HDS 只覆盖帖子流那一列。
       if (this.tabletHomeScoped() && !this.directStageOpen) {
-        this.tabletProfilePane()
+        if (this.rightPaneNeedsLight()) {
+          WithTheme({ colorMode: ThemeColorMode.LIGHT }) {
+            this.tabletProfilePane()
+          }
+        } else {
+          this.tabletProfilePane()
+        }
       }
       // 私信会话常驻舞台：小窗铺满，双栏时只改位置/宽度，页面实例不重建。
       if (this.directStageOpen) {
@@ -12048,7 +12075,7 @@ struct Index {
           // 需求："除了底栏 reels，其他 reels 页面右上角没有静音和下载按钮，添加一下"。
           menu: this.reelsMenu(ReelsAction.PROFILE)
         },
-        style: this.tabletHomeScoped() ? this.reelsDestinationTitleStyle() : this.destinationTitleStyle(),
+        style: this.destinationTitleStyle(),
         avoidLayoutSafeArea: false,
         enableComponentSafeArea: false
       })
@@ -12094,7 +12121,7 @@ struct Index {
           // 同视频分页那一页：右上角补上静音 / 下载（需求）。
           menu: this.reelsMenu(ReelsAction.SEARCH)
         },
-        style: this.tabletHomeScoped() ? this.reelsDestinationTitleStyle() : this.destinationTitleStyle(),
+        style: this.destinationTitleStyle(),
         avoidLayoutSafeArea: false,
         enableComponentSafeArea: false
       })
