@@ -11296,7 +11296,7 @@ struct Index {
           labelVisible: this.tabletSidebarExpanded,
           chipHeight: this.tabletButtonSize(),
           chipWidth: this.tabletSidebarItemWidth(),
-          iconSlotWidth: this.tabletSidebarExpanded ? 0 : this.tabletButtonSize(),
+          iconSlotWidth: this.tabletButtonSize(),
           iconSize: Math.round(22 * this.tabletUiScale()),
           fontSize: Math.round(14 * this.tabletUiScale()),
           autoInvert: false,
@@ -11316,19 +11316,13 @@ struct Index {
           Column() {
             ForEach(TAB_ITEMS, (item: TabItem, index: number): void => {
               Row({ space: Math.round(8 * this.tabletUiScale()) }) {
-                if (this.tabletSidebarExpanded) {
+                Stack({ alignContent: Alignment.Center }) {
                   SymbolGlyph(this.selectedIndex === index ? item.iconSelected : item.iconNormal)
                     .fontSize(Math.round(TAB_ICON_SIZE * this.tabletUiScale()))
                     .fontColor([this.tabIconColor(this.selectedIndex === index)])
-                } else {
-                  Stack({ alignContent: Alignment.Center }) {
-                    SymbolGlyph(this.selectedIndex === index ? item.iconSelected : item.iconNormal)
-                      .fontSize(Math.round(TAB_ICON_SIZE * this.tabletUiScale()))
-                      .fontColor([this.tabIconColor(this.selectedIndex === index)])
-                  }
-                  .width(this.tabletButtonSize())
-                  .height(this.tabletButtonSize())
                 }
+                .width(this.tabletButtonSize())
+                .height(this.tabletButtonSize())
                 if (this.tabletSidebarExpanded) {
                   Text(item.label)
                     .fontSize(Math.round(14 * this.tabletUiScale()))
@@ -11343,10 +11337,7 @@ struct Index {
               }
               .width(this.tabletSidebarItemWidth())
               .height(this.tabletButtonSize())
-              .padding({
-                left: this.tabletSidebarExpanded ? Math.round(16 * this.tabletUiScale()) : 0,
-                right: this.tabletSidebarExpanded ? Math.round(12 * this.tabletUiScale()) : 0
-              })
+              .padding({ right: this.tabletSidebarExpanded ? Math.round(12 * this.tabletUiScale()) : 0 })
               .justifyContent(FlexAlign.Start)
               .borderRadius(this.tabletButtonSize() / 2)
               .backgroundColor(Color.Transparent)
@@ -11393,7 +11384,7 @@ struct Index {
           labelVisible: this.tabletSidebarExpanded,
           chipHeight: this.tabletButtonSize(),
           chipWidth: this.tabletSidebarItemWidth(),
-          iconSlotWidth: this.tabletSidebarExpanded ? 0 : this.tabletButtonSize(),
+          iconSlotWidth: this.tabletButtonSize(),
           iconSize: Math.round(22 * this.tabletUiScale()),
           fontSize: Math.round(14 * this.tabletUiScale()),
           autoInvert: false,
@@ -11408,7 +11399,7 @@ struct Index {
           labelVisible: this.tabletSidebarExpanded,
           chipHeight: this.tabletButtonSize(),
           chipWidth: this.tabletSidebarItemWidth(),
-          iconSlotWidth: this.tabletSidebarExpanded ? 0 : this.tabletButtonSize(),
+          iconSlotWidth: this.tabletButtonSize(),
           iconSize: Math.round(22 * this.tabletUiScale()),
           fontSize: Math.round(14 * this.tabletUiScale()),
           autoInvert: false,
