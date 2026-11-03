@@ -1033,8 +1033,7 @@ export struct DirectThreadPage {
     this.previewName = message.senderName.length > 0 ? message.senderName
       : (this.view !== null && this.view.withUsername.length > 0
         ? this.view.withUsername : (this.view !== null ? this.view.title : ''));
-    this.previewAvatar = message.senderAvatar.length > 0 ? message.senderAvatar
-      : (this.view !== null ? this.view.withAvatar : '');
+    this.previewAvatar = this.senderAvatarOf(message);
 
     const targetW: number = this.previewImageWidth();
     const targetH: number = this.previewCardTargetHeight();
@@ -1339,7 +1338,58 @@ export struct DirectThreadPage {
     if (message.senderName.length > 0) {
       return message.senderName;
     }
+    const known: string = this.knownSenderName(message.userId);
+    if (known.length > 0) {
+      return known;
+    }
+    if (this.view !== null && this.view.isGroup) {
+      // 群聊里绝不能拿"对方名字"顶替：那会把所有补丁消息都说成同一个人。
+      return message.userId.length > 0 ? message.userId : '';
+    }
     return this.view !== null ? this.view.withUsername : '';
+  }
+
+  /** 从已有消息里找同一个 user 的名字（实时补丁没带 sender 时用）。 */
+  private knownSenderName(userId: string): string {
+    if (userId.length === 0 || this.view === null) {
+      return '';
+    }
+    const list: Array<DirectMessage> = this.view.messages;
+    for (let index: number = list.length - 1; index >= 0; index--) {
+      const one: DirectMessage = list[index];
+      if (one.userId === userId && one.senderName.length > 0) {
+        return one.senderName;
+      }
+    }
+    return '';
+  }
+
+  private knownSenderAvatar(userId: string): string {
+    if (userId.length === 0 || this.view === null) {
+      return '';
+    }
+    const list: Array<DirectMessage> = this.view.messages;
+    for (let index: number = list.length - 1; index >= 0; index--) {
+      const one: DirectMessage = list[index];
+      if (one.userId === userId && one.senderAvatar.length > 0) {
+        return one.senderAvatar;
+      }
+    }
+    return '';
+  }
+
+  private senderAvatarOf(message: DirectMessage): string {
+    if (message.senderAvatar.length > 0) {
+      return message.senderAvatar;
+    }
+    const known: string = this.knownSenderAvatar(message.userId);
+    if (known.length > 0) {
+      return known;
+    }
+    if (this.view !== null && this.view.isGroup) {
+      return '';
+    }
+    return this.view !== null ? this.view.withAvatar : '';
   }
 
   /** 分组建模用的"人"（同一人多条连续消息算一组）；空名时退回 user_id。 */
@@ -1436,10 +1486,8 @@ export struct DirectThreadPage {
           }
           Row({ space: 8 }) {
             if (this.showsAvatar(index, message)) {
-              Image(message.senderAvatar.length > 0
-                ? message.senderAvatar
-                : (this.view !== null && this.view.withAvatar.length > 0
-                  ? this.view.withAvatar : $r('app.media.startIcon')))
+              Image(this.senderAvatarOf(message).length > 0
+                ? this.senderAvatarOf(message) : $r('app.media.startIcon'))
                 .draggable(false)
                 .width(AVATAR_SIZE)
                 .height(AVATAR_SIZE)

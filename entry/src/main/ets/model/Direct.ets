@@ -1192,7 +1192,42 @@ export class DirectMapper {
     if (text.length === 0 && mediaUrl.length === 0) {
       return null;
     }
-    const userId: string = JsonRead.strOf(item, 'user_id');
+    /*
+     * 实时补丁的发送者字段比 REST 多：user_id / sender_fbid / sender.pk / sender.id。
+     * 这几个都要认，否则群聊里每条补丁都变成同一个"未知用户"。
+     */
+    let userId: string = JsonRead.strOf(item, 'user_id');
+    if (userId.length === 0) {
+      userId = JsonRead.strOf(item, 'sender_fbid');
+    }
+    let senderName: string = JsonRead.strOf(item, 'sender_name');
+    let senderAvatar: string = JsonRead.strOf(item, 'sender_avatar');
+    const senderNode: Record<string, Object> | null = JsonRead.recordOf(item, 'sender');
+    const userNode: Record<string, Object> | null = JsonRead.recordOf(item, 'user');
+    const senderAt: Record<string, Object> | null = senderNode !== null ? senderNode : userNode;
+    if (senderAt !== null) {
+      if (userId.length === 0) {
+        userId = JsonRead.strOf(senderAt, 'pk');
+      }
+      if (userId.length === 0) {
+        userId = JsonRead.strOf(senderAt, 'id');
+      }
+      if (senderName.length === 0) {
+        senderName = JsonRead.strOf(senderAt, 'full_name');
+        if (senderName.length === 0) {
+          senderName = JsonRead.strOf(senderAt, 'username');
+        }
+      }
+      if (senderAvatar.length === 0) {
+        senderAvatar = JsonRead.strOf(senderAt, 'profile_pic_url');
+        if (senderAvatar.length === 0) {
+          const pic: Record<string, Object> | null = JsonRead.recordOf(senderAt, 'hd_profile_pic_url_info');
+          if (pic !== null) {
+            senderAvatar = JsonRead.strOf(pic, 'url');
+          }
+        }
+      }
+    }
     const micros: number = JsonRead.numOf(item, 'timestamp');
     const shareCode: string = DirectMapper.shareCodeOf(item);
     const shareUrl: string = DirectMapper.shareUrlOf(item);
@@ -1211,7 +1246,7 @@ export class DirectMapper {
       tsMs, kind, text, mediaUrl,
       DirectMapper.hasVideoMedia(item), shareCode, shareUrl, shareVideo,
       card.kind, card.cover, card.user, card.avatar, card.caption,
-      card.playable);
+      card.playable, senderName, senderAvatar);
   }
 
   /**
