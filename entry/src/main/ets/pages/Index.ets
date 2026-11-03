@@ -8529,11 +8529,25 @@ struct Index {
       }
     };
     if (PlatformCap.hasHdsMaterial()) {
-      // 沉浸光感：材质类型交给系统按环境自适应，档位跟设定页那一档（和底部悬浮栏同源）。
+      // 沉浸光感：浅色下材质档位压柔一档，避免标题栏蒙版白得发死。
       style.systemMaterialEffect = {
         materialType: immersiveMaterialType(),
-        materialLevel: immersiveLevel(this.materialLevel)
+        materialLevel: this.isDarkUi
+          ? immersiveLevel(this.materialLevel)
+          : hdsMaterial.MaterialLevel.GENTLE
       };
+    }
+    if (!this.isDarkUi) {
+      // 浅色蒙版：半透明白 + 更短的延伸 + 更大模糊，减轻整块死白。
+      const lightMask: HdsNavigationTitleBarStyle = {
+        backgroundStyle: {
+          backgroundColor: '#CCFFFFFF',
+          maskExtraHeight: 24,
+          blurRadius: 64
+        }
+      };
+      style.originalStyle = lightMask;
+      style.scrollEffectStyle = lightMask;
     }
     return style;
   }
@@ -8550,8 +8564,21 @@ struct Index {
     if (PlatformCap.hasHdsMaterial()) {
       style.systemMaterialEffect = {
         materialType: immersiveMaterialType(),
-        materialLevel: immersiveLevel(this.materialLevel)
+        materialLevel: this.isDarkUi
+          ? immersiveLevel(this.materialLevel)
+          : hdsMaterial.MaterialLevel.GENTLE
       };
+    }
+    if (!this.isDarkUi) {
+      const lightMask: HdsNavigationTitleBarStyle = {
+        backgroundStyle: {
+          backgroundColor: '#CCFFFFFF',
+          maskExtraHeight: 24,
+          blurRadius: 64
+        }
+      };
+      style.originalStyle = lightMask;
+      style.scrollEffectStyle = lightMask;
     }
     return style;
   }
