@@ -885,6 +885,8 @@ export struct MaterialChipButton {
   @Prop trailing: Resource | null = null;
   @Prop fontSize: number = 12;
   @Prop chipHeight: number = 28;
+  /** 展开态要跟 tabbar 同宽时传侧边栏条目宽度（0 = 按内容自适应）。 */
+  @Prop chipWidth: number = 0;
   @Prop iconSize: number = 12;
   @Prop tint: string = '';
   /** 是否吞掉长按（见 MaterialSurface 里 swallowLongPress 的说明）。 */
@@ -935,6 +937,7 @@ export struct MaterialChipButton {
     }
     .height(this.chipHeight)
     .padding(0)
+    .constraintSize({ minWidth: this.chipWidth })
     .borderRadius(this.chipHeight / 2)
     .backgroundColor(Color.Transparent)
     .selectedColor(Color.Transparent)

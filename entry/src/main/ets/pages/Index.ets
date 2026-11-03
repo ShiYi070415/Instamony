@@ -11283,7 +11283,8 @@ struct Index {
             symbol: $r('sys.symbol.chevron_left'),
             labelRes: $r('app.string.sidebar_collapse'),
             chipHeight: this.tabletButtonSize(),
-            iconSize: Math.round(20 * this.tabletUiScale()),
+            chipWidth: this.tabletSidebarItemWidth(),
+            iconSize: Math.round(22 * this.tabletUiScale()),
             fontSize: Math.round(14 * this.tabletUiScale()),
             autoInvert: false,
             onTap: (): void => {
@@ -11385,7 +11386,8 @@ struct Index {
             symbol: $r('sys.symbol.heart'),
             labelRes: $r('app.string.notifications'),
             chipHeight: this.tabletButtonSize(),
-            iconSize: Math.round(20 * this.tabletUiScale()),
+            chipWidth: this.tabletSidebarItemWidth(),
+            iconSize: Math.round(22 * this.tabletUiScale()),
             fontSize: Math.round(14 * this.tabletUiScale()),
             autoInvert: false,
             onTap: (): void => {
@@ -11408,7 +11410,8 @@ struct Index {
             symbol: $r('sys.symbol.more'),
             labelRes: $r('app.string.action_settings'),
             chipHeight: this.tabletButtonSize(),
-            iconSize: Math.round(20 * this.tabletUiScale()),
+            chipWidth: this.tabletSidebarItemWidth(),
+            iconSize: Math.round(22 * this.tabletUiScale()),
             fontSize: Math.round(14 * this.tabletUiScale()),
             autoInvert: false,
             onTap: (): void => {
