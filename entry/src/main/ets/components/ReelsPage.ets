@@ -1997,7 +1997,7 @@ struct ReelOverlay {
         Span(this.captionLine())
           .fontColor(Color.White)
         Span(CAPTION_TAIL)
-          .fontColor('#BFBFBF')
+          .fontColor(Color.White)
       }
       .fontSize(CAPTION_FONT_SIZE)
       .lineHeight(CAPTION_LINE_HEIGHT)
@@ -3384,11 +3384,11 @@ export struct ReelsPage {
             LoadingProgress()
               .width(32)
               .height(32)
-              .color('#BFBFBF')
+              .color(Color.White)
           }
           Text(this.status.length > 0 ? this.status : $r('app.string.reels_loading'))
             .fontSize(13)
-            .fontColor('#BFBFBF')
+            .fontColor(Color.White)
             .textAlign(TextAlign.Center)
             .padding({ left: 24, right: 24 })
         }

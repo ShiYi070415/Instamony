@@ -8571,6 +8571,25 @@ struct Index {
         backgroundColor: '#00000000',
         maskExtraHeight: 0,
         blurRadius: 0
+      },
+      // Reels 页在视频上：标题、返回、菜单统一白色。
+      contentStyle: {
+        titleStyle: {
+          mainTitleColor: Color.White,
+          subTitleColor: Color.White,
+          mainTitleShadowColor: '#66000000',
+          subTitleShadowColor: '#66000000'
+        },
+        backIconStyle: {
+          backgroundColor: Color.Transparent,
+          iconColor: Color.White,
+          textColor: Color.White
+        },
+        menuStyle: {
+          backgroundColor: Color.Transparent,
+          iconColor: Color.White,
+          textColor: Color.White
+        }
       }
     };
     style.originalStyle = noMask;
