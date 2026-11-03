@@ -1952,106 +1952,6 @@ export struct StoryViewer {
        * 父层按 flipAngle 转到 180°；这一层反向转 -flipAngle，所以到背面时正好是正的。
        * 超过 90° 才显示，盖住正在转出去的前面。
        */
-      // 背面同样**常驻预渲染**：从卡片一开始就建好下一位的媒体/头像，
-      // 翻过 90° 时只切透明度，不会有"先镜像一帧再插背面"。
-      Stack({ alignContent: Alignment.TopStart }) {
-          // 黑底先铺：媒体没到时不是透明，也不会露出正面。
-          Column() {
-            LoadingProgress()
-              .width(44)
-              .height(44)
-              .color('#FFFFFF')
-          }
-          .width('100%')
-          .height('100%')
-          .justifyContent(FlexAlign.Center)
-          .backgroundColor('#000000')
-          if (this.backFirstItem() !== null
-            && (this.backFirstItem() as StoryItem).imageUrl.length > 0) {
-            Image((this.backFirstItem() as StoryItem).imageUrl)
-              .width('100%')
-              .height('100%')
-              .objectFit(ImageFit.Cover)
-          }
-          // 资讯栏不等媒体：头像/用户名先显示，进度条有数据才画。
-          Column({ space: 8 }) {
-            if (this.backReel().items.length > 0) {
-              Row({ space: 3 }) {
-                ForEach(this.backReel().items, (one: StoryItem, position: number): void => {
-                  Row()
-                    .layoutWeight(1)
-                    .height(3)
-                    .borderRadius(1.5)
-                    .backgroundColor('#E6FFFFFF')
-                })
-              }
-              .width('100%')
-            }
-            Row({ space: 8 }) {
-              if (this.backAvatar().length > 0) {
-                Image(this.backAvatar())
-                  .width(32)
-                  .height(32)
-                  .borderRadius(16)
-                  .objectFit(ImageFit.Cover)
-              }
-              Text(this.backUsername().length > 0 ? this.backUsername() : this.backReel().username)
-                .fontSize(15)
-                .fontColor(Color.White)
-                .maxLines(1)
-            }
-            .width('100%')
-          }
-          .width('100%')
-          .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-          .backgroundColor('#4D000000')
-
-          // 背面也带齐动作：静音、下载、更多。媒体没到也先显示。
-          Column() {
-            Row({ space: 8 }) {
-              MaterialIconButton({
-                symbol: this.muted ? $r('sys.symbol.speaker_slash') : $r('sys.symbol.speaker_wave_2'),
-                buttonSize: 36,
-                iconSize: 18,
-                tint: '#FFFFFF',
-                autoInvert: false,
-                onTap: (on: boolean): void => {
-                  AppSettings.setVideoMuted(!this.muted);
-                }
-              })
-              MediaDownloadButton({
-                resolveUrl: (): string => this.backDownloadUrl(),
-                ext: this.backDownloadExt(),
-                title: this.backDownloadTitle(),
-                isVideo: this.backDownloadIsVideo(),
-                buttonSize: 36,
-                iconSize: 18,
-                tint: '#FFFFFF'
-              })
-              MaterialIconButton({
-                symbol: $r('sys.symbol.sort'),
-                buttonSize: 36,
-                iconSize: 18,
-                tint: '#FFFFFF',
-                autoInvert: false,
-                onTap: (on: boolean): void => {
-                }
-              })
-            }
-          }
-          .width('100%')
-          .height('100%')
-          .justifyContent(FlexAlign.End)
-          .alignItems(HorizontalAlign.End)
-          .padding({ right: 12, bottom: 12 })
-        }
-        .backgroundColor(Color.Black)
-        .width('100%')
-        .height('100%')
-        // 抵消父层的翻面角度：父 180° 时这一层回到正面。
-        .rotate({ x: 0, y: 1, z: 0, angle: -this.flipAngle })
-        .opacity(this.flipAngle > 90 ? 1 : 0)
-        .hitTestBehavior(HitTestMode.None)
     }
     .width('100%')
     // 媒体区固定高度（圆角卡片的那块"底"），进度条 / 资讯栏都浮在它上面。
@@ -2068,6 +1968,116 @@ export struct StoryViewer {
    * 设定），所以厚度跟着设定页走。`autoInvert: false` + 固定白图标：这一页底色永远是黑的，
    * 不能让图标跟着"材质反色"飘。
    */
+  /**
+   * 卡片背面：**不跟着卡片做 3D 旋转**，而是作为同位置的一层盖在旋转卡片上面。
+   *
+   * 之前把背面塞进旋转的卡片里再反向旋转，3D 合成下会整层不显示（用户看到的一直是正面）；
+   * 放到外层后，翻过 90° 只切这一层的透明度，稳定可见，也不会出现正面镜像。
+   */
+  @Builder
+  backCardFace() {
+    Stack({ alignContent: Alignment.TopStart }) {
+      // 黑底 + 加载图标：媒体没到也能先显示完整背面。
+      Column() {
+        LoadingProgress()
+          .width(44)
+          .height(44)
+          .color('#FFFFFF')
+      }
+      .width('100%')
+      .height('100%')
+      .justifyContent(FlexAlign.Center)
+      .backgroundColor('#000000')
+      if (this.backFirstItem() !== null
+        && (this.backFirstItem() as StoryItem).imageUrl.length > 0) {
+        Image((this.backFirstItem() as StoryItem).imageUrl)
+          .width('100%')
+          .height('100%')
+          .objectFit(ImageFit.Cover)
+      }
+      // 资讯栏不依赖媒体。
+      Column({ space: 8 }) {
+        if (this.backReel().items.length > 0) {
+          Row({ space: 3 }) {
+            ForEach(this.backReel().items, (one: StoryItem, position: number): void => {
+              Row()
+                .layoutWeight(1)
+                .height(3)
+                .borderRadius(1.5)
+                .backgroundColor('#E6FFFFFF')
+            })
+          }
+          .width('100%')
+        }
+        Row({ space: 8 }) {
+          if (this.backAvatar().length > 0) {
+            Image(this.backAvatar())
+              .width(32)
+              .height(32)
+              .borderRadius(16)
+              .objectFit(ImageFit.Cover)
+          }
+          Text(this.backUsername().length > 0 ? this.backUsername() : this.backReel().username)
+            .fontSize(15)
+            .fontColor(Color.White)
+            .maxLines(1)
+        }
+        .width('100%')
+      }
+      .width('100%')
+      .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+      .backgroundColor('#4D000000')
+
+      Column() {
+        Row({ space: 8 }) {
+          MaterialIconButton({
+            symbol: this.muted ? $r('sys.symbol.speaker_slash') : $r('sys.symbol.speaker_wave_2'),
+            buttonSize: 36,
+            iconSize: 18,
+            tint: '#FFFFFF',
+            autoInvert: false,
+            onTap: (on: boolean): void => {
+              AppSettings.setVideoMuted(!this.muted);
+            }
+          })
+          MediaDownloadButton({
+            resolveUrl: (): string => this.backDownloadUrl(),
+            ext: this.backDownloadExt(),
+            title: this.backDownloadTitle(),
+            isVideo: this.backDownloadIsVideo(),
+            buttonSize: 36,
+            iconSize: 18,
+            tint: '#FFFFFF'
+          })
+          MaterialIconButton({
+            symbol: $r('sys.symbol.sort'),
+            buttonSize: 36,
+            iconSize: 18,
+            tint: '#FFFFFF',
+            autoInvert: false,
+            onTap: (on: boolean): void => {
+            }
+          })
+        }
+      }
+      .width('100%')
+      .height('100%')
+      .justifyContent(FlexAlign.End)
+      .alignItems(HorizontalAlign.End)
+      .padding({ right: 12, bottom: 12 })
+    }
+    .width(this.cardW())
+    .height(this.mediaH())
+    .position({ x: this.cardX(), y: this.cardY() })
+    .borderRadius(CARD_RADIUS_VP)
+    .clip(true)
+    .backgroundColor(Color.Black)
+    .opacity(this.flipAngle > 90 ? 1 : 0)
+    .translate({ y: this.dragY })
+    .scale({ x: this.exitScale, y: this.exitScale })
+    .hitTestBehavior(HitTestMode.None)
+  }
+
   @Builder
   actionButton(symbol: Resource, kind: string, isOn: boolean) {
     MaterialIconButton({
@@ -2224,6 +2234,7 @@ export struct StoryViewer {
             this.swipeRelease(event.offsetX);
           })
       )
+      this.backCardFace()
       }
       .width('100%')
       .height(this.clipH > 0 ? this.clipH : this.overlayH)
