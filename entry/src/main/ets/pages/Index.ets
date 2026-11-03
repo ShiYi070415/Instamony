@@ -1527,6 +1527,8 @@ struct Index {
    * 标题栏样式才会跟着换（不然要等下一次别的重建）。
    */
   @StorageProp(SETTING_DARK_UI) @Watch('onThemeChanged') isDarkUi: boolean = true;
+  /** 系统本身的深浅（Reels 强制深色时 isDarkUi 会变，拿它判断右栏是否该浅色）。 */
+  @State private systemDarkUi: boolean = false;
   /**
    * 搜索框**收起来了没有**（需求："上滑搜索框收缩成按钮到右上角，点击或者回到顶部时才展开"）。
    *
@@ -1545,6 +1547,9 @@ struct Index {
    * syncReelsColorMode 里会自然什么都不做；两边都不会来回抖（它只在需要时改一次配置）。
    */
   private onThemeChanged(): void {
+    if (!this.reelsDarkForced) {
+      this.systemDarkUi = this.isDarkUi;
+    }
     this.syncReelsColorMode();
   }
   /**
@@ -2373,6 +2378,7 @@ struct Index {
   }
 
   aboutToAppear(): void {
+    this.systemDarkUi = this.isDarkUi;
     // ---- 材质能力诊断（放在最前面：后面任何一步抛异常都不会把它挡掉）----
     // 标题栏背板一直是一块偏黑的板子、看不到"渐变模糊"：官方 FAQ 说材质的**模糊/折射**
     // （materialFilter）只在**高/中算力**设备上渲染，低算力设备只保留背景色/边框/阴影。
@@ -8595,6 +8601,7 @@ struct Index {
   /** 当前左栏是 Reels、右栏开的是别的页面：右栏要用浅色。 */
   private rightPaneNeedsLight(): boolean {
     return this.tabletHomeScoped()
+      && !this.systemDarkUi
       && this.currentTab() === AppTab.Reels
       && !this.reelsInRightPane();
   }
