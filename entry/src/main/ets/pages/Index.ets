@@ -1607,6 +1607,10 @@ struct Index {
   /** 信息层底部留白：有输入条时贴它上沿 +10vp；评论面板打开时（页面输入条隐藏）回默认。 */
   /** Reels 全屏铺到侧边栏下面：侧边栏改为浮层，不占内容宽度。 */
   private reelsFullBleed(): boolean {
+    // 设置页压在左栏 Reels 上时，设置页要正常留白避让侧边栏，不能继续全屏铺。
+    if (this.topPage === SETTINGS_PAGE || this.topPage === SETTINGS_DETAIL_PAGE) {
+      return false;
+    }
     // 右栏 Reels 时左页仍要按侧边栏宽度整体让位，不能再全屏铺过去。
     return this.tabletWideShell() && this.reelsBackdropActive()
       && !this.reelsInRightPane();
