@@ -8600,8 +8600,13 @@ struct Index {
 
   /** 当前左栏是 Reels、右栏开的是别的页面：右栏要用浅色。 */
   private rightPaneNeedsLight(): boolean {
+    /*
+     * 系统深色时 isDarkUi=true 且不是我们强制的（reelsDarkForced=false）；
+     * 系统浅色进 Reels 时 isDarkUi=true，但 reelsDarkForced=true —— 这两种要分开。
+     */
+    const systemDark: boolean = this.isDarkUi && !this.reelsDarkForced;
     return this.tabletHomeScoped()
-      && !this.systemDarkUi
+      && !systemDark
       && this.currentTab() === AppTab.Reels
       && !this.reelsInRightPane();
   }
