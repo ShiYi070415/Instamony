@@ -169,7 +169,7 @@ const FLIP_IN_MS: number = 360;
  * 不用 90：那样卡片会完全侧对屏幕看不见 —— 命中不了缓存时要等网络（半秒上下），
  * 中间那段就是全黑。45 是"看得出在翻面、但不夸张"的量（用户反馈 75 太猛）。
  */
-const FLIP_MAX_ANGLE: number = 45;
+const FLIP_MAX_ANGLE: number = 180;
 /** 左右滑切换用户的最小位移（vp）。 */
 const SWIPE_SWITCH_VP: number = 60;
 // ---------------------------------------------------------------- 头像不在屏幕时的收起
@@ -467,6 +467,10 @@ export struct StoryViewer {
    * 它是叠在**几何**上的额外变换：静止时是 0，所以完全不影响卡片/头像的落点。
    */
   @State private flipAngle: number = 0;
+  /** 翻出去（0→180°）已经播完：此时数据没到就显示黑底加载图标。 */
+  @State private flipOutDone: boolean = false;
+  /** 数据已经提前到了，等翻页动画播完再显示。 */
+  private pendingReveal: boolean = false;
   /** 这一次翻的方向（+1 = 接下一位，-1 = 回上一位），翻回来时用它的反方向。 */
   private flipDir: number = 1;
   /** 正在翻卡片（翻出去的动画已经起了，等新数据回来翻回来）。 */
@@ -582,11 +586,23 @@ export struct StoryViewer {
       return;
     }
     this.switching = true;
+    this.flipOutDone = false;
+    this.pendingReveal = false;
     this.flipDir = dir;
     this.flipAt = Date.now();
     // 角度取**反方向**：接下一位是往左翻、回上一位往右翻（用户反馈原来的方向是反的）。
     // 从**当前角度**接着转（跟手拖到一半松手时就是从这里继续），不是从 0 重来。
-    animateTo({ duration: FLIP_OUT_MS, curve: Curve.Friction }, (): void => {
+    animateTo({
+      duration: FLIP_OUT_MS,
+      curve: Curve.Friction,
+      onFinish: (): void => {
+        this.flipOutDone = true;
+        // 数据如果已经提前到了，等动画播满再显示，避免动画被压成一帧。
+        if (this.pendingReveal) {
+          this.revealNext();
+        }
+      }
+    }, (): void => {
       this.applyFlip(-dir * FLIP_MAX_ANGLE);
     });
   }
@@ -601,33 +617,19 @@ export struct StoryViewer {
     if (!this.switching) {
       return;
     }
-    this.switching = false;
-    const waited: number = Date.now() - this.flipAt;
-    const delay: number = FLIP_OUT_MS - waited;
-    if (this.flipInTimer >= 0) {
-      clearTimeout(this.flipInTimer);
-      this.flipInTimer = -1;
+    // 翻页动画不跟数据加载挂钩：数据到了只登记，等 0→180° 自己播完再显示。
+    this.pendingReveal = true;
+    if (this.flipOutDone) {
+      this.revealNext();
     }
-    if (delay > 0) {
-      this.flipInTimer = setTimeout((): void => {
-        this.flipInTimer = -1;
-        this.animateFlipIn();
-      }, delay);
-      return;
-    }
-    this.animateFlipIn();
   }
 
-  private animateFlipIn(): void {
-    // 先"瞬移"到另一面（这一刻卡片是侧对着的，看不出跳变），再翻回 0。
-    this.applyFlip(this.flipDir * FLIP_MAX_ANGLE);
-    animateTo({
-      duration: FLIP_IN_MS,
-      // 阻尼调大一点（0.68 → 0.82）：回弹别那么"猛"（用户反馈）。
-      curve: curves.springMotion(0.45, 0.82)
-    }, (): void => {
-      this.applyFlip(0);
-    });
+  /** 动画已经完整播完（或数据提前到了等它播完）：直接显示下一张的正面。 */
+  private revealNext(): void {
+    this.switching = false;
+    this.pendingReveal = false;
+    this.flipOutDone = false;
+    this.applyFlip(0);
   }
 
   // ---------------------------------------------------------------- 翻卡片
@@ -700,6 +702,8 @@ export struct StoryViewer {
       this.flipInTimer = -1;
     }
     this.switching = false;
+    this.pendingReveal = false;
+    this.flipOutDone = false;
     this.applyFlip(0);
   }
 
@@ -1835,6 +1839,24 @@ export struct StoryViewer {
       .padding({ right: STORY_MUTE_INSET_VP, bottom: STORY_MUTE_INSET_VP })
       // 只吃自己那颗按钮的点击，其余空白让给下面的翻页层
       .hitTestBehavior(HitTestMode.Transparent)
+
+      /*
+       * 翻页动画已经完整播完（0→180°），但下一位的数据还没到：
+       * 黑屏 + 居中加载图标。动画不再等数据，所以不会卡在 45°。
+       */
+      if (this.switching && this.flipOutDone) {
+        Column() {
+          LoadingProgress()
+            .width(44)
+            .height(44)
+            .color('#FFFFFF')
+        }
+        .width('100%')
+        .height('100%')
+        .justifyContent(FlexAlign.Center)
+        .backgroundColor('#000000')
+        .hitTestBehavior(HitTestMode.Block)
+      }
     }
     .width('100%')
     // 媒体区固定高度（圆角卡片的那块"底"），进度条 / 资讯栏都浮在它上面。

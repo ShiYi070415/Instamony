@@ -39,6 +39,7 @@ import { ReelsSeen } from '../core/ReelsSeen';
 import { ShareProbe } from '../core/ShareProbe';
 // 快拍托盘的落盘缓存（冷启动先画上次那排头像，见 core/TrayCache）。
 import { TrayCache } from '../core/TrayCache';
+import { StoryCache } from '../core/StoryCache';
 import { RepostState } from '../core/RepostState';
 import { NetworkState } from '../core/NetworkState';
 import { PlatformCap } from '../core/PlatformCap';
@@ -271,6 +272,8 @@ export default class EntryAbility extends UIAbility {
        * （用户报的"快拍列表冷启动渲染的很慢"就是它）。
        */
       TrayCache.init(this.context);
+      // 快拍内容的 24 小时落盘缓存（见 core/StoryCache）。
+      StoryCache.init(this.context);
       /*
        * 「这条我转过没有」的本机台账（见 core/RepostState）。
        *

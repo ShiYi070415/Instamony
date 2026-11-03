@@ -16,6 +16,9 @@
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { preferences } from '@kit.ArkData';
+import { common } from '@kit.AbilityKit';
+import { AccountScope } from './AccountScope';
 import { NativeStories } from './NativeStories';
 import { ApiThrottle } from './ApiThrottle';
 import { MediaPrefetch } from './MediaPrefetch';
@@ -27,6 +30,37 @@ const TAG: string = 'StoryCache';
 const DEPTH: number = 8;
 /** 只预下载每位用户第一条的封面，不再替后面的 story 白下流量。 */
 const PREFETCH_ITEMS: number = 1;
+/** 快拍数据落盘缓存：24 小时（用户要求"复用率高"）。 */
+const STORE: string = 'instarmony_story_reels';
+const KEY: string = 'reels_v1';
+const FORMAT: number = 1;
+const MAX_AGE_MS: number = 24 * 60 * 60 * 1000;
+/** 最多保留多少位用户的 reel（防止一直涨）。 */
+const MAX_ENTRIES: number = 24;
+
+/** 落盘的一条媒体（字段名压短，省空间）。 */
+interface StoredStoryItem {
+  i?: string;
+  u?: string;
+  v?: string;
+  t?: number;
+  d?: number;
+  w?: number;
+  h?: number;
+}
+
+interface StoredStoryPage {
+  at?: number;
+  uid?: string;
+  un?: string;
+  av?: string;
+  items?: Array<StoredStoryItem>;
+}
+
+interface StoredStoryMap {
+  v?: number;
+  pages?: Record<string, StoredStoryPage>;
+}
 
 /** 排队等闸门的一个请求。 */
 class InflightPage {
@@ -69,6 +103,22 @@ export class StoryCache {
    * `loading`**（否则 `loading` 会虚高到 `≥DEPTH`，`fill()` 的条件永久为假，预缓存静默停摆）。
    */
   private static generation: number = 0;
+  /** 24 小时落盘缓存的 preferences 文件（EntryAbility 启动时打开）。 */
+  private static store: preferences.Preferences | null = null;
+
+  /** 打开 24 小时快拍缓存文件（幂等）。 */
+  static init(context: common.Context): void {
+    if (StoryCache.store !== null) {
+      return;
+    }
+    try {
+      StoryCache.store = preferences.getPreferencesSync(context, { name: STORE });
+      AccountScope.register(StoryCache.store, [KEY]);
+      hilog.info(DOMAIN, TAG, '24h cache store opened');
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'open 24h cache failed: %{public}s', (error as Error).message);
+    }
+  }
 
   /**
    * 保证"从第 `from` 位开始"的若干页都在队列里（托盘**可见范围**变化时调它）。
@@ -190,7 +240,109 @@ export class StoryCache {
         return true;
       }
     }
-    return false;
+    return StoryCache.diskPage(userId) !== null;
+  }
+
+  /** 读整份 24h 缓存（失效条目顺手剔除）。 */
+  private static readMap(): StoredStoryMap {
+    const store: preferences.Preferences | null = StoryCache.store;
+    if (store === null) {
+      return { v: FORMAT, pages: {} };
+    }
+    try {
+      const text: string = store.getSync(AccountScope.slot(KEY), '') as string;
+      if (text.length === 0) {
+        return { v: FORMAT, pages: {} };
+      }
+      const dto: StoredStoryMap = JSON.parse(text) as StoredStoryMap;
+      if ((dto.v ?? 0) !== FORMAT || dto.pages === undefined) {
+        return { v: FORMAT, pages: {} };
+      }
+      const now: number = Date.now();
+      const pages: Record<string, StoredStoryPage> = dto.pages;
+      const keys: Array<string> = Object.keys(pages);
+      const kept: Record<string, StoredStoryPage> = {};
+      for (let index: number = 0; index < keys.length; index++) {
+        const one: StoredStoryPage | undefined = pages[keys[index]];
+        if (one !== undefined && now - (one.at ?? 0) <= MAX_AGE_MS) {
+          kept[keys[index]] = one;
+        }
+      }
+      return { v: FORMAT, pages: kept };
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'read 24h cache failed: %{public}s', (error as Error).message);
+      return { v: FORMAT, pages: {} };
+    }
+  }
+
+  /** 某位用户 24h 内缓存的那一页（没有/过期给 null）。 */
+  private static diskPage(userId: string): StoredStoryPage | null {
+    const map: StoredStoryMap = StoryCache.readMap();
+    const pages: Record<string, StoredStoryPage> | undefined = map.pages;
+    if (pages === undefined) {
+      return null;
+    }
+    const page: StoredStoryPage | undefined = pages[userId];
+    if (page === undefined || Date.now() - (page.at ?? 0) > MAX_AGE_MS) {
+      return null;
+    }
+    return page;
+  }
+
+  /** 把一页写进 24h 缓存（按用户覆盖；超过上限丢最旧的）。 */
+  private static saveToDisk(reel: StoryReel): void {
+    const store: preferences.Preferences | null = StoryCache.store;
+    if (store === null || reel.userId.length === 0 || reel.items.length === 0) {
+      return;
+    }
+    try {
+      const map: StoredStoryMap = StoryCache.readMap();
+      const pages: Record<string, StoredStoryPage> = map.pages !== undefined ? map.pages : {};
+      const items: Array<StoredStoryItem> = [];
+      for (let index: number = 0; index < reel.items.length; index++) {
+        const item: StoryItem = reel.items[index];
+        items.push({
+          i: item.id, u: item.imageUrl, v: item.videoUrl, t: item.takenAt,
+          d: item.durationMs, w: item.width, h: item.height
+        });
+      }
+      pages[reel.userId] = {
+        at: Date.now(), uid: reel.userId, un: reel.username, av: reel.avatarUrl, items: items
+      };
+      const keys: Array<string> = Object.keys(pages);
+      keys.sort((a: string, b: string): number => {
+        return (pages[b].at ?? 0) - (pages[a].at ?? 0);
+      });
+      const kept: Record<string, StoredStoryPage> = {};
+      for (let index: number = 0; index < keys.length && index < MAX_ENTRIES; index++) {
+        kept[keys[index]] = pages[keys[index]];
+      }
+      store.putSync(AccountScope.slot(KEY), JSON.stringify({ v: FORMAT, pages: kept }));
+      store.flushSync();
+      hilog.info(DOMAIN, TAG, '24h saved uid=%{public}s n=%{public}d', reel.userId, reel.items.length);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'save 24h cache failed: %{public}s', (error as Error).message);
+    }
+  }
+
+  /** 24h 缓存 → StoryReel（图片/视频地址过期时由 Image 自己失败，不影响翻页）。 */
+  private static loadFromDisk(userId: string): StoryReel | null {
+    const page: StoredStoryPage | null = StoryCache.diskPage(userId);
+    if (page === null) {
+      return null;
+    }
+    const raw: Array<StoredStoryItem> = page.items ?? [];
+    const items: Array<StoryItem> = [];
+    for (let index: number = 0; index < raw.length; index++) {
+      const one: StoredStoryItem = raw[index];
+      items.push(new StoryItem(one.i ?? '', one.u ?? '', one.v ?? '', one.t ?? 0,
+        one.d ?? 5000, one.w ?? 0, one.h ?? 0));
+    }
+    if (items.length === 0) {
+      return null;
+    }
+    hilog.info(DOMAIN, TAG, '24h hit uid=%{public}s n=%{public}d', userId, items.length);
+    return new StoryReel(page.uid ?? userId, page.un ?? '', page.av ?? '', items);
   }
 
   private static inQueue(userId: string): boolean {
@@ -212,6 +364,12 @@ export class StoryCache {
         StoryCache.fill();
         return page;
       }
+    }
+    const disk: StoryReel | null = StoryCache.loadFromDisk(userId);
+    if (disk !== null) {
+      StoryCache.warmMedia(disk);
+      StoryCache.fill();
+      return disk;
     }
     hilog.info(DOMAIN, TAG, 'take miss uid=%{public}s cached=%{public}d',
       userId, StoryCache.pages.length);
@@ -237,6 +395,7 @@ export class StoryCache {
       ApiThrottle.interactive());
     if (reel !== null) {
       StoryCache.warmMedia(reel);
+      StoryCache.saveToDisk(reel);
     }
     StoryCache.fill();
     return reel;
@@ -286,6 +445,7 @@ export class StoryCache {
       if (reel !== null && reel.items.length > 0) {
         StoryCache.pages.push(reel);
         StoryCache.warmMedia(reel);
+        StoryCache.saveToDisk(reel);
         hilog.info(DOMAIN, TAG, 'cached uid=%{public}s n=%{public}d pages=%{public}d',
           userId, reel.items.length, StoryCache.pages.length);
       } else {
