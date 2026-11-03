@@ -482,6 +482,9 @@ export struct StoryViewer {
   /** 翻页期间到达、等动画播完后再应用的新 reel。 */
   private pendingReel: StoryReel | null = null;
   @State private flipAngle: number = 0;
+  /** 卡片两面各自的可视度：不依赖翻页角度条件，拖动/动画中都能逐帧更新。 */
+  @State private frontAlpha: number = 1;
+  @State private backAlpha: number = 0;
   /** 翻出去（0→180°）已经播完：此时数据没到就显示黑底加载图标。 */
   @State private flipOutDone: boolean = false;
   /** 数据已经提前到了，等翻页动画播完再显示。 */
@@ -621,6 +624,10 @@ export struct StoryViewer {
     this.pendingReveal = false;
     this.flipDir = dir;
     this.flipAt = Date.now();
+    this.getUIContext().animateTo({ duration: 120, curve: Curve.EaseOut }, (): void => {
+      this.frontAlpha = 0;
+      this.backAlpha = 1;
+    });
     if (this.flipOutTimer >= 0) {
       clearTimeout(this.flipOutTimer);
       this.flipOutTimer = -1;
@@ -686,6 +693,8 @@ export struct StoryViewer {
     this.switching = false;
     this.pendingReveal = false;
     this.flipOutDone = false;
+    this.frontAlpha = 1;
+    this.backAlpha = 0;
     this.applyFlip(0);
   }
 
@@ -699,6 +708,14 @@ export struct StoryViewer {
    */
   private applyFlip(angle: number): void {
     this.flipAngle = angle;
+  }
+
+  /** 0~180 的翻转进度：45°~90° 交叉淡出，90° 后只看背面。 */
+  private syncFaceVisibility(): void {
+    const abs: number = Math.min(180, Math.abs(this.flipAngle));
+    const t: number = Math.max(0, Math.min(1, (abs - 45) / 45));
+    this.frontAlpha = 1 - t;
+    this.backAlpha = t;
   }
 
   // ---------------------------------------------------------------- 左右滑：跟手翻页
@@ -721,6 +738,7 @@ export struct StoryViewer {
     const ratio: number = Math.max(-1, Math.min(1, offsetX / width));
     // 跟手是**逐帧直接赋值**（不套 animateTo），所以三个量在这里一起写（见 applyFlip）。
     this.applyFlip(ratio * FLIP_MAX_ANGLE);
+    this.syncFaceVisibility();
   }
 
   /**
@@ -740,6 +758,8 @@ export struct StoryViewer {
       // 没拉够 / 那个方向没人：弹回原面（阻尼大一点，别弹得那么猛）。
       animateTo({ duration: 240, curve: curves.springMotion(0.45, 0.85) }, (): void => {
         this.applyFlip(0);
+        this.frontAlpha = 1;
+        this.backAlpha = 0;
       });
       return;
     }
@@ -765,6 +785,8 @@ export struct StoryViewer {
     this.switching = false;
     this.pendingReveal = false;
     this.flipOutDone = false;
+    this.frontAlpha = 1;
+    this.backAlpha = 0;
     this.applyFlip(0);
   }
 
@@ -2134,7 +2156,7 @@ export struct StoryViewer {
     // 卡片 2 与卡片 1 背对背：按本次旋转方向预转 ±180°，
     // 这样父层 90°→180° 的过程中它从侧面逐渐转正，而不是等最后才出现。
     .rotate({ x: 0, y: 1, z: 0, angle: this.flipAngle > 0 ? -180 : 180 })
-    .opacity(this.flipAngle > 90 ? 1 : 0)
+    .opacity(this.backAlpha)
     .enabled(false)
     .hitTestBehavior(HitTestMode.None)
   }
@@ -2215,8 +2237,8 @@ export struct StoryViewer {
           }
           .width('100%')
           .height('100%')
-          .opacity(this.flipAngle > 90 ? 0 : this.contentAlpha)
-          .enabled(this.flipAngle <= 90)
+          .opacity(this.frontAlpha * this.contentAlpha)
+          .enabled(this.frontAlpha > 0.5)
         }
 
         /*
@@ -2243,8 +2265,8 @@ export struct StoryViewer {
           .objectFit(ImageFit.Cover)
           .draggable(false)
           .backgroundColor('#333333')
-          .opacity(this.flipAngle > 90 ? 0 : 1)
-          .enabled(this.flipAngle <= 90)
+          .opacity(this.frontAlpha)
+          .enabled(this.frontAlpha > 0.5)
           // 收起动画还在播的时候点头像 = 掉头重新展开（需求）。
           .onClick((): void => {
             if (this.closing) {
