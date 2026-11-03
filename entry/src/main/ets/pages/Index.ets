@@ -7352,6 +7352,13 @@ struct Index {
     return Math.round(14 * this.tabletUiScale());
   }
 
+  /** 侧边栏宽度变化用线性动画。 */
+  private toggleTabletSidebar(expand: boolean): void {
+    this.getUIContext().animateTo({ duration: 240, curve: Curve.Linear }, (): void => {
+      this.tabletSidebarExpanded = expand;
+    });
+  }
+
   /** 侧边栏之外的可用宽度。 */
   private contentAreaWidth(): number {
     const total: number = this.shellWidthVp > 0 ? this.shellWidthVp : this.screenWidthVp;
@@ -11283,40 +11290,20 @@ struct Index {
   tabletSidebar() {
     Column() {
       Row() {
-        if (this.tabletSidebarExpanded) {
-          MaterialChipButton({
-            symbol: $r('sys.symbol.chevron_left'),
-            labelRes: $r('app.string.sidebar_collapse'),
-            chipHeight: this.tabletButtonSize(),
-            chipWidth: this.tabletSidebarItemWidth(),
-            iconSlotWidth: this.tabletButtonSize(),
-            iconSize: Math.round(22 * this.tabletUiScale()),
-            fontSize: Math.round(14 * this.tabletUiScale()),
-            autoInvert: false,
-            onTap: (): void => {
-              this.getUIContext().animateTo({
-                duration: 260,
-                curve: curves.springMotion(0.42, 0.86)
-              }, (): void => {
-                this.tabletSidebarExpanded = false;
-              });
-            }
-          })
-        } else {
-          MaterialIconButton({
-            symbol: $r('sys.symbol.chevron_right'),
-            buttonSize: this.tabletButtonSize(),
-            iconSize: Math.round(22 * this.tabletUiScale()),
-            onTap: (on: boolean): void => {
-              this.getUIContext().animateTo({
-                duration: 260,
-                curve: curves.springMotion(0.42, 0.86)
-              }, (): void => {
-                this.tabletSidebarExpanded = true;
-              });
-            }
-          })
-        }
+        MaterialChipButton({
+          symbol: this.tabletSidebarExpanded ? $r('sys.symbol.chevron_left') : $r('sys.symbol.chevron_right'),
+          labelRes: $r('app.string.sidebar_collapse'),
+          labelVisible: this.tabletSidebarExpanded,
+          chipHeight: this.tabletButtonSize(),
+          chipWidth: this.tabletSidebarItemWidth(),
+          iconSlotWidth: this.tabletButtonSize(),
+          iconSize: Math.round(22 * this.tabletUiScale()),
+          fontSize: Math.round(14 * this.tabletUiScale()),
+          autoInvert: false,
+          onTap: (): void => {
+            this.toggleTabletSidebar(!this.tabletSidebarExpanded);
+          }
+        })
       }
       .width('100%')
       .height(this.tabletButtonSize() + 8)
@@ -11391,55 +11378,35 @@ struct Index {
       Blank()
 
       Column({ space: Math.round(8 * this.tabletUiScale()) }) {
-        if (this.tabletSidebarExpanded) {
-          MaterialChipButton({
-            symbol: $r('sys.symbol.heart'),
-            labelRes: $r('app.string.notifications'),
-            chipHeight: this.tabletButtonSize(),
-            chipWidth: this.tabletSidebarItemWidth(),
-            iconSlotWidth: this.tabletButtonSize(),
-            iconSize: Math.round(22 * this.tabletUiScale()),
-            fontSize: Math.round(14 * this.tabletUiScale()),
-            autoInvert: false,
-            onTap: (): void => {
-              this.openNotifications();
-            }
-          })
-        } else {
-          MaterialIconButton({
-            symbol: $r('sys.symbol.heart'),
-            buttonSize: this.tabletButtonSize(),
-            iconSize: Math.round(22 * this.tabletUiScale()),
-            onTap: (on: boolean): void => {
-              this.openNotifications();
-            }
-          })
-        }
+        MaterialChipButton({
+          symbol: $r('sys.symbol.heart'),
+          labelRes: $r('app.string.notifications'),
+          labelVisible: this.tabletSidebarExpanded,
+          chipHeight: this.tabletButtonSize(),
+          chipWidth: this.tabletSidebarItemWidth(),
+          iconSlotWidth: this.tabletButtonSize(),
+          iconSize: Math.round(22 * this.tabletUiScale()),
+          fontSize: Math.round(14 * this.tabletUiScale()),
+          autoInvert: false,
+          onTap: (): void => {
+            this.openNotifications();
+          }
+        })
 
-        if (this.tabletSidebarExpanded) {
-          MaterialChipButton({
-            symbol: $r('sys.symbol.more'),
-            labelRes: $r('app.string.action_settings'),
-            chipHeight: this.tabletButtonSize(),
-            chipWidth: this.tabletSidebarItemWidth(),
-            iconSlotWidth: this.tabletButtonSize(),
-            iconSize: Math.round(22 * this.tabletUiScale()),
-            fontSize: Math.round(14 * this.tabletUiScale()),
-            autoInvert: false,
-            onTap: (): void => {
-              this.openSettings();
-            }
-          })
-        } else {
-          MaterialIconButton({
-            symbol: $r('sys.symbol.more'),
-            buttonSize: this.tabletButtonSize(),
-            iconSize: Math.round(22 * this.tabletUiScale()),
-            onTap: (on: boolean): void => {
-              this.openSettings();
-            }
-          })
-        }
+        MaterialChipButton({
+          symbol: $r('sys.symbol.more'),
+          labelRes: $r('app.string.action_settings'),
+          labelVisible: this.tabletSidebarExpanded,
+          chipHeight: this.tabletButtonSize(),
+          chipWidth: this.tabletSidebarItemWidth(),
+          iconSlotWidth: this.tabletButtonSize(),
+          iconSize: Math.round(22 * this.tabletUiScale()),
+          fontSize: Math.round(14 * this.tabletUiScale()),
+          autoInvert: false,
+          onTap: (): void => {
+            this.openSettings();
+          }
+        })
       }
       .width('100%')
       .padding({ left: this.tabletSidebarGutter(), bottom: Math.round(16 * this.tabletUiScale()) })

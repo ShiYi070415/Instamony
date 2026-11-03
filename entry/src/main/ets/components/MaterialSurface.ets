@@ -889,6 +889,8 @@ export struct MaterialChipButton {
   @Prop chipWidth: number = 0;
   /** 图标固定槽宽（侧边栏展开时用：图标位置不动，文字往右长）。0 = 旧行为。 */
   @Prop iconSlotWidth: number = 0;
+  /** 是否显示文字（侧边栏收起时只留图标）。 */
+  @Prop labelVisible: boolean = true;
   @Prop iconSize: number = 12;
   @Prop tint: string = '';
   /** 是否吞掉长按（见 MaterialSurface 里 swallowLongPress 的说明）。 */
@@ -932,13 +934,18 @@ export struct MaterialChipButton {
               .fontColor([this.inkColor()])
           }
         }
-        Text(this.labelText.length > 0 ? this.labelText : this.labelRes)
-          .fontSize(this.fontSize)
+        if (this.labelVisible) {
+          Text(this.labelText.length > 0 ? this.labelText : this.labelRes)
+            .fontSize(this.fontSize)
           .fontWeight(FontWeight.Medium)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .fontColor(this.inkColor())
-          .constraintSize({ maxWidth: 160 })
+            .fontColor(this.inkColor())
+            .constraintSize({ maxWidth: 160 })
+            .transition(TransitionEffect.OPACITY
+              .combine(TransitionEffect.translate({ x: -6 }))
+              .animation({ duration: 160, curve: Curve.Linear }))
+        }
         if (this.trailing !== null) {
           SymbolGlyph(this.trailing)
             .fontSize(this.iconSize)
