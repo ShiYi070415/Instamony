@@ -11088,6 +11088,21 @@ struct Index {
 
   /** 打开设定页（NavDestination，见 destinationBuilder）。 */
   private openSettings(): void {
+    /*
+     * 双栏状态下打开设置：先把右栏收掉，再走整页路由 —— 设置页始终单栏。
+     * 否则 pushPage 会按"平板上新开右栏"处理，设置又进了右栏。
+     */
+    if (this.tabletWideShell() && this.tabletSplitEnabled() && this.tabletRightName.length > 0) {
+      this.tabletRightName = '';
+      this.tabletProfileParam = '';
+      this.tabletProfileStack.clear();
+      if (this.selectedIndex >= 0 && this.selectedIndex < this.tabRightNames.length) {
+        this.tabRightNames[this.selectedIndex] = '';
+        this.tabRightParams[this.selectedIndex] = '';
+      }
+      this.navStack.pushPath({ name: SETTINGS_PAGE });
+      return;
+    }
     this.pushPage(SETTINGS_PAGE);
   }
 
