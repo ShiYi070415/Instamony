@@ -20,7 +20,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 // curves：下沉收缩的补间用系统那套弹簧（springMotion，带过冲，比 EaseOut 更"弹"）。
 // uiMaterial：只用来读应用级沉浸光感开关的状态（见 aboutToAppear 的日志）。
 // display：量屏宽，底栏胶囊的左右留白按它反算。
-import { curves, display, ImmersiveMode, uiMaterial, window } from '@kit.ArkUI';
+import { curves, display, ImmersiveMode, LengthMetrics, uiMaterial, window } from '@kit.ArkUI';
 import {
   HdsAnimationMode,
   HdsNavDestination,
@@ -8694,6 +8694,11 @@ struct Index {
     return this.tabletWideShell() && this.currentTab() === AppTab.Reels;
   }
 
+  /** 左栏 Reels 的 HDS 标题栏左边距：让开浮层侧边栏。 */
+  private reelsTitleBarLeftVp(): number {
+    return this.reelsSidebarWhite() ? this.tabletSidebarWidth() : 0;
+  }
+
   /**
    * 系统那条栏换了项（Tabs 的 onChange）。
    *
@@ -11486,6 +11491,8 @@ struct Index {
       // 标题/菜单按分页取（见 shellTitleContent）：Reels 那一页的标题栏让位给分段按钮。
       content: this.shellTitleContent(),
       style: this.pageTitleStyle(),
+      // Reels 时 HDS mainTitle 也要让开左侧浮层侧边栏。
+      padding: { start: LengthMetrics.vp(this.reelsTitleBarLeftVp()) },
       // 和官方示例保持一致：两个都 false。
       // 这两个开关管的是 HDS 要不要替标题栏/内容避让系统安全区；示例一路 false，
       // 前提就是「忽略安全区之后由自己负责留白」—— 我们的留白给了列表的内容起始偏移
