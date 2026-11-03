@@ -82,7 +82,7 @@ import {
   TAB_TAP_KEYS
 } from '../core/AppSettings';
 // 沉浸光感材质：验证弹窗的外观（见 showChallengeDialog）与首页胶囊共用同一套档位。
-import { immersiveMaterial, MaterialIconButton, SurfaceModifier } from '../components/MaterialSurface';
+import { immersiveMaterial, MaterialChipButton, MaterialIconButton, SurfaceModifier } from '../components/MaterialSurface';
 // 沉浸光感的档位/类型换算（设定页里的字符串 → hdsMaterial 的枚举，含设备能力降级）。
 import { BarChromeModifier, immersiveLevel, immersiveMaterialType, titleScrollEffectType } from '../core/ImmersiveLight';
 import { PlatformCap } from '../core/PlatformCap';
@@ -11278,23 +11278,43 @@ struct Index {
   tabletSidebar() {
     Column() {
       Row() {
-        MaterialIconButton({
-          symbol: $r('sys.symbol.line_3_horizontal'),
-          buttonSize: this.tabletButtonSize(),
-          iconSize: Math.round(22 * this.tabletUiScale()),
-          onTap: (on: boolean): void => {
-            this.getUIContext().animateTo({
-              duration: 260,
-              curve: curves.springMotion(0.42, 0.86)
-            }, (): void => {
-              this.tabletSidebarExpanded = !this.tabletSidebarExpanded;
-            });
-          }
-        })
+        if (this.tabletSidebarExpanded) {
+          MaterialChipButton({
+            symbol: $r('sys.symbol.chevron_left'),
+            labelRes: $r('app.string.sidebar_collapse'),
+            chipHeight: this.tabletButtonSize(),
+            iconSize: Math.round(20 * this.tabletUiScale()),
+            fontSize: Math.round(14 * this.tabletUiScale()),
+            autoInvert: false,
+            onTap: (): void => {
+              this.getUIContext().animateTo({
+                duration: 260,
+                curve: curves.springMotion(0.42, 0.86)
+              }, (): void => {
+                this.tabletSidebarExpanded = false;
+              });
+            }
+          })
+        } else {
+          MaterialIconButton({
+            symbol: $r('sys.symbol.chevron_right'),
+            buttonSize: this.tabletButtonSize(),
+            iconSize: Math.round(22 * this.tabletUiScale()),
+            onTap: (on: boolean): void => {
+              this.getUIContext().animateTo({
+                duration: 260,
+                curve: curves.springMotion(0.42, 0.86)
+              }, (): void => {
+                this.tabletSidebarExpanded = true;
+              });
+            }
+          })
+        }
       }
-      .width('100%')
+      .width(this.tabletSidebarItemWidth())
       .height(this.tabletButtonSize() + 8)
-      .justifyContent(FlexAlign.Center)
+      .justifyContent(this.tabletSidebarExpanded ? FlexAlign.Start : FlexAlign.Center)
+      .padding({ left: this.tabletSidebarExpanded ? Math.round(4 * this.tabletUiScale()) : 0 })
 
       // 和底部悬浮栏同一种胶囊：把宽高对换后竖着放，材质直接挂在整颗胶囊上。
       Stack({ alignContent: Alignment.Center }) {
@@ -11360,7 +11380,19 @@ struct Index {
       Blank()
 
       Column({ space: Math.round(8 * this.tabletUiScale()) }) {
-        Row({ space: Math.round(12 * this.tabletUiScale()) }) {
+        if (this.tabletSidebarExpanded) {
+          MaterialChipButton({
+            symbol: $r('sys.symbol.heart'),
+            labelRes: $r('app.string.notifications'),
+            chipHeight: this.tabletButtonSize(),
+            iconSize: Math.round(20 * this.tabletUiScale()),
+            fontSize: Math.round(14 * this.tabletUiScale()),
+            autoInvert: false,
+            onTap: (): void => {
+              this.openNotifications();
+            }
+          })
+        } else {
           MaterialIconButton({
             symbol: $r('sys.symbol.heart'),
             buttonSize: this.tabletButtonSize(),
@@ -11369,24 +11401,21 @@ struct Index {
               this.openNotifications();
             }
           })
-          if (this.tabletSidebarExpanded) {
-            Text($r('app.string.notifications'))
-              .fontSize(Math.round(14 * this.tabletUiScale()))
-              .fontColor($r('app.color.primary_text'))
-              .maxLines(1)
-              .onClick((): void => {
-                this.openNotifications();
-              })
-          }
         }
-        .width(this.tabletSidebarItemWidth())
-        .justifyContent(this.tabletSidebarExpanded ? FlexAlign.Start : FlexAlign.Center)
-        .padding({
-          left: this.tabletSidebarExpanded ? Math.round(8 * this.tabletUiScale()) : 0,
-          right: this.tabletSidebarExpanded ? Math.round(12 * this.tabletUiScale()) : 0
-        })
 
-        Row({ space: Math.round(12 * this.tabletUiScale()) }) {
+        if (this.tabletSidebarExpanded) {
+          MaterialChipButton({
+            symbol: $r('sys.symbol.more'),
+            labelRes: $r('app.string.action_settings'),
+            chipHeight: this.tabletButtonSize(),
+            iconSize: Math.round(20 * this.tabletUiScale()),
+            fontSize: Math.round(14 * this.tabletUiScale()),
+            autoInvert: false,
+            onTap: (): void => {
+              this.openSettings();
+            }
+          })
+        } else {
           MaterialIconButton({
             symbol: $r('sys.symbol.more'),
             buttonSize: this.tabletButtonSize(),
@@ -11395,22 +11424,7 @@ struct Index {
               this.openSettings();
             }
           })
-          if (this.tabletSidebarExpanded) {
-            Text($r('app.string.action_settings'))
-              .fontSize(Math.round(14 * this.tabletUiScale()))
-              .fontColor($r('app.color.primary_text'))
-              .maxLines(1)
-              .onClick((): void => {
-                this.openSettings();
-              })
-          }
         }
-        .width(this.tabletSidebarItemWidth())
-        .justifyContent(this.tabletSidebarExpanded ? FlexAlign.Start : FlexAlign.Center)
-        .padding({
-          left: this.tabletSidebarExpanded ? Math.round(8 * this.tabletUiScale()) : 0,
-          right: this.tabletSidebarExpanded ? Math.round(12 * this.tabletUiScale()) : 0
-        })
       }
       .width('100%')
       .padding({ bottom: Math.round(16 * this.tabletUiScale()) })

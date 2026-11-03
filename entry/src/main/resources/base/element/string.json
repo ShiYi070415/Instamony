@@ -389,6 +389,10 @@
       "value": "设定"
     },
     {
+      "name": "sidebar_collapse",
+      "value": "收起"
+    },
+    {
       "name": "account_add",
       "value": "新增账号"
     },
