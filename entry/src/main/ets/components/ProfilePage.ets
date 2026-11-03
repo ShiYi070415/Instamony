@@ -334,6 +334,8 @@ export struct ProfilePage {
    * 段数本身从视图模型读（`vm.segmentCount()`）—— 别人主页没有"收藏"那一段，顺序也由它给。
    */
   @Prop segmentMode: string = SEGMENT_MODE_SELF;
+  /** 右栏浅色模式：不用 app 的深色资源，强制浅色文字/背景。 */
+  @Prop lightMode: boolean = false;
   /** 点一个格子：交给页面打开那条帖子。 */
   onOpen: (post: ProfilePost) => void = (post: ProfilePost): void => {
   };
@@ -704,16 +706,16 @@ export struct ProfilePage {
               .width(HIGHLIGHT_SIZE + HIGHLIGHT_RING_GAP * 2)
               .height(HIGHLIGHT_SIZE + HIGHLIGHT_RING_GAP * 2)
               .borderRadius((HIGHLIGHT_SIZE + HIGHLIGHT_RING_GAP * 2) / 2)
-              .border({ width: HIGHLIGHT_RING_W, color: $r('app.color.divider') })
+              .border({ width: HIGHLIGHT_RING_W, color: this.dividerColor() })
             SymbolGlyph($r('sys.symbol.plus'))
               .fontSize(26)
-              .fontColor([$r('app.color.primary_text')])
+              .fontColor([this.primaryTextColor()])
           }
           .width(HIGHLIGHT_SIZE + (HIGHLIGHT_RING_GAP + HIGHLIGHT_RING_W) * 2)
           .height(HIGHLIGHT_SIZE + (HIGHLIGHT_RING_GAP + HIGHLIGHT_RING_W) * 2)
           Text($r('app.string.profile_highlight_new'))
             .fontSize(11)
-            .fontColor($r('app.color.primary_text'))
+            .fontColor(this.primaryTextColor())
             .maxLines(1)
         }
           .width(HIGHLIGHT_LABEL_W)
@@ -729,21 +731,21 @@ export struct ProfilePage {
                 .width(HIGHLIGHT_SIZE + HIGHLIGHT_RING_GAP * 2)
                 .height(HIGHLIGHT_SIZE + HIGHLIGHT_RING_GAP * 2)
                 .borderRadius((HIGHLIGHT_SIZE + HIGHLIGHT_RING_GAP * 2) / 2)
-                .border({ width: HIGHLIGHT_RING_W, color: $r('app.color.divider') })
+                .border({ width: HIGHLIGHT_RING_W, color: this.dividerColor() })
               Image(one.coverUrl.length > 0 ? one.coverUrl : $r('app.media.startIcon'))
                 .draggable(false)
                 .width(HIGHLIGHT_SIZE)
                 .height(HIGHLIGHT_SIZE)
                 .borderRadius(HIGHLIGHT_SIZE / 2)
                 .objectFit(ImageFit.Cover)
-                .backgroundColor($r('app.color.field_background'))
-                .border({ width: 2, color: $r('app.color.page_background') })
+                .backgroundColor(this.fieldBackgroundColor())
+                .border({ width: 2, color: this.pageBackgroundColor() })
             }
             .width(HIGHLIGHT_SIZE + (HIGHLIGHT_RING_GAP + HIGHLIGHT_RING_W) * 2)
             .height(HIGHLIGHT_SIZE + (HIGHLIGHT_RING_GAP + HIGHLIGHT_RING_W) * 2)
             Text(one.title.length > 0 ? one.title : ' ')
               .fontSize(11)
-              .fontColor($r('app.color.primary_text'))
+              .fontColor(this.primaryTextColor())
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
               .textAlign(TextAlign.Center)
@@ -796,7 +798,7 @@ export struct ProfilePage {
             })
         } else {
           Span(seg.text)
-            .fontColor($r('app.color.primary_text'))
+            .fontColor(this.primaryTextColor())
         }
       }, (seg: BioSegment, index: number): string => `${index}-${seg.text}`)
     }
@@ -1245,10 +1247,10 @@ export struct ProfilePage {
       Text(this.countText(this.statValue(which)))
         .fontSize(16)
         .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.primary_text'))
+        .fontColor(this.primaryTextColor())
       Text(label)
         .fontSize(13)
-        .fontColor($r('app.color.secondary_text'))
+        .fontColor(this.secondaryTextColor())
     }
     .layoutWeight(1)
   }
@@ -1346,7 +1348,7 @@ export struct ProfilePage {
           // 加载中 / **加载失败**（网页回放那条路偶尔给一条过期的封面地址，真机上就是一格纯黑）
           // 都垫这张灰底播放占位图（resources/base/media/grid_placeholder.png）。
           .alt($r('app.media.grid_placeholder'))
-          .backgroundColor($r('app.color.field_background'))
+          .backgroundColor(this.fieldBackgroundColor())
       } else {
         /*
          * **封面用不了**（空串，或者 cover 位上是 mp4 —— 见 ProfilePost.hasUsableCover）：
@@ -1361,12 +1363,12 @@ export struct ProfilePage {
         Column() {
           SymbolGlyph(this.cellShowsPlay(post) ? $r('sys.symbol.play_fill') : $r('sys.symbol.camera'))
             .fontSize(22)
-            .fontColor([$r('app.color.secondary_text')])
+            .fontColor([this.secondaryTextColor()])
         }
         .width('100%')
         .height('100%')
         .justifyContent(FlexAlign.Center)
-        .backgroundColor($r('app.color.field_background'))
+        .backgroundColor(this.fieldBackgroundColor())
       }
       if (this.cellShowsPlay(post) && post.hasUsableCover()) {
         SymbolGlyph($r('sys.symbol.play_fill'))
@@ -1633,6 +1635,26 @@ export struct ProfilePage {
     return header === null ? '' : header.avatarUrl;
   }
 
+  private primaryTextColor(): ResourceColor {
+    return this.lightMode ? '#111111' : $r('app.color.primary_text');
+  }
+
+  private secondaryTextColor(): ResourceColor {
+    return this.lightMode ? '#666666' : $r('app.color.secondary_text');
+  }
+
+  private pageBackgroundColor(): ResourceColor {
+    return this.lightMode ? '#FFFFFF' : $r('app.color.page_background');
+  }
+
+  private fieldBackgroundColor(): ResourceColor {
+    return this.lightMode ? '#F2F2F2' : $r('app.color.field_background');
+  }
+
+  private dividerColor(): ResourceColor {
+    return this.lightMode ? '#E5E5E5' : $r('app.color.divider');
+  }
+
   build() {
     // 根容器是 Column，最上面垫一层**透明 Stack**（和首页 FeedList 同一套做法）：
     // 下拉刷新用的是 Refresh 自带的**系统原生**图标，而它画在 Refresh 的顶边上 —— Refresh
@@ -1657,7 +1679,7 @@ export struct ProfilePage {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor($r('app.color.page_background'))
+    .backgroundColor(this.pageBackgroundColor())
     .onAreaChange((oldArea: Area, newArea: Area): void => {
       const width: number = typeof newArea.width === 'number'
         ? newArea.width : parseFloat(`${newArea.width}`);
@@ -1834,7 +1856,7 @@ export struct ProfilePage {
                 .height(AVATAR_SIZE)
                 .borderRadius(AVATAR_SIZE / 2)
                 .objectFit(ImageFit.Cover)
-                .backgroundColor($r('app.color.field_background'))
+                .backgroundColor(this.fieldBackgroundColor())
               Column({ space: 8 }) {
                 Row({ space: 5 }) {
                   /*
@@ -1846,7 +1868,7 @@ export struct ProfilePage {
                   Text(this.displayName())
                     .fontSize(18)
                     .fontWeight(FontWeight.Bold)
-                    .fontColor($r('app.color.primary_text'))
+                    .fontColor(this.primaryTextColor())
                     .maxLines(1)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
                     .layoutWeight(1)
@@ -1884,7 +1906,7 @@ export struct ProfilePage {
               if (this.visibleStatus().length > 0) {
                 Text(this.visibleStatus())
                   .fontSize(12)
-                  .fontColor($r('app.color.secondary_text'))
+                  .fontColor(this.secondaryTextColor())
                   .width('100%')
                   .maxLines(2)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -2155,10 +2177,10 @@ export struct ProfilePage {
             LoadingProgress()
               .width(22)
               .height(22)
-              .color($r('app.color.secondary_text'))
+              .color(this.secondaryTextColor())
             Text($r('app.string.profile_loading_more'))
               .fontSize(12)
-              .fontColor($r('app.color.secondary_text'))
+              .fontColor(this.secondaryTextColor())
           }
           .height(56)
           .justifyContent(FlexAlign.Center)
@@ -2171,10 +2193,10 @@ export struct ProfilePage {
           Column({ space: 8 }) {
             SymbolGlyph($r('sys.symbol.camera'))
               .fontSize(34)
-              .fontColor([$r('app.color.secondary_text')])
+              .fontColor([this.secondaryTextColor()])
             Text($r('app.string.profile_empty'))
               .fontSize(14)
-              .fontColor($r('app.color.secondary_text'))
+              .fontColor(this.secondaryTextColor())
           }
           .width('100%')
           .height(220)

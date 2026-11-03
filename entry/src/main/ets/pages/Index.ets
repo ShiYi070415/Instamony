@@ -924,6 +924,8 @@ struct UserProfileRoute {
   @Prop layoutWidthVp: number = 0;
   /** 嵌在右栏时标题由右栏画，ProfilePage 不再额外避让 HDS 标题栏。 */
   @Prop embedded: boolean = false;
+  /** 右栏 Reels 背景下的其他页面：强制浅色。 */
+  @Prop lightMode: boolean = false;
   vm: ProfileViewModel = new ProfileViewModel();
   /** 打开一条帖子：交给隐藏网页（同「我的」页）。 */
   onOpen: (post: ProfilePost) => void = (post: ProfilePost): void => {
@@ -982,6 +984,7 @@ struct UserProfileRoute {
       vm: this.vm,
       layoutWidthVp: this.layoutWidthVp,
       topOffsetVp: this.embedded ? 0 : 94,
+      lightMode: this.lightMode,
       segmentMode: SEGMENT_MODE_USER,
       // 简介里的 @账号：开那个人的主页（需求："点击后进入该用户主页"）。
       onOpenUser: (username: string): void => {
@@ -7623,6 +7626,7 @@ struct Index {
         layoutWidthVp: Math.max(0, this.profileStageWidth()),
         // 右栏本身也是 HDS 导航：资料区要避让它的标题栏，不能用 0。
         embedded: false,
+        lightMode: this.rightPaneNeedsLight(),
         onOpen: (post: ProfilePost): void => {
           this.openLoosePost(post.shortcode, post.isVideo);
         },
