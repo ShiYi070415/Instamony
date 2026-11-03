@@ -11272,6 +11272,10 @@ struct Index {
               .borderRadius(this.tabletButtonSize() / 2)
               .backgroundColor(Color.Transparent)
               .onClick((): void => {
+                // 只有单栏（没有右栏）时，侧边栏 tab 不响应点击。
+                if (!this.tabletHomeScoped()) {
+                  return;
+                }
                 if (index !== 0) {
                   this.tabletProfileParam = '';
                 }
