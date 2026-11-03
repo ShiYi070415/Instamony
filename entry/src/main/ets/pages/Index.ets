@@ -11573,6 +11573,8 @@ struct Index {
         }
         .width(this.tabletSidebarWidth())
         .height('100%')
+        // 侧边栏背景直接铺进上下系统避让区（状态栏 / 手势条），不留下透明缝。
+        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
         .position({ x: 0, y: 0 })
         .zIndex(40)
       }
