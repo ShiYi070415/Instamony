@@ -1896,18 +1896,6 @@ struct Index {
     if (tab === AppTab.Profile) {
       // 「我的」页自己的动作绑到标题栏菜单上（页内右上角那颗 more 按钮保留，两处都能进设定）。
       const profileItems: Array<HdsNavigationMenuItemOptions> = [];
-      // 没有侧边栏（手机/窄窗口）时，侧边栏底部的设置入口收进标题栏。
-      if (!this.tabletWideShell()) {
-        profileItems.push({
-          content: {
-            icon: $r('sys.symbol.more'),
-            label: $r('app.string.action_settings'),
-            action: (): void => {
-              this.openSettings();
-            }
-          }
-        });
-      }
       profileItems.push({
         content: {
           // 当前账号头像作为菜单按钮，点开仍是原来的账号选单浮层。
@@ -1920,6 +1908,18 @@ struct Index {
           }
         }
       });
+      // 没有侧边栏（手机/窄窗口）时，设置入口放在账号按钮**右边**。
+      if (!this.tabletWideShell()) {
+        profileItems.push({
+          content: {
+            icon: $r('sys.symbol.more'),
+            label: $r('app.string.action_settings'),
+            action: (): void => {
+              this.openSettings();
+            }
+          }
+        });
+      }
       return { value: profileItems };
     }
     if (tab === AppTab.Home) {
@@ -9790,7 +9790,7 @@ struct Index {
       source: ReelsAction.HOME,
       // 左侧主 Reels 始终避让侧边栏；右栏 Reels 由另一个实例单独处理。
       leftInsetVp: this.reelsFullBleed() ? this.tabletSidebarWidth() : 0,
-      infoBottomVp: this.tabletWideShell() ? this.bottomSafeVp : 82,
+      infoBottomVp: this.homeReelsInfoBottomVp(),
       // 分段滑动时冻结所有视频播放（见 ReelsPage.freeze 与 reelsTab 的 Tabs 回调）。
       // 刷到自己的视频时不画关注按钮（同其它两页）。
       ownAuthor: this.profileVm.ownAccountName(),
@@ -10265,6 +10265,10 @@ struct Index {
   @State private storyReload: number = 0;
   /** 正在播的这一位的 userId（播放页按它去量序列里那颗头像，排查转场错位用）。 */
   @State private storyUserId: string = '';
+  /** 下一位用户的预取结果：卡片翻到背面时提前渲染，不等数据。 */
+  @State private storyNextReel: StoryReel = EMPTY_REEL;
+  @State private storyNextName: string = '';
+  @State private storyNextAvatar: string = '';
   /** 正在取数（防连点；转圈由托盘自己画，见 StoriesTray.pendingUser）。 */
   private storyLoading: boolean = false;
   /**
@@ -10894,10 +10898,36 @@ struct Index {
     this.storyReel = reel;
     // 卡片在 openStory 里就已经弹出来了（先弹后取数），这里只把"点开那一发"的标记清掉。
     this.storyPendingOpen = false;
+    this.refreshNextStoryPreview();
     hilog.info(DOMAIN, TAG,
       'story play at=%{public}d uid=%{public}s n=%{public}d src=%{public}s heroValid=%{public}s hero=%{public}s',
       at, item.userId, reel.items.length, cached ? 'cache' : 'net',
       `${this.storyHeroValid}`, this.storyHero.dump());
+  }
+
+  /**
+   * 预渲染卡片背面的"下一位用户"：只 peek 缓存，不消耗队列，也不额外打接口。
+   * 背面在翻到 180° 时直接显示这一份，不再镜像当前内容。
+   */
+  private refreshNextStoryPreview(): void {
+    if (this.storyIsHighlight) {
+      this.storyNextReel = EMPTY_REEL;
+      this.storyNextName = '';
+      this.storyNextAvatar = '';
+      return;
+    }
+    const next: number = this.storyQueueIndex + 1;
+    if (next < 0 || next >= this.storyQueue.length) {
+      this.storyNextReel = EMPTY_REEL;
+      this.storyNextName = '';
+      this.storyNextAvatar = '';
+      return;
+    }
+    const item: StoryTrayItem = this.storyQueue[next];
+    this.storyNextName = item.username;
+    this.storyNextAvatar = item.avatarUrl;
+    const cached: StoryReel | null = StoryCache.peek(item.userId);
+    this.storyNextReel = cached !== null ? cached : EMPTY_REEL;
   }
 
   /**
@@ -10911,6 +10941,7 @@ struct Index {
       this.openHighlightAt(this.highlightIndex + 1, this.storyHero);
       return;
     }
+    this.refreshNextStoryPreview();
     const next: number = this.storyQueueIndex + 1;
     hilog.info(DOMAIN, TAG, 'story next user from=%{public}d next=%{public}d of=%{public}d',
       this.storyQueueIndex, next, this.storyQueue.length);
@@ -10946,6 +10977,9 @@ struct Index {
     // 选精快拍那套标记跟着一起复位（下一层可能是普通快拍）。
     this.storyIsHighlight = false;
     this.storyDateText = '';
+    this.storyNextReel = EMPTY_REEL;
+    this.storyNextName = '';
+    this.storyNextAvatar = '';
   }
 
   /**
@@ -11092,6 +11126,20 @@ struct Index {
     // 桌面/小窗模式下把窗口拖窄后，屏幕宽度不变，侧边栏会一直留着。
     const width: number = this.shellWidthVp > 0 ? this.shellWidthVp : this.screenWidthVp;
     return width >= 600;
+  }
+
+  /**
+   * 首页 Reels 信息层/动作区离屏幕底边的基准留白。
+   *
+   * 无侧边栏时脚下是悬浮底栏：底栏高 60 + 离底 28，信息层再留 6vp 间隙；
+   * 系统手势条高度也必须算进去（旧值写死 82，在带手势条的机器上会被底栏压住）。
+   * 底栏下沉/回弹的那 25vp 由 ReelsPage.overlaySink 用同一条弹簧曲线补间。
+   */
+  private homeReelsInfoBottomVp(): number {
+    if (this.tabletWideShell()) {
+      return this.bottomSafeVp;
+    }
+    return BAR_HEIGHT + BAR_REST_BOTTOM - 6 + this.bottomSafeVp;
   }
 
   /** 侧栏控件随窗口宽度等比缩放：约为窗宽的 6%，上限锁死正常按钮的 56vp。 */
@@ -13403,6 +13451,10 @@ struct Index {
           reel: this.storyReel === null ? EMPTY_REEL : this.storyReel,
           username: this.storyName,
           avatarUrl: this.storyAvatar,
+          // 卡片背面提前渲染下一位（见 StoryViewer 的 flipAngle > 90 分支）。
+          nextReel: this.storyNextReel,
+          nextUsername: this.storyNextName,
+          nextAvatar: this.storyNextAvatar,
           // 正在播的这一位（播放页按它去量序列里那颗头像的位置，见 StoryViewer.logRects）。
           heroUserId: this.storyUserId,
           // 资讯旁那颗「关注」：没关注才显示（需求），点它走 followUser（见 onFollowStoryAuthor）。

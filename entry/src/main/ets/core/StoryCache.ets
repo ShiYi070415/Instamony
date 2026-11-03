@@ -234,6 +234,16 @@ export class StoryCache {
   }
 
   /** 某一位在不在队列里（宿主点开之前先问一下：已在队列里就不要 reset，否则白扔一次预取）。 */
+  /** 看一眼缓存但**不抽走**（翻页背面预渲染用）。 */
+  static peek(userId: string): StoryReel | null {
+    for (let index: number = 0; index < StoryCache.pages.length; index++) {
+      if (StoryCache.pages[index].userId === userId) {
+        return StoryCache.pages[index];
+      }
+    }
+    return StoryCache.loadFromDisk(userId);
+  }
+
   static has(userId: string): boolean {
     for (let index: number = 0; index < StoryCache.pages.length; index++) {
       if (StoryCache.pages[index].userId === userId) {

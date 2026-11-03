@@ -220,6 +220,10 @@ export struct StoryViewer {
   @Prop username: string = '';
   /** 头像（同上；转场飞的就是这张图）。 */
   @Prop avatarUrl: string = '';
+  /** 下一位用户已经预取好的 reel / 资料：只用于卡片背面**提前渲染**，不参与当前播放。 */
+  @Prop nextReel: StoryReel = EMPTY_REEL;
+  @Prop nextUsername: string = '';
+  @Prop nextAvatar: string = '';
   /** 后面还有没有下一位用户（最后一条的右半屏据此决定"接续"还是"收页"）。 */
   @Prop hasNextUser: boolean = false;
   /** 前面还有没有上一位用户（第一条的左半屏据此决定"回上一位"还是"重播这一条"）。 */
@@ -1301,6 +1305,11 @@ export struct StoryViewer {
     return item === null ? `story-${Date.now()}` : `story-${item.id}`;
   }
 
+  /** 背面预览用：下一位用户的第一条（只渲染，不参与当前播放）。 */
+  private nextFirstItem(): StoryItem | null {
+    return this.nextReel.items.length > 0 ? this.nextReel.items[0] : null;
+  }
+
   private currentDuration(): number {
     const item: StoryItem | null = this.currentItem();
     return item === null ? 5000 : item.durationMs;
@@ -1856,6 +1865,58 @@ export struct StoryViewer {
         .justifyContent(FlexAlign.Center)
         .backgroundColor('#000000')
         .hitTestBehavior(HitTestMode.Block)
+      }
+
+      /*
+       * 卡片背面：提前渲染**下一位用户**的快拍，而不是把当前内容镜像翻过来。
+       *
+       * 父层按 flipAngle 转到 180°；这一层反向转 -flipAngle，所以到背面时正好是正的。
+       * 超过 90° 才显示，盖住正在转出去的前面。
+       */
+      if (this.flipAngle > 90) {
+        Stack({ alignContent: Alignment.BottomStart }) {
+          if (this.nextFirstItem() !== null
+            && (this.nextFirstItem() as StoryItem).imageUrl.length > 0) {
+            Image((this.nextFirstItem() as StoryItem).imageUrl)
+              .width('100%')
+              .height('100%')
+              .objectFit(ImageFit.Cover)
+          } else {
+            Column() {
+              LoadingProgress()
+                .width(44)
+                .height(44)
+                .color('#FFFFFF')
+            }
+            .width('100%')
+            .height('100%')
+            .justifyContent(FlexAlign.Center)
+            .backgroundColor('#000000')
+          }
+          if (this.nextFirstItem() !== null) {
+            Row({ space: 8 }) {
+              if (this.nextAvatar.length > 0) {
+                Image(this.nextAvatar)
+                  .width(30)
+                  .height(30)
+                  .borderRadius(15)
+                  .objectFit(ImageFit.Cover)
+              }
+              Text(this.nextUsername.length > 0 ? this.nextUsername : this.nextReel.username)
+                .fontSize(14)
+                .fontColor(Color.White)
+                .maxLines(1)
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+            .backgroundColor('#66000000')
+          }
+        }
+        .width('100%')
+        .height('100%')
+        // 抵消父层的翻面角度：父 180° 时这一层回到正面。
+        .rotate({ x: 0, y: 1, z: 0, angle: -this.flipAngle })
+        .hitTestBehavior(HitTestMode.None)
       }
     }
     .width('100%')
