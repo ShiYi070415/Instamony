@@ -952,7 +952,10 @@ export struct MaterialChipButton {
             .fontColor([this.inkColor()])
         }
       }
-      .padding({ left: this.iconSlotWidth > 0 ? 0 : 10, right: 10 })
+      .padding({
+        left: this.iconSlotWidth > 0 ? 0 : 10,
+        right: this.labelVisible ? 10 : 0
+      })
     }
     .height(this.chipHeight)
     .padding(0)

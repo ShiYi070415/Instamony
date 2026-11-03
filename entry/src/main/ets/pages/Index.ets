@@ -11311,7 +11311,7 @@ struct Index {
       .padding({ left: this.tabletSidebarGutter() })
 
       // 和底部悬浮栏同一种胶囊：把宽高对换后竖着放，材质直接挂在整颗胶囊上。
-      Stack({ alignContent: Alignment.TopStart }) {
+      Stack({ alignContent: Alignment.Start }) {
         Toggle({ type: ToggleType.Button, isOn: false }) {
           Column() {
             ForEach(TAB_ITEMS, (item: TabItem, index: number): void => {
