@@ -1884,22 +1884,23 @@ export struct StoryViewer {
        * 翻页动画已经完整播完（0→180°），但下一位的数据还没到：
        * 黑屏 + 居中加载图标。动画不再等数据，所以不会卡在 45°。
        */
-      if (this.flipAngle > 90) {
-        Column() {
-          if (this.switching && this.flipOutDone) {
-            LoadingProgress()
-              .width(44)
-              .height(44)
-              .color('#FFFFFF')
-          }
+      // 这一层**常驻**（不按角度条件创建），翻到背面时只改透明度；
+      // 条件创建会晚一帧，正是"短暂露出正面镜像"的来源。
+      Column() {
+        if (this.switching && this.flipOutDone) {
+          LoadingProgress()
+            .width(44)
+            .height(44)
+            .color('#FFFFFF')
         }
-        .width('100%')
-        .height('100%')
-        .justifyContent(FlexAlign.Center)
-        .backgroundColor('#000000')
-        // 不吃手势：加载期间仍然可以下滑收起 / 继续滑动，不能把卡片锁死。
-        .hitTestBehavior(HitTestMode.Transparent)
       }
+      .width('100%')
+      .height('100%')
+      .justifyContent(FlexAlign.Center)
+      .backgroundColor('#000000')
+      .opacity(this.flipAngle > 90 ? 1 : 0)
+      // 不吃手势：加载期间仍然可以下滑收起 / 继续滑动，不能把卡片锁死。
+      .hitTestBehavior(HitTestMode.Transparent)
 
       /*
        * 卡片背面：提前渲染**下一位用户**的快拍，而不是把当前内容镜像翻过来。
@@ -1907,8 +1908,9 @@ export struct StoryViewer {
        * 父层按 flipAngle 转到 180°；这一层反向转 -flipAngle，所以到背面时正好是正的。
        * 超过 90° 才显示，盖住正在转出去的前面。
        */
-      if (this.flipAngle > 90) {
-        Stack({ alignContent: Alignment.BottomStart }) {
+      // 背面同样**常驻预渲染**：从卡片一开始就建好下一位的媒体/头像，
+      // 翻过 90° 时只切透明度，不会有"先镜像一帧再插背面"。
+      Stack({ alignContent: Alignment.BottomStart }) {
           if (this.nextFirstItem() !== null
             && (this.nextFirstItem() as StoryItem).imageUrl.length > 0) {
             Image((this.nextFirstItem() as StoryItem).imageUrl)
@@ -1950,8 +1952,8 @@ export struct StoryViewer {
         .height('100%')
         // 抵消父层的翻面角度：父 180° 时这一层回到正面。
         .rotate({ x: 0, y: 1, z: 0, angle: -this.flipAngle })
+        .opacity(this.flipAngle > 90 ? 1 : 0)
         .hitTestBehavior(HitTestMode.None)
-      }
     }
     .width('100%')
     // 媒体区固定高度（圆角卡片的那块"底"），进度条 / 资讯栏都浮在它上面。
