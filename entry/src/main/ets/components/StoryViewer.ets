@@ -224,6 +224,10 @@ export struct StoryViewer {
   @Prop nextReel: StoryReel = EMPTY_REEL;
   @Prop nextUsername: string = '';
   @Prop nextAvatar: string = '';
+  /** 上一位用户：右滑时卡片背面显示他/她的快拍。 */
+  @Prop prevReel: StoryReel = EMPTY_REEL;
+  @Prop prevUsername: string = '';
+  @Prop prevAvatar: string = '';
   /** 后面还有没有下一位用户（最后一条的右半屏据此决定"接续"还是"收页"）。 */
   @Prop hasNextUser: boolean = false;
   /** 前面还有没有上一位用户（第一条的左半屏据此决定"回上一位"还是"重播这一条"）。 */
@@ -1336,9 +1340,26 @@ export struct StoryViewer {
     return item === null ? `story-${Date.now()}` : `story-${item.id}`;
   }
 
-  /** 背面预览用：下一位用户的第一条（只渲染，不参与当前播放）。 */
-  private nextFirstItem(): StoryItem | null {
-    return this.nextReel.items.length > 0 ? this.nextReel.items[0] : null;
+  /** 背面预览用：按旋转方向选下一位/上一位，只渲染，不参与当前播放。 */
+  private backIsPrev(): boolean {
+    return this.flipAngle > 0;
+  }
+
+  private backReel(): StoryReel {
+    return this.backIsPrev() ? this.prevReel : this.nextReel;
+  }
+
+  private backUsername(): string {
+    return this.backIsPrev() ? this.prevUsername : this.nextUsername;
+  }
+
+  private backAvatar(): string {
+    return this.backIsPrev() ? this.prevAvatar : this.nextAvatar;
+  }
+
+  private backFirstItem(): StoryItem | null {
+    const items: Array<StoryItem> = this.backReel().items;
+    return items.length > 0 ? items[0] : null;
   }
 
   private currentDuration(): number {
@@ -1910,10 +1931,10 @@ export struct StoryViewer {
        */
       // 背面同样**常驻预渲染**：从卡片一开始就建好下一位的媒体/头像，
       // 翻过 90° 时只切透明度，不会有"先镜像一帧再插背面"。
-      Stack({ alignContent: Alignment.BottomStart }) {
-          if (this.nextFirstItem() !== null
-            && (this.nextFirstItem() as StoryItem).imageUrl.length > 0) {
-            Image((this.nextFirstItem() as StoryItem).imageUrl)
+      Stack({ alignContent: Alignment.TopStart }) {
+          if (this.backFirstItem() !== null
+            && (this.backFirstItem() as StoryItem).imageUrl.length > 0) {
+            Image((this.backFirstItem() as StoryItem).imageUrl)
               .width('100%')
               .height('100%')
               .objectFit(ImageFit.Cover)
@@ -1929,23 +1950,37 @@ export struct StoryViewer {
             .justifyContent(FlexAlign.Center)
             .backgroundColor('#000000')
           }
-          if (this.nextFirstItem() !== null) {
-            Row({ space: 8 }) {
-              if (this.nextAvatar.length > 0) {
-                Image(this.nextAvatar)
-                  .width(30)
-                  .height(30)
-                  .borderRadius(15)
-                  .objectFit(ImageFit.Cover)
+          if (this.backFirstItem() !== null) {
+            Column({ space: 8 }) {
+              // 下一位用户自己的分段进度条（有几个 story 就几段）。
+              Row({ space: 3 }) {
+                ForEach(this.backReel().items, (one: StoryItem, position: number): void => {
+                  Row()
+                    .layoutWeight(1)
+                    .height(3)
+                    .borderRadius(1.5)
+                    .backgroundColor('#E6FFFFFF')
+                })
               }
-              Text(this.nextUsername.length > 0 ? this.nextUsername : this.nextReel.username)
-                .fontSize(14)
-                .fontColor(Color.White)
-                .maxLines(1)
+              .width('100%')
+              Row({ space: 8 }) {
+                if (this.backAvatar().length > 0) {
+                  Image(this.backAvatar())
+                    .width(32)
+                    .height(32)
+                    .borderRadius(16)
+                    .objectFit(ImageFit.Cover)
+                }
+                Text(this.backUsername().length > 0 ? this.backUsername() : this.backReel().username)
+                  .fontSize(15)
+                  .fontColor(Color.White)
+                  .maxLines(1)
+              }
+              .width('100%')
             }
             .width('100%')
             .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-            .backgroundColor('#66000000')
+            .backgroundColor('#4D000000')
           }
         }
         .width('100%')

@@ -244,6 +244,15 @@ export class StoryCache {
     return StoryCache.loadFromDisk(userId);
   }
 
+  /** 主动预热某一位（卡片背面预渲染用；已在队列/在飞时不重复发）。 */
+  static prefetchUser(userId: string, altIds: Array<string> = [], username: string = ''): void {
+    if (userId.length === 0 || StoryCache.inQueue(userId) || StoryCache.inFlight(userId)) {
+      return;
+    }
+    StoryCache.loading = StoryCache.loading + 1;
+    StoryCache.loadOne(userId, altIds, username);
+  }
+
   static has(userId: string): boolean {
     for (let index: number = 0; index < StoryCache.pages.length; index++) {
       if (StoryCache.pages[index].userId === userId) {

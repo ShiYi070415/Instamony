@@ -10269,6 +10269,12 @@ struct Index {
   @State private storyNextReel: StoryReel = EMPTY_REEL;
   @State private storyNextName: string = '';
   @State private storyNextAvatar: string = '';
+  /** 上一位用户：右滑时的背面。 */
+  @State private storyPrevReel: StoryReel = EMPTY_REEL;
+  @State private storyPrevName: string = '';
+  @State private storyPrevAvatar: string = '';
+  /** 背面预热还没命中时，等一小拍再 peek 一次（不阻塞翻页）。 */
+  private storyNextPreviewTimer: number = -1;
   /** 正在取数（防连点；转圈由托盘自己画，见 StoriesTray.pendingUser）。 */
   private storyLoading: boolean = false;
   /**
@@ -10899,6 +10905,7 @@ struct Index {
     // 卡片在 openStory 里就已经弹出来了（先弹后取数），这里只把"点开那一发"的标记清掉。
     this.storyPendingOpen = false;
     this.refreshNextStoryPreview();
+    this.refreshPrevStoryPreview();
     hilog.info(DOMAIN, TAG,
       'story play at=%{public}d uid=%{public}s n=%{public}d src=%{public}s heroValid=%{public}s hero=%{public}s',
       at, item.userId, reel.items.length, cached ? 'cache' : 'net',
@@ -10910,6 +10917,10 @@ struct Index {
    * 背面在翻到 180° 时直接显示这一份，不再镜像当前内容。
    */
   private refreshNextStoryPreview(): void {
+    if (this.storyNextPreviewTimer >= 0) {
+      clearTimeout(this.storyNextPreviewTimer);
+      this.storyNextPreviewTimer = -1;
+    }
     if (this.storyIsHighlight) {
       this.storyNextReel = EMPTY_REEL;
       this.storyNextName = '';
@@ -10927,7 +10938,57 @@ struct Index {
     this.storyNextName = item.username;
     this.storyNextAvatar = item.avatarUrl;
     const cached: StoryReel | null = StoryCache.peek(item.userId);
-    this.storyNextReel = cached !== null ? cached : EMPTY_REEL;
+    if (cached !== null) {
+      this.storyNextReel = cached;
+      return;
+    }
+    this.storyNextReel = EMPTY_REEL;
+    // 背面数据没命中：主动预热一位，并稍后再 peek（不阻塞当前播放）。
+    StoryCache.prefetchUser(item.userId, item.altIds, item.username);
+    if (this.storyNextPreviewTimer >= 0) {
+      clearTimeout(this.storyNextPreviewTimer);
+    }
+    this.storyNextPreviewTimer = setTimeout((): void => {
+      this.storyNextPreviewTimer = -1;
+      const at: number = this.storyQueueIndex + 1;
+      if (at < 0 || at >= this.storyQueue.length) {
+        return;
+      }
+      const nextItem: StoryTrayItem = this.storyQueue[at];
+      const ready: StoryReel | null = StoryCache.peek(nextItem.userId);
+      if (ready !== null) {
+        this.storyNextReel = ready;
+        this.storyNextName = nextItem.username;
+        this.storyNextAvatar = nextItem.avatarUrl;
+      }
+    }, 450);
+  }
+
+  /** 上一位用户的背面（右滑时显示）。 */
+  private refreshPrevStoryPreview(): void {
+    if (this.storyIsHighlight) {
+      this.storyPrevReel = EMPTY_REEL;
+      this.storyPrevName = '';
+      this.storyPrevAvatar = '';
+      return;
+    }
+    const prev: number = this.storyQueueIndex - 1;
+    if (prev < 0 || prev >= this.storyQueue.length) {
+      this.storyPrevReel = EMPTY_REEL;
+      this.storyPrevName = '';
+      this.storyPrevAvatar = '';
+      return;
+    }
+    const item: StoryTrayItem = this.storyQueue[prev];
+    this.storyPrevName = item.username;
+    this.storyPrevAvatar = item.avatarUrl;
+    const cached: StoryReel | null = StoryCache.peek(item.userId);
+    if (cached !== null) {
+      this.storyPrevReel = cached;
+      return;
+    }
+    this.storyPrevReel = EMPTY_REEL;
+    StoryCache.prefetchUser(item.userId, item.altIds, item.username);
   }
 
   /**
@@ -10961,6 +11022,7 @@ struct Index {
       this.openHighlightAt(this.highlightIndex - 1, this.storyHero);
       return;
     }
+    this.refreshPrevStoryPreview();
     const prev: number = this.storyQueueIndex - 1;
     hilog.info(DOMAIN, TAG, 'story prev user from=%{public}d prev=%{public}d of=%{public}d',
       this.storyQueueIndex, prev, this.storyQueue.length);
@@ -10980,6 +11042,13 @@ struct Index {
     this.storyNextReel = EMPTY_REEL;
     this.storyNextName = '';
     this.storyNextAvatar = '';
+    this.storyPrevReel = EMPTY_REEL;
+    this.storyPrevName = '';
+    this.storyPrevAvatar = '';
+    if (this.storyNextPreviewTimer >= 0) {
+      clearTimeout(this.storyNextPreviewTimer);
+      this.storyNextPreviewTimer = -1;
+    }
   }
 
   /**
@@ -13455,6 +13524,9 @@ struct Index {
           nextReel: this.storyNextReel,
           nextUsername: this.storyNextName,
           nextAvatar: this.storyNextAvatar,
+          prevReel: this.storyPrevReel,
+          prevUsername: this.storyPrevName,
+          prevAvatar: this.storyPrevAvatar,
           // 正在播的这一位（播放页按它去量序列里那颗头像的位置，见 StoryViewer.logRects）。
           heroUserId: this.storyUserId,
           // 资讯旁那颗「关注」：没关注才显示（需求），点它走 followUser（见 onFollowStoryAuthor）。
