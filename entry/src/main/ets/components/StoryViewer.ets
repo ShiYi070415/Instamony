@@ -701,12 +701,18 @@ export struct StoryViewer {
     this.switching = false;
     this.pendingReveal = false;
     this.flipOutDone = false;
-    // 顺序很关键：先隐藏背面，再归零，再换背面快照，最后才亮正面。
-    // 否则背面会在 0° 的那一帧露出"再下一位"。
-    this.backAlpha = 0;
+    /*
+     * 不要先隐藏背面：那样会在"背面已消失、正面还没亮"之间露出一帧黑。
+     * 先把卡片归零并亮正面，正面完整盖住后面的卡片 2；等这一帧画完再隐藏背面。
+     */
     this.applyFlip(0);
     this.syncBackPreview(false);
     this.frontAlpha = 1;
+    setTimeout((): void => {
+      if (!this.switching && Math.abs(this.flipAngle) < 1) {
+        this.backAlpha = 0;
+      }
+    }, 0);
   }
 
   // ---------------------------------------------------------------- 翻卡片
