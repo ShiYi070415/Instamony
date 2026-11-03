@@ -809,7 +809,7 @@ export struct MaterialLabelButton {
    */
   private fire(): void {
     const now: number = Date.now();
-    if (now - this.lastFireMs < 400) {
+    if (now - this.lastFireMs < this.tapDebounceMs) {
       return;
     }
     this.lastFireMs = now;
@@ -893,6 +893,8 @@ export struct MaterialChipButton {
   @Prop labelVisible: boolean = true;
   /** 侧边栏展开态：内容固定靠左，不随按钮变宽跑到中间。 */
   @Prop anchorStart: boolean = false;
+  /** 同一次点击的 onChange/onClick 去重窗口；侧边栏要能快速二次点击打断，传小一点。 */
+  @Prop tapDebounceMs: number = 400;
   @Prop iconSize: number = 12;
   @Prop tint: string = '';
   /** 是否吞掉长按（见 MaterialSurface 里 swallowLongPress 的说明）。 */
