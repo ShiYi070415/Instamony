@@ -8694,12 +8694,20 @@ struct Index {
     return this.tabletWideShell() && this.currentTab() === AppTab.Reels;
   }
 
-  /** 所有左栏 tab 的 HDS 标题栏左边距：统一让开浮层侧边栏，并留一点缝。 */
+  /**
+   * HDS 标题栏左边距。
+   *
+   * **只有 Reels 全屏铺到侧边栏下面时才需要补**：其它页面外层 Row 已经用
+   * margin-left 让开了侧边栏，再补一次会飞出去两倍。
+   */
   private reelsTitleBarLeftVp(): number {
     if (!this.tabletWideShell()) {
       return 0;
     }
-    return this.tabletSidebarWidth() + 12;
+    // 非全屏页外层已经用 margin 让开侧边栏；全屏 Reels 才需要补整段侧边栏。
+    // 两种页面最后都额外留 8vp，标题起点才一致。
+    const base: number = this.reelsFullBleed() ? this.tabletSidebarWidth() : 0;
+    return base + 8;
   }
 
   /**
