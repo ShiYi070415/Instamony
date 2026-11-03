@@ -606,8 +606,8 @@ export struct StoryViewer {
   private applyDisplayReel(reel: StoryReel): void {
     this.displayReel = reel;
     this.frontMediaReady = false;
-    this.displayName = this.username;
-    this.displayAvatar = this.avatarUrl;
+    this.displayName = reel.username.length > 0 ? reel.username : this.username;
+    this.displayAvatar = reel.avatarUrl.length > 0 ? reel.avatarUrl : this.avatarUrl;
     this.waiting = false;
     this.paused = false;
     this.index = 0;
@@ -1439,15 +1439,13 @@ export struct StoryViewer {
   /** 把宿主给的下一位/上一位复制成背面快照；翻页期间不再跟着 props 变。 */
   private syncBackPreview(prev: boolean): void {
     this.backDisplayPrev = prev;
-    if (prev) {
-      this.backDisplayReel = this.prevReel;
-      this.backDisplayName = this.prevUsername;
-      this.backDisplayAvatar = this.prevAvatar;
-    } else {
-      this.backDisplayReel = this.nextReel;
-      this.backDisplayName = this.nextUsername;
-      this.backDisplayAvatar = this.nextAvatar;
-    }
+    const reel: StoryReel = prev ? this.prevReel : this.nextReel;
+    this.backDisplayReel = reel;
+    // 资讯以这份 reel 自己的 username/avatar 为准，避免"名字先更新、reel 还是上一位"时错位。
+    this.backDisplayName = reel.username.length > 0 ? reel.username
+      : (prev ? this.prevUsername : this.nextUsername);
+    this.backDisplayAvatar = reel.avatarUrl.length > 0 ? reel.avatarUrl
+      : (prev ? this.prevAvatar : this.nextAvatar);
   }
 
   /** 宿主更新下一位/上一位时：空闲状态才同步，翻页中冻结。 */
@@ -2137,26 +2135,32 @@ export struct StoryViewer {
         .padding({ left: PROGRESS_SIDE_VP, right: PROGRESS_SIDE_VP, top: PROGRESS_TOP_VP })
 
         Row() {
-          Row({ space: 8 }) {
-            if (this.backAvatar().length > 0) {
-              Image(this.backAvatar())
-                .width(INFO_AVATAR_VP)
-                .height(INFO_AVATAR_VP)
-                .borderRadius(INFO_AVATAR_VP / 2)
-                .objectFit(ImageFit.Cover)
+          // 和卡片 1 一样：透明 Toggle 承载沉浸光感材质，里面放头像 + 用户名。
+          Toggle({ type: ToggleType.Button, isOn: false }) {
+            Row({ space: 8 }) {
+              if (this.backAvatar().length > 0) {
+                Image(this.backAvatar())
+                  .width(INFO_AVATAR_VP)
+                  .height(INFO_AVATAR_VP)
+                  .borderRadius(INFO_AVATAR_VP / 2)
+                  .objectFit(ImageFit.Cover)
+              }
+              Text(this.backUsername().length > 0 ? this.backUsername() : this.backReel().username)
+                .fontSize(14)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(Color.White)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .constraintSize({ maxWidth: this.cardW() * 0.45 })
             }
-            Text(this.backUsername().length > 0 ? this.backUsername() : this.backReel().username)
-              .fontSize(14)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(Color.White)
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .constraintSize({ maxWidth: this.cardW() * 0.45 })
           }
           .height(INFO_PILL_H)
           .padding({ left: 3, right: 12, top: 3, bottom: 3 })
           .borderRadius(INFO_PILL_H / 2)
-          .backgroundColor('#4D000000')
+          .backgroundColor(Color.Transparent)
+          .selectedColor(Color.Transparent)
+          .attributeModifier(new SurfaceModifier(this.thickness, false))
+          .hitTestBehavior(HitTestMode.None)
 
           Row().layoutWeight(1)
           MaterialIconButton({
