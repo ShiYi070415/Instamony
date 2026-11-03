@@ -47,10 +47,19 @@ export struct MediaDownloadButton {
   @Prop ext: string = 'jpg';
   @Prop title: string = '';
   @Prop isVideo: boolean = false;
+  /** 圆形按钮尺寸/图标尺寸（快拍卡片里要和静音键一致）。 */
+  @Prop buttonSize: number = 40;
+  @Prop iconSize: number = 18;
+  /** 深色媒体上的白色图标。 */
+  @Prop tint: string = '';
 
   build() {
     MaterialIconButton({
       symbol: $r('sys.symbol.arrow_down_to_line'),
+      buttonSize: this.buttonSize,
+      iconSize: this.iconSize,
+      tint: this.tint,
+      autoInvert: this.tint.length === 0,
       onTap: (): void => {
         const host: common.Context | undefined = this.getUIContext().getHostContext();
         const url: string = this.resolveUrl();

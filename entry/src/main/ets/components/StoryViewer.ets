@@ -28,6 +28,7 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { curves, display } from '@kit.ArkUI';
 import { CommentInputBar } from './CommentInputBar';
+import { MediaDownloadButton } from './MediaActionButtons';
 import { MaterialIconButton, MaterialLabelButton, SurfaceModifier } from './MaterialSurface';
 import { AppSettings, MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS,
   SETTING_VIDEO_MUTED } from '../core/AppSettings';
@@ -1272,6 +1273,30 @@ export struct StoryViewer {
     return items[Math.min(this.index, items.length - 1)];
   }
 
+  /** 下载按**当前这一格**取地址：多图快拍翻到第 N 张就下第 N 张，不是永远第一张。 */
+  private downloadUrl(): string {
+    const item: StoryItem | null = this.currentItem();
+    if (item === null) {
+      return '';
+    }
+    return item.videoUrl.length > 0 ? item.videoUrl : item.imageUrl;
+  }
+
+  private downloadExt(): string {
+    const item: StoryItem | null = this.currentItem();
+    return item !== null && item.videoUrl.length > 0 ? 'mp4' : 'jpg';
+  }
+
+  private downloadIsVideo(): boolean {
+    const item: StoryItem | null = this.currentItem();
+    return item !== null && item.videoUrl.length > 0;
+  }
+
+  private downloadTitle(): string {
+    const item: StoryItem | null = this.currentItem();
+    return item === null ? `story-${Date.now()}` : `story-${item.id}`;
+  }
+
   private currentDuration(): number {
     const item: StoryItem | null = this.currentItem();
     return item === null ? 5000 : item.durationMs;
@@ -1780,7 +1805,7 @@ export struct StoryViewer {
        * 必须放在点击层**之后**（Stack 里后画的在上面），否则点它会先被"左/右半屏翻页"吃掉。
        * 图标与信息流 / reels 那两颗一致：开=喇叭，关=喇叭加斜杠；状态走全局 key，点了落盘。
        */
-      Row() {
+      Row({ space: 8 }) {
         MaterialIconButton({
           symbol: this.muted ? $r('sys.symbol.speaker_slash') : $r('sys.symbol.speaker_wave_2'),
           buttonSize: 36,
@@ -1791,6 +1816,16 @@ export struct StoryViewer {
             // 取反由全局状态决定（双击回调时不会来回翻，见 MaterialIconButton 的说明）
             AppSettings.setVideoMuted(!this.muted);
           }
+        })
+        // 下载按钮在静音键**右边**；resolveUrl 点按时才求值，跟着当前媒体 index 走。
+        MediaDownloadButton({
+          resolveUrl: (): string => this.downloadUrl(),
+          ext: this.downloadExt(),
+          title: this.downloadTitle(),
+          isVideo: this.downloadIsVideo(),
+          buttonSize: 36,
+          iconSize: 18,
+          tint: '#FFFFFF'
         })
       }
       .width('100%')
