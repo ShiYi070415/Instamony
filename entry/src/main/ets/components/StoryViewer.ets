@@ -1362,6 +1362,29 @@ export struct StoryViewer {
     return items.length > 0 ? items[0] : null;
   }
 
+  private backDownloadUrl(): string {
+    const item: StoryItem | null = this.backFirstItem();
+    if (item === null) {
+      return '';
+    }
+    return item.videoUrl.length > 0 ? item.videoUrl : item.imageUrl;
+  }
+
+  private backDownloadExt(): string {
+    const item: StoryItem | null = this.backFirstItem();
+    return item !== null && item.videoUrl.length > 0 ? 'mp4' : 'jpg';
+  }
+
+  private backDownloadIsVideo(): boolean {
+    const item: StoryItem | null = this.backFirstItem();
+    return item !== null && item.videoUrl.length > 0;
+  }
+
+  private backDownloadTitle(): string {
+    const item: StoryItem | null = this.backFirstItem();
+    return item === null ? `story-back-${Date.now()}` : `story-${item.id}`;
+  }
+
   private currentDuration(): number {
     const item: StoryItem | null = this.currentItem();
     return item === null ? 5000 : item.durationMs;
@@ -1932,27 +1955,27 @@ export struct StoryViewer {
       // 背面同样**常驻预渲染**：从卡片一开始就建好下一位的媒体/头像，
       // 翻过 90° 时只切透明度，不会有"先镜像一帧再插背面"。
       Stack({ alignContent: Alignment.TopStart }) {
+          // 黑底先铺：媒体没到时不是透明，也不会露出正面。
+          Column() {
+            LoadingProgress()
+              .width(44)
+              .height(44)
+              .color('#FFFFFF')
+          }
+          .width('100%')
+          .height('100%')
+          .justifyContent(FlexAlign.Center)
+          .backgroundColor('#000000')
           if (this.backFirstItem() !== null
             && (this.backFirstItem() as StoryItem).imageUrl.length > 0) {
             Image((this.backFirstItem() as StoryItem).imageUrl)
               .width('100%')
               .height('100%')
               .objectFit(ImageFit.Cover)
-          } else {
-            Column() {
-              LoadingProgress()
-                .width(44)
-                .height(44)
-                .color('#FFFFFF')
-            }
-            .width('100%')
-            .height('100%')
-            .justifyContent(FlexAlign.Center)
-            .backgroundColor('#000000')
           }
-          if (this.backFirstItem() !== null) {
-            Column({ space: 8 }) {
-              // 下一位用户自己的分段进度条（有几个 story 就几段）。
+          // 资讯栏不等媒体：头像/用户名先显示，进度条有数据才画。
+          Column({ space: 8 }) {
+            if (this.backReel().items.length > 0) {
               Row({ space: 3 }) {
                 ForEach(this.backReel().items, (one: StoryItem, position: number): void => {
                   Row()
@@ -1963,26 +1986,66 @@ export struct StoryViewer {
                 })
               }
               .width('100%')
-              Row({ space: 8 }) {
-                if (this.backAvatar().length > 0) {
-                  Image(this.backAvatar())
-                    .width(32)
-                    .height(32)
-                    .borderRadius(16)
-                    .objectFit(ImageFit.Cover)
-                }
-                Text(this.backUsername().length > 0 ? this.backUsername() : this.backReel().username)
-                  .fontSize(15)
-                  .fontColor(Color.White)
-                  .maxLines(1)
+            }
+            Row({ space: 8 }) {
+              if (this.backAvatar().length > 0) {
+                Image(this.backAvatar())
+                  .width(32)
+                  .height(32)
+                  .borderRadius(16)
+                  .objectFit(ImageFit.Cover)
               }
-              .width('100%')
+              Text(this.backUsername().length > 0 ? this.backUsername() : this.backReel().username)
+                .fontSize(15)
+                .fontColor(Color.White)
+                .maxLines(1)
             }
             .width('100%')
-            .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-            .backgroundColor('#4D000000')
           }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+          .backgroundColor('#4D000000')
+
+          // 背面也带齐动作：静音、下载、更多。媒体没到也先显示。
+          Column() {
+            Row({ space: 8 }) {
+              MaterialIconButton({
+                symbol: this.muted ? $r('sys.symbol.speaker_slash') : $r('sys.symbol.speaker_wave_2'),
+                buttonSize: 36,
+                iconSize: 18,
+                tint: '#FFFFFF',
+                autoInvert: false,
+                onTap: (on: boolean): void => {
+                  AppSettings.setVideoMuted(!this.muted);
+                }
+              })
+              MediaDownloadButton({
+                resolveUrl: (): string => this.backDownloadUrl(),
+                ext: this.backDownloadExt(),
+                title: this.backDownloadTitle(),
+                isVideo: this.backDownloadIsVideo(),
+                buttonSize: 36,
+                iconSize: 18,
+                tint: '#FFFFFF'
+              })
+              MaterialIconButton({
+                symbol: $r('sys.symbol.sort'),
+                buttonSize: 36,
+                iconSize: 18,
+                tint: '#FFFFFF',
+                autoInvert: false,
+                onTap: (on: boolean): void => {
+                }
+              })
+            }
+          }
+          .width('100%')
+          .height('100%')
+          .justifyContent(FlexAlign.End)
+          .alignItems(HorizontalAlign.End)
+          .padding({ right: 12, bottom: 12 })
         }
+        .backgroundColor(Color.Black)
         .width('100%')
         .height('100%')
         // 抵消父层的翻面角度：父 180° 时这一层回到正面。
