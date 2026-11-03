@@ -809,7 +809,7 @@ export struct MaterialLabelButton {
    */
   private fire(): void {
     const now: number = Date.now();
-    if (now - this.lastFireMs < this.tapDebounceMs) {
+    if (now - this.lastFireMs < 400) {
       return;
     }
     this.lastFireMs = now;
@@ -909,7 +909,7 @@ export struct MaterialChipButton {
   /** 同 MaterialLabelButton：`onChange` 可能不来，`onClick` 兜底 + 400ms 去重。 */
   private fire(): void {
     const now: number = Date.now();
-    if (now - this.lastFireMs < 400) {
+    if (now - this.lastFireMs < this.tapDebounceMs) {
       return;
     }
     this.lastFireMs = now;
