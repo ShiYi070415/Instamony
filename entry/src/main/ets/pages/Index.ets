@@ -9733,7 +9733,8 @@ struct Index {
       Text(this.pageTitle())
         .fontSize(REELS_TITLE_SIZE)
         .fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.primary_text'))
+        // Reels 标题是自绘的，必须单独写白色（HDS contentStyle 管不到它）。
+        .fontColor(Color.White)
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
       Blank()
