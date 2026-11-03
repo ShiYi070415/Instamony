@@ -2073,6 +2073,9 @@ export struct StoryViewer {
     .clip(true)
     .backgroundColor(Color.Black)
     .opacity(this.flipAngle > 90 ? 1 : 0)
+    // 翻到背面之前完全移出布局/触摸树：否则这张全尺寸图层会挡住卡片手势。
+    .visibility(this.flipAngle > 90 ? Visibility.Visible : Visibility.None)
+    .enabled(false)
     .translate({ y: this.dragY })
     .scale({ x: this.exitScale, y: this.exitScale })
     .hitTestBehavior(HitTestMode.None)
