@@ -2028,6 +2028,44 @@ export struct StoryViewer {
       .padding({ left: 12, right: 12, top: 10, bottom: 10 })
       .backgroundColor('#4D000000')
 
+      // 底部动作区：背面也要是一整张快拍页，不只是媒体。
+      Column() {
+        Row({ space: 14 }) {
+          MaterialIconButton({
+            symbol: $r('sys.symbol.heart'),
+            buttonSize: 36,
+            iconSize: 20,
+            tint: '#FFFFFF',
+            autoInvert: false,
+            onTap: (on: boolean): void => {
+            }
+          })
+          MaterialIconButton({
+            symbol: $r('sys.symbol.message'),
+            buttonSize: 36,
+            iconSize: 20,
+            tint: '#FFFFFF',
+            autoInvert: false,
+            onTap: (on: boolean): void => {
+            }
+          })
+          MaterialIconButton({
+            symbol: $r('sys.symbol.share'),
+            buttonSize: 36,
+            iconSize: 20,
+            tint: '#FFFFFF',
+            autoInvert: false,
+            onTap: (on: boolean): void => {
+            }
+          })
+        }
+      }
+      .width('100%')
+      .height('100%')
+      .justifyContent(FlexAlign.End)
+      .alignItems(HorizontalAlign.Start)
+      .padding({ left: 12, bottom: 12 })
+
       Column() {
         Row({ space: 8 }) {
           MaterialIconButton({
