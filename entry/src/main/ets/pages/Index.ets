@@ -11212,6 +11212,19 @@ struct Index {
     return width >= 600;
   }
 
+  /** 侧边栏 tab 是否锁住：只有登录页、设置首页/二级页。 */
+  private sidebarTabsLocked(): boolean {
+    if (this.loginPageShown()) {
+      return true;
+    }
+    const names: Array<string> = this.navStack.getAllPathName();
+    const top: string = names.length > 0 ? names[names.length - 1] : '';
+    if (top === SETTINGS_PAGE || top === SETTINGS_DETAIL_PAGE) {
+      return true;
+    }
+    return this.tabletRightName === SETTINGS_PAGE || this.tabletRightName === SETTINGS_DETAIL_PAGE;
+  }
+
   /**
    * 首页 Reels 信息层/动作区离屏幕底边的基准留白。
    *
@@ -11272,8 +11285,8 @@ struct Index {
               .borderRadius(this.tabletButtonSize() / 2)
               .backgroundColor(Color.Transparent)
               .onClick((): void => {
-                // 只有单栏（没有右栏）时，侧边栏 tab 不响应点击。
-                if (!this.tabletHomeScoped()) {
+                // 只有登录页和设置页锁住侧边栏 tab，其余页面正常点击。
+                if (this.sidebarTabsLocked()) {
                   return;
                 }
                 if (index !== 0) {
