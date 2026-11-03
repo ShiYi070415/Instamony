@@ -961,6 +961,7 @@ export struct MaterialChipButton {
         right: this.labelVisible ? 10 : 0
       })
     }
+    .width(this.chipWidth > 0 ? this.chipWidth : 'auto')
     .height(this.chipHeight)
     .padding(0)
     .constraintSize({ minWidth: this.chipWidth })
