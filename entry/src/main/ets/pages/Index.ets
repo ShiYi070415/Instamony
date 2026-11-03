@@ -7352,9 +7352,12 @@ struct Index {
     return Math.round(14 * this.tabletUiScale());
   }
 
-  /** 侧边栏宽度变化用线性动画。 */
+  /** 侧边栏展开/收起：弹性动画。 */
   private toggleTabletSidebar(expand: boolean): void {
-    this.getUIContext().animateTo({ duration: 240, curve: Curve.Linear }, (): void => {
+    this.getUIContext().animateTo({
+      duration: 320,
+      curve: curves.springMotion(0.42, 0.82)
+    }, (): void => {
       this.tabletSidebarExpanded = expand;
     });
   }
