@@ -11212,17 +11212,31 @@ struct Index {
     return width >= 600;
   }
 
-  /** 侧边栏 tab 是否锁住：只有登录页、设置首页/二级页。 */
+  /** 侧边栏 tab 是否锁住：只有登录页。 */
   private sidebarTabsLocked(): boolean {
-    if (this.loginPageShown()) {
-      return true;
-    }
+    return this.loginPageShown();
+  }
+
+  /** 设置页点侧边栏 tab：先收起设置，再让 tab 切换。 */
+  private closeSettingsForTabSwitch(): void {
     const names: Array<string> = this.navStack.getAllPathName();
-    const top: string = names.length > 0 ? names[names.length - 1] : '';
-    if (top === SETTINGS_PAGE || top === SETTINGS_DETAIL_PAGE) {
-      return true;
+    while (names.length > 0) {
+      const top: string = names[names.length - 1];
+      if (top !== SETTINGS_PAGE && top !== SETTINGS_DETAIL_PAGE) {
+        break;
+      }
+      this.navStack.pop();
+      names.pop();
     }
-    return this.tabletRightName === SETTINGS_PAGE || this.tabletRightName === SETTINGS_DETAIL_PAGE;
+    if (this.tabletRightName === SETTINGS_PAGE || this.tabletRightName === SETTINGS_DETAIL_PAGE) {
+      this.tabletRightName = '';
+      this.tabletProfileParam = '';
+      this.tabletProfileStack.clear();
+      if (this.selectedIndex >= 0 && this.selectedIndex < this.tabRightNames.length) {
+        this.tabRightNames[this.selectedIndex] = '';
+        this.tabRightParams[this.selectedIndex] = '';
+      }
+    }
   }
 
   /**
@@ -11285,10 +11299,11 @@ struct Index {
               .borderRadius(this.tabletButtonSize() / 2)
               .backgroundColor(Color.Transparent)
               .onClick((): void => {
-                // 只有登录页和设置页锁住侧边栏 tab，其余页面正常点击。
+                // 只有登录页锁住侧边栏 tab；设置页点击 tab 会先收起设置再切页。
                 if (this.sidebarTabsLocked()) {
                   return;
                 }
+                this.closeSettingsForTabSwitch();
                 if (index !== 0) {
                   this.tabletProfileParam = '';
                 }
