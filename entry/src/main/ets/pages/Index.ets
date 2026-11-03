@@ -12059,7 +12059,7 @@ struct Index {
        * 收起来之后点不到返回了，但**再点一下画面**就会恢复（见 ReelsPage.toggleChrome）。
        * 第二个参数 true = 走 HDS 自带的显隐动画（淡出而不是瞬移）。
        */
-      .hideTitleBar(this.reelsInRightPane() || this.reelsChromeHidesShell(), true)
+      .hideTitleBar(this.reelsChromeHidesShell(), true)
       .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
       // 视频要铺到标题栏底下（沉浸式），所以不裁内容。
       .clip(false)
@@ -12100,7 +12100,7 @@ struct Index {
       .hideBackButton(false)
       .titleMode(HdsNavDestinationTitleMode.MINI)
       // 同视频分页那一页：隐藏全局控件时标题栏一起收（见 reelsChromeHidesShell）。
-      .hideTitleBar(this.reelsInRightPane() || this.reelsChromeHidesShell(), true)
+      .hideTitleBar(this.reelsChromeHidesShell(), true)
       .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
       .clip(false)
       .onShown((): void => {
@@ -12230,77 +12230,6 @@ struct Index {
    * 为什么用 Stack：输入框要**压在视频上**（IG 的 Reels 就是这样，不是把视频顶上去）——
    * 它是浮层，所以放 Stack 的上面一层并给 zIndex（同「我的」页那层钉住的分段按钮）。
    */
-  /** 右栏 Reels 自绘顶栏：返回 / 标题 / 静音 / 下载。 */
-  @Builder
-  reelsRightChrome(source: string) {
-    Row() {
-      Stack({ alignContent: Alignment.Center }) {
-        SymbolGlyph($r('sys.symbol.chevron_left'))
-          .fontSize(22)
-          .fontColor([Color.White])
-      }
-      .width(Math.round(Math.min(44, Math.max(36, this.profileStageWidth() * 0.09))))
-      .height(Math.round(Math.min(44, Math.max(36, this.profileStageWidth() * 0.09))))
-      .borderRadius(999)
-      .backgroundColor('#33000000')
-      .onClick((): void => {
-        if (this.handleDestinationBack()) {
-          return;
-        }
-        if (this.tabletHomeScoped()) {
-          this.tabletProfileStack.pop();
-        } else {
-          this.navStack.pop();
-        }
-      })
-
-      Text($r('app.string.reels_page_title'))
-        .fontSize(17)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(Color.White)
-        .layoutWeight(1)
-        .textAlign(TextAlign.Center)
-
-      Row({ space: Math.round(Math.max(4, this.profileStageWidth() * 0.02)) }) {
-        if (this.reelsActionVersion >= 0 && ReelsAction.visibleFor(source)) {
-          Stack({ alignContent: Alignment.Center }) {
-            SymbolGlyph(this.videoMuted ? $r('sys.symbol.speaker_slash') : $r('sys.symbol.speaker_wave_2'))
-              .fontSize(21)
-              .fontColor([Color.White])
-          }
-          .width(Math.round(Math.min(44, Math.max(36, this.profileStageWidth() * 0.09))))
-          .height(Math.round(Math.min(44, Math.max(36, this.profileStageWidth() * 0.09))))
-          .borderRadius(999)
-          .backgroundColor('#33000000')
-          .onClick((): void => {
-            AppSettings.setVideoMuted(!this.videoMuted);
-          })
-
-          Stack({ alignContent: Alignment.Center }) {
-            SymbolGlyph($r('sys.symbol.arrow_down_to_line'))
-              .fontSize(21)
-              .fontColor([Color.White])
-          }
-          .width(Math.round(Math.min(44, Math.max(36, this.profileStageWidth() * 0.09))))
-          .height(Math.round(Math.min(44, Math.max(36, this.profileStageWidth() * 0.09))))
-          .borderRadius(999)
-          .backgroundColor('#33000000')
-          .onClick((): void => {
-            this.downloadReel(source);
-          })
-        }
-      }
-    }
-    .width('100%')
-    .height(56)
-    .padding({
-      left: Math.round(Math.max(12, this.profileStageWidth() * 0.04)),
-      right: Math.round(Math.max(12, this.profileStageWidth() * 0.04))
-    })
-    .position({ x: 0, y: this.topSafeVp })
-    .zIndex(5)
-  }
-
   @Builder
   reelsBody(vm: ProfileReelsViewModel, source: string) {
     Stack({ alignContent: Alignment.Bottom }) {
@@ -12350,10 +12279,6 @@ struct Index {
           this.toast($r('app.string.feature_pending'));
         }
       })
-      // 右栏 Reels：HDS 标题栏已收起，按钮改为自绘，位置按右栏宽度比例。
-      if (this.reelsInRightPane() && !this.reelsChromeHidesShell()) {
-        this.reelsRightChrome(source)
-      }
       // 底部评论输入框（沉浸光感，见 CommentInputBar）。
       //
       // 这一版**不真的发评论**（用户确认："先只做输入框 UI，不真发"）：输入框把内容交上来之后
