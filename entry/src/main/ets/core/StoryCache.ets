@@ -105,6 +105,9 @@ export class StoryCache {
   private static generation: number = 0;
   /** 24 小时落盘缓存的 preferences 文件（EntryAbility 启动时打开）。 */
   private static store: preferences.Preferences | null = null;
+  /** 最近看过的用户内存缓存：来回切换不再反复读盘/发请求。 */
+  private static recent: Map<string, StoryReel> = new Map<string, StoryReel>();
+  private static readonly RECENT_MAX: number = 12;
 
   /** 打开 24 小时快拍缓存文件（幂等）。 */
   static init(context: common.Context): void {
@@ -236,6 +239,10 @@ export class StoryCache {
   /** 某一位在不在队列里（宿主点开之前先问一下：已在队列里就不要 reset，否则白扔一次预取）。 */
   /** 看一眼缓存但**不抽走**（翻页背面预渲染用）。 */
   static peek(userId: string): StoryReel | null {
+    const remembered: StoryReel | undefined = StoryCache.recent.get(userId);
+    if (remembered !== undefined) {
+      return remembered;
+    }
     for (let index: number = 0; index < StoryCache.pages.length; index++) {
       if (StoryCache.pages[index].userId === userId) {
         return StoryCache.pages[index];
@@ -308,8 +315,22 @@ export class StoryCache {
     return page;
   }
 
+  /** 记住最近看过的一页（内存 LRU，最多 12 位）。 */
+  private static remember(reel: StoryReel): void {
+    StoryCache.recent.delete(reel.userId);
+    StoryCache.recent.set(reel.userId, reel);
+    while (StoryCache.recent.size > StoryCache.RECENT_MAX) {
+      const first: string | undefined = StoryCache.recent.keys().next().value;
+      if (first === undefined || first.length === 0) {
+        break;
+      }
+      StoryCache.recent.delete(first);
+    }
+  }
+
   /** 把一页写进 24h 缓存（按用户覆盖；超过上限丢最旧的）。 */
   private static saveToDisk(reel: StoryReel): void {
+    StoryCache.remember(reel);
     const store: preferences.Preferences | null = StoryCache.store;
     if (store === null || reel.userId.length === 0 || reel.items.length === 0) {
       return;
@@ -361,7 +382,9 @@ export class StoryCache {
       return null;
     }
     hilog.info(DOMAIN, TAG, '24h hit uid=%{public}s n=%{public}d', userId, items.length);
-    return new StoryReel(page.uid ?? userId, page.un ?? '', page.av ?? '', items);
+    const reel: StoryReel = new StoryReel(page.uid ?? userId, page.un ?? '', page.av ?? '', items);
+    StoryCache.remember(reel);
+    return reel;
   }
 
   private static inQueue(userId: string): boolean {
@@ -383,6 +406,12 @@ export class StoryCache {
         StoryCache.fill();
         return page;
       }
+    }
+    const remembered: StoryReel | undefined = StoryCache.recent.get(userId);
+    if (remembered !== undefined) {
+      StoryCache.warmMedia(remembered);
+      StoryCache.fill();
+      return remembered;
     }
     const disk: StoryReel | null = StoryCache.loadFromDisk(userId);
     if (disk !== null) {
