@@ -2013,15 +2013,13 @@ export struct StoryViewer {
    * 不能让图标跟着"材质反色"飘。
    */
   /**
-   * 卡片背面：**不跟着卡片做 3D 旋转**，而是作为同位置的一层盖在旋转卡片上面。
-   *
-   * 之前把背面塞进旋转的卡片里再反向旋转，3D 合成下会整层不显示（用户看到的一直是正面）；
-   * 放到外层后，翻过 90° 只切这一层的透明度，稳定可见，也不会出现正面镜像。
+   * 卡片 2：与卡片 1 同样的版面——顶部进度条 + 资讯胶囊 + 更多，右下角静音/下载，
+   * 媒体铺满，没媒体时黑底居中加载。两张卡共用父层翻转。
    */
   @Builder
   backCardFace() {
     Stack({ alignContent: Alignment.TopStart }) {
-      // 黑底 + 加载图标：媒体没到也能先显示完整背面。
+      // 黑底 + 加载图标：媒体没到也先显示完整背面。
       Column() {
         LoadingProgress()
           .width(44)
@@ -2039,122 +2037,96 @@ export struct StoryViewer {
           .height('100%')
           .objectFit(ImageFit.Cover)
       }
-      // 资讯栏不依赖媒体。
-      Column({ space: 8 }) {
-        if (this.backReel().items.length > 0) {
-          Row({ space: 3 }) {
-            ForEach(this.backReel().items, (one: StoryItem, position: number): void => {
-              Row()
-                .layoutWeight(1)
-                .height(3)
-                .borderRadius(1.5)
-                .backgroundColor('#E6FFFFFF')
-            })
-          }
-          .width('100%')
-        }
-        Row({ space: 8 }) {
-          if (this.backAvatar().length > 0) {
-            Image(this.backAvatar())
-              .width(32)
-              .height(32)
-              .borderRadius(16)
-              .objectFit(ImageFit.Cover)
-          }
-          Text(this.backUsername().length > 0 ? this.backUsername() : this.backReel().username)
-            .fontSize(15)
-            .fontColor(Color.White)
-            .maxLines(1)
+
+      // 顶部：进度条 + 资讯胶囊/更多，和卡片 1 同一套间距。
+      Column() {
+        Row({ space: SEG_GAP }) {
+          ForEach(this.backReel().items, (one: StoryItem, position: number): void => {
+            Row()
+              .layoutWeight(1)
+              .height(SEG_H)
+              .borderRadius(SEG_H / 2)
+              .backgroundColor(position === 0 ? Color.White : '#66FFFFFF')
+          }, (one: StoryItem, position: number): string => `${one.id}-${position}`)
         }
         .width('100%')
-      }
-      .width('100%')
-      .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-      .backgroundColor('#4D000000')
+        .height(PROGRESS_TOP_VP + SEG_H)
+        .padding({ left: PROGRESS_SIDE_VP, right: PROGRESS_SIDE_VP, top: PROGRESS_TOP_VP })
 
-      // 底部动作区：背面也要是一整张快拍页，不只是媒体。
-      Column() {
-        Row({ space: 14 }) {
-          MaterialIconButton({
-            symbol: $r('sys.symbol.heart'),
-            buttonSize: 36,
-            iconSize: 20,
-            tint: '#FFFFFF',
-            autoInvert: false,
-            onTap: (on: boolean): void => {
+        Row() {
+          Row({ space: 8 }) {
+            if (this.backAvatar().length > 0) {
+              Image(this.backAvatar())
+                .width(INFO_AVATAR_VP)
+                .height(INFO_AVATAR_VP)
+                .borderRadius(INFO_AVATAR_VP / 2)
+                .objectFit(ImageFit.Cover)
             }
-          })
-          MaterialIconButton({
-            symbol: $r('sys.symbol.message'),
-            buttonSize: 36,
-            iconSize: 20,
-            tint: '#FFFFFF',
-            autoInvert: false,
-            onTap: (on: boolean): void => {
-            }
-          })
-          MaterialIconButton({
-            symbol: $r('sys.symbol.share'),
-            buttonSize: 36,
-            iconSize: 20,
-            tint: '#FFFFFF',
-            autoInvert: false,
-            onTap: (on: boolean): void => {
-            }
-          })
-        }
-      }
-      .width('100%')
-      .height('100%')
-      .justifyContent(FlexAlign.End)
-      .alignItems(HorizontalAlign.Start)
-      .padding({ left: 12, bottom: 12 })
+            Text(this.backUsername().length > 0 ? this.backUsername() : this.backReel().username)
+              .fontSize(14)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Color.White)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .constraintSize({ maxWidth: this.cardW() * 0.45 })
+          }
+          .height(INFO_PILL_H)
+          .padding({ left: 3, right: 12, top: 3, bottom: 3 })
+          .borderRadius(INFO_PILL_H / 2)
+          .backgroundColor('#4D000000')
 
-      Column() {
-        Row({ space: 8 }) {
-          MaterialIconButton({
-            symbol: this.muted ? $r('sys.symbol.speaker_slash') : $r('sys.symbol.speaker_wave_2'),
-            buttonSize: 36,
-            iconSize: 18,
-            tint: '#FFFFFF',
-            autoInvert: false,
-            onTap: (on: boolean): void => {
-              AppSettings.setVideoMuted(!this.muted);
-            }
-          })
-          MediaDownloadButton({
-            resolveUrl: (): string => this.backDownloadUrl(),
-            ext: this.backDownloadExt(),
-            title: this.backDownloadTitle(),
-            isVideo: this.backDownloadIsVideo(),
-            buttonSize: 36,
-            iconSize: 18,
-            tint: '#FFFFFF'
-          })
+          Row().layoutWeight(1)
           MaterialIconButton({
             symbol: $r('sys.symbol.sort'),
-            buttonSize: 36,
-            iconSize: 18,
+            buttonSize: 40,
+            iconSize: 20,
             tint: '#FFFFFF',
             autoInvert: false,
             onTap: (on: boolean): void => {
             }
           })
         }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
+        .padding({ left: INFO_SIDE_VP, right: INFO_SIDE_VP, top: INFO_GAP_VP })
+      }
+      .width('100%')
+
+      // 右下角：和卡片 1 一样只放静音 + 下载。
+      Row({ space: 8 }) {
+        MaterialIconButton({
+          symbol: this.muted ? $r('sys.symbol.speaker_slash') : $r('sys.symbol.speaker_wave_2'),
+          buttonSize: 36,
+          iconSize: 18,
+          tint: '#FFFFFF',
+          autoInvert: false,
+          onTap: (on: boolean): void => {
+            AppSettings.setVideoMuted(!this.muted);
+          }
+        })
+        MediaDownloadButton({
+          resolveUrl: (): string => this.backDownloadUrl(),
+          ext: this.backDownloadExt(),
+          title: this.backDownloadTitle(),
+          isVideo: this.backDownloadIsVideo(),
+          buttonSize: 36,
+          iconSize: 18,
+          tint: '#FFFFFF'
+        })
       }
       .width('100%')
       .height('100%')
       .justifyContent(FlexAlign.End)
-      .alignItems(HorizontalAlign.End)
-      .padding({ right: 12, bottom: 12 })
+      .alignItems(VerticalAlign.Bottom)
+      .padding({ right: STORY_MUTE_INSET_VP, bottom: STORY_MUTE_INSET_VP })
+      .hitTestBehavior(HitTestMode.None)
     }
     .width('100%')
     .height('100%')
     .borderRadius(CARD_RADIUS_VP)
     .clip(true)
     .backgroundColor(Color.Black)
-    // 卡片 2 与卡片 1 背对背：按本次旋转方向预转 ±180°，
-    // 这样父层 90°→180° 的过程中它从侧面逐渐转正，而不是等最后才出现。
+    // 与卡片 1 背对背：按方向预转 ±180°，父层翻到 180° 时正好正向。
     .rotate({ x: 0, y: 1, z: 0, angle: this.flipAngle > 0 ? -180 : 180 })
     .opacity(this.backAlpha)
     .enabled(false)
