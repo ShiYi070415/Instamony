@@ -22,6 +22,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 // display：量屏宽，底栏胶囊的左右留白按它反算。
 import { curves, display, ImmersiveMode, uiMaterial, window } from '@kit.ArkUI';
 import {
+  BlurStrategy,
   HdsAnimationMode,
   HdsNavDestination,
   HdsNavDestinationTitleMode,
@@ -8529,20 +8530,24 @@ struct Index {
       }
     };
     if (PlatformCap.hasHdsMaterial()) {
-      // 沉浸光感：浅色下材质档位压柔一档，避免标题栏蒙版白得发死。
+      // 浅色下不要材质（材质会带白色蒙版），只保留标题栏模糊。
       style.systemMaterialEffect = {
-        materialType: immersiveMaterialType(),
+        materialType: this.isDarkUi
+          ? immersiveMaterialType()
+          : hdsMaterial.MaterialType.NONE,
         materialLevel: this.isDarkUi
           ? immersiveLevel(this.materialLevel)
           : hdsMaterial.MaterialLevel.GENTLE
       };
     }
     if (!this.isDarkUi) {
-      // 浅色蒙版：半透明白 + 更短的延伸 + 更大模糊，减轻整块死白。
+      style.blurStrategy = BlurStrategy.ENABLE;
+      // 浅色蒙版：透明底 + 零延伸，只让 HDS 做模糊，不叠白色。
       const lightMask: HdsNavigationTitleBarStyle = {
         backgroundStyle: {
-          backgroundColor: '#CCFFFFFF',
-          maskExtraHeight: 24,
+          // 透明底：只要模糊，不要 HDS 默认的白色蒙版。
+          backgroundColor: '#00000000',
+          maskExtraHeight: 0,
           blurRadius: 64
         }
       };
@@ -8563,17 +8568,21 @@ struct Index {
     };
     if (PlatformCap.hasHdsMaterial()) {
       style.systemMaterialEffect = {
-        materialType: immersiveMaterialType(),
+        materialType: this.isDarkUi
+          ? immersiveMaterialType()
+          : hdsMaterial.MaterialType.NONE,
         materialLevel: this.isDarkUi
           ? immersiveLevel(this.materialLevel)
           : hdsMaterial.MaterialLevel.GENTLE
       };
     }
     if (!this.isDarkUi) {
+      style.blurStrategy = BlurStrategy.ENABLE;
       const lightMask: HdsNavigationTitleBarStyle = {
         backgroundStyle: {
-          backgroundColor: '#CCFFFFFF',
-          maskExtraHeight: 24,
+          // 透明底：只要模糊，不要 HDS 默认的白色蒙版。
+          backgroundColor: '#00000000',
+          maskExtraHeight: 0,
           blurRadius: 64
         }
       };
