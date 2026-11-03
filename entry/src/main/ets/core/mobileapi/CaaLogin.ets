@@ -2877,14 +2877,75 @@ export class CaaLogin {
   }
 
   /**
-   * 取密码加密公钥（`qe/sync` 的响应头）。
-   *
-   * **这一发走系统 `http` 模块**，不走自建 TLS：`qe/sync` 不是登录端点，系统栈在这里是
-   * 200/405 + 正常下发公钥头（真机实测），而自建通道跑这一发会抛
-   * `Cannot read property length of undefined`（GET 路径在自建通道上还没调通）。
-   * 真正被 IG 挡的只有 `send_login_request`，那一发走自建通道就够了。
+   * 新版网页登录把加密材料直接嵌在首页 HTML 里（`InstagramPasswordEncryption`），
+   * 不再由 `qe/sync` 响应头下发；2026-11 起 qe/sync 直接 404。
+   */
+  private static async webPasswordKeys(): Promise<PasswordKeys | null> {
+    const request: http.HttpRequest = http.createHttp();
+    try {
+      const response: http.HttpResponse = await request.request('https://www.instagram.com/',
+        DoHResolver.apply({
+          method: http.RequestMethod.GET,
+          header: {
+            'User-Agent': WEB_UA,
+            'Accept': 'text/html,application/xhtml+xml',
+            'Accept-Language': 'en-US,en;q=0.9'
+          },
+          connectTimeout: 15000,
+          readTimeout: 20000,
+          expectDataType: http.HttpDataType.STRING
+        }));
+      const html: string = `${response.result}`;
+      const marker: string = '"InstagramPasswordEncryption",[],{';
+      const at: number = html.indexOf(marker);
+      if (at >= 0) {
+        const start: number = at + marker.length;
+        const end: number = html.indexOf('}', start);
+        const body: string = end > start ? html.substring(start, end) : '';
+        const keyId: string = CaaLogin.jsonField(body, 'key_id');
+        const publicKey: string = CaaLogin.jsonField(body, 'public_key');
+        const version: string = CaaLogin.jsonField(body, 'version');
+        const parsed: number = Number.parseInt(keyId, 10);
+        if (Number.isFinite(parsed) && parsed > 0 && publicKey.length >= 64 && version.length > 0) {
+          CaaLogin.lastPasswordKeysNote = `web status=${response.responseCode} keyId=${parsed}`
+            + ` version=${version} pubLen=${publicKey.length}`;
+          return new PasswordKeys(parsed, publicKey, version);
+        }
+      }
+      CaaLogin.lastPasswordKeysNote = `web status=${response.responseCode} 未找到加密配置`
+        + ` html=${html.length}B cookie=${CaaLogin.cookieNames() || '(空)'}`;
+      return null;
+    } catch (error) {
+      CaaLogin.lastPasswordKeysNote = `instagram.com(http) 异常：${(error as Error).message}`;
+      return null;
+    } finally {
+      try {
+        request.destroy();
+      } catch (error) {
+      }
+    }
+  }
+
+  /** 从一个扁平 JSON 片段里取字符串字段。 */
+  private static jsonField(json: string, name: string): string {
+    const marker: string = `"${name}":"`;
+    const at: number = json.indexOf(marker);
+    if (at < 0) {
+      return '';
+    }
+    const start: number = at + marker.length;
+    const end: number = json.indexOf('"', start);
+    return end > start ? json.substring(start, end) : '';
+  }
+
+  /**
+   * 取密码加密公钥：优先新版网页 HTML 配置；旧版才回退 `qe/sync`。
    */
   private static async passwordKeys(identity: MobileIdentity): Promise<PasswordKeys | null> {
+    const web: PasswordKeys | null = await CaaLogin.webPasswordKeys();
+    if (web !== null) {
+      return web;
+    }
     const request: http.HttpRequest = http.createHttp();
     try {
       /*

@@ -24,6 +24,8 @@
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { util } from '@kit.ArkTS';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { InstagramPageBridge } from '../../bridge/PageBridge';
+import { PWD_ENCRYPT_JS_B64 } from './PwdEncryptScript';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'MobileCrypto';
@@ -32,10 +34,13 @@ const TAG: string = 'MobileCrypto';
 export class PasswordKeys {
   readonly keyId: number;
   readonly publicKeyBase64: string;
+  /** `4` = 旧 Android RSA 方案；`10` = 新网页 X25519/NaCl 方案。 */
+  readonly version: string;
 
-  constructor(keyId: number, publicKeyBase64: string) {
+  constructor(keyId: number, publicKeyBase64: string, version: string = '4') {
     this.keyId = keyId;
     this.publicKeyBase64 = publicKeyBase64;
+    this.version = version;
   }
 
   isUsable(): boolean {
@@ -75,6 +80,9 @@ export class MobileCrypto {
       MobileCrypto.lastEncryptNote = `加密公钥不可用（keyId=${keys.keyId}, `
         + `pubKey=${keys.publicKeyBase64.length} 字符）`;
       return '';
+    }
+    if (keys.version === '10') {
+      return MobileCrypto.encryptBrowser(password, keys);
     }
     const passwordBytes: number = new util.TextEncoder().encodeInto(password).length;
     try {
@@ -119,6 +127,48 @@ export class MobileCrypto {
     } catch (error) {
       MobileCrypto.lastEncryptNote = `加密异常（keyId=${keys.keyId}）：${(error as Error).message}`;
       hilog.warn(DOMAIN, TAG, 'encryptPassword threw: %{public}s', (error as Error).message);
+      return '';
+    }
+  }
+
+  /**
+   * 新版网页加密（`#PWD_INSTAGRAM_BROWSER:10:`）。
+   *
+   * 算法是 X25519 + XSalsa20-Poly1305 + BLAKE2b，ArkTS 侧没有现成实现；
+   * 这里把已打包的浏览器实现注入登录页隐藏 WebView，用它的 WebCrypto/JS 算。
+   * 密码只在进程内和本地页面之间传递，不经过网络。
+   */
+  private static async encryptBrowser(password: string, keys: PasswordKeys): Promise<string> {
+    try {
+      const bridge: InstagramPageBridge = InstagramPageBridge.getInstance();
+      if (!bridge.isAttached()) {
+        MobileCrypto.lastEncryptNote = 'WebView 未挂载，无法执行 version 10 加密';
+        return '';
+      }
+      await bridge.awaitPageReady(12000);
+      const sourceBytes: Uint8Array = new util.Base64Helper().decodeSync(PWD_ENCRYPT_JS_B64);
+      const source: string = util.TextDecoder.create('utf-8').decodeToString(sourceBytes);
+      const inject: string = 'if(!globalThis.__igPwdReady){'
+        + source
+        + '\n;globalThis.__igPwdReady=true;} "ok"';
+      await bridge.runScript(inject);
+      const expression: string = 'globalThis.__igPwdEncrypt('
+        + JSON.stringify(password) + ','
+        + JSON.stringify(keys.version) + ','
+        + JSON.stringify(`${keys.keyId}`) + ','
+        + JSON.stringify(keys.publicKeyBase64) + ')';
+      const out: string = await bridge.runBridge(expression, 20000, 'pwd-encrypt-v10');
+      if (!out.startsWith('#PWD_')) {
+        MobileCrypto.lastEncryptNote = `version 10 加密失败：${out.substring(0, 160)}`;
+        return '';
+      }
+      MobileCrypto.lastEncryptNote = `keyId=${keys.keyId} version=10 payload=${out.length} chars`;
+      hilog.info(DOMAIN, TAG, 'enc_password v10 ok keyId=%{public}d total=%{public}d',
+        keys.keyId, out.length);
+      return out;
+    } catch (error) {
+      MobileCrypto.lastEncryptNote = `version 10 加密异常：${(error as Error).message}`;
+      hilog.warn(DOMAIN, TAG, 'encryptBrowser threw: %{public}s', (error as Error).message);
       return '';
     }
   }

@@ -4190,6 +4190,16 @@ struct Index {
    *          其他 = 给登录页显示的原因
    */
   private async caaLogin(username: string, password: string): Promise<string> {
+    /*
+     * 新版密码加密（version 10）要用浏览器 JS 的 X25519/XSalsa20/BLAKE2b；
+     * 登录页本身没有 WebView，先把隐藏网页宿主挂上再走登录。
+     */
+    if (!this.webHostMounted) {
+      this.webStartUrl = 'https://www.instagram.com/';
+      this.webHeadless = true;
+      this.mountWebHost();
+    }
+    await this.bridge.awaitPageReady(12000);
     const outcome: CaaOutcome = await CaaSession.login(username, password);
     hilog.info(DOMAIN, TAG, 'caa login ok=%{public}s needsCode=%{public}s reason=%{public}s',
       outcome.ok ? 'y' : 'n', outcome.needsCode ? 'y' : 'n', outcome.reason);
