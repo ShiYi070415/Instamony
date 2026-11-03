@@ -29,6 +29,7 @@ import {
   HdsNavigationMenuContentOptions,
   HdsNavigationMenuItemOptions,
   HdsNavigationTitleBarStyle,
+  HdsTitleBarContentStyle,
   HdsNavigationTitleMode,
   TitleBarContentOptions,
   TitleBarStyleOptions,
@@ -8538,6 +8539,9 @@ struct Index {
         materialLevel: immersiveLevel(this.materialLevel)
       };
     }
+    const content: HdsTitleBarContentStyle = this.defaultTitleContent();
+    style.originalStyle = { contentStyle: content };
+    style.scrollEffectStyle = { contentStyle: content };
     return style;
   }
 
@@ -8556,7 +8560,18 @@ struct Index {
         materialLevel: immersiveLevel(this.materialLevel)
       };
     }
+    style.originalStyle = { contentStyle: this.defaultTitleContent() };
     return style;
+  }
+
+  /** 非 Reels 页的标题栏内容色：必须显式写回，否则 HDS 会沿用上一页 Reels 的白色。 */
+  private defaultTitleContent(): HdsTitleBarContentStyle {
+    const ink: ResourceColor = this.isDarkUi ? Color.White : '#111111';
+    return {
+      titleStyle: { mainTitleColor: ink, subTitleColor: ink },
+      backIconStyle: { iconColor: ink, textColor: ink },
+      menuStyle: { iconColor: ink, textColor: ink }
+    };
   }
 
   /** Reels 页专用：标题栏不要任何蒙版/材质，只保留文字与按钮。 */
