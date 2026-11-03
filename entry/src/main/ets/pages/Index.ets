@@ -8604,9 +8604,10 @@ struct Index {
      * 系统深色时 isDarkUi=true 且不是我们强制的（reelsDarkForced=false）；
      * 系统浅色进 Reels 时 isDarkUi=true，但 reelsDarkForced=true —— 这两种要分开。
      */
-    const systemDark: boolean = this.isDarkUi && !this.reelsDarkForced;
+    // 右栏非 Reels 页面打开时 syncReelsColorMode 会让应用跟随系统，
+    // 所以这里直接读系统生效的 isDarkUi 即可。
     return this.tabletHomeScoped()
-      && !systemDark
+      && !this.isDarkUi
       && this.currentTab() === AppTab.Reels
       && !this.reelsInRightPane();
   }
@@ -11625,6 +11626,21 @@ struct Index {
    * 深色的用户离开 Reels 依旧深色。
    */
   private syncReelsColorMode(): void {
+    /*
+     * 左栏是 Reels、右栏打开的是**别的页面**：右栏页面必须按系统明暗走。
+     * 此时不能继续把整个应用强制深色，否则系统浅色下右栏也变黑；
+     * 先撤销强制，让应用跟随系统（左栏 Reels 内容本身仍是深色视频）。
+     */
+    const rightOther: boolean = this.tabletHomeScoped()
+      && this.currentTab() === AppTab.Reels
+      && !this.reelsInRightPane();
+    if (rightOther) {
+      if (this.reelsDarkForced) {
+        this.reelsDarkForced = false;
+        this.applyAppColorMode(false);
+      }
+      return;
+    }
     // 右栏里的 Reels 只让右栏自身保持深色，不切全局应用配色。
     if (this.reelsInRightPane()) {
       if (this.reelsDarkForced) {
