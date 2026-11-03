@@ -22,7 +22,6 @@ import { BusinessError } from '@kit.BasicServicesKit';
 // display：量屏宽，底栏胶囊的左右留白按它反算。
 import { curves, display, ImmersiveMode, uiMaterial, window } from '@kit.ArkUI';
 import {
-  BlurStrategy,
   HdsAnimationMode,
   HdsNavDestination,
   HdsNavDestinationTitleMode,
@@ -8530,29 +8529,11 @@ struct Index {
       }
     };
     if (PlatformCap.hasHdsMaterial()) {
-      // 浅色下不要材质（材质会带白色蒙版），只保留标题栏模糊。
+      // 沉浸光感：材质类型交给系统按环境自适应，档位跟设定页那一档（和底部悬浮栏同源）。
       style.systemMaterialEffect = {
-        materialType: this.isDarkUi
-          ? immersiveMaterialType()
-          : hdsMaterial.MaterialType.NONE,
-        materialLevel: this.isDarkUi
-          ? immersiveLevel(this.materialLevel)
-          : hdsMaterial.MaterialLevel.GENTLE
+        materialType: immersiveMaterialType(),
+        materialLevel: immersiveLevel(this.materialLevel)
       };
-    }
-    if (!this.isDarkUi) {
-      style.blurStrategy = BlurStrategy.ENABLE;
-      // 浅色蒙版：透明底 + 零延伸，只让 HDS 做模糊，不叠白色。
-      const lightMask: HdsNavigationTitleBarStyle = {
-        backgroundStyle: {
-          // 透明底：只要模糊，不要 HDS 默认的白色蒙版。
-          backgroundColor: '#00000000',
-          maskExtraHeight: 0,
-          blurRadius: 64
-        }
-      };
-      style.originalStyle = lightMask;
-      style.scrollEffectStyle = lightMask;
     }
     return style;
   }
@@ -8568,26 +8549,9 @@ struct Index {
     };
     if (PlatformCap.hasHdsMaterial()) {
       style.systemMaterialEffect = {
-        materialType: this.isDarkUi
-          ? immersiveMaterialType()
-          : hdsMaterial.MaterialType.NONE,
-        materialLevel: this.isDarkUi
-          ? immersiveLevel(this.materialLevel)
-          : hdsMaterial.MaterialLevel.GENTLE
+        materialType: immersiveMaterialType(),
+        materialLevel: immersiveLevel(this.materialLevel)
       };
-    }
-    if (!this.isDarkUi) {
-      style.blurStrategy = BlurStrategy.ENABLE;
-      const lightMask: HdsNavigationTitleBarStyle = {
-        backgroundStyle: {
-          // 透明底：只要模糊，不要 HDS 默认的白色蒙版。
-          backgroundColor: '#00000000',
-          maskExtraHeight: 0,
-          blurRadius: 64
-        }
-      };
-      style.originalStyle = lightMask;
-      style.scrollEffectStyle = lightMask;
     }
     return style;
   }

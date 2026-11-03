@@ -76,8 +76,6 @@ const PULL_CANCEL_VP: number = 24;
  * 原来是 104）。
  */
 const PULL_PILL_TOP_VP: number = 116;
-/** HDS 标题栏（状态栏 + 标题栏）高度：卡片顶部要避让它。 */
-const HDS_TITLE_OFFSET_VP: number = 94;
 /** 指示器胶囊的长宽（vp）：定宽而不是自适应 —— 文案在"下拉/松开/正在刷新"之间切换，
  *  自适应会让胶囊在刷新那一瞬间抖一下。96 = 用户要求"左右留白缩小"之后的一档
  *  （图标 15 + 间隔 6 + 5 个字 ≈ 90，再留 3 的余量）。 */
@@ -1215,13 +1213,6 @@ struct ReelSlide {
       }
       .width('100%')
       .aspectRatio(this.aspect())
-      // 只让卡片本身避让 HDS 标题栏：页面背景 / 信息层仍然整页铺满。
-      .margin({ top: this.chromeHidden ? 0 : HDS_TITLE_OFFSET_VP })
-      .constraintSize({
-        maxHeight: this.chromeHidden
-          ? '100%'
-          : `calc(100% - ${HDS_TITLE_OFFSET_VP}vp)`
-      })
       // 竖屏视频（高 > 屏高）超出的部分在**外层**被裁掉，而不是把画面压扁。
       .clip(true)
 
