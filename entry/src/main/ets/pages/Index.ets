@@ -7340,6 +7340,13 @@ struct Index {
       : this.tabletButtonSize() + 28;
   }
 
+  /** 展开时内部胶囊/条目的宽度；收起时等于圆按钮直径。 */
+  private tabletSidebarItemWidth(): number {
+    return this.tabletSidebarExpanded
+      ? Math.round(196 * this.tabletUiScale())
+      : this.tabletButtonSize();
+  }
+
   /** 侧边栏之外的可用宽度。 */
   private contentAreaWidth(): number {
     const total: number = this.shellWidthVp > 0 ? this.shellWidthVp : this.screenWidthVp;
@@ -11276,7 +11283,12 @@ struct Index {
           buttonSize: this.tabletButtonSize(),
           iconSize: Math.round(22 * this.tabletUiScale()),
           onTap: (on: boolean): void => {
-            this.tabletSidebarExpanded = !this.tabletSidebarExpanded;
+            this.getUIContext().animateTo({
+              duration: 260,
+              curve: curves.springMotion(0.42, 0.86)
+            }, (): void => {
+              this.tabletSidebarExpanded = !this.tabletSidebarExpanded;
+            });
           }
         })
       }
@@ -11289,13 +11301,27 @@ struct Index {
         Toggle({ type: ToggleType.Button, isOn: false }) {
           Column() {
             ForEach(TAB_ITEMS, (item: TabItem, index: number): void => {
-              Stack({ alignContent: Alignment.Center }) {
+              Row({ space: Math.round(12 * this.tabletUiScale()) }) {
                 SymbolGlyph(this.selectedIndex === index ? item.iconSelected : item.iconNormal)
                   .fontSize(Math.round(TAB_ICON_SIZE * this.tabletUiScale()))
                   .fontColor([this.tabIconColor(this.selectedIndex === index)])
+                if (this.tabletSidebarExpanded) {
+                  Text(item.label)
+                    .fontSize(Math.round(14 * this.tabletUiScale()))
+                    .fontWeight(this.selectedIndex === index ? FontWeight.Medium : FontWeight.Regular)
+                    .fontColor(this.tabIconColor(this.selectedIndex === index))
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    .transition(TransitionEffect.OPACITY.animation({ duration: 140 }))
+                }
               }
-              .width(this.tabletButtonSize())
+              .width(this.tabletSidebarItemWidth())
               .height(this.tabletButtonSize())
+              .padding({
+                left: this.tabletSidebarExpanded ? Math.round(16 * this.tabletUiScale()) : 0,
+                right: this.tabletSidebarExpanded ? Math.round(12 * this.tabletUiScale()) : 0
+              })
+              .justifyContent(this.tabletSidebarExpanded ? FlexAlign.Start : FlexAlign.Center)
               .borderRadius(this.tabletButtonSize() / 2)
               .backgroundColor(Color.Transparent)
               .onClick((): void => {
@@ -11311,7 +11337,7 @@ struct Index {
               })
             }, (item: TabItem): string => `${item.tab}`)
           }
-          .width(this.tabletButtonSize())
+          .width(this.tabletSidebarItemWidth())
           .height(5 * this.tabletButtonSize() + Math.round(24 * this.tabletUiScale()))
           .padding({
             top: Math.round(12 * this.tabletUiScale()),
@@ -11319,7 +11345,7 @@ struct Index {
           })
           .alignItems(HorizontalAlign.Center)
         }
-        .width(this.tabletButtonSize())
+        .width(this.tabletSidebarItemWidth())
         .height(5 * this.tabletButtonSize() + Math.round(24 * this.tabletUiScale()))
         .padding(0)
         .borderRadius(this.tabletButtonSize() / 2)
@@ -11334,21 +11360,56 @@ struct Index {
       Blank()
 
       Column({ space: Math.round(8 * this.tabletUiScale()) }) {
-        MaterialIconButton({
-          symbol: $r('sys.symbol.heart'),
-          buttonSize: this.tabletButtonSize(),
-          iconSize: Math.round(22 * this.tabletUiScale()),
-          onTap: (on: boolean): void => {
-            this.openNotifications();
+        Row({ space: Math.round(12 * this.tabletUiScale()) }) {
+          MaterialIconButton({
+            symbol: $r('sys.symbol.heart'),
+            buttonSize: this.tabletButtonSize(),
+            iconSize: Math.round(22 * this.tabletUiScale()),
+            onTap: (on: boolean): void => {
+              this.openNotifications();
+            }
+          })
+          if (this.tabletSidebarExpanded) {
+            Text($r('app.string.notifications'))
+              .fontSize(Math.round(14 * this.tabletUiScale()))
+              .fontColor($r('app.color.primary_text'))
+              .maxLines(1)
+              .onClick((): void => {
+                this.openNotifications();
+              })
           }
+        }
+        .width(this.tabletSidebarItemWidth())
+        .justifyContent(this.tabletSidebarExpanded ? FlexAlign.Start : FlexAlign.Center)
+        .padding({
+          left: this.tabletSidebarExpanded ? Math.round(8 * this.tabletUiScale()) : 0,
+          right: this.tabletSidebarExpanded ? Math.round(12 * this.tabletUiScale()) : 0
         })
-        MaterialIconButton({
-          symbol: $r('sys.symbol.more'),
-          buttonSize: this.tabletButtonSize(),
-          iconSize: Math.round(22 * this.tabletUiScale()),
-          onTap: (on: boolean): void => {
-            this.openSettings();
+
+        Row({ space: Math.round(12 * this.tabletUiScale()) }) {
+          MaterialIconButton({
+            symbol: $r('sys.symbol.more'),
+            buttonSize: this.tabletButtonSize(),
+            iconSize: Math.round(22 * this.tabletUiScale()),
+            onTap: (on: boolean): void => {
+              this.openSettings();
+            }
+          })
+          if (this.tabletSidebarExpanded) {
+            Text($r('app.string.action_settings'))
+              .fontSize(Math.round(14 * this.tabletUiScale()))
+              .fontColor($r('app.color.primary_text'))
+              .maxLines(1)
+              .onClick((): void => {
+                this.openSettings();
+              })
           }
+        }
+        .width(this.tabletSidebarItemWidth())
+        .justifyContent(this.tabletSidebarExpanded ? FlexAlign.Start : FlexAlign.Center)
+        .padding({
+          left: this.tabletSidebarExpanded ? Math.round(8 * this.tabletUiScale()) : 0,
+          right: this.tabletSidebarExpanded ? Math.round(12 * this.tabletUiScale()) : 0
         })
       }
       .width('100%')
