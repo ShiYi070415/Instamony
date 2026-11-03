@@ -8499,6 +8499,9 @@ struct Index {
      * Reels 页仍然用 destinationTitleStyle（用户要求把 hdsnavigation 的模糊加回来）。
      */
     const tab: AppTab = this.currentTab();
+    if (tab === AppTab.Reels) {
+      return this.reelsTitleStyle();
+    }
     return tab === AppTab.Home || tab === AppTab.Search
       ? this.feedTitleStyle()
       : this.destinationTitleStyle();
@@ -8553,6 +8556,29 @@ struct Index {
         materialLevel: immersiveLevel(this.materialLevel)
       };
     }
+    return style;
+  }
+
+  /** Reels 页专用：标题栏不要任何蒙版/材质，只保留文字与按钮。 */
+  private reelsTitleStyle(): TitleBarStyleOptions {
+    const style: TitleBarStyleOptions = this.destinationTitleStyle();
+    style.scrollEffectOpts = {
+      enableScrollEffect: false,
+      scrollEffectType: ScrollEffectType.COMMON_BLUR
+    };
+    const noMask: HdsNavigationTitleBarStyle = {
+      backgroundStyle: {
+        backgroundColor: '#00000000',
+        maskExtraHeight: 0,
+        blurRadius: 0
+      }
+    };
+    style.originalStyle = noMask;
+    style.scrollEffectStyle = noMask;
+    style.systemMaterialEffect = {
+      materialType: hdsMaterial.MaterialType.NONE,
+      materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+    };
     return style;
   }
 
@@ -11987,7 +12013,7 @@ struct Index {
           // 需求："除了底栏 reels，其他 reels 页面右上角没有静音和下载按钮，添加一下"。
           menu: this.reelsMenu(ReelsAction.PROFILE)
         },
-        style: this.destinationTitleStyle(),
+        style: this.reelsTitleStyle(),
         avoidLayoutSafeArea: false,
         enableComponentSafeArea: false
       })
@@ -12033,7 +12059,7 @@ struct Index {
           // 同视频分页那一页：右上角补上静音 / 下载（需求）。
           menu: this.reelsMenu(ReelsAction.SEARCH)
         },
-        style: this.destinationTitleStyle(),
+        style: this.reelsTitleStyle(),
         avoidLayoutSafeArea: false,
         enableComponentSafeArea: false
       })
