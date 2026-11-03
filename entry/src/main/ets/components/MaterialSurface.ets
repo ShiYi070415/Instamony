@@ -891,6 +891,8 @@ export struct MaterialChipButton {
   @Prop iconSlotWidth: number = 0;
   /** 是否显示文字（侧边栏收起时只留图标）。 */
   @Prop labelVisible: boolean = true;
+  /** 侧边栏展开态：内容固定靠左，不随按钮变宽跑到中间。 */
+  @Prop anchorStart: boolean = false;
   @Prop iconSize: number = 12;
   @Prop tint: string = '';
   /** 是否吞掉长按（见 MaterialSurface 里 swallowLongPress 的说明）。 */
@@ -952,6 +954,8 @@ export struct MaterialChipButton {
             .fontColor([this.inkColor()])
         }
       }
+      .width(this.anchorStart ? '100%' : 'auto')
+      .justifyContent(this.anchorStart ? FlexAlign.Start : FlexAlign.Center)
       .padding({
         left: this.iconSlotWidth > 0 ? 0 : (this.labelVisible ? 16 : 10),
         right: this.labelVisible ? 10 : 0
