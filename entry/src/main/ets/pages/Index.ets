@@ -11562,6 +11562,13 @@ struct Index {
       if (this.tabletWideShell()) {
         // 侧边栏融入主体：永远作为左侧浮层，不参与主体宽度计算。
         Stack() {
+          // 设置页压上来时先铺一层不透明底，避免切换瞬间上下的系统避让区透出黑/透明。
+          if (this.settingsOverReels()) {
+            Column()
+              .width('100%')
+              .height('100%')
+              .backgroundColor($r('app.color.page_background'))
+          }
           this.tabletSidebar()
         }
         .width(this.tabletSidebarWidth())
