@@ -953,7 +953,7 @@ export struct MaterialChipButton {
         }
       }
       .padding({
-        left: this.iconSlotWidth > 0 ? 0 : 10,
+        left: this.iconSlotWidth > 0 ? 0 : (this.labelVisible ? 16 : 10),
         right: this.labelVisible ? 10 : 0
       })
     }
