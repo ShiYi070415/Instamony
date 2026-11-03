@@ -7347,6 +7347,11 @@ struct Index {
       : this.tabletButtonSize();
   }
 
+  /** 侧边栏内容统一的左边距：收起/展开图标中心都不动。 */
+  private tabletSidebarGutter(): number {
+    return Math.round(14 * this.tabletUiScale());
+  }
+
   /** 侧边栏之外的可用宽度。 */
   private contentAreaWidth(): number {
     const total: number = this.shellWidthVp > 0 ? this.shellWidthVp : this.screenWidthVp;
@@ -11284,6 +11289,7 @@ struct Index {
             labelRes: $r('app.string.sidebar_collapse'),
             chipHeight: this.tabletButtonSize(),
             chipWidth: this.tabletSidebarItemWidth(),
+            iconSlotWidth: this.tabletButtonSize(),
             iconSize: Math.round(22 * this.tabletUiScale()),
             fontSize: Math.round(14 * this.tabletUiScale()),
             autoInvert: false,
@@ -11312,20 +11318,24 @@ struct Index {
           })
         }
       }
-      .width(this.tabletSidebarItemWidth())
+      .width('100%')
       .height(this.tabletButtonSize() + 8)
-      .justifyContent(this.tabletSidebarExpanded ? FlexAlign.Start : FlexAlign.Center)
-      .padding({ left: this.tabletSidebarExpanded ? Math.round(4 * this.tabletUiScale()) : 0 })
+      .justifyContent(FlexAlign.Start)
+      .padding({ left: this.tabletSidebarGutter() })
 
       // 和底部悬浮栏同一种胶囊：把宽高对换后竖着放，材质直接挂在整颗胶囊上。
-      Stack({ alignContent: Alignment.Center }) {
+      Stack({ alignContent: Alignment.TopStart }) {
         Toggle({ type: ToggleType.Button, isOn: false }) {
           Column() {
             ForEach(TAB_ITEMS, (item: TabItem, index: number): void => {
-              Row({ space: Math.round(12 * this.tabletUiScale()) }) {
-                SymbolGlyph(this.selectedIndex === index ? item.iconSelected : item.iconNormal)
-                  .fontSize(Math.round(TAB_ICON_SIZE * this.tabletUiScale()))
-                  .fontColor([this.tabIconColor(this.selectedIndex === index)])
+              Row({ space: Math.round(8 * this.tabletUiScale()) }) {
+                Stack({ alignContent: Alignment.Center }) {
+                  SymbolGlyph(this.selectedIndex === index ? item.iconSelected : item.iconNormal)
+                    .fontSize(Math.round(TAB_ICON_SIZE * this.tabletUiScale()))
+                    .fontColor([this.tabIconColor(this.selectedIndex === index)])
+                }
+                .width(this.tabletButtonSize())
+                .height(this.tabletButtonSize())
                 if (this.tabletSidebarExpanded) {
                   Text(item.label)
                     .fontSize(Math.round(14 * this.tabletUiScale()))
@@ -11333,16 +11343,15 @@ struct Index {
                     .fontColor(this.tabIconColor(this.selectedIndex === index))
                     .maxLines(1)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
-                    .transition(TransitionEffect.OPACITY.animation({ duration: 140 }))
+                    .transition(TransitionEffect.OPACITY
+                      .combine(TransitionEffect.translate({ x: -8 }))
+                      .animation({ duration: 160, curve: Curve.EaseOut }))
                 }
               }
               .width(this.tabletSidebarItemWidth())
               .height(this.tabletButtonSize())
-              .padding({
-                left: this.tabletSidebarExpanded ? Math.round(16 * this.tabletUiScale()) : 0,
-                right: this.tabletSidebarExpanded ? Math.round(12 * this.tabletUiScale()) : 0
-              })
-              .justifyContent(this.tabletSidebarExpanded ? FlexAlign.Start : FlexAlign.Center)
+              .padding({ right: this.tabletSidebarExpanded ? Math.round(12 * this.tabletUiScale()) : 0 })
+              .justifyContent(FlexAlign.Start)
               .borderRadius(this.tabletButtonSize() / 2)
               .backgroundColor(Color.Transparent)
               .onClick((): void => {
@@ -11376,6 +11385,7 @@ struct Index {
         .attributeModifier(new SurfaceModifier(Index.materialThicknessNow(), false, true))
       }
       .width('100%')
+      .padding({ left: this.tabletSidebarGutter() })
       .layoutWeight(1)
 
       Blank()
@@ -11387,6 +11397,7 @@ struct Index {
             labelRes: $r('app.string.notifications'),
             chipHeight: this.tabletButtonSize(),
             chipWidth: this.tabletSidebarItemWidth(),
+            iconSlotWidth: this.tabletButtonSize(),
             iconSize: Math.round(22 * this.tabletUiScale()),
             fontSize: Math.round(14 * this.tabletUiScale()),
             autoInvert: false,
@@ -11411,6 +11422,7 @@ struct Index {
             labelRes: $r('app.string.action_settings'),
             chipHeight: this.tabletButtonSize(),
             chipWidth: this.tabletSidebarItemWidth(),
+            iconSlotWidth: this.tabletButtonSize(),
             iconSize: Math.round(22 * this.tabletUiScale()),
             fontSize: Math.round(14 * this.tabletUiScale()),
             autoInvert: false,
@@ -11430,8 +11442,8 @@ struct Index {
         }
       }
       .width('100%')
-      .padding({ bottom: Math.round(16 * this.tabletUiScale()) })
-      .alignItems(HorizontalAlign.Center)
+      .padding({ left: this.tabletSidebarGutter(), bottom: Math.round(16 * this.tabletUiScale()) })
+      .alignItems(HorizontalAlign.Start)
     }
     .width(this.tabletSidebarWidth())
     .height('100%')

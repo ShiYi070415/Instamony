@@ -887,6 +887,8 @@ export struct MaterialChipButton {
   @Prop chipHeight: number = 28;
   /** 展开态要跟 tabbar 同宽时传侧边栏条目宽度（0 = 按内容自适应）。 */
   @Prop chipWidth: number = 0;
+  /** 图标固定槽宽（侧边栏展开时用：图标位置不动，文字往右长）。0 = 旧行为。 */
+  @Prop iconSlotWidth: number = 0;
   @Prop iconSize: number = 12;
   @Prop tint: string = '';
   /** 是否吞掉长按（见 MaterialSurface 里 swallowLongPress 的说明）。 */
@@ -916,9 +918,19 @@ export struct MaterialChipButton {
     Toggle({ type: ToggleType.Button, isOn: false }) {
       Row({ space: 6 }) {
         if (this.symbol !== null) {
-          SymbolGlyph(this.symbol)
-            .fontSize(this.iconSize)
-            .fontColor([this.inkColor()])
+          if (this.iconSlotWidth > 0) {
+            Stack({ alignContent: Alignment.Center }) {
+              SymbolGlyph(this.symbol)
+                .fontSize(this.iconSize)
+                .fontColor([this.inkColor()])
+            }
+            .width(this.iconSlotWidth)
+            .height(this.chipHeight)
+          } else {
+            SymbolGlyph(this.symbol)
+              .fontSize(this.iconSize)
+              .fontColor([this.inkColor()])
+          }
         }
         Text(this.labelText.length > 0 ? this.labelText : this.labelRes)
           .fontSize(this.fontSize)
@@ -933,7 +945,7 @@ export struct MaterialChipButton {
             .fontColor([this.inkColor()])
         }
       }
-      .padding({ left: 10, right: 10 })
+      .padding({ left: this.iconSlotWidth > 0 ? 0 : 10, right: 10 })
     }
     .height(this.chipHeight)
     .padding(0)
