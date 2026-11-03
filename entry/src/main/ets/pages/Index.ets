@@ -1616,6 +1616,11 @@ struct Index {
       && !this.reelsInRightPane();
   }
 
+  /** 设置页是否正压在左栏 Reels 上。 */
+  private settingsOverReels(): boolean {
+    return this.topPage === SETTINGS_PAGE || this.topPage === SETTINGS_DETAIL_PAGE;
+  }
+
   /** 当前 Reels 页是不是在右侧分页里（此时左侧不应再加侧边栏内缩）。 */
   private reelsInRightPane(): boolean {
     return this.tabletRightName === PROFILE_REELS_PAGE
@@ -1634,6 +1639,9 @@ struct Index {
 
   /** 只有左侧主 Reels 才让整个壳铺黑；右栏 Reels 只黑右栏自己。 */
   private reelsBackdropActive(): boolean {
+    if (this.settingsOverReels()) {
+      return false;
+    }
     if (this.tabletWideShell()
       && (this.topPage === PROFILE_REELS_PAGE || this.topPage === SEARCH_REELS_PAGE)) {
       return false;
@@ -8695,7 +8703,8 @@ struct Index {
 
   /** 左栏 Reels：侧边栏浮在视频/黑底上，所有图标统一白色。 */
   private reelsSidebarWhite(): boolean {
-    return this.tabletWideShell() && this.currentTab() === AppTab.Reels;
+    return this.tabletWideShell() && this.currentTab() === AppTab.Reels
+      && !this.settingsOverReels();
   }
 
   /**
@@ -11460,7 +11469,8 @@ struct Index {
     .height('100%')
     .padding({ top: 4 })
     // Reels 时侧边栏透明，让外层 Reels 黑底直接铺到侧边栏区域，并去掉侧边栏分割线。
-    .backgroundColor(this.reelsBackdropActive() ? Color.Transparent : $r('app.color.page_background'))
+    .backgroundColor(this.reelsBackdropActive() && !this.settingsOverReels()
+      ? Color.Transparent : $r('app.color.page_background'))
     .border({
       width: { right: this.reelsBackdropActive() ? 0 : 0.5 },
       color: $r('app.color.divider')
