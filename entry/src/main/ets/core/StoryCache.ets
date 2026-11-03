@@ -28,8 +28,8 @@ const DOMAIN: number = 0xFF00;
 const TAG: string = 'StoryCache';
 /** 预取窗口：当前用户之后的 8 位，覆盖快速连续切换。 */
 const DEPTH: number = 8;
-/** 只预下载每位用户第一条的封面，不再替后面的 story 白下流量。 */
-const PREFETCH_ITEMS: number = 1;
+/** 预下载每位用户前 3 条媒体：首屏更快，避免翻到该用户时现拉。 */
+const PREFETCH_ITEMS: number = 3;
 /** 快拍数据落盘缓存：24 小时（用户要求"复用率高"）。 */
 const STORE: string = 'instarmony_story_reels';
 const KEY: string = 'reels_v1';

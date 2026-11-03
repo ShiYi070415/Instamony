@@ -490,6 +490,9 @@ export struct StoryViewer {
   /** 卡片两面各自的可视度：不依赖翻页角度条件，拖动/动画中都能逐帧更新。 */
   @State private frontAlpha: number = 1;
   @State private backAlpha: number = 0;
+  /** 正面当前媒体是否已经能画出来（用来避免换卡完成时黑一帧）。 */
+  @State private frontMediaReady: boolean = false;
+  private pendingRevealFinal: boolean = false;
   /** 翻出去（0→180°）已经播完：此时数据没到就显示黑底加载图标。 */
   @State private flipOutDone: boolean = false;
   /** 数据已经提前到了，等翻页动画播完再显示。 */
@@ -602,6 +605,7 @@ export struct StoryViewer {
   /** 把一份 reel 应用到正面（翻页动画结束后才调用）。 */
   private applyDisplayReel(reel: StoryReel): void {
     this.displayReel = reel;
+    this.frontMediaReady = false;
     this.displayName = this.username;
     this.displayAvatar = this.avatarUrl;
     this.waiting = false;
@@ -702,9 +706,25 @@ export struct StoryViewer {
     this.pendingReveal = false;
     this.flipOutDone = false;
     /*
-     * 不要先隐藏背面：那样会在"背面已消失、正面还没亮"之间露出一帧黑。
-     * 先把卡片归零并亮正面，正面完整盖住后面的卡片 2；等这一帧画完再隐藏背面。
+     * 正面媒体还没真正画出来时先不要归零：让卡片 2 继续顶在 180° 显示目标用户，
+     * 等 Image/Video 报 ready 再切到正面，避免"换卡完成黑一下"。
      */
+    if (!this.frontMediaReady) {
+      this.pendingRevealFinal = true;
+      // 兜底：媒体迟迟不回调也不能永远停在卡片 2。
+      setTimeout((): void => {
+        if (this.pendingRevealFinal && !this.switching) {
+          this.finalizeReveal();
+        }
+      }, 2500);
+      return;
+    }
+    this.finalizeReveal();
+  }
+
+  /** 正面媒体就绪后，把卡片 2 的正面接过来。 */
+  private finalizeReveal(): void {
+    this.pendingRevealFinal = false;
     this.applyFlip(0);
     this.syncBackPreview(false);
     this.frontAlpha = 1;
@@ -713,6 +733,17 @@ export struct StoryViewer {
         this.backAlpha = 0;
       }
     }, 0);
+  }
+
+  /** 正面媒体加载完成：如果正等它，立刻完成换卡。 */
+  private markFrontMediaReady(): void {
+    if (this.frontMediaReady) {
+      return;
+    }
+    this.frontMediaReady = true;
+    if (this.pendingRevealFinal && !this.switching) {
+      this.finalizeReveal();
+    }
   }
 
   // ---------------------------------------------------------------- 翻卡片
@@ -1887,11 +1918,15 @@ export struct StoryViewer {
         .loop(false)
         // 全局静音（快拍 / highlight 与信息流、reels 共用同一个开关，见 SETTING_VIDEO_MUTED）
         .muted(this.muted)
+        .onPrepared((): void => {
+          this.markFrontMediaReady();
+        })
         .onFinish((): void => {
           // 播完 = 右半屏那一下，直接下一条（时钟那条兜底可能先到，next() 自己会判重）。
           this.next();
         })
-        .onError((): void => {
+.onError((): void => {
+          this.markFrontMediaReady();
           // 视频放不出来（CDN 被墙 / 解码不了）：别卡死在这儿，交给进度条按时长往下走。
           hilog.warn(DOMAIN, TAG, 'video error url=%{public}s',
             this.currentVideo().substring(0, 80));
@@ -1906,6 +1941,12 @@ export struct StoryViewer {
         // 同视频：媒体区按真实比例算好了，`Cover` 不裁也不留黑边。
         .objectFit(ImageFit.Cover)
         .draggable(false)
+        .onComplete((): void => {
+          this.markFrontMediaReady();
+        })
+        .onError((): void => {
+          this.markFrontMediaReady();
+        })
     }
   }
 
