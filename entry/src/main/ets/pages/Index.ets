@@ -8544,34 +8544,33 @@ struct Index {
   }
 
   /** 二级页（通知 / 设定）标题栏样式：不做滚动模糊，其余同上。 */
-  /** 右栏 Reels：标题栏保持原样，只把返回/菜单按钮的材质改成深色。 */
+  /** 右栏 Reels：本地浅色标题栏（不跟着系统深色模式变黑）。 */
   private reelsDestinationTitleStyle(): TitleBarStyleOptions {
     const style: TitleBarStyleOptions = this.destinationTitleStyle();
-    // 动态样式只有开启 scrollEffect 时 HDS 才会读取 originalStyle/scrollEffectStyle。
     style.scrollEffectOpts = {
       enableScrollEffect: true,
       scrollEffectType: ScrollEffectType.COMMON_BLUR
     };
-    const darkButtons: HdsNavigationTitleBarStyle = {
-      // 半透明深色压在系统模糊材质上：不是整条纯黑，而是"深色模糊"。
-      backgroundStyle: { backgroundColor: '#66000000' },
+    const lightBar: HdsNavigationTitleBarStyle = {
+      // 高不透明度白色压在模糊层上，视觉上是浅色标题栏。
+      backgroundStyle: { backgroundColor: '#F2FFFFFF' },
       contentStyle: {
-        titleStyle: { mainTitleColor: Color.White },
-        // 和动作区一致：按钮自身透明，只留白色图标；不要 HDS 默认的纯白胶囊底。
+        titleStyle: { mainTitleColor: '#111111' },
         backIconStyle: {
           backgroundColor: Color.Transparent,
-          iconColor: Color.White,
-          textColor: Color.White
+          iconColor: '#111111',
+          textColor: '#111111'
         },
         menuStyle: {
           backgroundColor: Color.Transparent,
-          iconColor: Color.White,
-          textColor: Color.White
-        }
+          iconColor: '#111111',
+          textColor: '#111111'
+        },
+        dividerStyle: { dividerColor: '#1A000000' }
       }
     };
-    style.originalStyle = darkButtons;
-    style.scrollEffectStyle = darkButtons;
+    style.originalStyle = lightBar;
+    style.scrollEffectStyle = lightBar;
     return style;
   }
 
@@ -12049,7 +12048,7 @@ struct Index {
           // 需求："除了底栏 reels，其他 reels 页面右上角没有静音和下载按钮，添加一下"。
           menu: this.reelsMenu(ReelsAction.PROFILE)
         },
-        style: this.destinationTitleStyle(),
+        style: this.tabletHomeScoped() ? this.reelsDestinationTitleStyle() : this.destinationTitleStyle(),
         avoidLayoutSafeArea: false,
         enableComponentSafeArea: false
       })
@@ -12095,7 +12094,7 @@ struct Index {
           // 同视频分页那一页：右上角补上静音 / 下载（需求）。
           menu: this.reelsMenu(ReelsAction.SEARCH)
         },
-        style: this.destinationTitleStyle(),
+        style: this.tabletHomeScoped() ? this.reelsDestinationTitleStyle() : this.destinationTitleStyle(),
         avoidLayoutSafeArea: false,
         enableComponentSafeArea: false
       })
