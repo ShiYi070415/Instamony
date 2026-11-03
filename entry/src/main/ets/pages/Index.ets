@@ -9179,8 +9179,8 @@ struct Index {
      */
     if (this.currentTab() === AppTab.Reels) {
       return {
-        // 标题由 stackBuilder 里自己画（见 reelsTitleSegment），这里留空。
-        title: { mainTitle: '' },
+        // 标题交给 HDS 原生 mainTitle；stackBuilder 只放分段按钮和右侧菜单。
+        title: { mainTitle: $r('app.string.reels_page_title') },
         // Reels 的静音/下载改到页面右上角、分段按钮下方（见 reelsFloatingMenus）。
         menu: { value: [] },
         /*
@@ -9730,13 +9730,7 @@ struct Index {
   @Builder
   reelsTitleSegment() {
     Row() {
-      Text(this.pageTitle())
-        .fontSize(REELS_TITLE_SIZE)
-        .fontWeight(FontWeight.Bold)
-        // Reels 标题是自绘的，必须单独写白色（HDS contentStyle 管不到它）。
-        .fontColor(Color.White)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
+      // 标题由 HDS 的 mainTitle 画；这里留空把分段按钮推到右侧。
       Blank()
       Column() {
         ProfileSegmentBar({
