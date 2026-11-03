@@ -11645,10 +11645,11 @@ struct Index {
           },
           // 设置首页点一项：新开一个 NavDestination（返回键回设置首页）。
           onOpenSection: (section: string): void => {
-            this.pushPage(SETTINGS_DETAIL_PAGE, section);
+            // 右栏里必须压栈，不能 replace，否则设置首页被二级页顶掉、返回回不去。
+            this.pushPage(SETTINGS_DETAIL_PAGE, section, true);
           },
           onOpenSponsor: (): void => {
-            this.pushPage(SPONSOR_PAGE);
+            this.pushPage(SPONSOR_PAGE, '', true);
           }
         })
       }
