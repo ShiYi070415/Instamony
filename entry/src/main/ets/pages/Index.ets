@@ -8705,9 +8705,9 @@ struct Index {
       return 0;
     }
     // 非全屏页外层已经用 margin 让开侧边栏；全屏 Reels 才需要补整段侧边栏。
-    // 两种页面最后都额外留 8vp，标题起点才一致。
+    // 两种页面最后都额外留 13vp，标题起点才一致。
     const base: number = this.reelsFullBleed() ? this.tabletSidebarWidth() : 0;
-    return base + 8;
+    return base + 13;
   }
 
   /**
