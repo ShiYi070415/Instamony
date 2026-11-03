@@ -2131,8 +2131,9 @@ export struct StoryViewer {
     .borderRadius(CARD_RADIUS_VP)
     .clip(true)
     .backgroundColor(Color.Black)
-    // 卡片 2 与卡片 1 背对背：先转 180°，父层再转 180° 时正好正向。
-    .rotate({ x: 0, y: 1, z: 0, angle: 180 })
+    // 卡片 2 与卡片 1 背对背：按本次旋转方向预转 ±180°，
+    // 这样父层 90°→180° 的过程中它从侧面逐渐转正，而不是等最后才出现。
+    .rotate({ x: 0, y: 1, z: 0, angle: this.flipAngle > 0 ? -180 : 180 })
     .opacity(this.flipAngle > 90 ? 1 : 0)
     .enabled(false)
     .hitTestBehavior(HitTestMode.None)
