@@ -8694,13 +8694,9 @@ struct Index {
     return this.tabletWideShell() && this.currentTab() === AppTab.Reels;
   }
 
-  /** 左栏各 tab 的 HDS 标题栏左边距：让开浮层侧边栏，并留一点缝。 */
+  /** 所有左栏 tab 的 HDS 标题栏左边距：统一让开浮层侧边栏，并留一点缝。 */
   private reelsTitleBarLeftVp(): number {
     if (!this.tabletWideShell()) {
-      return 0;
-    }
-    const tab: AppTab = this.currentTab();
-    if (tab !== AppTab.Reels && tab !== AppTab.Search && tab !== AppTab.Profile) {
       return 0;
     }
     return this.tabletSidebarWidth() + 12;
