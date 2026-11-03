@@ -1215,6 +1215,13 @@ struct ReelSlide {
       }
       .width('100%')
       .aspectRatio(this.aspect())
+      // 只让卡片本身避让 HDS 标题栏：页面背景 / 信息层仍然整页铺满。
+      .margin({ top: this.chromeHidden ? 0 : HDS_TITLE_OFFSET_VP })
+      .constraintSize({
+        maxHeight: this.chromeHidden
+          ? '100%'
+          : `calc(100% - ${HDS_TITLE_OFFSET_VP}vp)`
+      })
       // 竖屏视频（高 > 屏高）超出的部分在**外层**被裁掉，而不是把画面压扁。
       .clip(true)
 
@@ -3427,9 +3434,6 @@ export struct ReelsPage {
         }
         .width('100%')
         .height('100%')
-        // 卡片顶部避让 HDS 标题栏；控件隐藏时标题栏也收起，卡片重新铺满。
-        .padding({ top: this.chromeHidden ? 0 : HDS_TITLE_OFFSET_VP })
-        .animation({ duration: 220, curve: Curve.EaseOut })
         .vertical(true)
         .loop(false)
         .indicator(false)
