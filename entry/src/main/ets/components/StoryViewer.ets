@@ -2126,7 +2126,7 @@ export struct StoryViewer {
     .backgroundColor(Color.Black)
     // 卡片 2 与卡片 1 背对背：先转 180°，父层再转 180° 时正好正向。
     .rotate({ x: 0, y: 1, z: 0, angle: 180 })
-    .opacity(this.flipAngle > 90 ? 1 : 0)
+    .opacity(1)
     .enabled(false)
     .hitTestBehavior(HitTestMode.None)
   }
@@ -2194,6 +2194,8 @@ export struct StoryViewer {
          * **不用** translate/scale 做转场几何：那两个在 ArkUI 里是相乘的，落点会算不准（踩过）。
          */
         Stack({ alignContent: Alignment.TopStart }) {
+        // 卡片 2 永远在卡片 1 后面；卡片 1 转过 90° 后隐藏，背面自然露出。
+        this.backCardFace()
         /*
          * 内容**只在动画跑完之后才挂**（见 contentMounted）：动画那几百毫秒里这一层只有一块
          * 底色，重排几乎为零；等卡片到位再把媒体 / 资讯栏挂上来淡入。
@@ -2205,7 +2207,8 @@ export struct StoryViewer {
           }
           .width('100%')
           .height('100%')
-          .opacity(this.contentAlpha)
+          .opacity(this.flipAngle > 90 ? 0 : this.contentAlpha)
+          .enabled(this.flipAngle <= 90)
         }
 
         /*
@@ -2232,13 +2235,14 @@ export struct StoryViewer {
           .objectFit(ImageFit.Cover)
           .draggable(false)
           .backgroundColor('#333333')
+          .opacity(this.flipAngle > 90 ? 0 : 1)
+          .enabled(this.flipAngle <= 90)
           // 收起动画还在播的时候点头像 = 掉头重新展开（需求）。
           .onClick((): void => {
             if (this.closing) {
               this.reopen();
             }
           })
-        this.backCardFace()
       }
       .width(this.open ? this.cardW() : this.cardClosedW())
       .height(this.open ? this.mediaH() : this.cardClosedW())
