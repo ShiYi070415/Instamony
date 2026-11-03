@@ -1895,26 +1895,47 @@ struct Index {
     const tab: AppTab = this.currentTab();
     if (tab === AppTab.Profile) {
       // 「我的」页自己的动作绑到标题栏菜单上（页内右上角那颗 more 按钮保留，两处都能进设定）。
-      return {
-        value: [
-          {
-            content: {
-              // 当前账号头像作为菜单按钮，点开仍是原来的账号选单浮层。
-              icon: this.accountMenuIcon(),
-              label: this.titleAccountName(),
-              // 头像用大图标档，尽量填满 40vp 的菜单按钮。
-              type: IconStyleMode.LARGE,
-              action: (): void => {
-                this.openAccountMenu();
-              }
+      const profileItems: Array<HdsNavigationMenuItemOptions> = [];
+      // 没有侧边栏（手机/窄窗口）时，侧边栏底部的设置入口收进标题栏。
+      if (!this.tabletWideShell()) {
+        profileItems.push({
+          content: {
+            icon: $r('sys.symbol.more'),
+            label: $r('app.string.action_settings'),
+            action: (): void => {
+              this.openSettings();
             }
           }
-        ]
-      };
+        });
+      }
+      profileItems.push({
+        content: {
+          // 当前账号头像作为菜单按钮，点开仍是原来的账号选单浮层。
+          icon: this.accountMenuIcon(),
+          label: this.titleAccountName(),
+          // 头像用大图标档，尽量填满 40vp 的菜单按钮。
+          type: IconStyleMode.LARGE,
+          action: (): void => {
+            this.openAccountMenu();
+          }
+        }
+      });
+      return { value: profileItems };
     }
     if (tab === AppTab.Home) {
-      // 只留上传（加号）：通知入口已移到平板侧边栏底部。
       const items: Array<HdsNavigationMenuItemOptions> = [];
+      // 没有侧边栏时，通知入口收进首页标题栏；有侧边栏时仍在侧边栏底部。
+      if (!this.tabletWideShell()) {
+        items.push({
+          content: {
+            icon: $r('sys.symbol.heart'),
+            label: $r('app.string.notifications'),
+            action: (): void => {
+              this.openNotifications();
+            }
+          }
+        });
+      }
       items.push({
         content: {
           icon: $r('sys.symbol.plus'),
