@@ -8682,8 +8682,16 @@ struct Index {
    * 深色背景用浅色图标"，而且不用我们自己盯像素。
    * 写死色值（`#FFFFFF` 之类）不会参与反色，所以这里一个都不能有。
    */
-  private tabIconColor(selected: boolean): Resource {
+  private tabIconColor(selected: boolean): ResourceColor {
+    if (this.reelsSidebarWhite()) {
+      return Color.White;
+    }
     return selected ? $r('sys.color.font_primary') : $r('sys.color.font_secondary');
+  }
+
+  /** 左栏 Reels：侧边栏浮在视频/黑底上，所有图标统一白色。 */
+  private reelsSidebarWhite(): boolean {
+    return this.tabletWideShell() && this.currentTab() === AppTab.Reels;
   }
 
   /**
@@ -11333,6 +11341,7 @@ struct Index {
           iconSize: Math.round(22 * this.tabletUiScale()),
           fontSize: Math.round(14 * this.tabletUiScale()),
           autoInvert: false,
+          tint: this.reelsSidebarWhite() ? '#FFFFFF' : '',
           onTap: (): void => {
             this.toggleTabletSidebar(!this.tabletSidebarExpanded);
           }
@@ -11423,6 +11432,7 @@ struct Index {
           iconSize: Math.round(22 * this.tabletUiScale()),
           fontSize: Math.round(14 * this.tabletUiScale()),
           autoInvert: false,
+          tint: this.reelsSidebarWhite() ? '#FFFFFF' : '',
           onTap: (): void => {
             this.openNotifications();
           }
@@ -11440,6 +11450,7 @@ struct Index {
           iconSize: Math.round(22 * this.tabletUiScale()),
           fontSize: Math.round(14 * this.tabletUiScale()),
           autoInvert: false,
+          tint: this.reelsSidebarWhite() ? '#FFFFFF' : '',
           onTap: (): void => {
             this.openSettings();
           }
