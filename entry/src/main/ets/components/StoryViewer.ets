@@ -474,6 +474,10 @@ export struct StoryViewer {
    * 翻到最陡时把内容换成新用户，再翻回来 —— 就是"换了一张卡"的观感。
    * 它是叠在**几何**上的额外变换：静止时是 0，所以完全不影响卡片/头像的落点。
    */
+  /** 当前**实际渲染**的 reel：翻页动画期间不跟着宿主的新 reel 变，等翻完再换。 */
+  @State private displayReel: StoryReel = EMPTY_REEL;
+  /** 翻页期间到达、等动画播完后再应用的新 reel。 */
+  private pendingReel: StoryReel | null = null;
   @State private flipAngle: number = 0;
   /** 翻出去（0→180°）已经播完：此时数据没到就显示黑底加载图标。 */
   @State private flipOutDone: boolean = false;
@@ -522,6 +526,7 @@ export struct StoryViewer {
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'screen size failed: %{public}s', (error as Error).message ?? '-');
     }
+    this.displayReel = this.reel;
     this.restartItem();
     /*
      * **预构建**的那一步挪到 `onAppear` 的定时器里（量完浮层尺寸之后，见那里的 setTimeout）：
@@ -533,7 +538,7 @@ export struct StoryViewer {
       this.tick();
     }, TICK_MS);
     hilog.info(DOMAIN, TAG, 'open uid=%{public}s n=%{public}d hero=%{public}s,%{public}s %{public}dx%{public}s',
-      this.reel.userId, this.reel.items.length, `${Math.round(this.heroX)}`, `${Math.round(this.heroY)}`,
+      this.reel.userId, this.displayReel.items.length, `${Math.round(this.heroX)}`, `${Math.round(this.heroY)}`,
       `${Math.round(this.heroW)}`, `${Math.round(this.heroH)}`);
   }
 
@@ -570,22 +575,27 @@ export struct StoryViewer {
   private onReelChanged(): void {
     hilog.info(DOMAIN, TAG, 'next user uid=%{public}s n=%{public}d',
       this.reel.userId, this.reel.items.length);
+    // 翻页中数据到了：只存起来，不要换正面正在渲染的 reel；
+    // 否则正面会在旋转途中直接变成下一位，看起来就是"没动画直接出现"。
+    if (this.switching) {
+      this.pendingReel = this.reel;
+      this.flipIn();
+      return;
+    }
+    this.applyDisplayReel(this.reel);
+  }
+
+  /** 把一份 reel 应用到正面（翻页动画结束后才调用）。 */
+  private applyDisplayReel(reel: StoryReel): void {
+    this.displayReel = reel;
     this.waiting = false;
     this.paused = false;
     this.index = 0;
     this.restartItem();
-    // 数据到了就立刻把内容建好（预构建，见 aboutToAppear 的说明）：不用等展开动画结束。
     this.contentMounted = true;
-    /*
-     * 数据是"卡片已经开着"的时候才到的（宿主先弹卡片后取数）：
-     * 这时媒体节点是新建的，`autoPlay(this.open && this.contentMounted)` 已经能起播，
-     * 这里再补一记 start()，免得 Video 的 autoPlay 属性变更在某些版本上不触发播放。
-     */
     if (this.open && this.contentMounted && this.currentIsVideo()) {
       this.videoController.start();
     }
-    // 正在翻卡片：新数据到了就弹回来（见 beginUserSwitch）。
-    this.flipIn();
   }
 
   // ---------------------------------------------------------------- 换用户时的翻卡片
@@ -660,6 +670,11 @@ export struct StoryViewer {
     if (this.flipOutTimer >= 0) {
       clearTimeout(this.flipOutTimer);
       this.flipOutTimer = -1;
+    }
+    if (this.pendingReel !== null) {
+      const incoming: StoryReel = this.pendingReel;
+      this.pendingReel = null;
+      this.applyDisplayReel(incoming);
     }
     this.switching = false;
     this.pendingReveal = false;
@@ -1198,7 +1213,7 @@ export struct StoryViewer {
 
   private tick(): void {
     // 数据还没到（宿主是"先弹卡片、后到数据"，见 Index.openStory）：进度条不动、也不会往下跳。
-    if (this.paused || this.waiting || this.dragPaused || !this.open || this.reel.items.length === 0) {
+    if (this.paused || this.waiting || this.dragPaused || !this.open || this.displayReel.items.length === 0) {
       // 暂停（或正在取下一位 / 手指正按着 / 展开动画还没跑完）时把起播时刻往后推，
       // 恢复后进度条接着走（不是跳回去）。展开动画那 300ms 不推进度：那段时间进度条本身
       // 还在淡入，推进去只是白白让这一页重绘。
@@ -1231,10 +1246,10 @@ export struct StoryViewer {
       return;
     }
     // 数据还没到（空 reel）：什么都不做，等 @Watch 把数据换上来。
-    if (this.reel.items.length === 0) {
+    if (this.displayReel.items.length === 0) {
       return;
     }
-    if (this.index + 1 >= this.reel.items.length) {
+    if (this.index + 1 >= this.displayReel.items.length) {
       if (this.hasNextUser) {
         this.waiting = true;
         // 换用户：先翻出去，新数据到了再弹回来（见 beginUserSwitch / onReelChanged）。
@@ -1279,7 +1294,7 @@ export struct StoryViewer {
       return;
     }
     // 数据还没到：不做任何事。
-    if (this.reel.items.length === 0) {
+    if (this.displayReel.items.length === 0) {
       return;
     }
     if (this.index > 0) {
@@ -1309,7 +1324,7 @@ export struct StoryViewer {
   }
 
   private currentItem(): StoryItem | null {
-    const items: Array<StoryItem> = this.reel.items;
+    const items: Array<StoryItem> = this.displayReel.items;
     if (items.length === 0) {
       return null;
     }
@@ -1412,14 +1427,14 @@ export struct StoryViewer {
     if (this.username.length > 0) {
       return this.username;
     }
-    return this.reel.username;
+    return this.displayReel.username;
   }
 
   private avatarNow(): string {
     if (this.avatarUrl.length > 0) {
       return this.avatarUrl;
     }
-    return this.reel.avatarUrl;
+    return this.displayReel.avatarUrl;
   }
 
   /** 起始矩形的四个值（量不到就给兜底，见 FALLBACK_W）。 */
@@ -1557,7 +1572,7 @@ export struct StoryViewer {
 
   /** 一段进度条占多宽（去掉留白与段间距后均分）—— 有几张就分几段（需求）。 */
   private segWidth(): number {
-    const count: number = this.reel.items.length;
+    const count: number = this.displayReel.items.length;
     if (count <= 0) {
       return 0;
     }
@@ -1613,7 +1628,7 @@ export struct StoryViewer {
     const item: StoryItem | null = this.currentItem();
     hilog.info(DOMAIN, TAG,
       'media %{public}s i=%{public}d/%{public}d video=%{public}s size=%{public}dx%{public}d aspect=%{public}d.%{public}d area=%{public}dx%{public}d',
-      tag, this.index, this.reel.items.length,
+      tag, this.index, this.displayReel.items.length,
       item === null ? '-' : `${item.isVideo()}`,
       item === null ? 0 : item.width, item === null ? 0 : item.height,
       Math.floor(this.mediaAspect()), Math.round((this.mediaAspect() % 1) * 100),
@@ -1623,7 +1638,7 @@ export struct StoryViewer {
   @Builder
   progressBar() {
     Row() {
-      ForEach(this.reel.items, (one: StoryItem, position: number): void => {
+      ForEach(this.displayReel.items, (one: StoryItem, position: number): void => {
         Row() {
           Row()
             .width(this.segFill(position))
@@ -1763,7 +1778,7 @@ export struct StoryViewer {
   /** 媒体：视频就真播（自动起播），图片就按进度条停着；**数据还没到就给个转圈**。 */
   @Builder
   mediaLayer() {
-    if (this.reel.items.length === 0) {
+    if (this.displayReel.items.length === 0) {
       // 宿主是"先弹卡片、后取数据"（见 Index.openStory）：这一段是空窗期。
       LoadingProgress()
         .width(36)
@@ -2104,18 +2119,15 @@ export struct StoryViewer {
       .alignItems(HorizontalAlign.End)
       .padding({ right: 12, bottom: 12 })
     }
-    .width(this.cardW())
-    .height(this.mediaH())
-    .position({ x: this.cardX(), y: this.cardY() })
+    .width('100%')
+    .height('100%')
     .borderRadius(CARD_RADIUS_VP)
     .clip(true)
     .backgroundColor(Color.Black)
+    // 卡片 2 与卡片 1 背对背：先转 180°，父层再转 180° 时正好正向。
+    .rotate({ x: 0, y: 1, z: 0, angle: 180 })
     .opacity(this.flipAngle > 90 ? 1 : 0)
-    // 翻到背面之前完全移出布局/触摸树：否则这张全尺寸图层会挡住卡片手势。
-    .visibility(this.flipAngle > 90 ? Visibility.Visible : Visibility.None)
     .enabled(false)
-    .translate({ y: this.dragY })
-    .scale({ x: this.exitScale, y: this.exitScale })
     .hitTestBehavior(HitTestMode.None)
   }
 
@@ -2226,6 +2238,7 @@ export struct StoryViewer {
               this.reopen();
             }
           })
+        this.backCardFace()
       }
       .width(this.open ? this.cardW() : this.cardClosedW())
       .height(this.open ? this.mediaH() : this.cardClosedW())
@@ -2275,7 +2288,6 @@ export struct StoryViewer {
             this.swipeRelease(event.offsetX);
           })
       )
-      this.backCardFace()
       }
       .width('100%')
       .height(this.clipH > 0 ? this.clipH : this.overlayH)
@@ -2368,7 +2380,7 @@ export struct StoryViewer {
          * 量完尺寸**再**挂内容（预构建）：这时卡片和媒体区用的是同一套 `overlayW/H`，
          * 不会差出一截黑边；而且仍在展开动画之前，所以"点开时已经构建好"照样成立。
          */
-        if (this.reel.items.length > 0) {
+        if (this.displayReel.items.length > 0) {
           this.contentMounted = true;
         }
         this.expand();
