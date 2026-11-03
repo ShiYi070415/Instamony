@@ -221,11 +221,11 @@ export struct StoryViewer {
   /** 头像（同上；转场飞的就是这张图）。 */
   @Prop avatarUrl: string = '';
   /** 下一位用户已经预取好的 reel / 资料：只用于卡片背面**提前渲染**，不参与当前播放。 */
-  @Prop nextReel: StoryReel = EMPTY_REEL;
+  @Prop @Watch('onBackSourceChanged') nextReel: StoryReel = EMPTY_REEL;
   @Prop nextUsername: string = '';
   @Prop nextAvatar: string = '';
   /** 上一位用户：右滑时卡片背面显示他/她的快拍。 */
-  @Prop prevReel: StoryReel = EMPTY_REEL;
+  @Prop @Watch('onBackSourceChanged') prevReel: StoryReel = EMPTY_REEL;
   @Prop prevUsername: string = '';
   @Prop prevAvatar: string = '';
   /** 后面还有没有下一位用户（最后一条的右半屏据此决定"接续"还是"收页"）。 */
@@ -479,6 +479,11 @@ export struct StoryViewer {
   /** 正面资讯栏也冻结到翻页结束，避免翻页途中名字/头像先变。 */
   @State private displayName: string = '';
   @State private displayAvatar: string = '';
+  /** 背面快照：翻页期间冻结，避免宿主更新 nextReel 时闪到再下一位。 */
+  @State private backDisplayReel: StoryReel = EMPTY_REEL;
+  @State private backDisplayName: string = '';
+  @State private backDisplayAvatar: string = '';
+  private backDisplayPrev: boolean = false;
   /** 翻页期间到达、等动画播完后再应用的新 reel。 */
   private pendingReel: StoryReel | null = null;
   @State private flipAngle: number = 0;
@@ -535,6 +540,7 @@ export struct StoryViewer {
     this.displayReel = this.reel;
     this.displayName = this.username;
     this.displayAvatar = this.avatarUrl;
+    this.syncBackPreview(false);
     this.restartItem();
     /*
      * **预构建**的那一步挪到 `onAppear` 的定时器里（量完浮层尺寸之后，见那里的 setTimeout）：
@@ -619,6 +625,8 @@ export struct StoryViewer {
     if (this.switching) {
       return;
     }
+    // 先冻结背面数据：动画期间宿主更新 nextReel 也不会闪到再下一位。
+    this.syncBackPreview(dir < 0);
     this.switching = true;
     this.flipOutDone = false;
     this.pendingReveal = false;
@@ -693,9 +701,12 @@ export struct StoryViewer {
     this.switching = false;
     this.pendingReveal = false;
     this.flipOutDone = false;
-    this.frontAlpha = 1;
+    // 顺序很关键：先隐藏背面，再归零，再换背面快照，最后才亮正面。
+    // 否则背面会在 0° 的那一帧露出"再下一位"。
     this.backAlpha = 0;
     this.applyFlip(0);
+    this.syncBackPreview(false);
+    this.frontAlpha = 1;
   }
 
   // ---------------------------------------------------------------- 翻卡片
@@ -738,6 +749,10 @@ export struct StoryViewer {
     const ratio: number = Math.max(-1, Math.min(1, offsetX / width));
     // 跟手是**逐帧直接赋值**（不套 animateTo），所以三个量在这里一起写（见 applyFlip）。
     this.applyFlip(ratio * FLIP_MAX_ANGLE);
+    const wantPrev: boolean = ratio > 0;
+    if (wantPrev !== this.backDisplayPrev) {
+      this.syncBackPreview(wantPrev);
+    }
     this.syncFaceVisibility();
   }
 
@@ -1384,21 +1399,42 @@ export struct StoryViewer {
     return item === null ? `story-${Date.now()}` : `story-${item.id}`;
   }
 
-  /** 背面预览用：按旋转方向选下一位/上一位，只渲染，不参与当前播放。 */
+  /** 把宿主给的下一位/上一位复制成背面快照；翻页期间不再跟着 props 变。 */
+  private syncBackPreview(prev: boolean): void {
+    this.backDisplayPrev = prev;
+    if (prev) {
+      this.backDisplayReel = this.prevReel;
+      this.backDisplayName = this.prevUsername;
+      this.backDisplayAvatar = this.prevAvatar;
+    } else {
+      this.backDisplayReel = this.nextReel;
+      this.backDisplayName = this.nextUsername;
+      this.backDisplayAvatar = this.nextAvatar;
+    }
+  }
+
+  /** 宿主更新下一位/上一位时：空闲状态才同步，翻页中冻结。 */
+  private onBackSourceChanged(): void {
+    if (this.switching || Math.abs(this.flipAngle) > 1) {
+      return;
+    }
+    this.syncBackPreview(false);
+  }
+
   private backIsPrev(): boolean {
-    return this.flipAngle > 0;
+    return this.backDisplayPrev;
   }
 
   private backReel(): StoryReel {
-    return this.backIsPrev() ? this.prevReel : this.nextReel;
+    return this.backDisplayReel;
   }
 
   private backUsername(): string {
-    return this.backIsPrev() ? this.prevUsername : this.nextUsername;
+    return this.backDisplayName;
   }
 
   private backAvatar(): string {
-    return this.backIsPrev() ? this.prevAvatar : this.nextAvatar;
+    return this.backDisplayAvatar;
   }
 
   private backFirstItem(): StoryItem | null {
