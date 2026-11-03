@@ -1147,6 +1147,8 @@ struct Index {
   @State selectedIndex: number = 0;
   /** 平板侧边栏是否展开（宽屏专用）。 */
   @State private tabletSidebarExpanded: boolean = false;
+  /** 0..1 的展开进度：动画被打断时从当前进度反向，不会跳回端点。 */
+  @State private tabletSidebarProgress: number = 0;
   /** 壳子的实际窗口宽度（vp），窗口缩放时更新；侧栏按钮按它等比缩放。 */
   @State private shellWidthVp: number = 0;
   /** 壳子的实际窗口高度（vp）：快拍/信息流按 9:16 收口时要用。 */
@@ -7335,16 +7337,16 @@ struct Index {
 
   /** 侧边栏实际宽度（和 tabletSidebar 的 .width 同源）。 */
   private tabletSidebarWidth(): number {
-    return this.tabletSidebarExpanded
-      ? Math.round(220 * this.tabletUiScale())
-      : this.tabletButtonSize() + 28;
+    const collapsed: number = this.tabletButtonSize() + 28;
+    const expanded: number = Math.round(220 * this.tabletUiScale());
+    return Math.round(collapsed + (expanded - collapsed) * this.tabletSidebarProgress);
   }
 
   /** 展开时内部胶囊/条目的宽度；收起时等于圆按钮直径。 */
   private tabletSidebarItemWidth(): number {
-    return this.tabletSidebarExpanded
-      ? Math.round(196 * this.tabletUiScale())
-      : this.tabletButtonSize();
+    const collapsed: number = this.tabletButtonSize();
+    const expanded: number = Math.round(196 * this.tabletUiScale());
+    return Math.round(collapsed + (expanded - collapsed) * this.tabletSidebarProgress);
   }
 
   /** 侧边栏内容统一的左边距：收起/展开图标中心都不动。 */
@@ -7354,11 +7356,13 @@ struct Index {
 
   /** 侧边栏展开/收起：弹性动画。 */
   private toggleTabletSidebar(expand: boolean): void {
+    // 状态先切（文本/图标用），宽度走 0..1 进度；中途再点会从当前进度反向。
+    this.tabletSidebarExpanded = expand;
     this.getUIContext().animateTo({
       duration: 320,
       curve: curves.springMotion(0.42, 0.82)
     }, (): void => {
-      this.tabletSidebarExpanded = expand;
+      this.tabletSidebarProgress = expand ? 1 : 0;
     });
   }
 
