@@ -505,6 +505,8 @@ export struct StoryViewer {
   private flipAt: number = 0;
   /** 新数据提前到了的话，用它把"翻回来"推迟到翻出去播完之后。 */
   private flipInTimer: number = -1;
+  /** `flipOut` 的兜底计时器：`animateTo.onFinish` 在个别设备上会被下一帧吞掉。 */
+  private flipOutTimer: number = -1;
   /** 视频控制器（长按暂停 / 恢复要用）。 */
   private videoController: VideoController = new VideoController();
 
@@ -550,6 +552,10 @@ export struct StoryViewer {
       clearTimeout(this.flipInTimer);
       this.flipInTimer = -1;
     }
+    if (this.flipOutTimer >= 0) {
+      clearTimeout(this.flipOutTimer);
+      this.flipOutTimer = -1;
+    }
     if (this.pocketExitTimer >= 0) {
       clearTimeout(this.pocketExitTimer);
       this.pocketExitTimer = -1;
@@ -594,6 +600,23 @@ export struct StoryViewer {
     this.pendingReveal = false;
     this.flipDir = dir;
     this.flipAt = Date.now();
+    if (this.flipOutTimer >= 0) {
+      clearTimeout(this.flipOutTimer);
+      this.flipOutTimer = -1;
+    }
+    // 兜底：动画的 onFinish 万一没来，也必须进入"翻完/加载"状态，不能卡死。
+    this.flipOutTimer = setTimeout((): void => {
+      this.flipOutTimer = -1;
+      if (!this.switching || this.flipOutDone) {
+        return;
+      }
+      // 动画被系统丢帧时也强制到最终面，避免停在半翻角度。
+      this.applyFlip(-this.flipDir * FLIP_MAX_ANGLE);
+      this.flipOutDone = true;
+      if (this.pendingReveal) {
+        this.revealNext();
+      }
+    }, FLIP_OUT_MS + 40);
     // 角度取**反方向**：接下一位是往左翻、回上一位往右翻（用户反馈原来的方向是反的）。
     // 从**当前角度**接着转（跟手拖到一半松手时就是从这里继续），不是从 0 重来。
     animateTo({
@@ -630,6 +653,10 @@ export struct StoryViewer {
 
   /** 动画已经完整播完（或数据提前到了等它播完）：直接显示下一张的正面。 */
   private revealNext(): void {
+    if (this.flipOutTimer >= 0) {
+      clearTimeout(this.flipOutTimer);
+      this.flipOutTimer = -1;
+    }
     this.switching = false;
     this.pendingReveal = false;
     this.flipOutDone = false;
@@ -704,6 +731,10 @@ export struct StoryViewer {
     if (this.flipInTimer >= 0) {
       clearTimeout(this.flipInTimer);
       this.flipInTimer = -1;
+    }
+    if (this.flipOutTimer >= 0) {
+      clearTimeout(this.flipOutTimer);
+      this.flipOutTimer = -1;
     }
     this.switching = false;
     this.pendingReveal = false;
@@ -1853,18 +1884,21 @@ export struct StoryViewer {
        * 翻页动画已经完整播完（0→180°），但下一位的数据还没到：
        * 黑屏 + 居中加载图标。动画不再等数据，所以不会卡在 45°。
        */
-      if (this.switching && this.flipOutDone) {
+      if (this.flipAngle > 90) {
         Column() {
-          LoadingProgress()
-            .width(44)
-            .height(44)
-            .color('#FFFFFF')
+          if (this.switching && this.flipOutDone) {
+            LoadingProgress()
+              .width(44)
+              .height(44)
+              .color('#FFFFFF')
+          }
         }
         .width('100%')
         .height('100%')
         .justifyContent(FlexAlign.Center)
         .backgroundColor('#000000')
-        .hitTestBehavior(HitTestMode.Block)
+        // 不吃手势：加载期间仍然可以下滑收起 / 继续滑动，不能把卡片锁死。
+        .hitTestBehavior(HitTestMode.Transparent)
       }
 
       /*
