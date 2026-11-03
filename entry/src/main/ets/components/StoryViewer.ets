@@ -476,6 +476,9 @@ export struct StoryViewer {
    */
   /** 当前**实际渲染**的 reel：翻页动画期间不跟着宿主的新 reel 变，等翻完再换。 */
   @State private displayReel: StoryReel = EMPTY_REEL;
+  /** 正面资讯栏也冻结到翻页结束，避免翻页途中名字/头像先变。 */
+  @State private displayName: string = '';
+  @State private displayAvatar: string = '';
   /** 翻页期间到达、等动画播完后再应用的新 reel。 */
   private pendingReel: StoryReel | null = null;
   @State private flipAngle: number = 0;
@@ -527,6 +530,8 @@ export struct StoryViewer {
       hilog.warn(DOMAIN, TAG, 'screen size failed: %{public}s', (error as Error).message ?? '-');
     }
     this.displayReel = this.reel;
+    this.displayName = this.username;
+    this.displayAvatar = this.avatarUrl;
     this.restartItem();
     /*
      * **预构建**的那一步挪到 `onAppear` 的定时器里（量完浮层尺寸之后，见那里的 setTimeout）：
@@ -588,6 +593,8 @@ export struct StoryViewer {
   /** 把一份 reel 应用到正面（翻页动画结束后才调用）。 */
   private applyDisplayReel(reel: StoryReel): void {
     this.displayReel = reel;
+    this.displayName = this.username;
+    this.displayAvatar = this.avatarUrl;
     this.waiting = false;
     this.paused = false;
     this.index = 0;
@@ -1424,15 +1431,15 @@ export struct StoryViewer {
   }
 
   private titleNow(): string {
-    if (this.username.length > 0) {
-      return this.username;
+    if (this.displayName.length > 0) {
+      return this.displayName;
     }
     return this.displayReel.username;
   }
 
   private avatarNow(): string {
-    if (this.avatarUrl.length > 0) {
-      return this.avatarUrl;
+    if (this.displayAvatar.length > 0) {
+      return this.displayAvatar;
     }
     return this.displayReel.avatarUrl;
   }
@@ -2126,7 +2133,7 @@ export struct StoryViewer {
     .backgroundColor(Color.Black)
     // 卡片 2 与卡片 1 背对背：先转 180°，父层再转 180° 时正好正向。
     .rotate({ x: 0, y: 1, z: 0, angle: 180 })
-    .opacity(1)
+    .opacity(this.flipAngle > 90 ? 1 : 0)
     .enabled(false)
     .hitTestBehavior(HitTestMode.None)
   }
