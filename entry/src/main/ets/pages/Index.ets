@@ -8694,9 +8694,16 @@ struct Index {
     return this.tabletWideShell() && this.currentTab() === AppTab.Reels;
   }
 
-  /** 左栏 Reels 的 HDS 标题栏左边距：让开浮层侧边栏。 */
+  /** 左栏各 tab 的 HDS 标题栏左边距：让开浮层侧边栏，并留一点缝。 */
   private reelsTitleBarLeftVp(): number {
-    return this.reelsSidebarWhite() ? this.tabletSidebarWidth() : 0;
+    if (!this.tabletWideShell()) {
+      return 0;
+    }
+    const tab: AppTab = this.currentTab();
+    if (tab !== AppTab.Reels && tab !== AppTab.Search && tab !== AppTab.Profile) {
+      return 0;
+    }
+    return this.tabletSidebarWidth() + 12;
   }
 
   /**
@@ -9204,31 +9211,12 @@ struct Index {
       };
     }
     if (this.currentTab() === AppTab.Search) {
-      // 搜索页标题同样要避开侧边栏浮层，并保留标题左侧留白。
-      return {
-        title: { mainTitle: '' },
-        menu: this.menus(),
-        stackBuilder: (): void => {
-          this.searchTitleSegment();
-        }
-      };
+      // 搜索页标题也交给 HDS mainTitle，左边距由 titleBar.padding 避让侧边栏。
+      return { title: { mainTitle: this.pageTitle() }, menu: this.menus() };
     }
     if (this.currentTab() === AppTab.Profile) {
-      /*
-       * 「我的」：标题栏**置中**放账号下拉按钮（需求：显示当前账号的头像与账号名，点开选单）。
-       *
-       * 为什么走 `stackBuilder`（而不是 bottomBuilder）：stack 区就是"标题那一块"，
-       * 高度和其它页的标题一致、不额外长高，而且**材质在这块是生效的**
-       * （同一区域 Reels 的分段按钮已经验过，见 reelsTitleSegment）。
-       * 标题文字由我们让位（mainTitle 留空），右边仍归 HDS 画菜单（设定那颗）。
-       */
-      return {
-        title: { mainTitle: '' },
-        menu: this.menus(),
-        stackBuilder: (): void => {
-          this.profileTitleAccount();
-        }
-      };
+      // 「我的」标题交给 HDS mainTitle；账号入口仍在 menus 里。
+      return { title: { mainTitle: this.pageTitle() }, menu: this.menus() };
     }
     return { title: { mainTitle: this.pageTitle() }, menu: this.menus() };
   }
