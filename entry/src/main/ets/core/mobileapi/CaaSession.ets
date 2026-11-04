@@ -25,6 +25,7 @@ import { InstagramCookieJar, InstagramCookieSnapshot } from '../InstagramCookieJ
 import { CaaLogin, CaaResult, CaaStep, CaaUsdid } from './CaaLogin';
 import { MobileIdentity, MobileSession } from './MobileSession';
 import { base64, utf8 } from './MobileSign';
+import { AppLifecycle } from '../AppLifecycle';
 // 自建 TLS 1.3 通道（见 tls13Probe：App 内唯一能"换 ClientHello 指纹"的手段）。
 
 
@@ -162,6 +163,8 @@ export class CaaSession {
    * @param password 明文密码（只在本进程内存里；加密后才出网，见 MobileCrypto.encryptPassword）
    */
   static async login(username: string, password: string): Promise<CaaOutcome> {
+    CaaSession.stopApprovalWatch();
+    CaaSession.watchLast = 'idle';
     const user: string = username.trim();
     if (user.length === 0 || password.length === 0) {
       return CaaSession.outcome(false, '用户名和密码都要填');
@@ -232,6 +235,101 @@ export class CaaSession {
   /** 现在是不是等着交验证码。 */
   static waitingCode(): boolean {
     return CaaLogin.waitingCode();
+  }
+
+  /* ------------------------------------------- 「在另一台设备上同意」 */
+
+  private static watchRunning: boolean = false;
+  private static watchTimer: number = 0;
+  private static watchLast: string = 'idle';
+  private static watchBound: boolean = false;
+  private static readonly APPROVAL_MS: number = 7500;
+
+  static approvalAvailable(): boolean {
+    return CaaLogin.approvalAvailable();
+  }
+
+  static approvalStateNow(): string {
+    return CaaSession.watchLast;
+  }
+
+  static startApprovalWatch(): void {
+    if (!CaaLogin.approvalAvailable() || CaaSession.watchRunning) {
+      return;
+    }
+    CaaSession.watchRunning = true;
+    CaaSession.watchLast = 'waiting';
+    CaaSession.bindForeground();
+    CaaSession.schedule(1200);
+    hilog.info(DOMAIN, TAG, 'approval watch start');
+  }
+
+  static stopApprovalWatch(): void {
+    CaaSession.watchRunning = false;
+    if (CaaSession.watchTimer !== 0) {
+      clearTimeout(CaaSession.watchTimer);
+      CaaSession.watchTimer = 0;
+    }
+  }
+
+  private static bindForeground(): void {
+    if (CaaSession.watchBound) {
+      return;
+    }
+    CaaSession.watchBound = true;
+    AppLifecycle.addVisibilityListener((foreground: boolean): void => {
+      if (foreground && CaaSession.watchRunning) {
+        CaaSession.schedule(0);
+      }
+    });
+  }
+
+  private static schedule(delay: number): void {
+    if (!CaaSession.watchRunning) {
+      return;
+    }
+    if (CaaSession.watchTimer !== 0) {
+      clearTimeout(CaaSession.watchTimer);
+    }
+    CaaSession.watchTimer = setTimeout((): void => {
+      CaaSession.watchTimer = 0;
+      if (!CaaSession.watchRunning) {
+        return;
+      }
+      if (!AppLifecycle.isForeground()) {
+        CaaSession.schedule(1000);
+        return;
+      }
+      CaaSession.approvalTick().then((state: string): void => {
+        if (!CaaSession.watchRunning) {
+          return;
+        }
+        if (state === 'signed-in' || state === 'declined') {
+          CaaSession.stopApprovalWatch();
+          return;
+        }
+        CaaSession.schedule(CaaSession.APPROVAL_MS);
+      }).catch((): void => {
+        CaaSession.schedule(CaaSession.APPROVAL_MS);
+      });
+    }, delay);
+  }
+
+  private static async approvalTick(): Promise<string> {
+    const state: string = await CaaLogin.pollApproval();
+    CaaSession.watchLast = state;
+    hilog.info(DOMAIN, TAG, 'approval tick -> %{public}s', state);
+    if (state === 'approved') {
+      const claimed: CaaResult | null = CaaLogin.takeApprovedLogin();
+      if (claimed !== null) {
+        const outcome: CaaOutcome = await CaaSession.finish(claimed);
+        if (outcome.ok) {
+          CaaSession.watchLast = 'signed-in';
+          return 'signed-in';
+        }
+      }
+    }
+    return state;
   }
 
 

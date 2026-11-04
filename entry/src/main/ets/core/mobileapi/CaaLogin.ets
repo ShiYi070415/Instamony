@@ -645,6 +645,8 @@ export class CaaLogin {
 
   /** 等验证码时留住的现场（见 `CaaPending`）。 */
   private static pending: CaaPending | null = null;
+  /** approval 轮询里拿到的会话，等 CaaSession 落盘。 */
+  private static approvedLogin: CaaLoginPayload | null = null;
 
 
 
@@ -946,6 +948,88 @@ export class CaaLogin {
   /** 现在是不是"等着用户交验证码"（UI 据此决定要不要显示输入框）。 */
   static waitingCode(): boolean {
     return CaaLogin.pending !== null;
+  }
+
+  /* ------------------------------------------- 在另一台设备上同意 */
+
+  /** 这次 2FA 有没有可轮询的 approval 票据。 */
+  static approvalAvailable(): boolean {
+    const pending: CaaPending | null = CaaLogin.pending;
+    return pending !== null && pending.context.length > 0;
+  }
+
+  /** 轮询一次“那边同意了吗”。waiting/approved/declined/error/none。 */
+  static async pollApproval(): Promise<string> {
+    const pending: CaaPending | null = CaaLogin.pending;
+    if (pending === null || pending.context.length === 0) {
+      return 'none';
+    }
+    const action: string = 'com.bloks.www.two_step_verification.has_been_allowed.async';
+    const server: Record<string, string> = {
+      'two_step_verification_context': pending.context,
+      'flow_source': TSV_FLOW_SOURCE,
+      'device_id': pending.identity.androidDeviceId
+    };
+    const params: Record<string, ESObject> = {};
+    const serverParams: Record<string, ESObject> =
+      CaaLogin.mergeParams(server, {}) as Record<string, ESObject>;
+    serverParams['cloud_trust_token'] = 'null';
+    serverParams['spectra_reg_login_data'] = null;
+    params['server_params'] = serverParams;
+    const client: Record<string, string> = {
+      'machine_id': pending.identity.mid,
+      'device_id': pending.identity.androidDeviceId
+    };
+    const clientParams: Record<string, ESObject> =
+      CaaLogin.mergeParams(client, {}) as Record<string, ESObject>;
+    clientParams['network_bssid'] = null;
+    params['client_input_params'] = clientParams;
+
+    const reply: CaaHttpReply =
+      await CaaLogin.bloksBestHost(pending.identity, pending.extra, action, params);
+    CaaLogin.steps.push(new CaaStep('2sv_approve', reply.status, reply.host));
+    const payload: ESObject = CaaLogin.parse(reply.body);
+    const login: CaaLoginPayload | null = CaaLogin.extractLoginPayload(payload);
+    if (login !== null) {
+      CaaLogin.approvedLogin = login;
+      return 'approved';
+    }
+    const review: ESObject = CaaLogin.findValueDeep(payload, 'review_status', 0);
+    const reviewText: string = review === undefined || review === null ? '' : `${review}`;
+    if (reviewText === '1') {
+      return 'approved';
+    }
+    if (reviewText === '2') {
+      return 'declined';
+    }
+    const lower: string = reply.body.toLowerCase();
+    if (lower.indexOf('review_status":1') >= 0 || lower.indexOf('review_status\\":1') >= 0) {
+      return 'approved';
+    }
+    if (lower.indexOf('rejected') >= 0 || lower.indexOf('declined') >= 0) {
+      return 'declined';
+    }
+    return reply.status === 200 ? 'waiting' : 'error';
+  }
+
+  /** 取走 approval 响应里收到的会话；没有返回 null。 */
+  static takeApprovedLogin(): CaaResult | null {
+    const login: CaaLoginPayload | null = CaaLogin.approvedLogin;
+    if (login === null) {
+      return null;
+    }
+    CaaLogin.approvedLogin = null;
+    const result: CaaResult = new CaaResult(true, '登录成功（在另一台设备上同意）');
+    result.cookie = login.cookie;
+    result.authorization = login.authorization;
+    result.mid = login.mid;
+    result.rur = login.rur;
+    result.claim = login.claim;
+    const pending: CaaPending | null = CaaLogin.pending;
+    if (pending !== null) {
+      result.aac = pending.aac;
+    }
+    return result;
   }
 
   /* ------------------------------------------- 2FA 现场摘要（诊断） */

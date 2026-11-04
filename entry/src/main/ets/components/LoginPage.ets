@@ -52,6 +52,7 @@ import {
 } from '../core/AppSettings';
 import { PlatformCap } from '../core/PlatformCap';
 import { WebProbeResult } from '../core/mobileapi/WebLoginProbe';
+import { CaaSession } from '../core/mobileapi/CaaSession';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const DOMAIN: number = 0xFF00;
@@ -136,6 +137,9 @@ export struct LoginPage {
   @State private username: string = '';
   @State private password: string = '';
   @State private busy: boolean = false;
+  /** 2FA「在另一台设备上同意」的轮询状态。 */
+  @State private approvalState: string = 'idle';
+  private approvalTimer: number = 0;
   @State private error: string = '';
   /** 两步验证的半模态面板：开没开、里面的验证码、错误、忙。 */
   @State private verifyOpen: boolean = false;
@@ -260,6 +264,19 @@ export struct LoginPage {
         .lineHeight(19)
         .fontColor($r('app.color.secondary_text'))
         .width('100%')
+      if (this.approvalState === 'waiting' || this.approvalState === 'idle') {
+        Text('也可以在已登录的 Instagram 客户端里同意本次登录')
+          .fontSize(12)
+          .lineHeight(18)
+          .fontColor($r('app.color.secondary_text'))
+          .width('100%')
+      } else if (this.approvalState === 'approved') {
+        Text('已同意，正在恢复会话…')
+          .fontSize(12)
+          .lineHeight(18)
+          .fontColor($r('app.color.secondary_text'))
+          .width('100%')
+      }
       Stack({ alignContent: Alignment.Center }) {
         // 材质底板（和登录页其它输入框同一套：胶囊 + 沉浸光感），但**不发光**（见上）。
         Toggle({ type: ToggleType.Button, isOn: false }) {
@@ -341,6 +358,7 @@ export struct LoginPage {
         fontSize: 15,
         lightEffect: false,
         onTap: (): void => {
+          this.stopApprovalWatch();
           this.verifyOpen = false;
           this.verifyError = '';
         }
@@ -376,6 +394,7 @@ export struct LoginPage {
       // 标题交给系统画（HDS 标题样式），见上面那段说明。
       title: { title: $r('app.string.login_verify_title') },
       onDisappear: (): void => {
+        this.stopApprovalWatch();
         this.verifyError = '';
         /*
          * **面板关掉就把登录按钮的转圈收掉**（需求：弹面板期间登录按钮一直转）。
@@ -400,6 +419,39 @@ export struct LoginPage {
     return options;
   }
 
+  private startApprovalWatch(): void {
+    if (!CaaSession.approvalAvailable()) {
+      this.approvalState = 'none';
+      return;
+    }
+    this.approvalState = 'waiting';
+    CaaSession.startApprovalWatch();
+    if (this.approvalTimer !== 0) {
+      clearInterval(this.approvalTimer);
+    }
+    this.approvalTimer = setInterval((): void => {
+      const state: string = CaaSession.approvalStateNow();
+      this.approvalState = state;
+      if (state === 'signed-in') {
+        this.stopApprovalWatch();
+        this.verifyOpen = false;
+        this.verifyCode = '';
+        this.busy = false;
+        this.onSignedIn();
+      } else if (state === 'declined' || state === 'none') {
+        this.stopApprovalWatch();
+      }
+    }, 1000);
+  }
+
+  private stopApprovalWatch(): void {
+    if (this.approvalTimer !== 0) {
+      clearInterval(this.approvalTimer);
+      this.approvalTimer = 0;
+    }
+    CaaSession.stopApprovalWatch();
+  }
+
   /** 面板里点「验证并登录」：交给宿主 → core（见 onCaaVerify）。 */
   private submitVerifyCode(): void {
     if (this.verifyBusy) {
@@ -411,6 +463,7 @@ export struct LoginPage {
     }
     this.verifyError = '';
     this.verifyBusy = true;
+    this.stopApprovalWatch();
     this.onCaaVerify(this.verifyCode.trim())
       .then((message: string): void => {
         this.verifyBusy = false;
@@ -766,6 +819,7 @@ export struct LoginPage {
           this.verifyCode = '';
           this.verifyError = '';
           this.verifyOpen = true;
+          this.startApprovalWatch();
           return;
         }
         this.busy = false;
