@@ -8086,7 +8086,7 @@ struct Index {
         FeedList({
           posts: this.posts,
           // 内容要滚到 HDS 标题栏下面，渐变模糊才有东西可采样。
-          topOffset: 0,
+          topOffset: 56,
           // 宽屏上整列收窄居中；手机为 0，保持原来的满宽。
           maxWidthVp: this.feedMaxWidth(),
           // 提示卡片位置：关注流 → 卡片 → 探索流（-1 = 不画，见 feedHintAt）。
@@ -8699,7 +8699,7 @@ struct Index {
     const mask: HdsNavigationTitleBarStyle = {
       backgroundStyle: {
         backgroundColor: '#00000000',
-        maskExtraHeight: 16,
+        maskExtraHeight: 8,
         blurRadius: 80
       },
       contentStyle: content
@@ -9294,7 +9294,7 @@ struct Index {
     ProfilePage({
       vm: this.profileVm,
       pageScroller: this.profileScroller,
-      topOffsetVp: 0,
+      topOffsetVp: 56,
       // 滚动 → 底栏下沉/隐藏（和首页同一条路，见 onFeedScroll）。
       onFeedScroll: (deltaY: number, offsetY: number, scrollState: ScrollState): void => {
         this.onFeedScroll(deltaY, offsetY, scrollState);
