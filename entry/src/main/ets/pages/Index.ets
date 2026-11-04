@@ -8565,12 +8565,19 @@ struct Index {
       enableScrollEffect: false,
       scrollEffectType: ScrollEffectType.COMMON_BLUR
     };
+    // 只改背景，必须把原来的 contentStyle 一起带上；
+    // 整个 originalStyle 替换会丢掉 HDS 原生按钮的样式，返回/菜单就变透明。
+    let content: HdsTitleBarContentStyle | undefined = undefined;
+    if (style.originalStyle !== undefined && style.originalStyle.contentStyle !== undefined) {
+      content = style.originalStyle.contentStyle;
+    }
     const noMask: HdsNavigationTitleBarStyle = {
       backgroundStyle: {
         backgroundColor: '#00000000',
         maskExtraHeight: 0,
         blurRadius: 0
-      }
+      },
+      contentStyle: content
     };
     style.originalStyle = noMask;
     style.scrollEffectStyle = noMask;
