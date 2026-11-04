@@ -278,6 +278,13 @@ export struct LoginPage {
       }
       .width('100%')
       .height('100%')
+    } else {
+      // 关闭时给 overlay 一个 0 尺寸、不可命中的占位：否则空 overlay 会盖住整页，
+      // 登录页的输入框和按钮全部点不动。
+      Column()
+        .width(0)
+        .height(0)
+        .hitTestBehavior(HitTestMode.None)
     }
   }
 
