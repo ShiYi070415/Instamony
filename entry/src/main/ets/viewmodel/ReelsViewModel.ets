@@ -17,7 +17,6 @@ import {
   REELS_SOURCE_FOLLOWING
 } from '../core/NativeReels';
 import { ApiThrottle } from '../core/ApiThrottle';
-import { CachedReelsPage, ReelsCache } from '../core/ReelsCache';
 import { ReelsCrashLog } from '../core/ReelsCrashLog';
 // 落盘的"看过的短码"台账：冷启动 / 刷新时据此跳过上一轮看过的视频（见 core/ReelsSeen）。
 import { ReelsSeen } from '../core/ReelsSeen';
@@ -570,9 +569,6 @@ export class ReelsViewModel implements ReelStreamVm {
     ReelsSeen.remember(this.source, out.map((reel: Reel): string => reel.shortcode));
     this.onReels(this.reels, this.more);
     this.onStatus('已加载 ' + this.reels.length + ' 条' + (this.more ? '' : '（到底了）'));
-    // 落盘一份：**首屏和翻页都存**（首页那条查询首屏有时只回 2~4 条，光存第一页太少）。
-    // 被限流/没网时这几十条就是视频标签能显示的全部内容（见 core/ReelsCache）。
-    ReelsCache.save(this.reels, ReelsCache.keyFor(this.source));
     return out.length;
   }
 
@@ -704,17 +700,7 @@ export class ReelsViewModel implements ReelStreamVm {
    * @param minutes 还有几分钟解禁（只用来写提示语）。
    */
   private fromCacheOrSay(minutes: number): void {
-    const cached: CachedReelsPage | null = ReelsCache.load(ReelsCache.keyFor(this.source));
-    if (cached !== null && cached.reels.length > 0) {
-      this.reels = cached.reels;
-      // 缓存那份没有游标：当成"到底了"，免得触底哨兵一直空转要下一页。
-      this.more = false;
-      this.onReels(this.reels, this.more);
-      this.onStatus(`Instagram 暂时限制了视频接口，先显示上次的 ${this.reels.length} 条（约 ${minutes} 分钟后自动重试）`);
-      hilog.info(DOMAIN, TAG, 'rate limited → cache n=%{public}d age=%{public}dms',
-        this.reels.length, cached.ageMs);
-      return;
-    }
+    // 冷启动不再用上轮落盘内容顶上：接口受限时如实提示，等恢复后重新实时取。
     this.onStatus(`Instagram 暂时限制了视频接口，约 ${minutes} 分钟后再试`);
   }
 
