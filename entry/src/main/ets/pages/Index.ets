@@ -8574,13 +8574,7 @@ struct Index {
     };
     style.originalStyle = noMask;
     style.scrollEffectStyle = noMask;
-    if (!this.isDarkUi) {
-      // 浅色模式不要材质自带的白色背板。
-      style.systemMaterialEffect = {
-        materialType: hdsMaterial.MaterialType.NONE,
-        materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
-      };
-    }
+    // 保留沉浸光感材质；只关掉背景蒙版/模糊，浅色下不再叠白色背板。
     return style;
   }
 
