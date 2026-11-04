@@ -40,7 +40,7 @@ const TAG: string = 'ShareProbe';
 /** 固定的落盘文件名（`dumpFixed` 的口径：沙箱 filesDir 下补 `.txt`）。 */
 const FILE_NAME: string = 'Instamony_share_probe';
 /** **调试开关**：false = 完全不做诊断（release 里应该是 false）。 */
-const PROBE_ON: boolean = true;
+const PROBE_ON: boolean = false;
 /** 最多记几个来源（时间线 / clips 三条 / 探索流，6 个够）。 */
 const MAX_SOURCES: number = 6;
 /** 键名清单最多列多少个（媒体节点通常 30~60 个键，别把文件撑大）。 */

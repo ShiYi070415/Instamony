@@ -423,6 +423,17 @@ export class MobileRequest {
   private static classify(code: number, text: string, ms: number,
                           headers: Record<string, string> = {}): MobileResult {
     MobileRequest.lastCode = code;
+    /*
+     * 大响应成功快路径：只为读 message/error_type 去整包 JSON.parse 不值得。
+     * 先用子串排除明确的错误标记，再按成功返回；解析交给各业务自己的 taskpool。
+     */
+    if (code >= 200 && code < 300 && text.length > 8192
+      && text.indexOf('"errors"') < 0 && text.indexOf('feedback_required') < 0
+      && text.indexOf('"status":"fail"') < 0) {
+      MobileRequest.lastError = '-';
+      MobileRequest.lastDetail = '-';
+      return new MobileResult(true, '', code, ms, text.length, text, '', headers);
+    }
     const parsed: Record<string, Object> | null = MobileRequest.parseJson(text);
     const message: string = MobileRequest.strField(parsed, 'message');
     const errorType: string = MobileRequest.strField(parsed, 'error_type');
