@@ -42,6 +42,7 @@ import {
   TextStyleMode
 } from '@kit.UIDesignKit';
 import { AppConfig } from '../config/AppConfig';
+import { safeScrollY } from '../core/ScrollerSafe';
 import { InstagramPageBridge } from '../bridge/PageBridge';
 
 import { CommentsPanel, CommentsListController, COMMENTS_DRAG_ZONE_VP } from '../components/CommentsPanel';
@@ -7369,7 +7370,7 @@ struct Index {
        */
       const idle: boolean = await this.viewModel.awaitIdle(REFRESH_SPIN_TAIL_MS);
       hilog.info(DOMAIN, TAG, 'refresh done idle=%{public}s posts=%{public}d offset=%{public}d',
-        idle ? 'y' : 'n', this.posts.length, this.feedScroller.currentOffset().yOffset);
+        idle ? 'y' : 'n', this.posts.length, safeScrollY(this.feedScroller));
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'refresh failed: %{public}s', (error as Error).message);
       this.setLocalStatus($r('app.string.status_unparsable'));

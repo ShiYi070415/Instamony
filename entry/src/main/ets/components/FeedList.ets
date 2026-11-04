@@ -46,6 +46,8 @@ import { LikeBurst, LikeBurstState, LikeIcon, playLikeBurst, RepostIcon, SaveIco
  *
  * 见 restoreAnchor：切 tab 时 List 是新建的，头一两帧还没量完布局，scrollToIndex 可能静默失效。
  */
+import { safeScrollY } from '../core/ScrollerSafe';
+
 const RESTORE_TRIES_MS: number[] = [0, 140, 360];
 /** 打日志用的域（和 VideoSurface 同一个域，方便一起抓）。 */
 const DOMAIN: number = 0xFF00;
@@ -2067,7 +2069,7 @@ export struct FeedList {
         }
         try {
           this.listScroller.scrollToIndex(listIndex, false);
-          const offset: number = this.listScroller.currentOffset().yOffset;
+          const offset: number = safeScrollY(this.listScroller);
           // **只有真的滚上去了才算成功**：刚重建的那一两帧里 List 还没量完布局，scrollToIndex
           // 会被当成越界而静默不生效（实测 offset 仍是 0）。早先这里无条件置 true，
           // 于是后两次重试全被挡掉，位置就还原不了。
@@ -2132,7 +2134,7 @@ export struct FeedList {
     if (this.refreshing) {
       return;
     }
-    const offset: number = this.listScroller.currentOffset().yOffset;
+    const offset: number = safeScrollY(this.listScroller);
     hilog.info(0xFF00, 'FeedList', 'refresh done → back to top from=%{public}d', offset);
     if (offset === 0) {
       return;
@@ -2149,7 +2151,7 @@ export struct FeedList {
     if (!this.active) {
       return;
     }
-    const offset: number = this.listScroller.currentOffset().yOffset;
+    const offset: number = safeScrollY(this.listScroller);
     if (offset > TAB_TAP_TOP_EPSILON_VP) {
       this.listScroller.scrollTo({
         xOffset: 0,
@@ -2175,7 +2177,7 @@ export struct FeedList {
    * 而真实偏移量可能已经很深，直接做差会凭空报一次几千 vp 的大滚动。
    */
   private reportScrollDelta(scrollState: ScrollState): void {
-    const y: number = this.listScroller.currentOffset().yOffset;
+    const y: number = safeScrollY(this.listScroller);
     if (!this.offsetSampled) {
       this.offsetSampled = true;
       this.lastOffsetY = y;
@@ -2215,7 +2217,7 @@ export struct FeedList {
      * 位移不到 `FOCUS_MIN_MOVE_VP` 时几何几乎没变，结论也不会变。
      * 但要留一个"心跳"（`FOCUS_HEARTBEAT_MS`）—— 慢速微调时位移攒不够，也不能一直不收敛。
      */
-    const y: number = this.listScroller.currentOffset().yOffset;
+    const y: number = safeScrollY(this.listScroller);
     const moved: number = Math.abs(y - this.lastFocusY);
     if (moved < FOCUS_MIN_MOVE_VP && elapsed < FOCUS_HEARTBEAT_MS) {
       return;

@@ -47,6 +47,8 @@ import { SearchSurfaceModifier, SurfaceModifier } from './MaterialSurface';
  * **搜索框不再住在标题栏里**（需求："模糊只盖到 HDS 标题行"）：它现在是本页顶部的一层浮层
  * （见 searchBoxOverlay），所以这一页的顶部留白分两段 —— 标题栏那一段 + 搜索框那一块。
  */
+import { safeScrollY } from '../core/ScrollerSafe';
+
 const SEARCH_BAR_TOP_OFFSET: number = 94;
 /** 搜索框那一块的高度（vp）= 框 40 + 上 4 + 下 8（与 pages/Index 里那个数保持一致）。 */
 const SEARCH_BOX_BLOCK: number = 52;
@@ -426,7 +428,7 @@ export struct SearchPage {
   private onTabRepeatTap(): void {
     const hasQuery: boolean = this.searchText.length > 0;
     const scroller: Scroller = hasQuery ? this.listScroller : this.flowScroller;
-    const offset: number = scroller.currentOffset().yOffset;
+    const offset: number = safeScrollY(scroller);
     if (offset > TAB_TAP_TOP_EPSILON_VP) {
       scroller.scrollTo({
         xOffset: 0,
@@ -794,7 +796,7 @@ export struct SearchPage {
     })
     // 滚动 → 底栏下沉/隐藏 + 搜索框收放（见 scrollSink）。
     .onDidScroll((scrollOffset: number, scrollState: ScrollState): void => {
-      this.scrollDelta.report(this.flowScroller.currentOffset().yOffset, scrollState,
+      this.scrollDelta.report(safeScrollY(this.flowScroller), scrollState,
         this.scrollSink);
     })
   }
@@ -815,7 +817,7 @@ export struct SearchPage {
     .edgeEffect(EdgeEffect.Spring)
     .contentEndOffset(SEARCH_BOTTOM_OFFSET)
     .onDidScroll((scrollOffset: number, scrollState: ScrollState): void => {
-      this.scrollDelta.report(this.listScroller.currentOffset().yOffset, scrollState,
+      this.scrollDelta.report(safeScrollY(this.listScroller), scrollState,
         this.scrollSink);
     })
     // **别裁内容**：列表可视区在顶部那层透明占位下面，关掉裁剪后滚动的行才会画到标题栏

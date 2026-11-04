@@ -25,6 +25,8 @@ import { ScrollDelta } from '../core/ScrollReport';
 import { FALLBACK_SURFACE, MaterialIconButton, SurfaceModifier } from './MaterialSurface';
 import { MATERIAL_THICKNESS_ULTRA_THIN, SETTING_MATERIAL_THICKNESS } from '../core/AppSettings';
 
+import { safeScrollY } from '../core/ScrollerSafe';
+
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'DirectThreadPage';
 
@@ -2080,7 +2082,7 @@ export struct DirectThreadPage {
         })
         .clip(false)
         .onDidScroll((scrollOffset: number, scrollState: ScrollState): void => {
-          const y: number = this.listScroller.currentOffset().yOffset;
+          const y: number = safeScrollY(this.listScroller);
           /*
            * 用户**往上翻**了（偏移在减小）：记成"不在贴底状态"，后面那几次延迟补贴底就不再抢位置
            * （见 scrollToNewest(false) 与 pinnedToBottom 的说明）。往回滚到底部时照旧贴底。

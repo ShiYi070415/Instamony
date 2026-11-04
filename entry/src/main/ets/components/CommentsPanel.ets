@@ -31,6 +31,8 @@ import { TranslateLabel } from './TranslateLabel';
 import { Translator } from '../core/Translator';
 import { LikeIcon } from './AnimatedIcons';
 
+import { safeScrollY } from '../core/ScrollerSafe';
+
 const DOMAIN = 0xFF00;
 const TAG = 'InstamonyCommentsPanel';
 
@@ -371,7 +373,7 @@ export struct CommentsPanel {
      */
     this.listCtl.offset = (): number => {
       try {
-        return this.listScroller.currentOffset().yOffset;
+        return safeScrollY(this.listScroller);
       } catch (error) {
         return this.listOffset;
       }
@@ -660,7 +662,7 @@ export struct CommentsPanel {
    */
   private listAtTop(): boolean {
     try {
-      return this.listScroller.currentOffset().yOffset <= 0.5;
+      return safeScrollY(this.listScroller) <= 0.5;
     } catch (error) {
       return this.listOffset <= 0.5;
     }

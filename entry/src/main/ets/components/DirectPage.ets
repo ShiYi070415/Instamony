@@ -25,6 +25,8 @@ import { AppLifecycle } from '../core/AppLifecycle';
 import { TAB_TAP_DIRECT, TAB_TAP_TOP_EPSILON_VP, TAB_TAP_TOP_SCROLL_MS } from '../core/AppSettings';
 
 /** 顶部让出标题栏、底部让出悬浮 tab 栏（与首页/我的同一个数）。 */
+import { safeScrollY } from '../core/ScrollerSafe';
+
 const DIRECT_TOP_OFFSET: number = 94;
 const DIRECT_BOTTOM_OFFSET: number = 96;
 /** 头像直径、左右内边距（vp）。 */
@@ -309,7 +311,7 @@ export struct DirectPage {
    * 因为 `refreshing` 是 `$$` 双向绑定的）。
    */
   private onTabRepeatTap(): void {
-    const offset: number = this.listScroller.currentOffset().yOffset;
+    const offset: number = safeScrollY(this.listScroller);
     if (offset > TAB_TAP_TOP_EPSILON_VP) {
       this.listScroller.scrollTo({
         xOffset: 0,
@@ -547,7 +549,7 @@ export struct DirectPage {
         .contentEndOffset(DIRECT_BOTTOM_OFFSET)
         // 滚动 → 底栏下沉/隐藏（判据与去重都在 pages/Index，见 onFeedScroll）。
         .onDidScroll((scrollOffset: number, scrollState: ScrollState): void => {
-          this.scrollDelta.report(this.listScroller.currentOffset().yOffset, scrollState,
+          this.scrollDelta.report(safeScrollY(this.listScroller), scrollState,
             this.onFeedScroll);
         })
         /*
