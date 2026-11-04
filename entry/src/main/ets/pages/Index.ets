@@ -1844,6 +1844,8 @@ struct Index {
    * 滚动效果，所以这里建一个、同时交给 FeedList 用在 List 上。
    */
   private feedScroller: Scroller = new Scroller();
+  /** 我的页外层列表：交给 HDS 标题栏做滚动渐变模糊。 */
+  private profileScroller: Scroller = new Scroller();
   /**
    * 搜索页瀑布流（探索流）的滚动控制器。
    *
@@ -8691,16 +8693,9 @@ struct Index {
         materialLevel: this.isDarkUi ? immersiveLevel(this.materialLevel) : hdsMaterial.MaterialLevel.ADAPTIVE
       };
     }
-    const mask: HdsNavigationTitleBarStyle = {
-      backgroundStyle: {
-        backgroundColor: '#00000000',
-        maskExtraHeight: 16,
-        blurRadius: 80
-      },
-      contentStyle: content
-    };
-    style.originalStyle = mask;
-    style.scrollEffectStyle = mask;
+    // 不写 backgroundStyle：让 HDS 自己画渐变模糊，避免出现一条有边界的蒙版。
+    style.originalStyle = { contentStyle: content };
+    style.scrollEffectStyle = { contentStyle: content };
     return style;
   }
 
@@ -8753,6 +8748,16 @@ struct Index {
   /** Reels 页专用：标题栏不要任何蒙版/材质，只保留文字与按钮。 */
   private reelsTitleStyle(): TitleBarStyleOptions {
     const style: TitleBarStyleOptions = this.mainTitleStyle(this.reelsWhiteContent(false));
+    const noMask: HdsNavigationTitleBarStyle = {
+      backgroundStyle: {
+        backgroundColor: '#00000000',
+        maskExtraHeight: 0,
+        blurRadius: 0
+      },
+      contentStyle: this.reelsWhiteContent(false)
+    };
+    style.originalStyle = noMask;
+    style.scrollEffectStyle = noMask;
     style.systemMaterialEffect = {
       materialType: hdsMaterial.MaterialType.NONE,
       materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
@@ -9278,6 +9283,7 @@ struct Index {
   profilePage() {
     ProfilePage({
       vm: this.profileVm,
+      pageScroller: this.profileScroller,
       // 滚动 → 底栏下沉/隐藏（和首页同一条路，见 onFeedScroll）。
       onFeedScroll: (deltaY: number, offsetY: number, scrollState: ScrollState): void => {
         this.onFeedScroll(deltaY, offsetY, scrollState);
@@ -11712,7 +11718,7 @@ struct Index {
     // 把内容的滚动容器交给标题栏，滚动效果才有的放矢。
     //   · 首页：信息流那条 List；
     //   · 搜索页：探索流那条瀑布流（两条都交，HDS 按当前可见的那条算滚动量）。
-    .bindToScrollable([this.feedScroller, this.searchFlowScroller])
+    .bindToScrollable([this.feedScroller, this.searchFlowScroller, this.profileScroller])
     // 这是应用根页面，没有上一级可回，所以不显示返回键（示例里是 false）。
     .hideBackButton(true)
     .titleMode(HdsNavigationTitleMode.MINI)

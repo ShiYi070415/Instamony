@@ -500,7 +500,8 @@ export struct ProfilePage {
   /** 屏幕高度（vp）：算"末尾补高"要用（见 tailSpacerVp）。 */
   private screenHeightVp: number = 0;
   /** 外层滚动（头部 + 分段按钮）的控制器。 */
-  private readonly pageScroller: Scroller = new Scroller();
+  /** 外层列表控制器；由宿主注入，HDS 标题栏绑它做渐变模糊。 */
+  pageScroller: Scroller = new Scroller();
   /**
    * **每个分页各自的**滚动控制器（下标 = `PROFILE_TAB_*`）。
    *
