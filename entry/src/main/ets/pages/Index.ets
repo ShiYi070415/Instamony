@@ -7545,6 +7545,9 @@ struct Index {
       return;
     }
     const name: string = names[names.length - 1];
+    if (this.isOverlayPage(name)) {
+      return;
+    }
     const raw: Object = this.navStack.getParamByIndex(names.length - 1) as Object;
     const param: string = raw === undefined || raw === null ? '' : `${raw}`;
     this.navStack.clear();
@@ -7560,6 +7563,13 @@ struct Index {
       return;
     }
     const name: string = this.tabletRightName;
+    if (this.isOverlayPage(name)) {
+      // 已经关掉的通知/设置页不迁回全局，清掉残留名字即可。
+      this.tabletRightName = '';
+      this.tabletProfileParam = '';
+      this.tabletProfileStack.clear();
+      return;
+    }
     const param: string = this.tabletProfileParam;
     this.tabletRightName = '';
     this.tabletProfileParam = '';
@@ -11350,6 +11360,24 @@ struct Index {
     this.pushPage(SETTINGS_PAGE);
   }
 
+  /** 通知页关闭时清掉它留在右栏/标签缓存里的名字，避免布局变化后又被迁回来。 */
+  private closeNotificationsRightPane(): void {
+    if (this.tabletRightName === NOTIFICATIONS_PAGE) {
+      this.tabletRightName = '';
+      this.tabletProfileParam = '';
+      this.tabletProfileStack.clear();
+      if (this.selectedIndex >= 0 && this.selectedIndex < this.tabRightNames.length) {
+        this.tabRightNames[this.selectedIndex] = '';
+        this.tabRightParams[this.selectedIndex] = '';
+      }
+    }
+  }
+
+  /** 这些是整屏轻页面，不参与“小窗详情迁到右栏”的迁移，否则布局一变会自己弹回来。 */
+  private isOverlayPage(name: string): boolean {
+    return name === SETTINGS_PAGE || name === SETTINGS_DETAIL_PAGE || name === NOTIFICATIONS_PAGE;
+  }
+
   /** 设置一级页关闭/返回时，把它拉起的右栏设置页一起收掉。 */
   private closeSettingsRightPane(): void {
     if (this.tabletRightName === SETTINGS_PAGE || this.tabletRightName === SETTINGS_DETAIL_PAGE) {
@@ -11959,6 +11987,7 @@ struct Index {
         this.onPageShown(NOTIFICATIONS_PAGE);
       })
       .onHidden((): void => {
+        this.closeNotificationsRightPane();
         this.onPageHidden(NOTIFICATIONS_PAGE);
       })
       // 返回键：**评论浮层开着就先收评论**（需求："返回优先收起面板"），不再 pop 页面。
