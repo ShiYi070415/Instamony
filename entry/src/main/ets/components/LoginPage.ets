@@ -200,17 +200,23 @@ export struct LoginPage {
   @Builder
   mainButton(label: ResourceStr, action: () => void) {
     Toggle({ type: ToggleType.Button, isOn: false }) {
-      if (this.busy) {
-        LoadingProgress()
-          .width(20)
-          .height(20)
-          .color($r('app.color.on_accent'))
-      } else {
+      // 按钮内容结构保持稳定：只改透明度/叠转圈，不整块替换 Toggle 子节点，
+      // 否则按下的沉浸光感会被重建，出现点击后卡顿/闪一下。
+      Stack({ alignContent: Alignment.Center }) {
         Text(label)
           .fontSize(16)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.on_accent'))
+          .opacity(this.busy ? 0 : 1)
+        if (this.busy) {
+          LoadingProgress()
+            .width(20)
+            .height(20)
+            .color($r('app.color.on_accent'))
+        }
       }
+      .width('100%')
+      .height('100%')
     }
     .width('100%')
     .height(BUTTON_H)
@@ -225,7 +231,6 @@ export struct LoginPage {
      * 材质上面，光感全被挡住了。
      */
     .attributeModifier(new BrandSurfaceModifier(this.materialThickness))
-    .enabled(!this.busy)
     .onChange((): void => {
       if (!this.busy) {
         action();
@@ -745,6 +750,8 @@ export struct LoginPage {
     const typed: string = this.password;
     hilog.info(DOMAIN, TAG, 'submit: user len=%{public}d pass len=%{public}d',
       this.username.length, this.password.length);
+    // 先让 busy 状态和材质动画上屏一帧，再做 CAA 登录（登录初始化有同步 crypto/解析）。
+    setTimeout((): void => {
     this.onCaaLogin(this.username.trim(), typed)
       .then((message: string): void => {
         if (message === LOGIN_NEEDS_CODE) {
@@ -773,5 +780,6 @@ export struct LoginPage {
         this.busy = false;
         this.error = `登录出错：${error.message}`;
       });
+    }, 16);
   }
 }
