@@ -53,6 +53,7 @@ import {
 import { PlatformCap } from '../core/PlatformCap';
 import { WebProbeResult } from '../core/mobileapi/WebLoginProbe';
 import { CaaSession } from '../core/mobileapi/CaaSession';
+import { CaaLogin } from '../core/mobileapi/CaaLogin';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const DOMAIN: number = 0xFF00;
@@ -257,16 +258,48 @@ export struct LoginPage {
    * **面板里所有材质控件都不发光**（需求："2FA 面板禁用触摸发光"）：见下面
    * `SurfaceModifier(..., lightEffect = false)` 与「取消」那颗的 `lightEffect: false`。
    */
+  /** 2FA 圆角卡片：居中，沉浸光感材质，不再使用半模态。 */
+  @Builder
+  verifyOverlay() {
+    if (this.verifyOpen) {
+      Stack({ alignContent: Alignment.Center }) {
+        Column()
+          .width('100%')
+          .height('100%')
+          .backgroundColor('#66000000')
+        Toggle({ type: ToggleType.Button, isOn: false }) {
+          this.verifySheet()
+        }
+        .width('88%')
+        .constraintSize({ maxWidth: 560 })
+        .borderRadius(28)
+        .attributeModifier(new SurfaceModifier(this.materialThickness, false, true))
+        .hitTestBehavior(HitTestMode.Transparent)
+      }
+      .width('100%')
+      .height('100%')
+    }
+  }
+
   @Builder
   verifySheet() {
     Column({ space: 14 }) {
+      Text(this.verifyMode === 'approval'
+        ? $r('app.string.login_verify_approval_title')
+        : $r('app.string.login_verify_code_title'))
+        .fontSize(22)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('sys.color.font_primary'))
+        .width('100%')
+        .textAlign(TextAlign.Center)
+
       if (this.verifyMode === 'approval') {
         Row({ space: 16 }) {
           Column({ space: 4 }) {
-            SymbolGlyph($r('sys.symbol.phone'))
+            SymbolGlyph($r('sys.symbol.upload'))
               .fontSize(34)
               .fontColor([$r('sys.color.font_primary')])
-            Text('这台设备')
+            Text('登录请求')
               .fontSize(10)
               .fontColor($r('app.color.secondary_text'))
           }
@@ -275,7 +308,7 @@ export struct LoginPage {
             .fontColor([$r('app.color.secondary_text')])
           Column({ space: 4 }) {
             Stack({ alignContent: Alignment.TopEnd }) {
-              SymbolGlyph($r('sys.symbol.phone'))
+              SymbolGlyph($r('sys.symbol.bell'))
                 .fontSize(34)
                 .fontColor([$r('sys.color.font_primary')])
               SymbolGlyph($r('sys.symbol.checkmark_circle_fill'))
@@ -310,15 +343,21 @@ export struct LoginPage {
             .width('100%')
         }
 
-        MaterialLabelButton({
-          labelRes: $r('app.string.login_verify_switch_code'),
-          fullWidth: true,
-          fontSize: 15,
-          lightEffect: false,
-          onTap: (): void => {
-            this.stopApprovalWatch();
-            this.verifyMode = 'code';
-          }
+        Toggle({ type: ToggleType.Button, isOn: false }) {
+          Text($r('app.string.login_verify_switch_code'))
+            .fontSize(16)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.on_accent'))
+        }
+        .width('100%')
+        .height(BUTTON_H)
+        .padding(0)
+        .borderRadius(BUTTON_H / 2)
+        .selectedColor(Color.Transparent)
+        .attributeModifier(new BrandSurfaceModifier(this.materialThickness))
+        .onChange((): void => {
+          this.stopApprovalWatch();
+          this.verifyMode = 'code';
         })
         MaterialLabelButton({
           labelRes: $r('app.string.login_verify_cancel'),
@@ -326,10 +365,7 @@ export struct LoginPage {
           fontSize: 15,
           lightEffect: false,
           onTap: (): void => {
-            this.stopApprovalWatch();
-            this.busy = false;
-            this.verifyOpen = false;
-            this.verifyError = '';
+            this.cancelVerify();
           }
         })
       } else {
@@ -413,10 +449,7 @@ export struct LoginPage {
           fontSize: 15,
           lightEffect: false,
           onTap: (): void => {
-            this.stopApprovalWatch();
-            this.busy = false;
-            this.verifyOpen = false;
-            this.verifyError = '';
+            this.cancelVerify();
           }
         })
       }
@@ -472,6 +505,19 @@ export struct LoginPage {
       options.blurStyle = FALLBACK_BLUR;
     }
     return options;
+  }
+
+  private cancelVerify(): void {
+    this.stopApprovalWatch();
+    CaaLogin.cancelPending();
+    CaaSession.stopApprovalWatch();
+    this.busy = false;
+    this.verifyOpen = false;
+    this.verifyMode = 'approval';
+    this.approvalState = 'idle';
+    this.verifyCode = '';
+    this.verifyError = '';
+    // 账号密码保留：不清 username/password。
   }
 
   private startApprovalWatch(): void {
@@ -825,7 +871,7 @@ export struct LoginPage {
      * 外观见 verifySheetOptions：API 26+ 走 `SheetOptions.systemMaterial`（系统按
      * ImmersiveMaterial 画面板的底色/边框/阴影），老机器退回玻璃底 + 模糊。
      */
-    .bindSheet(this.verifyOpen, this.verifySheet(), this.verifySheetOptions())
+    .overlay(this.verifyOverlay(), { align: Alignment.Center })
   }
 
   /**

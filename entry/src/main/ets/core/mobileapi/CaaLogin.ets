@@ -950,6 +950,12 @@ export class CaaLogin {
     return CaaLogin.pending !== null;
   }
 
+  /** 取消 2FA：丢弃待提交现场和已批准的临时会话，下次登录从第 1 步重来。 */
+  static cancelPending(): void {
+    CaaLogin.pending = null;
+    CaaLogin.approvedLogin = null;
+  }
+
   /* ------------------------------------------- 在另一台设备上同意 */
 
   /** 这次 2FA 有没有可轮询的 approval 票据。 */
