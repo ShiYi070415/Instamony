@@ -8714,8 +8714,9 @@ struct Index {
    * margin-left 让开了侧边栏，再补一次会飞出去两倍。
    */
   private reelsTitleBarLeftVp(): number {
+    // 没有侧边栏时也从屏幕左边缘留 16vp。
     if (!this.tabletWideShell()) {
-      return 0;
+      return 16;
     }
     // 非全屏页外层已经用 margin 让开侧边栏；全屏 Reels 才需要补整段侧边栏。
     // 统一从屏幕左边缘（有侧边栏则从分割线）再留 16vp。
