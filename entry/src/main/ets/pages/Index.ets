@@ -8478,6 +8478,13 @@ struct Index {
         materialType: immersiveMaterialType(),
         materialLevel: immersiveLevel(this.materialLevel)
       };
+      if (this.currentTab() === AppTab.Reels) {
+        // 主 Reels 页不要底栏下面那层模糊渐变蒙版。
+        style.gradientMask = {
+          maskColor: '#00000000',
+          maskHeight: 0
+        };
+      }
     }
     return style;
   }
