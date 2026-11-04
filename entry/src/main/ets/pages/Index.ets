@@ -8085,6 +8085,8 @@ struct Index {
          */
         FeedList({
           posts: this.posts,
+          // 内容要滚到 HDS 标题栏下面，渐变模糊才有东西可采样。
+          topOffset: 0,
           // 宽屏上整列收窄居中；手机为 0，保持原来的满宽。
           maxWidthVp: this.feedMaxWidth(),
           // 提示卡片位置：关注流 → 卡片 → 探索流（-1 = 不画，见 feedHintAt）。
@@ -8684,7 +8686,8 @@ struct Index {
     const style: TitleBarStyleOptions = {
       scrollEffectOpts: {
         enableScrollEffect: true,
-        scrollEffectType: ScrollEffectType.GRADUAL_BLUR
+        // GRADUAL_BLUR 不吃 blurRadius；要渐变模糊必须用 GRADIENT_BLUR。
+        scrollEffectType: ScrollEffectType.GRADIENT_BLUR
       }
     };
     if (PlatformCap.hasHdsMaterial()) {
@@ -8693,9 +8696,16 @@ struct Index {
         materialLevel: this.isDarkUi ? immersiveLevel(this.materialLevel) : hdsMaterial.MaterialLevel.ADAPTIVE
       };
     }
-    // 不写 backgroundStyle：让 HDS 自己画渐变模糊，避免出现一条有边界的蒙版。
-    style.originalStyle = { contentStyle: content };
-    style.scrollEffectStyle = { contentStyle: content };
+    const mask: HdsNavigationTitleBarStyle = {
+      backgroundStyle: {
+        backgroundColor: '#00000000',
+        maskExtraHeight: 16,
+        blurRadius: 80
+      },
+      contentStyle: content
+    };
+    style.originalStyle = mask;
+    style.scrollEffectStyle = mask;
     return style;
   }
 
@@ -9284,6 +9294,7 @@ struct Index {
     ProfilePage({
       vm: this.profileVm,
       pageScroller: this.profileScroller,
+      topOffsetVp: 0,
       // 滚动 → 底栏下沉/隐藏（和首页同一条路，见 onFeedScroll）。
       onFeedScroll: (deltaY: number, offsetY: number, scrollState: ScrollState): void => {
         this.onFeedScroll(deltaY, offsetY, scrollState);
