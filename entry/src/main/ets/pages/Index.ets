@@ -8572,13 +8572,24 @@ struct Index {
       content = style.originalStyle.contentStyle;
     }
     if (content !== undefined) {
-      // HDS 原生按钮默认是透明内容；给一层半透明底，返回/菜单才有可见的胶囊。
-      const buttonBg: ResourceColor = this.isDarkUi ? '#26000000' : '#59FFFFFF';
+      // HDS 原生按钮默认是透明内容；给一层很淡的半透明底，只勾出胶囊轮廓。
+      const buttonBg: ResourceColor = this.isDarkUi ? '#1A000000' : '#1AFFFFFF';
+      // Reels 页压在视频上：浅色/深色都让标题与图标保持白色。
+      if (content.titleStyle !== undefined) {
+        content.titleStyle.mainTitleColor = Color.White;
+        content.titleStyle.subTitleColor = Color.White;
+        content.titleStyle.mainTitleShadowColor = '#66000000';
+        content.titleStyle.subTitleShadowColor = '#66000000';
+      }
       if (content.backIconStyle !== undefined) {
         content.backIconStyle.backgroundColor = buttonBg;
+        content.backIconStyle.iconColor = Color.White;
+        content.backIconStyle.textColor = Color.White;
       }
       if (content.menuStyle !== undefined) {
         content.menuStyle.backgroundColor = buttonBg;
+        content.menuStyle.iconColor = Color.White;
+        content.menuStyle.textColor = Color.White;
       }
     }
     const noMask: HdsNavigationTitleBarStyle = {
