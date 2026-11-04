@@ -1052,8 +1052,6 @@ struct Index {
   @State sessionChecked: boolean = false;
   @State bridgeReady: boolean = false;
   @State webVisible: boolean = false;
-  /** 只有"退出登录"造成的登录页才需要额外避让侧栏；冷启动登录页已有自己的布局。 */
-  @State private loginAfterSignOut: boolean = false;
   /**
    * **无头网页登录**进行中（见 headlessWebLogin / core/WebLogin）：宿主不给用户看，
    * 但不是 `Visibility.Hidden` —— 那会让引擎节流、IG 登录页跑不起来；
@@ -3780,9 +3778,6 @@ struct Index {
     this.sessionChecked = true;
     this.lastSessionState = signedIn;
     this.signedIn = signedIn;
-    if (signedIn) {
-      this.loginAfterSignOut = false;
-    }
     if (!signedIn) {
       /*
        * **登录页不再预先挂隐藏网页**（需求：网页登录那条路已整条移除，登录改走
@@ -4000,7 +3995,6 @@ struct Index {
   }
 
   private async signOut(): Promise<void> {
-    this.loginAfterSignOut = true;
     /*
      * **"退出登录"是真的把这个人踢掉**（用户报的："退出登录后下拉选单里已退出的账号还可以使用，
      * 点击切换甚至 session 保留完整"）。
@@ -8353,8 +8347,6 @@ struct Index {
       })
         .width('100%')
         .height('100%')
-        // 平板宽屏时避让左侧栏：登录页从侧栏右侧开始居中，不再压到侧栏下面。
-        .padding({ left: this.tabletWideShell() && this.loginAfterSignOut ? this.tabletSidebarWidth() : 0 })
     } else {
       Stack({ alignContent: Alignment.Bottom }) {
       // ---- 内容层：按 selectedIndex 切页（栏那层不参与切页）----
