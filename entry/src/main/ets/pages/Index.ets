@@ -11213,6 +11213,9 @@ struct Index {
     if (top === SETTINGS_PAGE || top === SETTINGS_DETAIL_PAGE) {
       return;
     }
+    // 清掉任何残留的设置页记录，避免返回后点侧边栏又把旧设置页翻出来。
+    this.navStack.removeByName(SETTINGS_PAGE);
+    this.navStack.removeByName(SETTINGS_DETAIL_PAGE);
     /*
      * 双栏状态下打开设置：先把右栏收掉，再走整页路由 —— 设置页始终单栏。
      * 否则 pushPage 会按"平板上新开右栏"处理，设置又进了右栏。
@@ -11229,6 +11232,19 @@ struct Index {
       return;
     }
     this.pushPage(SETTINGS_PAGE);
+  }
+
+  /** 设置一级页关闭/返回时，把它拉起的右栏设置页一起收掉。 */
+  private closeSettingsRightPane(): void {
+    if (this.tabletRightName === SETTINGS_PAGE || this.tabletRightName === SETTINGS_DETAIL_PAGE) {
+      this.tabletRightName = '';
+      this.tabletProfileParam = '';
+      this.tabletProfileStack.clear();
+      if (this.selectedIndex >= 0 && this.selectedIndex < this.tabRightNames.length) {
+        this.tabRightNames[this.selectedIndex] = '';
+        this.tabRightParams[this.selectedIndex] = '';
+      }
+    }
   }
 
   /**
@@ -11857,14 +11873,7 @@ struct Index {
           },
           // 设置首页点一项：新开一个 NavDestination（返回键回设置首页）。
           onOpenSection: (section: string): void => {
-            const names: Array<string> = this.navStack.getAllPathName();
-            const top: string = names.length > 0 ? names[names.length - 1] : '';
-            if (top === SETTINGS_PAGE || top === SETTINGS_DETAIL_PAGE) {
-              // 设置一级页在整页栈里：二级页直接叠在它上面，不走平板右栏。
-              this.navStack.pushPath({ name: SETTINGS_DETAIL_PAGE, param: section });
-              return;
-            }
-            // 右栏里必须压栈，不能 replace，否则设置首页被二级页顶掉、返回回不去。
+            // 二级页进右栏；右栏已经有页面时继续压栈，三级页覆盖在上面。
             this.pushPage(SETTINGS_DETAIL_PAGE, section, true);
           },
           onOpenSponsor: (): void => {
@@ -11890,10 +11899,20 @@ struct Index {
         this.onPageShown(SETTINGS_PAGE);
       })
       .onHidden((): void => {
+        this.closeSettingsRightPane();
         this.onPageHidden(SETTINGS_PAGE);
       })
-      // 返回键：**评论浮层开着就先收评论**（需求："返回优先收起面板"），不再 pop 页面。
-      .onBackPressed((): boolean => this.handleDestinationBack())
+      // 返回键：先收评论/模态；右栏还开着设置二级页就先收右栏，再返回。
+      .onBackPressed((): boolean => {
+        if (this.handleDestinationBack()) {
+          return true;
+        }
+        if (this.tabletRightName === SETTINGS_DETAIL_PAGE || this.tabletRightName === SETTINGS_PAGE) {
+          this.closeSettingsRightPane();
+          return true;
+        }
+        return false;
+      })
     } else if (name === SETTINGS_DETAIL_PAGE) {
       // 设置二级页：新开一页 NavDestination，标题栏/返回键由 HDS 提供。
       HdsNavDestination() {
