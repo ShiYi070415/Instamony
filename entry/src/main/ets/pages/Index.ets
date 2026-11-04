@@ -84,7 +84,6 @@ import {
 } from '../core/AppSettings';
 // 沉浸光感材质：验证弹窗的外观（见 showChallengeDialog）与首页胶囊共用同一套档位。
 import { immersiveMaterial, MaterialChipButton, MaterialIconButton, SurfaceModifier } from '../components/MaterialSurface';
-import { TabletSidebar } from '../components/TabletSidebar';
 // 沉浸光感的档位/类型换算（设定页里的字符串 → hdsMaterial 的枚举，含设备能力降级）。
 import { BarChromeModifier, immersiveLevel, immersiveMaterialType, titleScrollEffectType } from '../core/ImmersiveLight';
 import { PlatformCap } from '../core/PlatformCap';
@@ -7373,8 +7372,9 @@ struct Index {
 
   /** 侧边栏实际宽度（和 tabletSidebar 的 .width 同源）。 */
   private tabletSidebarWidth(): number {
-    // 父布局只按收起宽度让位；展开时侧边栏作为浮层盖在内容上，避免父级重排。
-    return this.tabletButtonSize() + 28;
+    const collapsed: number = this.tabletButtonSize() + 28;
+    const expanded: number = Math.round(220 * this.tabletUiScale());
+    return Math.round(collapsed + (expanded - collapsed) * this.tabletSidebarProgress);
   }
 
   /** 展开时内部胶囊/条目的宽度；收起时等于圆按钮直径。 */
@@ -11437,31 +11437,155 @@ struct Index {
   /** 平板左侧栏：展开按钮 → 垂直页签 → 底部通知/设置，全部竖排。 */
   @Builder
   tabletSidebar() {
-    TabletSidebar({
-      selectedIndex: this.selectedIndex,
-      whiteIcons: this.reelsSidebarWhite(),
-      loginPage: this.loginPageShown(),
-      settingsOverlay: this.settingsOverReels(),
-      buttonSize: this.tabletButtonSize(),
-      uiScale: this.tabletUiScale(),
-      gutter: this.tabletSidebarGutter(),
-      collapsedWidth: this.tabletButtonSize() + 28,
-      expandedWidth: Math.round(220 * this.tabletUiScale()),
-      expandedItemWidth: Math.round(196 * this.tabletUiScale()),
-      thickness: Index.materialThicknessNow(),
-      onTab: (index: number): void => {
-        this.closeSettingsForTabSwitch();
-        if (index !== 0) {
-          this.tabletProfileParam = '';
-        }
-        this.onTabBarClick(index);
-      },
-      onNotifications: (): void => {
-        this.openNotifications();
-      },
-      onSettings: (): void => {
-        this.openSettings();
+    Column() {
+      Row() {
+        MaterialChipButton({
+          symbol: this.tabletSidebarExpanded ? $r('sys.symbol.chevron_left') : $r('sys.symbol.chevron_right'),
+          labelRes: $r('app.string.sidebar_collapse'),
+          labelVisible: this.tabletSidebarExpanded,
+          anchorStart: true,
+          swallowLongPress: true,
+          tapDebounceMs: 100,
+          chipHeight: this.tabletButtonSize(),
+          chipWidth: this.tabletSidebarItemWidth(),
+          iconSlotWidth: this.tabletButtonSize(),
+          iconSize: Math.round(22 * this.tabletUiScale()),
+          fontSize: Math.round(14 * this.tabletUiScale()),
+          autoInvert: false,
+          tint: this.reelsSidebarWhite() ? '#FFFFFF' : '',
+          onTap: (): void => {
+            this.toggleTabletSidebar(!this.tabletSidebarExpanded);
+          }
+        })
       }
+      .width('100%')
+      .height(this.tabletButtonSize() + 8)
+      .justifyContent(FlexAlign.Start)
+      .padding({ left: this.tabletSidebarGutter() })
+
+      // 和底部悬浮栏同一种胶囊：把宽高对换后竖着放，材质直接挂在整颗胶囊上。
+      Stack({ alignContent: Alignment.Start }) {
+        Toggle({ type: ToggleType.Button, isOn: false }) {
+          Column() {
+            ForEach(TAB_ITEMS, (item: TabItem, index: number): void => {
+              Row({ space: Math.round(8 * this.tabletUiScale()) }) {
+                Stack({ alignContent: Alignment.Center }) {
+                  SymbolGlyph(this.selectedIndex === index ? item.iconSelected : item.iconNormal)
+                    .fontSize(Math.round(TAB_ICON_SIZE * this.tabletUiScale()))
+                    .fontColor([this.tabIconColor(this.selectedIndex === index)])
+                }
+                .width(this.tabletButtonSize())
+                .height(this.tabletButtonSize())
+                if (this.tabletSidebarExpanded) {
+                  Text(item.label)
+                    .fontSize(Math.round(14 * this.tabletUiScale()))
+                    .fontWeight(this.selectedIndex === index ? FontWeight.Medium : FontWeight.Regular)
+                    .fontColor(this.tabIconColor(this.selectedIndex === index))
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    .transition(TransitionEffect.OPACITY
+                      .combine(TransitionEffect.translate({ x: -8 }))
+                      .animation({ duration: 160, curve: Curve.EaseOut }))
+                }
+              }
+              .width(this.tabletSidebarItemWidth())
+              .height(this.tabletButtonSize())
+              .padding({ right: this.tabletSidebarExpanded ? Math.round(12 * this.tabletUiScale()) : 0 })
+              .justifyContent(FlexAlign.Start)
+              .borderRadius(this.tabletButtonSize() / 2)
+              .backgroundColor(Color.Transparent)
+              .onClick((): void => {
+                // 只有登录页锁住侧边栏 tab；设置页点击 tab 会先收起设置再切页。
+                if (this.sidebarTabsLocked()) {
+                  return;
+                }
+                this.closeSettingsForTabSwitch();
+                if (index !== 0) {
+                  this.tabletProfileParam = '';
+                }
+                this.onTabBarClick(index);
+              })
+            }, (item: TabItem): string => `${item.tab}`)
+          }
+          .width(this.tabletSidebarItemWidth())
+          .height(5 * this.tabletButtonSize() + Math.round(24 * this.tabletUiScale()))
+          .padding({
+            top: Math.round(12 * this.tabletUiScale()),
+            bottom: Math.round(12 * this.tabletUiScale())
+          })
+          .alignItems(HorizontalAlign.Center)
+        }
+        .width(this.tabletSidebarItemWidth())
+        .height(5 * this.tabletButtonSize() + Math.round(24 * this.tabletUiScale()))
+        .padding(0)
+        .borderRadius(this.tabletButtonSize() / 2)
+        .clip(true)
+        .backgroundColor(Color.Transparent)
+        .selectedColor(Color.Transparent)
+        .attributeModifier(new SurfaceModifier(Index.materialThicknessNow(), false, true))
+      }
+      .width('100%')
+      .padding({ left: this.tabletSidebarGutter() })
+      .layoutWeight(1)
+
+      Blank()
+
+      Column({ space: Math.round(8 * this.tabletUiScale()) }) {
+        MaterialChipButton({
+          symbol: $r('sys.symbol.heart'),
+          labelRes: $r('app.string.notifications'),
+          labelVisible: this.tabletSidebarExpanded,
+          anchorStart: true,
+          swallowLongPress: true,
+          tapDebounceMs: 100,
+          chipHeight: this.tabletButtonSize(),
+          chipWidth: this.tabletSidebarItemWidth(),
+          iconSlotWidth: this.tabletButtonSize(),
+          iconSize: Math.round(22 * this.tabletUiScale()),
+          fontSize: Math.round(14 * this.tabletUiScale()),
+          autoInvert: false,
+          tint: this.reelsSidebarWhite() ? '#FFFFFF' : '',
+          onTap: (): void => {
+            if (this.loginPageShown()) {
+              return;
+            }
+            this.openNotifications();
+          }
+        })
+        .enabled(!this.loginPageShown())
+
+        MaterialChipButton({
+          symbol: $r('sys.symbol.more'),
+          labelRes: $r('app.string.action_settings'),
+          labelVisible: this.tabletSidebarExpanded,
+          anchorStart: true,
+          swallowLongPress: true,
+          tapDebounceMs: 100,
+          chipHeight: this.tabletButtonSize(),
+          chipWidth: this.tabletSidebarItemWidth(),
+          iconSlotWidth: this.tabletButtonSize(),
+          iconSize: Math.round(22 * this.tabletUiScale()),
+          fontSize: Math.round(14 * this.tabletUiScale()),
+          autoInvert: false,
+          tint: this.reelsSidebarWhite() ? '#FFFFFF' : '',
+          onTap: (): void => {
+            this.openSettings();
+          }
+        })
+      }
+      .width('100%')
+      .padding({ left: this.tabletSidebarGutter(), bottom: Math.round(16 * this.tabletUiScale()) })
+      .alignItems(HorizontalAlign.Start)
+    }
+    .width(this.tabletSidebarWidth())
+    .height('100%')
+    .padding({ top: 4 })
+    // Reels 时侧边栏透明，让外层 Reels 黑底直接铺到侧边栏区域，并去掉侧边栏分割线。
+    .backgroundColor(this.reelsBackdropActive() && !this.settingsOverReels()
+      ? Color.Transparent : $r('app.color.page_background'))
+    .border({
+      width: { right: this.reelsBackdropActive() ? 0 : 0.5 },
+      color: $r('app.color.divider')
     })
   }
 
@@ -11559,9 +11683,10 @@ struct Index {
           }
           this.tabletSidebar()
         }
-        // 浮层给展开后的最大宽度；内部组件自己按 0..1 进度画宽度。
-        .width(Math.round(220 * this.tabletUiScale()))
+        .width(this.tabletSidebarWidth())
         .height('100%')
+        // 侧边栏背景直接铺进上下系统避让区（状态栏 / 手势条），不留下透明缝。
+        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
         .position({ x: 0, y: 0 })
         .zIndex(40)
       }
