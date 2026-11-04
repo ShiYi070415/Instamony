@@ -1450,6 +1450,13 @@ struct Index {
     if (navNames.length > 0 && navNames[navNames.length - 1] === name) {
       this.navStack.removeByName(name);
     }
+    if (this.isOverlayPage(name)) {
+      // HDS 的返回是动画；下一拍再兜一次，确保路由表里没有这一页。
+      setTimeout((): void => {
+        this.navStack.removeByName(name);
+        this.navDbg(`overlayPurge:${name}`);
+      }, 0);
+    }
     /*
      * 覆盖层数回到"挂起时那一层"：把评论浮层接回来（需求："不要收起评论面板"）。
      *
@@ -12122,7 +12129,9 @@ struct Index {
           this.closeSettingsRightPane();
           return true;
         }
-        return false;
+        // 不能 return false 让 HDS 只做视觉返回：NavPathStack 里会留下这一页，
+        // 侧边栏展开/收起或窗口变化重建时又把它拉出来。显式 pop。
+        return this.handlePageBack();
       })
     } else if (name === SETTINGS_DETAIL_PAGE) {
       // 设置二级页：新开一页 NavDestination，标题栏/返回键由 HDS 提供。
