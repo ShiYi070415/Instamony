@@ -11718,55 +11718,46 @@ struct Index {
       Blank()
 
       Column({ space: Math.round(8 * this.tabletUiScale()) }) {
-        // 设置/通知用普通 Button：MaterialChipButton 的 Toggle 在侧边栏宽度动画时会发伪事件，
-        // 导致展开/收起把设置页误打开。
-        Button({ type: ButtonType.Normal, stateEffect: true }) {
-          Row({ space: 8 }) {
-            SymbolGlyph($r('sys.symbol.heart'))
-              .fontSize(Math.round(22 * this.tabletUiScale()))
-              .fontColor([this.reelsSidebarWhite() ? '#FFFFFF' : $r('sys.color.font_primary')])
-            if (this.tabletSidebarExpanded) {
-              Text($r('app.string.notifications'))
-                .fontSize(Math.round(14 * this.tabletUiScale()))
-                .fontColor(this.reelsSidebarWhite() ? '#FFFFFF' : $r('sys.color.font_primary'))
+        MaterialChipButton({
+          symbol: $r('sys.symbol.heart'),
+          labelRes: $r('app.string.notifications'),
+          labelVisible: this.tabletSidebarExpanded,
+          anchorStart: true,
+          swallowLongPress: true,
+          tapDebounceMs: 100,
+          chipHeight: this.tabletButtonSize(),
+          chipWidth: this.tabletSidebarItemWidth(),
+          iconSlotWidth: this.tabletButtonSize(),
+          iconSize: Math.round(22 * this.tabletUiScale()),
+          fontSize: Math.round(14 * this.tabletUiScale()),
+          autoInvert: false,
+          tint: this.reelsSidebarWhite() ? '#FFFFFF' : '',
+          onTap: (): void => {
+            if (this.loginPageShown()) {
+              return;
             }
-          }
-          .width('100%')
-          .height(this.tabletButtonSize())
-          .justifyContent(FlexAlign.Start)
-          .padding({ left: Math.round(12 * this.tabletUiScale()) })
-        }
-        .width(this.tabletSidebarItemWidth())
-        .height(this.tabletButtonSize())
-        .backgroundColor(Color.Transparent)
-        .enabled(!this.loginPageShown())
-        .onClick((): void => {
-          if (!this.loginPageShown()) {
             this.openNotifications();
           }
         })
+        .enabled(!this.loginPageShown())
 
-        Button({ type: ButtonType.Normal, stateEffect: true }) {
-          Row({ space: 8 }) {
-            SymbolGlyph($r('sys.symbol.more'))
-              .fontSize(Math.round(22 * this.tabletUiScale()))
-              .fontColor([this.reelsSidebarWhite() ? '#FFFFFF' : $r('sys.color.font_primary')])
-            if (this.tabletSidebarExpanded) {
-              Text($r('app.string.action_settings'))
-                .fontSize(Math.round(14 * this.tabletUiScale()))
-                .fontColor(this.reelsSidebarWhite() ? '#FFFFFF' : $r('sys.color.font_primary'))
-            }
+        MaterialChipButton({
+          symbol: $r('sys.symbol.more'),
+          labelRes: $r('app.string.action_settings'),
+          labelVisible: this.tabletSidebarExpanded,
+          anchorStart: true,
+          swallowLongPress: true,
+          tapDebounceMs: 100,
+          chipHeight: this.tabletButtonSize(),
+          chipWidth: this.tabletSidebarItemWidth(),
+          iconSlotWidth: this.tabletButtonSize(),
+          iconSize: Math.round(22 * this.tabletUiScale()),
+          fontSize: Math.round(14 * this.tabletUiScale()),
+          autoInvert: false,
+          tint: this.reelsSidebarWhite() ? '#FFFFFF' : '',
+          onTap: (): void => {
+            this.openSettings();
           }
-          .width('100%')
-          .height(this.tabletButtonSize())
-          .justifyContent(FlexAlign.Start)
-          .padding({ left: Math.round(12 * this.tabletUiScale()) })
-        }
-        .width(this.tabletSidebarItemWidth())
-        .height(this.tabletButtonSize())
-        .backgroundColor(Color.Transparent)
-        .onClick((): void => {
-          this.openSettings();
         })
       }
       .width('100%')
@@ -12105,8 +12096,9 @@ struct Index {
         })
       }
     }
-    .width('100%')
+    .width(this.tabletWideShell() ? this.contentAreaWidth() : '100%')
     .height('100%')
+    .position({ x: this.tabletWideShell() ? this.tabletSidebarWidth() : 0, y: 0 })
     .backgroundColor($r('app.color.page_background'))
     .zIndex(95)
   }

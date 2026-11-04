@@ -905,6 +905,8 @@ export struct MaterialChipButton {
   };
 
   private lastFireMs: number = 0;
+  /** 最近一次真实按下；用来过滤侧边栏宽度/文字动画产生的伪事件。 */
+  private pressedAtMs: number = 0;
 
   /** 同 MaterialLabelButton：`onChange` 可能不来，`onClick` 兜底 + 400ms 去重。 */
   private fire(): void {
@@ -974,12 +976,21 @@ export struct MaterialChipButton {
     // 开启时吞掉长按（见 swallowLongPress 的说明）。
     .gesture(this.swallowLongPress ? LongPressGesture({ repeat: false, duration: 300 }) : null)
     .onChange((): void => {
-      this.fire();
+      if (Date.now() - this.pressedAtMs < 800) {
+        this.fire();
+      }
     })
     .onClick((): void => {
-      this.fire();
+      if (Date.now() - this.pressedAtMs < 800) {
+        this.fire();
+      }
     })
-    .onTouch(trackMaterialTouch)
+    .onTouch((event: TouchEvent): void => {
+      if (event.type === TouchType.Down || event.type === TouchType.Move) {
+        this.pressedAtMs = Date.now();
+      }
+      trackMaterialTouch(event);
+    })
     .gesture(PanGesture().onActionStart(consumePan).onActionUpdate(consumePan))
   }
 }
