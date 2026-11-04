@@ -4101,6 +4101,51 @@ struct Index {
    * 通知与信息流，于是托盘队列、私信快照、预取队列、设备会话材料、请求模板全都留给了下一个账号
    * （用户报的"快拍还是上一个人的"就是其中一条）。任何"按人"的新状态都加到这里，并且**只加这里**。
    */
+  /**
+   * 账号切换时清掉**页面级**的内存状态。
+   *
+   * `forgetAccountMemory` 原来只 reset 了各主 ViewModel，但页面自己的右栏、
+   * 用户页 VM Map、帖子/评论缓存、tab 保存的路由仍然留着 —— 换号后会串号，
+   * 或在切 tab 时恢复上一个人的页面。
+   */
+  private resetAccountPageState(): void {
+    this.navStack.clear();
+    this.tabletProfileStack.clear();
+    this.directStageStack.clear();
+    this.tabletRightName = '';
+    this.tabletProfileParam = '';
+    this.tabRightNames = ['', '', '', '', ''];
+    this.tabRightParams = ['', '', '', '', ''];
+    this.tabDirectThreads = ['', '', '', '', ''];
+    this.directStageOpen = false;
+    this.directStageVisible = false;
+    this.topPage = '';
+    this.shownPages = [];
+    this.coveringPages = 0;
+    this.navDepth = 0;
+    this.userProfileVms.forEach((vm: ProfileViewModel): void => {
+      vm.reset();
+    });
+    this.userProfileVms.clear();
+    this.profileReelsVm.reset();
+    this.searchReelsVm.reset();
+    this.postPagePosts = [];
+    this.searchReelsOrder = [];
+    this.mediaDetails.clear();
+    this.commentsPrefetch.clear();
+    this.commentLiking = [];
+    this.likeIntent.clear();
+    this.repostIntent.clear();
+    this.highlightQueue = [];
+    this.highlightRects.clear();
+    this.storyQueue = [];
+    this.storyRects.clear();
+    this.storyOpen = false;
+    this.storyClosing = false;
+    this.accountMenuOpen = false;
+    this.commentsVisible = false;
+  }
+
   private forgetAccountMemory(keepSessionFor: string = ''): void {
     /*
      * **不依赖 UI 状态的那几步交给 core/SessionService**（顺序在那里有注释，且只有一份）：
@@ -4147,6 +4192,9 @@ struct Index {
         this.directThreadVm.reset();
         // 快拍托盘队列（页面持有的那份；内容/隐藏表/托盘缓存由 SessionService → AccountCaches 清）。
         this.storyQueue = [];
+      }),
+      new ResetStep('page-state', (): void => {
+        this.resetAccountPageState();
       }),
       new ResetStep('identity', (): void => {
         // 「你的快拍」头像与标题栏账号名都属于"这个人"：先抹掉，等新头部回来再填。
@@ -8562,6 +8610,18 @@ struct Index {
    * 所以按 `PlatformCap.hasHdsMaterial()` 有条件地加上去；滚动效果类型还要看明暗主题
    * （浅色模式下 `IMMERSIVE_GRADIENT_BLUR` 会把标题刷成白字，见 titleScrollEffectType）。
    */
+  /** 浅色统一蒙版：透明底 + 更长的 maskExtraHeight + 更大模糊，不铺白色。 */
+  private lightTitleMask(content?: HdsTitleBarContentStyle): HdsNavigationTitleBarStyle {
+    return {
+      backgroundStyle: {
+        backgroundColor: '#00000000',
+        maskExtraHeight: 48,
+        blurRadius: 80
+      },
+      contentStyle: content
+    };
+  }
+
   private feedTitleStyle(): TitleBarStyleOptions {
     const style: TitleBarStyleOptions = {
       // 标题栏随内容滚动的**动态背景**（官方叫"动态模糊"/沉浸式标题栏）：内容滑到标题栏
@@ -8579,15 +8639,25 @@ struct Index {
       }
     };
     if (PlatformCap.hasHdsMaterial()) {
-      // 沉浸光感：材质类型交给系统按环境自适应，档位跟设定页那一档（和底部悬浮栏同源）。
+      // 浅色不要再叠材质自带的白色背板；深色保留沉浸光感。
       style.systemMaterialEffect = {
-        materialType: immersiveMaterialType(),
-        materialLevel: immersiveLevel(this.materialLevel)
+        materialType: this.isDarkUi ? immersiveMaterialType() : hdsMaterial.MaterialType.NONE,
+        materialLevel: this.isDarkUi ? immersiveLevel(this.materialLevel) : hdsMaterial.MaterialLevel.ADAPTIVE
       };
     }
     const content: HdsTitleBarContentStyle = this.defaultTitleContent();
-    style.originalStyle = { contentStyle: content };
-    style.scrollEffectStyle = { contentStyle: content };
+    if (!this.isDarkUi) {
+      style.scrollEffectOpts = {
+        enableScrollEffect: true,
+        scrollEffectType: ScrollEffectType.GRADUAL_BLUR
+      };
+      const mask: HdsNavigationTitleBarStyle = this.lightTitleMask(content);
+      style.originalStyle = mask;
+      style.scrollEffectStyle = mask;
+    } else {
+      style.originalStyle = { contentStyle: content };
+      style.scrollEffectStyle = { contentStyle: content };
+    }
     return style;
   }
 
@@ -8629,8 +8699,8 @@ struct Index {
     const noMask: HdsNavigationTitleBarStyle = {
       backgroundStyle: {
         backgroundColor: '#00000000',
-        maskExtraHeight: 0,
-        blurRadius: 0
+        maskExtraHeight: 48,
+        blurRadius: 80
       },
       contentStyle: content
     };
@@ -8650,11 +8720,18 @@ struct Index {
     };
     if (PlatformCap.hasHdsMaterial()) {
       style.systemMaterialEffect = {
-        materialType: immersiveMaterialType(),
-        materialLevel: immersiveLevel(this.materialLevel)
+        materialType: this.isDarkUi ? immersiveMaterialType() : hdsMaterial.MaterialType.NONE,
+        materialLevel: this.isDarkUi ? immersiveLevel(this.materialLevel) : hdsMaterial.MaterialLevel.ADAPTIVE
       };
     }
-    style.originalStyle = { contentStyle: this.defaultTitleContent() };
+    const content: HdsTitleBarContentStyle = this.defaultTitleContent();
+    if (!this.isDarkUi) {
+      const mask: HdsNavigationTitleBarStyle = this.lightTitleMask(content);
+      style.originalStyle = mask;
+      style.scrollEffectStyle = mask;
+    } else {
+      style.originalStyle = { contentStyle: content };
+    }
     return style;
   }
 
@@ -8678,8 +8755,8 @@ struct Index {
     const noMask: HdsNavigationTitleBarStyle = {
       backgroundStyle: {
         backgroundColor: '#00000000',
-        maskExtraHeight: 0,
-        blurRadius: 0
+        maskExtraHeight: 48,
+        blurRadius: 80
       },
       // Reels 页在视频上：标题、返回、菜单统一白色。
       contentStyle: {
