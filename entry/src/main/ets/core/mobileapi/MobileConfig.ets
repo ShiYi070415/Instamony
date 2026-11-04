@@ -78,7 +78,7 @@ export class AppProfile {
 }
 
 /** 默认 App 版本（instagrapi 的 `DEFAULT_APP_VERSION`：449.0.0.52.84）。 */
-export const DEFAULT_APP_VERSION: string = '449.0.0.52.84';
+export const DEFAULT_APP_VERSION: string = '454.0.0.54.77';
 
 /**
  * App 版本表：键 = app_version（instagrapi 的 `APP_SETTINGS`）。
@@ -92,6 +92,9 @@ export const DEFAULT_APP_VERSION: string = '449.0.0.52.84';
 function buildAppSettings(): Map<string, AppProfile> {
   const map: Map<string, AppProfile> = new Map<string, AppProfile>();
   const list: Array<AppProfile> = [
+    // 454.0.0.54.77 / versionCode 386014758：从 Instagram Android 454 客户端逆向核对。
+    new AppProfile('454.0.0.54.77', '386014758',
+      '8e8a63073c08f2c7e6701e497d777db5d8d7ad32a5788ce6b1094f20cad0c9f1'),
     new AppProfile('449.0.0.52.84', '1079242191',
       '799db3e387d7a21a19c72918b8698b6cd28a1516ade363792c100ed45a0f9f0b'),
     new AppProfile('448.0.0.0.20', '1065560286',
@@ -164,7 +167,7 @@ export class FixedHeaders {
 /** 请求头里另外几个固定值（见 FixedHeaders 的说明）。 */
 export const NAV_CHAIN: string =
   '9MV:self_profile:2,ProfileMediaTabFragment:self_profile:3,9Xf:self_following:4';
-export const IG_CAPABILITIES: string = '3brTv10=';
+export const IG_CAPABILITIES: string = '3brTv10C';
 export const FB_HTTP_ENGINE: string = 'Tigon/MNS/TCP';
 
 /** 网络超时（毫秒）。instagrapi 侧是 requests 的 read_timeout=25s，这里取同一量级。 */

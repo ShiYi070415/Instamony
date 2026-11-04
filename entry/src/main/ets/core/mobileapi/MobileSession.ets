@@ -820,6 +820,17 @@ export class MobileSession {
              * 桌面那份 `--caa-login` 一直能登，正是因为它用的 settings.json 里 mid 是有值的。
              */
             MobileSession.ensureMid(parsed);
+            // 老身份里记着 449 的 appVersion；UA/Bloks 都从这里派生，升级到 454 后要迁移。
+            if (parsed.appVersion !== DEFAULT_APP_VERSION) {
+              parsed.appVersion = DEFAULT_APP_VERSION;
+              try {
+                store.putSync(STORE_KEY, JSON.stringify(parsed));
+                store.flushSync();
+              } catch (error) {
+                hilog.warn(DOMAIN, TAG, 'app version migrate persist failed: %{public}s',
+                  (error as Error).message);
+              }
+            }
             MobileSession.seed = parsed;
             hilog.info(DOMAIN, TAG, 'identity restored (saved %{public}d ago)',
               parsed.savedAt > 0 ? Math.round((Date.now() - parsed.savedAt) / 1000) : -1);
