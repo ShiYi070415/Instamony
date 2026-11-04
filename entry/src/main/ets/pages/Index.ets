@@ -8345,6 +8345,10 @@ struct Index {
          */
       // 「在另一台设备上同意」实测在第三方客户端走不通（见 LoginPage 里那段对照表），这里不做任何事。
       })
+        .width('100%')
+        .height('100%')
+        // 平板宽屏时避让左侧栏：登录页从侧栏右侧开始居中，不再压到侧栏下面。
+        .padding({ left: this.tabletWideShell() ? this.tabletSidebarWidth() : 0 })
     } else {
       Stack({ alignContent: Alignment.Bottom }) {
       // ---- 内容层：按 selectedIndex 切页（栏那层不参与切页）----
