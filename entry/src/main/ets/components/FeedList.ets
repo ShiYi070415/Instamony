@@ -2903,13 +2903,18 @@ export struct FeedList {
     if (post.isVideo()) {
       return post.originalVideoUrl.length > 0 ? post.originalVideoUrl : post.videoUrl;
     }
+    /*
+     * 原图数组可能只有一张（旧缓存 / 资料页详情没补齐），这时不能用它按页取 ——
+     * 否则多图帖永远只会拿到第 0 张。原图数量不足时退回展示地址数组，同样按当前页取。
+     */
     const originals: Array<string> = post.originalImageUrls;
-    if (originals.length === 0) {
+    const source: Array<string> = originals.length > 1 ? originals : post.imageUrls;
+    if (source.length === 0) {
       return post.displayUrl;
     }
     const page: number = this.carouselPage(post);
-    const index: number = page >= 0 && page < originals.length ? page : 0;
-    return originals[index];
+    const index: number = page >= 0 && page < source.length ? page : 0;
+    return source[index];
   }
 
   /**
