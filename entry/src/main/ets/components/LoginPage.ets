@@ -868,17 +868,15 @@ export struct LoginPage {
       .width('100%')
       .height('100%')
       .padding({ left: SIDE_VP, right: SIDE_VP })
+
+      // 只在打开时挂载；不要用 .overlay(空 builder)：空 overlay 会铺满整页吃掉触摸。
+      if (this.verifyOpen) {
+        this.verifyOverlay()
+      }
     }
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.page_background'))
-    /*
-     * **两步验证的半模态面板**（需求："点登录若要求 2FA，就弹系统沉浸光感半模态面板"）。
-     *
-     * 外观见 verifySheetOptions：API 26+ 走 `SheetOptions.systemMaterial`（系统按
-     * ImmersiveMaterial 画面板的底色/边框/阴影），老机器退回玻璃底 + 模糊。
-     */
-    .overlay(this.verifyOverlay(), { align: Alignment.Center })
   }
 
   /**
