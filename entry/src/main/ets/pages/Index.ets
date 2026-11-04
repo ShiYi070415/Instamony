@@ -8086,7 +8086,7 @@ struct Index {
         FeedList({
           posts: this.posts,
           // 内容要滚到 HDS 标题栏下面，渐变模糊才有东西可采样。
-          topOffset: 56,
+          topOffset: 94,
           // 宽屏上整列收窄居中；手机为 0，保持原来的满宽。
           maxWidthVp: this.feedMaxWidth(),
           // 提示卡片位置：关注流 → 卡片 → 探索流（-1 = 不画，见 feedHintAt）。
@@ -8681,31 +8681,22 @@ struct Index {
    * 所以按 `PlatformCap.hasHdsMaterial()` 有条件地加上去；滚动效果类型还要看明暗主题
    * （浅色模式下 `IMMERSIVE_GRADIENT_BLUR` 会把标题刷成白字，见 titleScrollEffectType）。
    */
-  /** 五个主页面统一的 HDS 标题栏：渐变模糊，蒙版只比标题多 16vp。 */
+  /** 五个主页面共用的 HDS 标题栏：完全走系统默认滚动模糊，不手写蒙版。 */
   private mainTitleStyle(content: HdsTitleBarContentStyle): TitleBarStyleOptions {
     const style: TitleBarStyleOptions = {
       scrollEffectOpts: {
         enableScrollEffect: true,
-        // GRADUAL_BLUR 不吃 blurRadius；要渐变模糊必须用 GRADIENT_BLUR。
-        scrollEffectType: ScrollEffectType.GRADIENT_BLUR
+        scrollEffectType: titleScrollEffectType(this.isDarkUi)
       }
     };
     if (PlatformCap.hasHdsMaterial()) {
       style.systemMaterialEffect = {
-        materialType: this.isDarkUi ? immersiveMaterialType() : hdsMaterial.MaterialType.NONE,
-        materialLevel: this.isDarkUi ? immersiveLevel(this.materialLevel) : hdsMaterial.MaterialLevel.ADAPTIVE
+        materialType: immersiveMaterialType(),
+        materialLevel: immersiveLevel(this.materialLevel)
       };
     }
-    const mask: HdsNavigationTitleBarStyle = {
-      backgroundStyle: {
-        backgroundColor: '#00000000',
-        maskExtraHeight: 8,
-        blurRadius: 80
-      },
-      contentStyle: content
-    };
-    style.originalStyle = mask;
-    style.scrollEffectStyle = mask;
+    style.originalStyle = { contentStyle: content };
+    style.scrollEffectStyle = { contentStyle: content };
     return style;
   }
 
@@ -9294,7 +9285,7 @@ struct Index {
     ProfilePage({
       vm: this.profileVm,
       pageScroller: this.profileScroller,
-      topOffsetVp: 56,
+      topOffsetVp: 94,
       // 滚动 → 底栏下沉/隐藏（和首页同一条路，见 onFeedScroll）。
       onFeedScroll: (deltaY: number, offsetY: number, scrollState: ScrollState): void => {
         this.onFeedScroll(deltaY, offsetY, scrollState);
