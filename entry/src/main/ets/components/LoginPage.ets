@@ -440,6 +440,9 @@ export struct LoginPage {
         this.onSignedIn();
       } else if (state === 'declined' || state === 'none') {
         this.stopApprovalWatch();
+      } else if (state === 'approved') {
+        this.stopApprovalWatch();
+        this.verifyError = '另一台设备已同意，请关闭面板后重新点击登录';
       }
     }, 1000);
   }

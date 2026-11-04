@@ -304,7 +304,8 @@ export class CaaSession {
         if (!CaaSession.watchRunning) {
           return;
         }
-        if (state === 'signed-in' || state === 'declined') {
+        if (state === 'signed-in' || state === 'declined' || state === 'approved') {
+          // approved 但响应没带会话：这张一次性票据已经用掉，不能继续轮旧 context。
           CaaSession.stopApprovalWatch();
           return;
         }
