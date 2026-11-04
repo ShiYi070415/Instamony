@@ -6910,6 +6910,23 @@ struct Index {
    *
    * @returns true = 这次返回被吃掉了（不 pop 页面）。
    */
+  private handlePageBack(): boolean {
+    if (this.handleDestinationBack()) {
+      return true;
+    }
+    // 显式弹栈：不能只靠 HDS 视觉返回，否则侧边栏重建时旧页面可能又被翻出来。
+    if (this.tabletRightName.length > 0
+      && this.tabletProfileStack.getAllPathName().length > 0) {
+      this.tabletProfileStack.pop(true);
+      return true;
+    }
+    if (this.navStack.size() > 0) {
+      this.navStack.pop(true);
+      return true;
+    }
+    return false;
+  }
+
   private handleDestinationBack(): boolean {
     /*
      * **模态先于页面**（需求："用户页面的 highlight 卡片返回要优先收起卡片，而不是退出用户页面"）。
@@ -11848,7 +11865,7 @@ struct Index {
         this.onPageHidden(NOTIFICATIONS_PAGE);
       })
       // 返回键：**评论浮层开着就先收评论**（需求："返回优先收起面板"），不再 pop 页面。
-      .onBackPressed((): boolean => this.handleDestinationBack())
+      .onBackPressed((): boolean => this.handlePageBack())
     } else if (name === SETTINGS_PAGE) {
       // 设定页：和通知页同一套承载（标题栏 + 返回键 + 沉浸光感），内容见 SettingsPanel。
       HdsNavDestination() {
@@ -12018,7 +12035,7 @@ struct Index {
         this.finishAddAccount('page-left').catch((): void => {
         });
       })
-      .onBackPressed((): boolean => this.handleDestinationBack())
+      .onBackPressed((): boolean => this.handlePageBack())
     } else if (name === USER_PROFILE_PAGE) {
       /*
        * **用户主页**（从信息流的资料行点进来）。
@@ -12110,7 +12127,7 @@ struct Index {
         this.onPageHidden(USER_PROFILE_PAGE);
       })
       // 返回键：**评论浮层开着就先收评论**（需求："返回优先收起面板"），不再 pop 页面。
-      .onBackPressed((): boolean => this.handleDestinationBack())
+      .onBackPressed((): boolean => this.handlePageBack())
     } else if (name === POST_PAGE) {
       /*
        * **帖子页**（点网格里的某个格子进来，需求）。
@@ -12150,7 +12167,7 @@ struct Index {
         this.onPageHidden(POST_PAGE);
       })
       // 返回键：**评论浮层开着就先收评论**（需求："返回优先收起面板"），不再 pop 页面。
-      .onBackPressed((): boolean => this.handleDestinationBack())
+      .onBackPressed((): boolean => this.handlePageBack())
     } else if (name === PROFILE_REELS_PAGE) {
       /*
        * **视频分页的 Reels 页**（点「我的」/别人主页视频那一段的格子进来，需求）。
@@ -12199,7 +12216,7 @@ struct Index {
         this.stopReelsKeyboard();
       })
       // 返回键：**评论浮层开着就先收评论**（需求："返回优先收起面板"），不再 pop 页面。
-      .onBackPressed((): boolean => this.handleDestinationBack())
+      .onBackPressed((): boolean => this.handlePageBack())
     } else if (name === SEARCH_REELS_PAGE) {
       /*
        * **搜索页推荐流的 Reels 页**（需求："把搜索页推荐流实现点击帖子进入带返回的 reels 页面，
@@ -12238,7 +12255,7 @@ struct Index {
         this.stopReelsKeyboard();
       })
       // 返回键：**评论浮层开着就先收评论**（需求："返回优先收起面板"），不再 pop 页面。
-      .onBackPressed((): boolean => this.handleDestinationBack())
+      .onBackPressed((): boolean => this.handlePageBack())
     } else if (name === DIRECT_THREAD_PAGE) {
       /*
        * **私信会话页**（点收件箱里的一行进来）。
