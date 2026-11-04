@@ -11784,6 +11784,10 @@ struct Index {
         }
         .width(this.tabletSidebarWidth())
         .height('100%')
+        // 背景铺在**容器**上：expandSafeArea 扩展的是这个 Stack，只有它自己有底色，
+        // 状态栏/手势条那两块才不会是透明的（子节点的 height 100% 不会跟着扩）。
+        .backgroundColor(this.reelsBackdropActive() && !this.settingsOverReels()
+          ? Color.Transparent : $r('app.color.page_background'))
         // 侧边栏背景直接铺进上下系统避让区（状态栏 / 手势条），不留下透明缝。
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
         .position({ x: 0, y: 0 })
