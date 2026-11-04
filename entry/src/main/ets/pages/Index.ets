@@ -8573,7 +8573,7 @@ struct Index {
     }
     if (content !== undefined) {
       // HDS 原生按钮默认是透明内容；给一层半透明底，返回/菜单才有可见的胶囊。
-      const buttonBg: ResourceColor = this.isDarkUi ? '#59000000' : '#CCFFFFFF';
+      const buttonBg: ResourceColor = this.isDarkUi ? '#26000000' : '#59FFFFFF';
       if (content.backIconStyle !== undefined) {
         content.backIconStyle.backgroundColor = buttonBg;
       }
