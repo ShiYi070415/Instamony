@@ -91,6 +91,12 @@ struct CarouselDot {
 
 @Component
 export struct MediaCarousel {
+  /** 全局当前页：下载按钮和轮播可能不在同一层，靠它拿到真正显示的页。 */
+  private static livePages: Map<string, number> = new Map<string, number>();
+
+  static pageOf(id: string): number {
+    return MediaCarousel.livePages.get(id) ?? 0;
+  }
   /**
    * 逐页媒体（图 / 视频混排，见 model/MediaPost 的 MediaSlide）。
    *
@@ -156,6 +162,7 @@ export struct MediaCarousel {
     // 圆点形状由 position 算出来，重建时也得跟着回到那一张，否则图在第三张、圆点还在第一张。
     this.active.position = this.initialPage;
     this.page = this.initialPage;
+    MediaCarousel.livePages.set(this.idPrefix, this.initialPage);
   }
 
   /**
@@ -322,6 +329,7 @@ export struct MediaCarousel {
         this.active.position = index;
         // 页号一变，上一页的视频立刻停、这一页的（若视频）开始播 —— 见 pagePlaying。
         this.page = index;
+        MediaCarousel.livePages.set(this.idPrefix, index);
         this.onPageChange(index);
       })
 

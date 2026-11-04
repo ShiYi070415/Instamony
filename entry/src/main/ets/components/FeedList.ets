@@ -1142,6 +1142,11 @@ export struct FeedList {
 
   /** 这条多图帖上次看到第几张；没记录过就是第 0 张。 */
   private carouselPage(post: MediaPost): number {
+    // 以轮播组件自己报的 live page 为准（FeedList 可能被重建，旧 Map 会停在 0）。
+    const live: number = MediaCarousel.pageOf(post.id);
+    if (live > 0) {
+      return live;
+    }
     return this.carouselPages.get(FeedMapper.keyOf(post)) ?? 0;
   }
 
