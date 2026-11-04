@@ -11660,6 +11660,8 @@ struct Index {
         .height('100%')
         // 侧边栏背景直接铺进上下系统避让区（状态栏 / 手势条），不留下透明缝。
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+        // 侧边栏是顶层浮层：挡住后面 Reels/页面的手势，点击/长按都不能漏下去。
+        .hitTestBehavior(HitTestMode.Block)
         .position({ x: 0, y: 0 })
         .zIndex(40)
       }
