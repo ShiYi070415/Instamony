@@ -8558,6 +8558,32 @@ struct Index {
   }
 
   /** 二级页（通知 / 设定）标题栏样式：不做滚动模糊，其余同上。 */
+  /** 右栏 Reels：HDS 原生按钮 + 沉浸光感；浅色下去掉白色蒙版和模糊。 */
+  private rightReelsTitleStyle(): TitleBarStyleOptions {
+    const style: TitleBarStyleOptions = this.destinationTitleStyle();
+    style.scrollEffectOpts = {
+      enableScrollEffect: false,
+      scrollEffectType: ScrollEffectType.COMMON_BLUR
+    };
+    const noMask: HdsNavigationTitleBarStyle = {
+      backgroundStyle: {
+        backgroundColor: '#00000000',
+        maskExtraHeight: 0,
+        blurRadius: 0
+      }
+    };
+    style.originalStyle = noMask;
+    style.scrollEffectStyle = noMask;
+    if (!this.isDarkUi) {
+      // 浅色模式不要材质自带的白色背板。
+      style.systemMaterialEffect = {
+        materialType: hdsMaterial.MaterialType.NONE,
+        materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+      };
+    }
+    return style;
+  }
+
   private destinationTitleStyle(): TitleBarStyleOptions {
     const style: TitleBarStyleOptions = {
       // 信息流式的长列表不做滚动模糊，短列表也不做。
@@ -12076,7 +12102,8 @@ struct Index {
           // 需求："除了底栏 reels，其他 reels 页面右上角没有静音和下载按钮，添加一下"。
           menu: this.reelsMenu(ReelsAction.PROFILE)
         },
-        style: this.reelsTitleStyle(),
+        style: this.reelsInRightPane()
+          ? this.destinationTitleStyle() : this.reelsTitleStyle(),
         avoidLayoutSafeArea: false,
         enableComponentSafeArea: false
       })
@@ -12122,7 +12149,8 @@ struct Index {
           // 同视频分页那一页：右上角补上静音 / 下载（需求）。
           menu: this.reelsMenu(ReelsAction.SEARCH)
         },
-        style: this.reelsTitleStyle(),
+        style: this.reelsInRightPane()
+          ? this.destinationTitleStyle() : this.reelsTitleStyle(),
         avoidLayoutSafeArea: false,
         enableComponentSafeArea: false
       })
