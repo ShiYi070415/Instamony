@@ -2382,7 +2382,9 @@ export struct FeedList {
       // 帖子页不显示它（`showFollowInRow=false`，需求）：那一页关注按钮在标题栏右上角。
       if (this.showFollowInRow) {
         FollowPill({
-          ui: this.uiList[index],
+          // 按帖子 key 取，不能用构建时的 index：触底插帖/刷新后 index 会指向别人，
+          // 表现就是新加载的探索流卡片全部显示上一条的“已关注”。
+          ui: this.uiByKey.get(FeedMapper.keyOf(post)) ?? this.uiList[index],
           thickness: this.materialThickness,
           onTap: (on: boolean): void => {
             this.tapFollow(post, index, on);
@@ -3095,7 +3097,7 @@ export struct FeedList {
       // 动作区：点赞/计数就地更新（见 PostActions / PostUi）。
       // ui 必须取自状态数组的元素，@ObjectLink 才接得上（见 uiList 的说明）。
       PostActions({
-        ui: this.uiList[index],
+        ui: this.uiByKey.get(FeedMapper.keyOf(post)) ?? this.uiList[index],
         onLike: (): void => {
           this.onLike(post);
         },
