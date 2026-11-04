@@ -1441,6 +1441,12 @@ struct Index {
     if (this.topPage === name) {
       this.topPage = '';
     }
+    // 返回后如果路径栈里还残留这一页（HDS 只做了视觉返回），这里把它真正移除；
+    // 否则展开侧边栏触发重建时，旧页面会被重新画出来。
+    const navNames: Array<string> = this.navStack.getAllPathName();
+    if (navNames.length > 0 && navNames[navNames.length - 1] === name) {
+      this.navStack.removeByName(name);
+    }
     /*
      * 覆盖层数回到"挂起时那一层"：把评论浮层接回来（需求："不要收起评论面板"）。
      *
@@ -1469,9 +1475,13 @@ struct Index {
     }
     // 右栏栈已经空了：连右栏一起收起，回到居中的首页。
     // 私信会话用的是常驻舞台，切换会话时 onHidden 也会触发，不能把舞台误关掉。
-    if (!this.tabSwitching && !this.directStageOpen && this.tabletRightName.length > 0
-      && this.tabletProfileStack.getAllPathName().length === 0) {
-      this.closeTabletRight();
+    if (!this.tabSwitching && !this.directStageOpen && this.tabletRightName.length > 0) {
+      const rightNames: Array<string> = this.tabletProfileStack.getAllPathName();
+      const rightTop: string = rightNames.length > 0 ? rightNames[rightNames.length - 1] : '';
+      // 右栏栈空，或返回的正好是右栏栈顶：把右栏真正收掉，别等展开侧边栏时才露出来。
+      if (rightNames.length === 0 || rightTop === name) {
+        this.closeTabletRight();
+      }
     }
   }
 
