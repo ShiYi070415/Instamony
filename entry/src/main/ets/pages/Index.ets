@@ -7018,7 +7018,12 @@ struct Index {
     // 显式弹栈：不能只靠 HDS 视觉返回，否则侧边栏重建时旧页面可能又被翻出来。
     if (this.tabletRightName.length > 0
       && this.tabletProfileStack.getAllPathName().length > 0) {
+      const names: Array<string> = this.tabletProfileStack.getAllPathName();
       this.tabletProfileStack.pop(true);
+      // 右栏最后一页返回：收掉右栏，一级设置页回到单栏。
+      if (names.length <= 1) {
+        this.closeSettingsRightPane();
+      }
       return true;
     }
     if (this.navStack.size() > 0) {
@@ -7527,6 +7532,44 @@ struct Index {
   }
 
   /** 所有"开新页"统一入口：平板首页走右栏，其余走全局导航栈。 */
+  /**
+   * 设置页路由：一级页始终是单栏；二级页推入右栏；从二级再打开三级时压栈，
+   * 三级返回二级；二级返回时收掉右栏，回到一级单栏。二级之间互相替换，不叠栈。
+   */
+  private openSettingsSection(section: string, nested: boolean): void {
+    if (!this.tabletWideShell() || !this.tabletSplitEnabled()) {
+      this.pushPage(SETTINGS_DETAIL_PAGE, section);
+      return;
+    }
+    const names: Array<string> = this.tabletProfileStack.getAllPathName();
+    if (nested && names.length > 0) {
+      if (names.length >= 2) {
+        // 已经在三级：三级之间替换，深度保持 2。
+        this.tabletProfileStack.replacePath({ name: SETTINGS_DETAIL_PAGE, param: section });
+      } else {
+        this.tabletProfileStack.pushPath({ name: SETTINGS_DETAIL_PAGE, param: section });
+      }
+      this.tabletRightName = SETTINGS_DETAIL_PAGE;
+      this.tabletProfileParam = section;
+      return;
+    }
+    // 从一级进来：二级只保留一层。先收掉当前右栏再开新的，避免 HDS 把旧二级留在返回历史里。
+    if (names.length > 0) {
+      this.tabletRightName = '';
+      this.tabletProfileParam = '';
+      this.tabletProfileStack.clear();
+      setTimeout((): void => {
+        this.tabletProfileStack.pushPath({ name: SETTINGS_DETAIL_PAGE, param: section });
+        this.tabletRightName = SETTINGS_DETAIL_PAGE;
+        this.tabletProfileParam = section;
+      }, 380);
+      return;
+    }
+    this.tabletProfileStack.pushPath({ name: SETTINGS_DETAIL_PAGE, param: section });
+    this.tabletRightName = SETTINGS_DETAIL_PAGE;
+    this.tabletProfileParam = section;
+  }
+
   private pushPage(name: string, param: string = '', stackOnRight: boolean = false): void {
     if (this.directStageOpen && name === PROFILE_REELS_PAGE) {
       // 会话里点分享卡：Reels 压进会话舞台自己的栈，覆盖右侧会话页；
@@ -12066,7 +12109,13 @@ struct Index {
             });
           },
           onOpenSponsor: (): void => {
-            this.pushPage(SPONSOR_PAGE);
+            this.pushPage(SPONSOR_PAGE, '', true);
+          },
+          onOpenSection: (section: string): void => {
+            this.openSettingsSection(section, false);
+          },
+          onOpenSubsection: (section: string): void => {
+            this.openSettingsSection(section, true);
           }
         })
       }
@@ -12082,6 +12131,8 @@ struct Index {
       .titleMode(HdsNavDestinationTitleMode.MINI)
       .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
       .clip(false)
+      // 二级/三级设置都走统一返回：三级回二级，二级收右栏回单栏。
+      .onBackPressed((): boolean => this.handlePageBack())
     } else if (name === SPONSOR_PAGE) {
       // 赞助开发者：独立一页，标题栏/返回键由 HDS 提供。
       HdsNavDestination() {

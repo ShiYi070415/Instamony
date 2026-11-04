@@ -366,7 +366,9 @@ export struct SettingsPanel {
   };
   /** 从设置首页打开一个二级页（由宿主 push 新的 NavDestination）。 */
   onOpenSection: (section: string) => void = (section: string): void => {
-    this.settingsPage = section;
+  };
+  /** 二级页里继续打开三级页（与一级页的“替换二级”区分开）。 */
+  onOpenSubsection: (section: string) => void = (section: string): void => {
   };
   /** 独立二级页模式下固定展示的分类 key；空串 = 设置首页。 */
   detailSection: string = '';
@@ -2539,7 +2541,11 @@ export struct SettingsPanel {
 
   /** 设置首页点一项：交给宿主 push 新页面。 */
   private openSection(section: string): void {
-    this.onOpenSection(section);
+    if (this.standaloneDetail) {
+      this.onOpenSubsection(section);
+    } else {
+      this.onOpenSection(section);
+    }
   }
 
   /** 二级页标题（设置首页只显示分类）。 */
