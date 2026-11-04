@@ -178,6 +178,8 @@ export struct VideoSurface {
 
   private readonly xController: XComponentController = new XComponentController();
   private player: media.AVPlayer | null = null;
+  /** 播放器代次：异步回调回来时用它确认还是同一个播放器。 */
+  private playerEpoch: number = 0;
   /**
    * 进程内**当前活着的播放器数量**（诊断用）。
    *
@@ -345,6 +347,7 @@ export struct VideoSurface {
       }, 150);
       return;
     }
+    const epoch: number = ++this.playerEpoch;
     this.creating = true;
     VideoSurface.creatingAny = true;
     VideoSurface.pendingCreates++;
@@ -365,7 +368,7 @@ export struct VideoSurface {
       VideoSurface.pendingCreates--;
       // 等播放器创出来的这段时间里，属性可能已经变了（用户滑走了）：那就当场释放，
       // 不要留下一个没人管的播放器（它会自己去缓冲，占带宽还占解码器）。
-      if (this.destroyed || !this.wanted()) {
+      if (this.destroyed || !this.wanted() || this.playerEpoch !== epoch) {
         try {
           player.release();
         } catch (error) {
@@ -375,9 +378,15 @@ export struct VideoSurface {
       this.player = player;
       VideoSurface.notePlayerCreated(this.shortUrl());
       player.on('stateChange', (state: string): void => {
+        if (this.player !== player || this.playerEpoch !== epoch) {
+          return;
+        }
         this.onState(state);
       });
       player.on('error', (error: BusinessError): void => {
+        if (this.player !== player || this.playerEpoch !== epoch) {
+          return;
+        }
         this.reportError(`player error code=${error.code} msg=${error.message}`);
       });
       /*
@@ -402,6 +411,9 @@ export struct VideoSurface {
        * 所以拖动进度条松手、跳转落定之后进度条也能自己对齐。
        */
       player.on('timeUpdate', (time: number): void => {
+        if (this.player !== player || this.playerEpoch !== epoch) {
+          return;
+        }
         this.reportProgress(time);
       });
       this.applyUrl();
@@ -434,6 +446,7 @@ export struct VideoSurface {
   private teardownPlayer(): void {
     VideoProbe.log('teardownPlayer');
     const player: media.AVPlayer | null = this.player;
+    this.playerEpoch++;
     this.player = null;
     this.prepared = false;
     this.pendingPlay = false;
@@ -735,6 +748,7 @@ export struct VideoSurface {
       preferredBufferDuration: this.bufferSeconds(),
       showFirstFrameOnPrepare: true
     };
+    const epoch: number = this.playerEpoch;
     this.prepareStartedMs = Date.now();
     // 策略必须在 prepare 之前生效，所以先设策略再 prepare；这一步同样可能返回 undefined
     // （见 watchPromise 的说明），拿不到 then 也要照常 prepare，否则这条视频就永远不会起播。
@@ -749,10 +763,16 @@ export struct VideoSurface {
       return;
     }
     applied.then((): void => {
+      if (this.player !== player || this.playerEpoch !== epoch || this.destroyed) {
+        return;
+      }
       this.prepareNow();
     }).catch((error: BusinessError): void => {
       // 策略没设上不是致命的（只是少了"首帧预解"），照样 prepare，别让视频卡在初始化。
       hilog.warn(DOMAIN, TAG, 'setPlaybackStrategy failed code=%{public}d', error.code);
+      if (this.player !== player || this.playerEpoch !== epoch || this.destroyed) {
+        return;
+      }
       this.prepareNow();
     });
   }
@@ -760,7 +780,7 @@ export struct VideoSurface {
   /** 真正调 prepare（来源已设好、表面已挂上）。 */
   private prepareNow(): void {
     const player: media.AVPlayer | null = this.player;
-    if (player === null || this.destroyed) {
+    if (player === null || this.destroyed || player.state !== 'initialized') {
       return;
     }
     ReelsCrashLog.noteNow(`prepare begin state=${player.state} surface=${this.surfaceReady ? 'y' : 'n'}`);
