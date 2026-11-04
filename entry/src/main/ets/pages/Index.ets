@@ -11207,6 +11207,12 @@ struct Index {
 
   /** 打开设定页（NavDestination，见 destinationBuilder）。 */
   private openSettings(): void {
+    const names: Array<string> = this.navStack.getAllPathName();
+    const top: string = names.length > 0 ? names[names.length - 1] : '';
+    // 设置一级页只能有一个；二级页可以继续叠在一级页上。
+    if (top === SETTINGS_PAGE || top === SETTINGS_DETAIL_PAGE) {
+      return;
+    }
     /*
      * 双栏状态下打开设置：先把右栏收掉，再走整页路由 —— 设置页始终单栏。
      * 否则 pushPage 会按"平板上新开右栏"处理，设置又进了右栏。
@@ -11395,6 +11401,7 @@ struct Index {
           labelRes: $r('app.string.sidebar_collapse'),
           labelVisible: this.tabletSidebarExpanded,
           anchorStart: true,
+          swallowLongPress: true,
           tapDebounceMs: 100,
           chipHeight: this.tabletButtonSize(),
           chipWidth: this.tabletSidebarItemWidth(),
@@ -11486,6 +11493,7 @@ struct Index {
           labelRes: $r('app.string.notifications'),
           labelVisible: this.tabletSidebarExpanded,
           anchorStart: true,
+          swallowLongPress: true,
           tapDebounceMs: 100,
           chipHeight: this.tabletButtonSize(),
           chipWidth: this.tabletSidebarItemWidth(),
@@ -11495,15 +11503,20 @@ struct Index {
           autoInvert: false,
           tint: this.reelsSidebarWhite() ? '#FFFFFF' : '',
           onTap: (): void => {
+            if (this.loginPageShown()) {
+              return;
+            }
             this.openNotifications();
           }
         })
+        .enabled(!this.loginPageShown())
 
         MaterialChipButton({
           symbol: $r('sys.symbol.more'),
           labelRes: $r('app.string.action_settings'),
           labelVisible: this.tabletSidebarExpanded,
           anchorStart: true,
+          swallowLongPress: true,
           tapDebounceMs: 100,
           chipHeight: this.tabletButtonSize(),
           chipWidth: this.tabletSidebarItemWidth(),
@@ -11844,6 +11857,13 @@ struct Index {
           },
           // 设置首页点一项：新开一个 NavDestination（返回键回设置首页）。
           onOpenSection: (section: string): void => {
+            const names: Array<string> = this.navStack.getAllPathName();
+            const top: string = names.length > 0 ? names[names.length - 1] : '';
+            if (top === SETTINGS_PAGE || top === SETTINGS_DETAIL_PAGE) {
+              // 设置一级页在整页栈里：二级页直接叠在它上面，不走平板右栏。
+              this.navStack.pushPath({ name: SETTINGS_DETAIL_PAGE, param: section });
+              return;
+            }
             // 右栏里必须压栈，不能 replace，否则设置首页被二级页顶掉、返回回不去。
             this.pushPage(SETTINGS_DETAIL_PAGE, section, true);
           },
