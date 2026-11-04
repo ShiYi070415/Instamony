@@ -8677,129 +8677,67 @@ struct Index {
    * 所以按 `PlatformCap.hasHdsMaterial()` 有条件地加上去；滚动效果类型还要看明暗主题
    * （浅色模式下 `IMMERSIVE_GRADIENT_BLUR` 会把标题刷成白字，见 titleScrollEffectType）。
    */
-  /** 浅色统一蒙版：透明底 + 更长的 maskExtraHeight + 更大模糊，不铺白色。 */
-  private lightTitleMask(content?: HdsTitleBarContentStyle): HdsNavigationTitleBarStyle {
-    return {
+  /** 五个主页面统一的 HDS 标题栏：渐变模糊，蒙版只比标题多 16vp。 */
+  private mainTitleStyle(content: HdsTitleBarContentStyle): TitleBarStyleOptions {
+    const style: TitleBarStyleOptions = {
+      scrollEffectOpts: {
+        enableScrollEffect: true,
+        scrollEffectType: ScrollEffectType.GRADUAL_BLUR
+      }
+    };
+    if (PlatformCap.hasHdsMaterial()) {
+      style.systemMaterialEffect = {
+        materialType: this.isDarkUi ? immersiveMaterialType() : hdsMaterial.MaterialType.NONE,
+        materialLevel: this.isDarkUi ? immersiveLevel(this.materialLevel) : hdsMaterial.MaterialLevel.ADAPTIVE
+      };
+    }
+    const mask: HdsNavigationTitleBarStyle = {
       backgroundStyle: {
         backgroundColor: '#00000000',
-        maskExtraHeight: 48,
+        maskExtraHeight: 16,
         blurRadius: 80
       },
       contentStyle: content
     };
+    style.originalStyle = mask;
+    style.scrollEffectStyle = mask;
+    return style;
   }
 
   private feedTitleStyle(): TitleBarStyleOptions {
-    const style: TitleBarStyleOptions = {
-      // 标题栏随内容滚动的**动态背景**（官方叫"动态模糊"/沉浸式标题栏）：内容滑到标题栏
-      // 底下时，栏背板按滚动量渐变，所以标题栏看起来是"透"的。
-      //
-      // 上一版这里是 `enableScrollEffect: false`（当时想着"长列表滚动时突变抢眼"），
-      // 结果就是用户看到的"title 的背景变成黑色" —— 关掉之后标题栏不再有随内容滚动的
-      // 背板，只剩材质铺在页面底色上，而页面底色是黑的（见 build 里 root 的
-      // page_background），于是整条栏就是一块黑。
-      // 效果类型按设备能力 + 明暗主题给，见 titleScrollEffectType（浅色模式下不能要
-      // IMMERSIVE_GRADIENT_BLUR：它会把标题文字刷成白色，最顶上就是白字压白底）。
-      scrollEffectOpts: {
-        enableScrollEffect: true,
-        scrollEffectType: titleScrollEffectType(this.isDarkUi)
-      }
-    };
-    if (PlatformCap.hasHdsMaterial()) {
-      // 浅色不要再叠材质自带的白色背板；深色保留沉浸光感。
-      style.systemMaterialEffect = {
-        materialType: this.isDarkUi ? immersiveMaterialType() : hdsMaterial.MaterialType.NONE,
-        materialLevel: this.isDarkUi ? immersiveLevel(this.materialLevel) : hdsMaterial.MaterialLevel.ADAPTIVE
-      };
-    }
-    const content: HdsTitleBarContentStyle = this.defaultTitleContent();
-    if (!this.isDarkUi) {
-      style.scrollEffectOpts = {
-        enableScrollEffect: true,
-        scrollEffectType: ScrollEffectType.GRADUAL_BLUR
-      };
-      const mask: HdsNavigationTitleBarStyle = this.lightTitleMask(content);
-      style.originalStyle = mask;
-      style.scrollEffectStyle = mask;
-    } else {
-      style.originalStyle = { contentStyle: content };
-      style.scrollEffectStyle = { contentStyle: content };
-    }
-    return style;
+    return this.mainTitleStyle(this.defaultTitleContent());
   }
 
-  /** 二级页（通知 / 设定）标题栏样式：不做滚动模糊，其余同上。 */
-  /** 右栏 Reels：HDS 原生按钮 + 沉浸光感；浅色下去掉白色蒙版和模糊。 */
   private rightReelsTitleStyle(): TitleBarStyleOptions {
-    const style: TitleBarStyleOptions = this.destinationTitleStyle();
-    style.scrollEffectOpts = {
-      enableScrollEffect: false,
-      scrollEffectType: ScrollEffectType.COMMON_BLUR
-    };
-    // 只改背景，必须把原来的 contentStyle 一起带上；
-    // 整个 originalStyle 替换会丢掉 HDS 原生按钮的样式，返回/菜单就变透明。
-    let content: HdsTitleBarContentStyle | undefined = undefined;
-    if (style.originalStyle !== undefined && style.originalStyle.contentStyle !== undefined) {
-      content = style.originalStyle.contentStyle;
-    }
-    if (content !== undefined) {
-      // HDS 原生按钮默认是透明内容；给一层很淡的半透明底，只勾出胶囊轮廓。
-      const buttonBg: ResourceColor = this.isDarkUi ? '#1A000000' : '#1AFFFFFF';
-      // Reels 页压在视频上：浅色/深色都让标题与图标保持白色。
-      if (content.titleStyle !== undefined) {
-        content.titleStyle.mainTitleColor = Color.White;
-        content.titleStyle.subTitleColor = Color.White;
-        content.titleStyle.mainTitleShadowColor = '#66000000';
-        content.titleStyle.subTitleShadowColor = '#66000000';
-      }
-      if (content.backIconStyle !== undefined) {
-        content.backIconStyle.backgroundColor = buttonBg;
-        content.backIconStyle.iconColor = Color.White;
-        content.backIconStyle.textColor = Color.White;
-      }
-      if (content.menuStyle !== undefined) {
-        content.menuStyle.backgroundColor = buttonBg;
-        content.menuStyle.iconColor = Color.White;
-        content.menuStyle.textColor = Color.White;
-      }
-    }
-    const noMask: HdsNavigationTitleBarStyle = {
-      backgroundStyle: {
-        backgroundColor: '#00000000',
-        maskExtraHeight: 48,
-        blurRadius: 80
-      },
-      contentStyle: content
-    };
-    style.originalStyle = noMask;
-    style.scrollEffectStyle = noMask;
-    // 保留沉浸光感材质；只关掉背景蒙版/模糊，浅色下不再叠白色背板。
-    return style;
+    return this.mainTitleStyle(this.reelsWhiteContent(true));
   }
 
   private destinationTitleStyle(): TitleBarStyleOptions {
-    const style: TitleBarStyleOptions = {
-      // 信息流式的长列表不做滚动模糊，短列表也不做。
-      scrollEffectOpts: {
-        enableScrollEffect: false,
-        scrollEffectType: ScrollEffectType.GRADIENT_BLUR
+    return this.mainTitleStyle(this.defaultTitleContent());
+  }
+
+  /** Reels 页在视频上：标题/按钮白色；右栏那套给按钮加淡胶囊底。 */
+  private reelsWhiteContent(buttons: boolean): HdsTitleBarContentStyle {
+    const buttonBg: ResourceColor = buttons
+      ? (this.isDarkUi ? '#1A000000' : '#1AFFFFFF') : Color.Transparent;
+    return {
+      titleStyle: {
+        mainTitleColor: Color.White,
+        subTitleColor: Color.White,
+        mainTitleShadowColor: '#66000000',
+        subTitleShadowColor: '#66000000'
+      },
+      backIconStyle: {
+        backgroundColor: buttonBg,
+        iconColor: Color.White,
+        textColor: Color.White
+      },
+      menuStyle: {
+        backgroundColor: buttonBg,
+        iconColor: Color.White,
+        textColor: Color.White
       }
     };
-    if (PlatformCap.hasHdsMaterial()) {
-      style.systemMaterialEffect = {
-        materialType: this.isDarkUi ? immersiveMaterialType() : hdsMaterial.MaterialType.NONE,
-        materialLevel: this.isDarkUi ? immersiveLevel(this.materialLevel) : hdsMaterial.MaterialLevel.ADAPTIVE
-      };
-    }
-    const content: HdsTitleBarContentStyle = this.defaultTitleContent();
-    if (!this.isDarkUi) {
-      const mask: HdsNavigationTitleBarStyle = this.lightTitleMask(content);
-      style.originalStyle = mask;
-      style.scrollEffectStyle = mask;
-    } else {
-      style.originalStyle = { contentStyle: content };
-    }
-    return style;
   }
 
   /** 非 Reels 页的标题栏内容色：必须显式写回，否则 HDS 会沿用上一页 Reels 的白色。 */
@@ -8814,39 +8752,7 @@ struct Index {
 
   /** Reels 页专用：标题栏不要任何蒙版/材质，只保留文字与按钮。 */
   private reelsTitleStyle(): TitleBarStyleOptions {
-    const style: TitleBarStyleOptions = this.destinationTitleStyle();
-    style.scrollEffectOpts = {
-      enableScrollEffect: false,
-      scrollEffectType: ScrollEffectType.COMMON_BLUR
-    };
-    const noMask: HdsNavigationTitleBarStyle = {
-      backgroundStyle: {
-        backgroundColor: '#00000000',
-        maskExtraHeight: 48,
-        blurRadius: 80
-      },
-      // Reels 页在视频上：标题、返回、菜单统一白色。
-      contentStyle: {
-        titleStyle: {
-          mainTitleColor: Color.White,
-          subTitleColor: Color.White,
-          mainTitleShadowColor: '#66000000',
-          subTitleShadowColor: '#66000000'
-        },
-        backIconStyle: {
-          backgroundColor: Color.Transparent,
-          iconColor: Color.White,
-          textColor: Color.White
-        },
-        menuStyle: {
-          backgroundColor: Color.Transparent,
-          iconColor: Color.White,
-          textColor: Color.White
-        }
-      }
-    };
-    style.originalStyle = noMask;
-    style.scrollEffectStyle = noMask;
+    const style: TitleBarStyleOptions = this.mainTitleStyle(this.reelsWhiteContent(false));
     style.systemMaterialEffect = {
       materialType: hdsMaterial.MaterialType.NONE,
       materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
