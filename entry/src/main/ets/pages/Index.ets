@@ -13698,14 +13698,19 @@ struct Index {
          */
         if (this.reelsTitleTapEnabled()) {
           Column()
-            .width(this.reelsTitleTapWidth())
+            // 热区从侧边栏右侧开始：侧边栏是浮层，不能让它的点击同时落到标题热区。
+            .width(Math.max(0, this.reelsTitleTapWidth()
+              - (this.tabletWideShell() ? this.tabletSidebarWidth() : 0)))
             .height(REELS_TITLE_TAP_HEIGHT_VP)
             /*
              * 从**状态栏下沿**开始（`topSafeVp`，和评论面板那一层同一个口径）：页面根节点是整屏
              * 铺开的（HdsNavigation 用了 ignoreLayoutSafeArea），标题栏自己落在安全区下面。
              * 于是这块热区正好压在"Reels 标题文字 + 它右边的空白"上。
              */
-            .position({ x: 0, y: this.topSafeVp })
+            .position({
+              x: this.tabletWideShell() ? this.tabletSidebarWidth() : 0,
+              y: this.topSafeVp
+            })
             .backgroundColor(Color.Transparent)
             .hitTestBehavior(HitTestMode.Transparent)
             .zIndex(12)
