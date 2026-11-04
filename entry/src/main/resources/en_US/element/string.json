@@ -885,6 +885,30 @@
       "value": "Two-factor verification"
     },
     {
+      "name": "login_verify_approval_title",
+      "value": "Approve from another device"
+    },
+    {
+      "name": "login_verify_code_title",
+      "value": "2FA verification"
+    },
+    {
+      "name": "login_verify_switch_code",
+      "value": "Switch to 2FA code"
+    },
+    {
+      "name": "login_verify_approval_waiting",
+      "value": "Waiting for another device…"
+    },
+    {
+      "name": "login_verify_approval_approved",
+      "value": "Approved, restoring session…"
+    },
+    {
+      "name": "login_verify_approval_relogin",
+      "value": "Approved. Close this panel and sign in again."
+    },
+    {
       "name": "login_verify_hint",
       "value": "This account has extra verification enabled. Enter the 6-digit code Instagram sent you (SMS / authenticator / backup code)."
     },

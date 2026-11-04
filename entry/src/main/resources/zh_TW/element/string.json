@@ -105,6 +105,30 @@
       "value": "兩步驟驗證"
     },
     {
+      "name": "login_verify_approval_title",
+      "value": "從其他裝置批准"
+    },
+    {
+      "name": "login_verify_code_title",
+      "value": "2FA 驗證"
+    },
+    {
+      "name": "login_verify_switch_code",
+      "value": "切換 2FA 驗證"
+    },
+    {
+      "name": "login_verify_approval_waiting",
+      "value": "等待另一台裝置確認…"
+    },
+    {
+      "name": "login_verify_approval_approved",
+      "value": "已確認，正在恢復工作階段…"
+    },
+    {
+      "name": "login_verify_approval_relogin",
+      "value": "已確認，請關閉面板後重新登入"
+    },
+    {
       "name": "login_verify_hint",
       "value": "這個帳號開啟了額外驗證。請輸入 Instagram 發給你的 6 位驗證碼（簡訊 / 驗證器 / 備用碼）。"
     },

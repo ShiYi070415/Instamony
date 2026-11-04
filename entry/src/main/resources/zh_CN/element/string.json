@@ -105,6 +105,30 @@
       "value": "两步验证"
     },
     {
+      "name": "login_verify_approval_title",
+      "value": "从其他设备批准"
+    },
+    {
+      "name": "login_verify_code_title",
+      "value": "2FA 验证"
+    },
+    {
+      "name": "login_verify_switch_code",
+      "value": "切换 2FA 验证"
+    },
+    {
+      "name": "login_verify_approval_waiting",
+      "value": "等待另一台设备确认…"
+    },
+    {
+      "name": "login_verify_approval_approved",
+      "value": "已确认，正在恢复会话…"
+    },
+    {
+      "name": "login_verify_approval_relogin",
+      "value": "已确认，请关闭面板后重新登录"
+    },
+    {
       "name": "login_verify_hint",
       "value": "这个账号开启了额外验证。请输入 Instagram 发给你的 6 位验证码（短信 / 验证器 / 备用码）。"
     },

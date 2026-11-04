@@ -137,6 +137,7 @@ export struct LoginPage {
   @State private username: string = '';
   @State private password: string = '';
   @State private busy: boolean = false;
+  @State private verifyMode: string = 'approval';
   /** 2FA「在另一台设备上同意」的轮询状态。 */
   @State private approvalState: string = 'idle';
   private approvalTimer: number = 0;
@@ -259,116 +260,169 @@ export struct LoginPage {
   @Builder
   verifySheet() {
     Column({ space: 14 }) {
-      Text($r('app.string.login_verify_hint'))
-        .fontSize(13)
-        .lineHeight(19)
-        .fontColor($r('app.color.secondary_text'))
+      if (this.verifyMode === 'approval') {
+        Row({ space: 16 }) {
+          Column({ space: 4 }) {
+            SymbolGlyph($r('sys.symbol.phone'))
+              .fontSize(34)
+              .fontColor([$r('sys.color.font_primary')])
+            Text('这台设备')
+              .fontSize(10)
+              .fontColor($r('app.color.secondary_text'))
+          }
+          SymbolGlyph($r('sys.symbol.chevron_right'))
+            .fontSize(22)
+            .fontColor([$r('app.color.secondary_text')])
+          Column({ space: 4 }) {
+            Stack({ alignContent: Alignment.TopEnd }) {
+              SymbolGlyph($r('sys.symbol.phone'))
+                .fontSize(34)
+                .fontColor([$r('sys.color.font_primary')])
+              SymbolGlyph($r('sys.symbol.checkmark_circle_fill'))
+                .fontSize(15)
+                .fontColor([$r('app.color.accent')])
+                .offset({ x: 5, y: -5 })
+            }
+            Text('已登录设备')
+              .fontSize(10)
+              .fontColor($r('app.color.secondary_text'))
+          }
+        }
         .width('100%')
-      if (this.approvalState === 'waiting' || this.approvalState === 'idle') {
-        Text('也可以在已登录的 Instagram 客户端里同意本次登录')
-          .fontSize(12)
-          .lineHeight(18)
+        .justifyContent(FlexAlign.Center)
+        .padding({ top: 2, bottom: 2 })
+
+        Text($r('app.string.login_verify_approval_hint'))
+          .fontSize(13)
+          .lineHeight(19)
           .fontColor($r('app.color.secondary_text'))
           .width('100%')
-      } else if (this.approvalState === 'approved') {
-        Text('已同意，正在恢复会话…')
-          .fontSize(12)
-          .lineHeight(18)
+
+        if (this.approvalState === 'waiting' || this.approvalState === 'idle') {
+          Text($r('app.string.login_verify_approval_waiting'))
+            .fontSize(12)
+            .fontColor($r('app.color.secondary_text'))
+            .width('100%')
+        } else if (this.approvalState === 'approved') {
+          Text($r('app.string.login_verify_approval_relogin'))
+            .fontSize(12)
+            .fontColor($r('app.color.accent'))
+            .width('100%')
+        }
+
+        MaterialLabelButton({
+          labelRes: $r('app.string.login_verify_switch_code'),
+          fullWidth: true,
+          fontSize: 15,
+          lightEffect: false,
+          onTap: (): void => {
+            this.stopApprovalWatch();
+            this.verifyMode = 'code';
+          }
+        })
+        MaterialLabelButton({
+          labelRes: $r('app.string.login_verify_cancel'),
+          fullWidth: true,
+          fontSize: 15,
+          lightEffect: false,
+          onTap: (): void => {
+            this.stopApprovalWatch();
+            this.busy = false;
+            this.verifyOpen = false;
+            this.verifyError = '';
+          }
+        })
+      } else {
+        Text($r('app.string.login_verify_hint'))
+          .fontSize(13)
+          .lineHeight(19)
           .fontColor($r('app.color.secondary_text'))
           .width('100%')
-      }
-      Stack({ alignContent: Alignment.Center }) {
-        // 材质底板（和登录页其它输入框同一套：胶囊 + 沉浸光感），但**不发光**（见上）。
-        Toggle({ type: ToggleType.Button, isOn: false }) {
-          Text('')
+        Stack({ alignContent: Alignment.Center }) {
+          Toggle({ type: ToggleType.Button, isOn: false }) {
+            Text('')
+          }
+          .width('100%')
+          .height(FIELD_H)
+          .padding(0)
+          .borderRadius(FIELD_H / 2)
+          .backgroundColor(Color.Transparent)
+          .selectedColor(Color.Transparent)
+          .attributeModifier(new SurfaceModifier(this.materialThickness, false, true, false, false))
+          .hitTestBehavior(HitTestMode.None)
+          TextInput({ placeholder: $r('app.string.login_code_hint'), text: this.verifyCode })
+            .type(InputType.Number)
+            .height(FIELD_H)
+            .width('100%')
+            .padding({ left: 18, right: 18 })
+            .borderRadius(FIELD_H / 2)
+            .backgroundColor(Color.Transparent)
+            .fontSize(16)
+            .fontColor($r('app.color.primary_text'))
+            .placeholderColor($r('app.color.secondary_text'))
+            .caretColor($r('app.color.accent'))
+            .enabled(!this.verifyBusy)
+            .onChange((text: string): void => {
+              this.verifyCode = text;
+            })
         }
         .width('100%')
         .height(FIELD_H)
-        .padding(0)
-        .borderRadius(FIELD_H / 2)
-        .backgroundColor(Color.Transparent)
-        .selectedColor(Color.Transparent)
-        .attributeModifier(new SurfaceModifier(this.materialThickness, false, true, false, false))
-        .hitTestBehavior(HitTestMode.None)
-        TextInput({ placeholder: $r('app.string.login_code_hint'), text: this.verifyCode })
-          .type(InputType.Number)
-          .height(FIELD_H)
-          .width('100%')
-          .padding({ left: 18, right: 18 })
-          .borderRadius(FIELD_H / 2)
-          .backgroundColor(Color.Transparent)
-          .fontSize(16)
-          .fontColor($r('app.color.primary_text'))
-          .placeholderColor($r('app.color.secondary_text'))
-          .caretColor($r('app.color.accent'))
-          .enabled(!this.verifyBusy)
-          .onChange((text: string): void => {
-            this.verifyCode = text;
-          })
-      }
-      .width('100%')
-      .height(FIELD_H)
 
-      if (this.verifyError.length > 0) {
-        Row({ space: 6 }) {
-          SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
-            .fontSize(14)
-            .fontColor([$r('app.color.accent')])
-          Text(this.verifyError)
-            .fontSize(12)
-            .lineHeight(18)
-            .fontColor($r('app.color.accent'))
-            .layoutWeight(1)
+        if (this.verifyError.length > 0) {
+          Row({ space: 6 }) {
+            SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+              .fontSize(14)
+              .fontColor([$r('app.color.accent')])
+            Text(this.verifyError)
+              .fontSize(12)
+              .lineHeight(18)
+              .fontColor($r('app.color.accent'))
+              .layoutWeight(1)
+          }
+          .width('100%')
+        }
+
+        Toggle({ type: ToggleType.Button, isOn: false }) {
+          if (this.verifyBusy) {
+            LoadingProgress()
+              .width(20)
+              .height(20)
+              .color($r('app.color.on_accent'))
+          } else {
+            Text($r('app.string.login_verify_action'))
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.on_accent'))
+          }
         }
         .width('100%')
-      }
+        .height(BUTTON_H)
+        .padding(0)
+        .borderRadius(BUTTON_H / 2)
+        .selectedColor(Color.Transparent)
+        .attributeModifier(new BrandSurfaceModifier(this.materialThickness, false))
+        .enabled(!this.verifyBusy)
+        .onChange((): void => {
+          this.submitVerifyCode();
+        })
 
-      Toggle({ type: ToggleType.Button, isOn: false }) {
-        if (this.verifyBusy) {
-          LoadingProgress()
-            .width(20)
-            .height(20)
-            .color($r('app.color.on_accent'))
-        } else {
-          Text($r('app.string.login_verify_action'))
-            .fontSize(16)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.on_accent'))
-        }
+        MaterialLabelButton({
+          labelRes: $r('app.string.login_verify_cancel'),
+          fullWidth: true,
+          fontSize: 15,
+          lightEffect: false,
+          onTap: (): void => {
+            this.stopApprovalWatch();
+            this.busy = false;
+            this.verifyOpen = false;
+            this.verifyError = '';
+          }
+        })
       }
-      .width('100%')
-      .height(BUTTON_H)
-      .padding(0)
-      .borderRadius(BUTTON_H / 2)
-      .selectedColor(Color.Transparent)
-      /*
-       * 也和登录按钮同一套：**实色 + 沉浸光感**（品牌蓝交给材质），见 mainButton 的说明。
-       * 另外这一颗按需求**关掉光感**（"2FA 面板禁用触摸发光"），所以 lightEffect 传 false。
-       */
-      .attributeModifier(new BrandSurfaceModifier(this.materialThickness, false))
-      .enabled(!this.verifyBusy)
-      .onChange((): void => {
-        this.submitVerifyCode();
-      })
-
-      // 「取消」也不发光（需求："2FA 面板禁用触摸发光"，见 MaterialLabelButton.lightEffect）。
-      MaterialLabelButton({
-        labelRes: $r('app.string.login_verify_cancel'),
-        fullWidth: true,
-        fontSize: 15,
-        lightEffect: false,
-        onTap: (): void => {
-          this.stopApprovalWatch();
-          this.busy = false;
-          this.verifyOpen = false;
-          this.verifyError = '';
-        }
-      })
     }
     .width('100%')
     .padding({ left: SIDE_VP, right: SIDE_VP, top: 10, bottom: 24 })
-    // 面板的底色由 bindSheet 那一侧画（系统沉浸材质 / 玻璃底，见 verifySheetOptions），
-    // 内容层保持透明，别再铺第二层不透明底。
     .backgroundColor(Color.Transparent)
   }
 
@@ -393,7 +447,7 @@ export struct LoginPage {
       showClose: false,
       preferType: SheetType.BOTTOM,
       // 标题交给系统画（HDS 标题样式），见上面那段说明。
-      title: { title: $r('app.string.login_verify_title') },
+      title: { title: this.verifyMode === 'approval' ? $r('app.string.login_verify_approval_title') : $r('app.string.login_verify_code_title') },
       onDisappear: (): void => {
         this.stopApprovalWatch();
         this.verifyError = '';
@@ -825,6 +879,7 @@ export struct LoginPage {
            */
           this.verifyCode = '';
           this.verifyError = '';
+          this.verifyMode = 'approval';
           this.verifyOpen = true;
           this.startApprovalWatch();
           return;
