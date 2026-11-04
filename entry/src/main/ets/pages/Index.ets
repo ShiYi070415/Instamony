@@ -7391,22 +7391,6 @@ struct Index {
 
   /** 侧边栏展开/收起：弹性动画。 */
   private toggleTabletSidebar(expand: boolean): void {
-    // 主页面展开侧边栏时，顺手清掉任何不可见的残留路由，
-    // 避免 HDS 在布局重建时把刚返回的通知/设置页又画出来。
-    if (expand && this.topPage.length === 0) {
-      if (this.navStack.getAllPathName().length > 0) {
-        this.navStack.clear();
-      }
-      if (this.tabletRightName.length === 0
-        && this.tabletProfileStack.getAllPathName().length > 0) {
-        this.tabletProfileStack.clear();
-      }
-      if (this.tabletRightName.length === 0
-        && this.selectedIndex >= 0 && this.selectedIndex < this.tabRightNames.length) {
-        this.tabRightNames[this.selectedIndex] = '';
-        this.tabRightParams[this.selectedIndex] = '';
-      }
-    }
     // 状态先切（文本/图标用），宽度走 0..1 进度；中途再点会从当前进度反向。
     this.tabletSidebarExpanded = expand;
     this.getUIContext().animateTo({
