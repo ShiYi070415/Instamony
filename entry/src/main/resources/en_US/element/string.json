@@ -537,6 +537,14 @@
       "value": "Followed."
     },
     {
+      "name": "like_done",
+      "value": "Liked"
+    },
+    {
+      "name": "unlike_done",
+      "value": "Like removed"
+    },
+    {
       "name": "follow_failed",
       "value": "Could not follow"
     },

@@ -2058,9 +2058,11 @@ struct Index {
       // 以服务端确认的状态为准（有时候 create 会回 following=false，比如对方是私密账号）。
       // 同时记进会话级覆盖表：切页/刷新重建列表时，接口那份旧快照不会再把它顶回去。
       FollowState.remember(id, username, result.following);
-      this.setLocalStatus(result.following
+      const done: ResourceStr = result.following
         ? $r('app.string.follow_done')
-        : $r('app.string.unfollow_done', label));
+        : $r('app.string.unfollow_done', label);
+      this.setLocalStatus(done);
+      this.toast(done);
       return result.following === follow;
     }
     /*
@@ -2069,6 +2071,7 @@ struct Index {
      */
     hilog.warn(DOMAIN, TAG, 'follow failed (%{public}s) id=%{public}s', result.detail, id);
     this.setLocalStatus($r('app.string.follow_failed'));
+    this.toast($r('app.string.follow_failed'));
     return false;
   }
 
@@ -2188,6 +2191,7 @@ struct Index {
      */
     EngageState.rememberLiked(id, result.state);
     this.setLikedEverywhere(reel.shortcode.length > 0 ? reel.shortcode : id, result.state);
+    this.toast(like ? $r('app.string.like_done') : $r('app.string.unlike_done'));
     return true;
   }
 
@@ -2209,6 +2213,7 @@ struct Index {
     // 落盘台账也记一份（reels 那条列表重建时靠它，见 core/RepostState）。
     RepostState.remember(id, reel.shortcode, result.state);
     this.setRepostedEverywhere(reel.shortcode.length > 0 ? reel.shortcode : id, result.state);
+    this.toast(repost ? $r('app.string.repost_done') : $r('app.string.unrepost_done'));
     return true;
   }
 
@@ -6120,9 +6125,11 @@ struct Index {
           hilog.info(DOMAIN, TAG, 'like failed (%{public}s) id=%{public}s', native.detail,
             current.id);
           this.setLocalStatus($r('app.string.like_failed'));
+          this.toast($r('app.string.like_failed'));
           return;
         }
         this.setLikedEverywhere(key, target);
+        this.toast(target ? $r('app.string.like_done') : $r('app.string.unlike_done'));
         return;
       }
       // 三轮还没收敛（用户一直在点）：停手，但让图标停在最后一次「成功」的那个状态。
@@ -6133,6 +6140,7 @@ struct Index {
       this.setLikedEverywhere(key, !target);
       hilog.warn(DOMAIN, TAG, 'like error: %{public}s', (error as Error).message);
       this.setLocalStatus($r('app.string.like_failed'));
+      this.toast($r('app.string.like_failed'));
     } finally {
       this.likingKeys.delete(key);
     }
@@ -6206,11 +6214,14 @@ struct Index {
           // 没成功：把图标滚回去，并把原因说清楚（不再打开网页兜底）。
           this.setRepostedEverywhere(key, !target);
           this.setLocalStatus($r('app.string.repost_unsupported'));
+          this.toast($r('app.string.repost_unsupported'));
           return;
         }
         this.setRepostedEverywhere(key, target);
-        this.setLocalStatus(target
-          ? $r('app.string.repost_done') : $r('app.string.unrepost_done'));
+        const repostText: ResourceStr = target
+          ? $r('app.string.repost_done') : $r('app.string.unrepost_done');
+        this.setLocalStatus(repostText);
+        this.toast(repostText);
         return;
       }
       hilog.info(DOMAIN, TAG, 'repost gave up after 3 rounds key=%{public}s', key);

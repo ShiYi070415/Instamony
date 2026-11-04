@@ -793,6 +793,14 @@
       "value": "已关注。"
     },
     {
+      "name": "like_done",
+      "value": "已点赞"
+    },
+    {
+      "name": "unlike_done",
+      "value": "已取消点赞"
+    },
+    {
       "name": "follow_failed",
       "value": "关注失败"
     },
