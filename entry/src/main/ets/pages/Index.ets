@@ -5531,9 +5531,20 @@ struct Index {
     const names: Array<string> = this.tabletProfileStack.getAllPathName();
     if (names.length > 0) {
       const top: number = names.length - 1;
+      if (this.isOverlayPage(names[top])) {
+        // 设置/通知是整屏轻页面，不能存进 tab 的右栏缓存，否则切 tab 又会被恢复出来。
+        this.tabRightNames[index] = '';
+        this.tabRightParams[index] = '';
+        return;
+      }
       const raw: Object = this.tabletProfileStack.getParamByIndex(top) as Object;
       this.tabRightNames[index] = names[top];
       this.tabRightParams[index] = raw === undefined || raw === null ? '' : `${raw}`;
+      return;
+    }
+    if (this.isOverlayPage(this.tabletRightName)) {
+      this.tabRightNames[index] = '';
+      this.tabRightParams[index] = '';
       return;
     }
     this.tabRightNames[index] = this.tabletRightName;
@@ -5565,6 +5576,14 @@ struct Index {
       return;
     }
     const name: string = this.tabRightNames[index];
+    if (this.isOverlayPage(name)) {
+      this.tabRightNames[index] = '';
+      this.tabRightParams[index] = '';
+      this.tabletRightName = '';
+      this.tabletProfileParam = '';
+      this.tabletProfileStack.clear();
+      return;
+    }
     if (name.length > 0) {
       // 目标分页有右侧页面：原地替换，不先收起再打开。
       this.directStageOpen = false;
@@ -11362,6 +11381,7 @@ struct Index {
 
   /** 通知页关闭时清掉它留在右栏/标签缓存里的名字，避免布局变化后又被迁回来。 */
   private closeNotificationsRightPane(): void {
+    this.purgeOverlayFromTabCaches();
     if (this.tabletRightName === NOTIFICATIONS_PAGE) {
       this.tabletRightName = '';
       this.tabletProfileParam = '';
@@ -11378,8 +11398,19 @@ struct Index {
     return name === SETTINGS_PAGE || name === SETTINGS_DETAIL_PAGE || name === NOTIFICATIONS_PAGE;
   }
 
+  /** 清掉所有 tab 缓存里的设置/通知页，避免切 tab 或布局变化时恢复。 */
+  private purgeOverlayFromTabCaches(): void {
+    for (let index: number = 0; index < this.tabRightNames.length; index++) {
+      if (this.isOverlayPage(this.tabRightNames[index])) {
+        this.tabRightNames[index] = '';
+        this.tabRightParams[index] = '';
+      }
+    }
+  }
+
   /** 设置一级页关闭/返回时，把它拉起的右栏设置页一起收掉。 */
   private closeSettingsRightPane(): void {
+    this.purgeOverlayFromTabCaches();
     if (this.tabletRightName === SETTINGS_PAGE || this.tabletRightName === SETTINGS_DETAIL_PAGE) {
       this.tabletRightName = '';
       this.tabletProfileParam = '';
