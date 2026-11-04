@@ -36,8 +36,8 @@ const TAG: string = 'DeviceTruth';
  * 等于声称"Android 3.1 上跑 IG 449"，形状就不像真客户端。HarmonyOS 4 的底是 Android 12，
  * 所以正确值是 **31/12**。
  */
-const HUAWEI_ANDROID_VERSION: string = '31';
-const HUAWEI_ANDROID_RELEASE: string = '12';
+const HUAWEI_ANDROID_VERSION: string = '36';
+const HUAWEI_ANDROID_RELEASE: string = '16';
 /** 其它品牌的默认（与 instagrapi 的 DEVICE_SETTINGS 一致）。 */
 const DEFAULT_ANDROID_VERSION: string = '34';
 const DEFAULT_ANDROID_RELEASE: string = '14';
@@ -141,17 +141,25 @@ export class DeviceTruth {
      * 想要更具体的 `Huawei Mate 80`，走的是 UA Client Hints 那条通道
      * （见 InstagramWebHost 的补丁与 PageBridge.loadUrl），不是改这里。
      */
-    const modelName: string = asciiMarket.length > 0
-      ? asciiMarket : (asciiModel.length > 0 ? asciiModel : DeviceProfile.DEFAULT.model);
     const upperBrand: string = brand.toUpperCase();
     const huawei: boolean = upperBrand.indexOf('HUAWEI') >= 0
       || upperBrand.indexOf('HONOR') >= 0 || upperBrand.indexOf('华为') >= 0;
     /*
-     * 厂商名照 Android UA 的写法：IG 的 `USER_AGENT_BASE` 里 manufacturer 一项
-     * 真实 App 会写成 `Google/google` 这种"厂商/子厂商"。这里给 `品牌/品牌`。
+     * 型号只保留设备名，不再重复品牌：manufacturer 已经写了 `HUAWEI/huawei`。
+     * 系统 marketName 可能是 `HUAWEI MatePad Pro 12` / `HUAWEI Mate 80`，去掉前缀后
+     * 得到 `MatePad Pro 12` / `Mate 80`；读不到再退回 productModel。
      */
-    const manufacturer: string = brand.length > 0
-      ? `${brand}/${brand}` : DeviceProfile.DEFAULT.manufacturer;
+    let marketOnly: string = asciiMarket;
+    if (marketOnly.toUpperCase().startsWith('HUAWEI ')) {
+      marketOnly = marketOnly.substring(7).trim();
+    }
+    if (marketOnly.toUpperCase().startsWith('HONOR ')) {
+      marketOnly = marketOnly.substring(6).trim();
+    }
+    const modelName: string = marketOnly.length > 0
+      ? marketOnly : (asciiModel.length > 0 ? asciiModel : DeviceProfile.DEFAULT.model);
+    const manufacturer: string = huawei ? 'HUAWEI/huawei'
+      : (brand.length > 0 ? `${brand}/${brand.toLowerCase()}` : DeviceProfile.DEFAULT.manufacturer);
     const deviceCode: string = series.length > 0 ? series
       : (model.length > 0 ? model : DeviceProfile.DEFAULT.device);
     const cpu: string = abi.length > 0 ? abi.split(',')[0].trim() : DeviceProfile.DEFAULT.cpu;
