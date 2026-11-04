@@ -1722,6 +1722,19 @@ export class CaaLogin {
       return await CaaLogin.resolveTwoStep(identity, extra, payload, aac, code);
     }
 
+    /*
+     * CAA 有时不返回 challenge_required，而是 checkpoint_required + checkpoint_url。
+     * 先把地址记进 MobileChallenge；Index 的 refreshChallengeState 会弹「去验证」。
+     */
+    MobileChallenge.note(step5.body);
+    const checkpointMatch: RegExpMatchArray | null =
+      step5.body.match(/"checkpoint_url"\s*:\s*"([^"]{1,500})"/);
+    if (checkpointMatch !== null && checkpointMatch.length > 1) {
+      const checkpoint: string = checkpointMatch[1].replace(/\\\//g, '/').replace(/\\u0026/g, '&');
+      MobileChallenge.noteUrl(checkpoint);
+      hilog.info(DOMAIN, TAG, 'caa checkpoint noted len=%{public}d', checkpoint.length);
+    }
+    const checkpointPending: boolean = MobileChallenge.pending();
     const error: string = bloksErrorText(payload);
     /*
      * 「密码错误」是 IG 的**结论**，不是我们能改的传输问题（加密载荷已按 instagrapi
@@ -1797,7 +1810,8 @@ export class CaaLogin {
       ? `（网页接口的结论：${probeNote.length > 0 ? probeNote : '没能核对'}）`
         + '；若 IG 只是挡着不给进，**换个机场节点**再登（实测有效），设置 → 诊断里可先做「网络节点体检」' : '';
     const failed: CaaResult = new CaaResult(false, error.length > 0
-      ? `登录失败：${error}${advice}` : '响应里没找到登录结果（布局形状可能变了）');
+      ? `登录失败：${error}${advice}${checkpointPending ? '（已记录安全验证入口，请在弹窗里完成验证）' : ''}`
+      : '响应里没找到登录结果（布局形状可能变了）');
     /*
      * 失败时把**原始响应**带回去（截断到 100KB）。
      *
@@ -3116,6 +3130,7 @@ export class CaaLogin {
       'left_nav_button_action': 'NONE',
       'password_text_input_id': `${textInputId}:82`,
       'is_from_empty_password': 0,
+      'is_vanilla_password_page_empty_password': 0,
       'is_from_msplit_fallback': 0,
       'ar_event_source': 'login_home_page',
       'qe_device_id': identity.uuid,
