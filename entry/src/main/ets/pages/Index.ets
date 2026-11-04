@@ -8571,6 +8571,16 @@ struct Index {
     if (style.originalStyle !== undefined && style.originalStyle.contentStyle !== undefined) {
       content = style.originalStyle.contentStyle;
     }
+    if (content !== undefined) {
+      // HDS 原生按钮默认是透明内容；给一层半透明底，返回/菜单才有可见的胶囊。
+      const buttonBg: ResourceColor = this.isDarkUi ? '#59000000' : '#CCFFFFFF';
+      if (content.backIconStyle !== undefined) {
+        content.backIconStyle.backgroundColor = buttonBg;
+      }
+      if (content.menuStyle !== undefined) {
+        content.menuStyle.backgroundColor = buttonBg;
+      }
+    }
     const noMask: HdsNavigationTitleBarStyle = {
       backgroundStyle: {
         backgroundColor: '#00000000',
