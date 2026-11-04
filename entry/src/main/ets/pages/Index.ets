@@ -1052,6 +1052,9 @@ struct Index {
   @State sessionChecked: boolean = false;
   @State bridgeReady: boolean = false;
   @State webVisible: boolean = false;
+  /** 设置/通知的全屏承载（不进 NavPathStack）。 */
+  @State private overlayPage: string = '';
+  @State private overlaySection: string = '';
   /**
    * **无头网页登录**进行中（见 headlessWebLogin / core/WebLogin）：宿主不给用户看，
    * 但不是 `Visibility.Hidden` —— 那会让引擎节流、IG 登录页跑不起来；
@@ -5077,7 +5080,7 @@ struct Index {
       this.refreshNotifications();
       return;
     }
-    this.pushPage(NOTIFICATIONS_PAGE);
+    this.overlayPage = NOTIFICATIONS_PAGE;
     await this.loadNotifications();
   }
 
@@ -5624,6 +5627,8 @@ struct Index {
   }
 
   private selectTab(tab: AppTab): void {
+    this.overlayPage = '';
+    this.overlaySection = '';
     const previous: number = this.tabIndexOf(this.selectedTab);
     const target: number = this.tabIndexOf(tab);
     if (previous !== target) {
@@ -7010,6 +7015,10 @@ struct Index {
    * @returns true = 这次返回被吃掉了（不 pop 页面）。
    */
   private handlePageBack(): boolean {
+    if (this.overlayPage.length > 0) {
+      this.closeOverlayPage();
+      return true;
+    }
     if (this.handleDestinationBack()) {
       return true;
     }
@@ -7479,7 +7488,10 @@ struct Index {
   }
 
   /** 侧边栏展开/收起：弹性动画。 */
+  private sidebarToggledAtMs: number = 0;
+
   private toggleTabletSidebar(expand: boolean): void {
+    this.sidebarToggledAtMs = Date.now();
     // 状态先切（文本/图标用），宽度走 0..1 进度；中途再点会从当前进度反向。
     this.tabletSidebarExpanded = expand;
     this.getUIContext().animateTo({
@@ -11373,31 +11385,20 @@ struct Index {
 
   /** 打开设定页（NavDestination，见 destinationBuilder）。 */
   private openSettings(): void {
-    const names: Array<string> = this.navStack.getAllPathName();
-    const top: string = names.length > 0 ? names[names.length - 1] : '';
-    // 设置一级页只能有一个；二级页可以继续叠在一级页上。
-    if (top === SETTINGS_PAGE || top === SETTINGS_DETAIL_PAGE) {
+    if (Date.now() - this.sidebarToggledAtMs < 2000) {
       return;
     }
-    // 清掉任何残留的设置页记录，避免返回后点侧边栏又把旧设置页翻出来。
-    this.navStack.removeByName(SETTINGS_PAGE);
-    this.navStack.removeByName(SETTINGS_DETAIL_PAGE);
-    /*
-     * 双栏状态下打开设置：先把右栏收掉，再走整页路由 —— 设置页始终单栏。
-     * 否则 pushPage 会按"平板上新开右栏"处理，设置又进了右栏。
-     */
-    if (this.tabletWideShell() && this.tabletSplitEnabled()) {
-      this.tabletRightName = '';
-      this.tabletProfileParam = '';
-      this.tabletProfileStack.clear();
-      if (this.selectedIndex >= 0 && this.selectedIndex < this.tabRightNames.length) {
-        this.tabRightNames[this.selectedIndex] = '';
-        this.tabRightParams[this.selectedIndex] = '';
-      }
-      this.navStack.pushPath({ name: SETTINGS_PAGE });
+    this.overlayPage = SETTINGS_PAGE;
+    this.overlaySection = '';
+  }
+
+  /** 关闭设置/通知；设置二级先回一级。 */
+  private closeOverlayPage(): void {
+    if (this.overlaySection.length > 0) {
+      this.overlaySection = '';
       return;
     }
-    this.pushPage(SETTINGS_PAGE);
+    this.overlayPage = '';
   }
 
   /** 通知页关闭时清掉它留在右栏/标签缓存里的名字，避免布局变化后又被迁回来。 */
@@ -12016,6 +12017,89 @@ struct Index {
       case 'about': return $r('app.string.settings_item_app_details');
       default: return $r('app.string.action_settings');
     }
+  }
+
+  /** 全屏设置/通知承载：不参与 HDS 路由。 */
+  @Builder
+  customOverlayPage() {
+    Column() {
+      Row({ space: 8 }) {
+        Button({ type: ButtonType.Circle }) {
+          SymbolGlyph($r('sys.symbol.chevron_left'))
+            .fontSize(22)
+            .fontColor([$r('sys.color.font_primary')])
+        }
+        .width(40)
+        .height(40)
+        .backgroundColor(Color.Transparent)
+        .onClick((): void => {
+          this.closeOverlayPage();
+        })
+        Text(this.overlayPage === NOTIFICATIONS_PAGE
+          ? $r('app.string.notifications')
+          : (this.overlaySection.length > 0
+            ? this.settingsDetailTitle(this.overlaySection) : $r('app.string.action_settings')))
+          .fontSize(22)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('sys.color.font_primary'))
+      }
+      .width('100%')
+      .height(56)
+      .padding({ left: 12, right: 12 })
+      .margin({ top: this.topSafeVp })
+
+      if (this.overlayPage === NOTIFICATIONS_PAGE) {
+        NotificationsPanel({
+          items: this.notifications,
+          loading: this.notificationsLoading,
+          state: this.notificationsState,
+          diag: this.notificationsDiag,
+          refreshing: $notificationsRefreshing,
+          onRefresh: (): void => {
+            this.refreshNotifications();
+          },
+          onFollow: (item: NotifyItem): void => {
+            this.toggleFollow(item);
+          }
+        })
+      } else if (this.overlaySection.length > 0) {
+        SettingsPanel({
+          detailSection: this.overlaySection,
+          standaloneDetail: true,
+          signedIn: this.signedIn,
+          onSignOut: (): void => {
+            this.signOut();
+          },
+          onQualityChanged: (): void => {
+            this.viewModel.resetForQualityChange();
+            this.viewModel.refresh().catch((): void => {
+            });
+          }
+        })
+      } else {
+        SettingsPanel({
+          signedIn: this.signedIn,
+          onSignOut: (): void => {
+            this.signOut();
+          },
+          onQualityChanged: (): void => {
+            this.viewModel.resetForQualityChange();
+            this.viewModel.refresh().catch((): void => {
+            });
+          },
+          onOpenSection: (section: string): void => {
+            this.overlaySection = section;
+          },
+          onOpenSponsor: (): void => {
+            this.pushPage(SPONSOR_PAGE, '', true);
+          }
+        })
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor($r('app.color.page_background'))
+    .zIndex(95)
   }
 
   @Builder
@@ -13942,6 +14026,10 @@ struct Index {
        * 自带一层材质，内层材质会静默失效 —— 只有放进页面根 Stack（和评论面板同一层、同一个窗口）
        * 那块 Toggle 材质才真的生效。层级压在标题栏（zIndex 10）与底栏之上。
        */
+      if (this.overlayPage.length > 0) {
+        this.customOverlayPage()
+      }
+
       if (this.accountMenuOpen) {
         AccountMenu({
           onPick: (userId: string): void => {
