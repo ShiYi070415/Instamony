@@ -359,6 +359,7 @@ export struct LoginPage {
         lightEffect: false,
         onTap: (): void => {
           this.stopApprovalWatch();
+          this.busy = false;
           this.verifyOpen = false;
           this.verifyError = '';
         }
@@ -442,6 +443,7 @@ export struct LoginPage {
         this.stopApprovalWatch();
       } else if (state === 'approved') {
         this.stopApprovalWatch();
+        this.busy = false;
         this.verifyError = '另一台设备已同意，请关闭面板后重新点击登录';
       }
     }, 1000);
@@ -786,7 +788,9 @@ export struct LoginPage {
    * 其他 = 失败原因（画在密码框下面）。
    */
   private submit(): void {
-    if (this.busy) {
+    // 2FA 面板已经收起时，即使 busy 还是 true 也允许重新发起：
+    // onDisappear 在部分设备上会晚一拍，旧逻辑会把按钮永久锁死。
+    if (this.busy && this.verifyOpen) {
       return;
     }
     if (this.username.trim().length === 0 || this.password.length === 0) {
