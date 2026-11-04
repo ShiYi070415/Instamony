@@ -1398,26 +1398,41 @@ export class CaaLogin {
     regInput['fdid'] = sensitiveFdid;
     const regVariables: Record<string, ESObject> = {};
     regVariables['input'] = regInput;
-    const regBody: string = CaaLogin.formEncode([
-      new CaaField('client_doc_id', USDID_CLIENT_DOC_ID),
-      new CaaField('variables', JSON.stringify(regVariables)),
-      new CaaField('server_timestamps', 'true'),
-      new CaaField('fb_api_caller_class', 'graphql'),
-      new CaaField('fb_api_req_friendly_name', 'IGUSDIDRegistrationMutation')
-    ]);
-    const regHeaders: Record<string, string> = CaaLogin.headers(identity, extra);
-    regHeaders['X-FB-Friendly-Name'] = 'IGUSDIDRegistrationMutation';
-    regHeaders['X-Graphql-Client-Library'] = 'pando';
-    regHeaders['X-Root-Field-Name'] = 'usdid_registration';
-    const reg: CaaHttpReply = await CaaLogin.post('i.instagram.com', '/graphql_www', regBody, regHeaders);
     /*
-     * 非 200 时**把正文头 160 字也记进步骤**：USDID 注册这一发被拒（429 / 400）时，
-     * IG 的正文里通常写着是限速还是参数问题，只记一个状态码等于什么都没说。
+     * 454 的持久化表里对应操作叫 `IGFamilyUSDIDRegistrationMutation`
+     * （client_doc_id 35882970877475797300129583592）。它和老
+     * `IGUSDIDRegistrationMutation` 不一定同 schema，所以**先试新、失败回退旧**：
+     * 新 id 200 就用新的；否则仍按老链继续，不让登录卡在第 1 步。
      */
-    const regDetail: string = reg.status === 200 ? 'ok'
-      : `HTTP ${reg.status} ${reg.body.substring(0, 160).replace(/\s+/g, ' ')}`;
-    CaaLogin.steps.push(new CaaStep('usdid', reg.status, regDetail));
-    hilog.info(DOMAIN, TAG, 'usdid registration status=%{public}d', reg.status);
+    const regDocs: Array<string> = [
+      '35882970877475797300129583592', USDID_CLIENT_DOC_ID
+    ];
+    const regNames: Array<string> = [
+      'IGFamilyUSDIDRegistrationMutation', 'IGUSDIDRegistrationMutation'
+    ];
+    let reg: CaaHttpReply = new CaaHttpReply(0, '');
+    for (let attempt: number = 0; attempt < regDocs.length; attempt++) {
+      const regBody: string = CaaLogin.formEncode([
+        new CaaField('client_doc_id', regDocs[attempt]),
+        new CaaField('variables', JSON.stringify(regVariables)),
+        new CaaField('server_timestamps', 'true'),
+        new CaaField('fb_api_caller_class', 'graphql'),
+        new CaaField('fb_api_req_friendly_name', regNames[attempt])
+      ]);
+      const regHeaders: Record<string, string> = CaaLogin.headers(identity, extra);
+      regHeaders['X-FB-Friendly-Name'] = regNames[attempt];
+      regHeaders['X-Graphql-Client-Library'] = 'pando';
+      regHeaders['X-Root-Field-Name'] = 'usdid_registration';
+      reg = await CaaLogin.post('i.instagram.com', '/graphql_www', regBody, regHeaders);
+      const detail: string = reg.status === 200 ? 'ok'
+        : `HTTP ${reg.status} ${reg.body.substring(0, 160).replace(/\s+/g, ' ')}`;
+      CaaLogin.steps.push(new CaaStep(`usdid${attempt === 0 ? '-454' : ''}`, reg.status, detail));
+      hilog.info(DOMAIN, TAG, 'usdid registration[%{public}d] status=%{public}d',
+        attempt, reg.status);
+      if (reg.status === 200) {
+        break;
+      }
+    }
 
     // 2. attestation（拿 challenge_nonce；keystore 不可用是可接受状态）
     const attBody: string = CaaLogin.formEncode([
