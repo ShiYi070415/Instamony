@@ -158,7 +158,7 @@ export class DeviceTruth {
     }
     const modelName: string = marketOnly.length > 0
       ? marketOnly : (asciiModel.length > 0 ? asciiModel : DeviceProfile.DEFAULT.model);
-    const manufacturer: string = huawei ? 'HUAWEI/huawei'
+    const manufacturer: string = huawei ? 'Huawei/huawei'
       : (brand.length > 0 ? `${brand}/${brand.toLowerCase()}` : DeviceProfile.DEFAULT.manufacturer);
     const deviceCode: string = series.length > 0 ? series
       : (model.length > 0 ? model : DeviceProfile.DEFAULT.device);
