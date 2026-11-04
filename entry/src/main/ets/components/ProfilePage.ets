@@ -2024,7 +2024,7 @@ export struct ProfilePage {
       .edgeEffect(EdgeEffect.Spring)
       // 外层只滚"头部 + 分段按钮"那一段；滚动上报给底栏动画用（见 onFeedScroll）。
       .onDidScroll((scrollOffset: number, scrollState: ScrollState): void => {
-        const y: number = this.pageScroller.currentOffset().yOffset;
+        const y: number = this.scrollY(this.pageScroller);
         // 分段按钮钉住/松开（见 barPinned）。
         this.updatePinned(y);
         this.scrollDelta.report(y, scrollState, this.onFeedScroll);
@@ -2227,7 +2227,7 @@ export struct ProfilePage {
       }
     })
     .onDidScroll((scrollOffset: number, scrollState: ScrollState): void => {
-      const y: number = this.listScrollerOf(tab).currentOffset().yOffset;
+      const y: number = this.scrollY(this.listScrollerOf(tab));
       this.vm.rememberOffset(tab, y);
       this.lastScrollMs = Date.now();
       this.scrollDelta.report(y, scrollState, this.onFeedScroll);
@@ -2386,10 +2386,20 @@ export struct ProfilePage {
     }
   }
 
+  /** Scroller.currentOffset() 在还没挂到列表上时会返回 undefined，不能直接取 yOffset。 */
+  private scrollY(scroller: Scroller): number {
+    try {
+      const offset = scroller.currentOffset();
+      return offset === undefined ? 0 : offset.yOffset;
+    } catch (error) {
+      return 0;
+    }
+  }
+
   /** 当前内层偏移（诊断用，拿不到给 -1）。 */
   private innerOffsetNow(): number {
     try {
-      return this.listScrollerOf(this.tab).currentOffset().yOffset;
+      return this.scrollY(this.listScrollerOf(this.tab));
     } catch (error) {
       return -1;
     }
@@ -2398,7 +2408,7 @@ export struct ProfilePage {
   /** 当前外层偏移（诊断用，拿不到给 -1）。 */
   private outerOffsetNow(): number {
     try {
-      return this.pageScroller.currentOffset().yOffset;
+      return this.scrollY(this.pageScroller);
     } catch (error) {
       return -1;
     }
@@ -2507,7 +2517,7 @@ export struct ProfilePage {
    * 内层那几条只负责各自分页的网格 —— "回到顶部"对用户来说就是回到头像那一屏。
    */
   private onTabRepeatTap(): void {
-    const offset: number = this.pageScroller.currentOffset().yOffset;
+    const offset: number = this.scrollY(this.pageScroller);
     if (offset > TAB_TAP_TOP_EPSILON_VP) {
       this.pageScroller.scrollTo({
         xOffset: 0,
