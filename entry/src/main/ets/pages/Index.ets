@@ -1414,6 +1414,7 @@ struct Index {
      * 变小或不变 = 返回时又显示出来的那一层。不能拿 `shownPages` 判 —— 被盖住的那一层
      * 早就在 `onHidden` 里被摘出去了，返回时看着也是"没见过的名字"。
      */
+    this.navDbg(`pageShown:${name}`);
     const depth: number = this.navDepthNow();
     if (depth > this.navDepth) {
       // 评论面板（**带卡片时也是同一个面板**，见 commentsWithCard）让位给它：挂起而不是关掉，
@@ -1433,6 +1434,7 @@ struct Index {
 
   /** 某一层整屏页面**被盖住/关掉了**（HdsNavDestination 的 onHidden）。 */
   private onPageHidden(name: string): void {
+    this.navDbg(`pageHidden:${name}`);
     const at: number = this.shownPages.indexOf(name);
     if (at >= 0) {
       this.shownPages.splice(at, 1);
@@ -5562,6 +5564,7 @@ struct Index {
   }
 
   private restoreRightForTab(index: number): void {
+    this.navDbg(`restoreTab:${index}`);
     const thread: string = this.tabDirectThreads[index];
     if (thread.length > 0) {
       // 直接切到目标会话舞台，不先清空再弹出，避免右栏收缩一下。
@@ -7557,8 +7560,18 @@ struct Index {
     this.navStack.pushPath({ name: name, param: param });
   }
 
+  private navDbg(tag: string): void {
+    hilog.info(DOMAIN, TAG,
+      'NAVDBG %{public}s nav=[%{public}s] right=[%{public}s] rightName=%{public}s tabs=[%{public}s] sel=%{public}d split=%{public}s w=%{public}d',
+      tag, this.navStack.getAllPathName().join('>'),
+      this.tabletProfileStack.getAllPathName().join('>'), this.tabletRightName,
+      this.tabRightNames.join(','), this.selectedIndex, `${this.tabletSplitEnabled()}`,
+      Math.round(this.shellWidthVp));
+  }
+
   /** 小窗放大成双栏：把当前整页详情迁到右栏，左侧回到主页面。 */
   private migrateGlobalPageToRight(): void {
+    this.navDbg('migrateGlobal:enter');
     const names: Array<string> = this.navStack.getAllPathName();
     if (names.length === 0) {
       return;
@@ -7578,6 +7591,7 @@ struct Index {
 
   /** 双栏缩回小窗：把右栏详情迁回整页路由，右栏收起。 */
   private migrateRightToGlobal(): void {
+    this.navDbg('migrateRight:enter');
     if (this.tabletRightName.length === 0) {
       return;
     }
@@ -11393,6 +11407,23 @@ struct Index {
     }
   }
 
+  /** 断点变化时把设置/通知这类轻页面真正关掉，杜绝任何路由残留被重放。 */
+  private closeOverlayPagesForLayout(): void {
+    this.navStack.removeByName(SETTINGS_PAGE);
+    this.navStack.removeByName(SETTINGS_DETAIL_PAGE);
+    this.navStack.removeByName(NOTIFICATIONS_PAGE);
+    this.purgeOverlayFromTabCaches();
+    if (this.isOverlayPage(this.tabletRightName)) {
+      this.tabletRightName = '';
+      this.tabletProfileParam = '';
+      this.tabletProfileStack.clear();
+    }
+    this.topPage = '';
+    this.shownPages = [];
+    this.coveringPages = 0;
+    this.navDepth = 0;
+  }
+
   /** 这些是整屏轻页面，不参与“小窗详情迁到右栏”的迁移，否则布局一变会自己弹回来。 */
   private isOverlayPage(name: string): boolean {
     return name === SETTINGS_PAGE || name === SETTINGS_DETAIL_PAGE || name === NOTIFICATIONS_PAGE;
@@ -11855,6 +11886,10 @@ struct Index {
         this.shellHeightVp = height;
       }
       const isSplit: boolean = this.tabletSplitEnabled();
+      this.navDbg(`area wasSplit=${wasSplit} isSplit=${isSplit}`);
+      if (wasSplit !== isSplit) {
+        this.closeOverlayPagesForLayout();
+      }
       // 私信会话有常驻舞台：跨断点只改舞台布局，不做路由迁移，避免重建页面。
       if (!this.directStageOpen) {
         if (!wasSplit && isSplit) {
