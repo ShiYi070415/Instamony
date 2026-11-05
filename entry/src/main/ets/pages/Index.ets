@@ -8841,14 +8841,11 @@ struct Index {
    * margin-left 让开了侧边栏，再补一次会飞出去两倍。
    */
   private reelsTitleBarLeftVp(): number {
-    // 没有侧边栏时也从屏幕左边缘留 16vp。
-    if (!this.tabletWideShell()) {
-      return 16;
-    }
-    // 非全屏页外层已经用 margin 让开侧边栏；全屏 Reels 才需要补整段侧边栏。
-    // 统一从屏幕左边缘（有侧边栏则从分割线）再留 16vp。
-    const base: number = this.reelsFullBleed() ? this.tabletSidebarWidth() : 0;
-    return base + 16;
+    /*
+     * 标题栏现在和正文一样在 ContentArea 里，ContentArea 已经在侧栏右侧；
+     * 这里只能留正文的 16vp，不能再补侧栏宽度，否则标题比资讯栏/正文右移一整栏。
+     */
+    return 16;
   }
 
   /**
@@ -9928,8 +9925,8 @@ struct Index {
     .height('100%')
     .alignItems(VerticalAlign.Top)
     .padding({
-      left: REELS_TITLE_LEFT_PAD_VP
-        + (this.reelsFullBleed() ? this.tabletSidebarWidth() : 0),
+      // 和 Reels 的资讯栏/正文同一条左边线。
+      left: REELS_TITLE_LEFT_PAD_VP,
       right: 12,
       top: 8
     })
