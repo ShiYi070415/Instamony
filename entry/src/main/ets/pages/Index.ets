@@ -1741,6 +1741,8 @@ struct Index {
    * 但不同账号互不阻塞。用集合而不是单个布尔，是为了以后在推荐列表里连点多个也不打架。
    */
   private followingKeys: Set<string> = new Set<string>();
+  /** 关注写请求 busy：同一用户重复点击只发一次。 */
+  private followBusy: Set<string> = new Set<string>();
   /**
    * 正在转发的帖子 key 集合（与点赞分开：两个操作互不阻塞）。
    */
@@ -1981,7 +1983,16 @@ struct Index {
      * 用户名是空的就说明这条数据本身不完整，此时**不该**再造一个名字去点关注。
      */
     const label: string = username.length > 0 ? username : id;
-    const result: FollowResult = await NativeFollow.setFollowing(id, follow);
+    if (this.followBusy.has(id)) {
+      return false;
+    }
+    this.followBusy.add(id);
+    let result: FollowResult;
+    try {
+      result = await NativeFollow.setFollowing(id, follow);
+    } finally {
+      this.followBusy.delete(id);
+    }
     if (result.ok) {
       // 以服务端确认的状态为准（有时候 create 会回 following=false，比如对方是私密账号）。
       // 同时记进会话级覆盖表：切页/刷新重建列表时，接口那份旧快照不会再把它顶回去。
