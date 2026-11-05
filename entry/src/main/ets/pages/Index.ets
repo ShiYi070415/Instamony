@@ -27,6 +27,7 @@ import { AppRouter } from '../router/AppRouter';
 import { PageRegistry } from '../router/PageRegistry';
 import { RequestScheduler } from '../core/RequestScheduler';
 import { AccountUiReset } from '../core/AccountUiReset';
+import { AsyncGuard } from '../core/AsyncGuard';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { SymbolGlyphModifier } from '@kit.ArkUI';
 import { common, Want } from '@kit.AbilityKit';
@@ -1729,7 +1730,7 @@ struct Index {
    */
   private likingKeys: Set<string> = new Set<string>();
   /** 收藏在飞的条目：同一条只允许一发，避免连点书签发出重复写请求。 */
-  private savingKeys: Set<string> = new Set<string>();
+  private savingKeys: AsyncGuard = new AsyncGuard();
   /**
    * 连点时"用户**最后**想要的那个点赞状态"（key → 想要的值）。
    *
@@ -1749,7 +1750,7 @@ struct Index {
    */
   private followingKeys: Set<string> = new Set<string>();
   /** 关注写请求 busy：同一用户重复点击只发一次。 */
-  private followBusy: Set<string> = new Set<string>();
+  private followBusy: AsyncGuard = new AsyncGuard();
   /**
    * 正在转发的帖子 key 集合（与点赞分开：两个操作互不阻塞）。
    */
@@ -1990,15 +1991,15 @@ struct Index {
      * 用户名是空的就说明这条数据本身不完整，此时**不该**再造一个名字去点关注。
      */
     const label: string = username.length > 0 ? username : id;
-    if (this.followBusy.has(id)) {
+    if (!this.followBusy.tryBegin(id)) {
       return false;
     }
-    this.followBusy.add(id);
+    // tryBegin 已经占位。
     let result: FollowResult;
     try {
       result = await NativeFollow.setFollowing(id, follow);
     } finally {
-      this.followBusy.delete(id);
+      this.followBusy.end(id);
     }
     if (result.ok) {
       // 以服务端确认的状态为准（有时候 create 会回 following=false，比如对方是私密账号）。
@@ -2197,15 +2198,15 @@ struct Index {
       this.toast($r('app.string.save_failed'));
       return false;
     }
-    if (this.savingKeys.has(key)) {
+    if (!this.savingKeys.tryBegin(key)) {
       hilog.info(DOMAIN, TAG, 'save coalesced key=%{public}s save=%{public}s', key, `${save}`);
       return false;
     }
-    this.savingKeys.add(key);
+    // tryBegin 已经占位。
     try {
       return await this.saveMediaOnce(mediaId, shortcode, isVideo, save);
     } finally {
-      this.savingKeys.delete(key);
+      this.savingKeys.end(key);
     }
   }
 
