@@ -16,6 +16,7 @@
 import { WindowLayoutService } from '../core/WindowLayoutService';
 import { SidebarHost } from '../shell/SidebarHost';
 import { PageDestination } from '../shell/PageDestination';
+import { UserProfileRoute } from '../components/UserProfileRoute';
 import { SettingsDestination } from './settings/SettingsDestination';
 import { SettingsRootDestination } from './settings/SettingsRootDestination';
 import { SponsorDestination } from './settings/SponsorDestination';
@@ -928,110 +929,7 @@ class DelayStep {
  *
  * 分段：只有三段（帖子 / 视频 / 被提及），需求明确去掉"收藏"（见 setOrder）。
  */
-@Component
-struct UserProfileRoute {
-  /** 路由参数：`用户名|数字id`（见 Index.parseUserParam）。 */
-  @Prop param: string = '';
-  /** 嵌在首页平行视界右栏时的实际宽度（0 = 整屏路由）。 */
-  @Prop layoutWidthVp: number = 0;
-  /** 嵌在右栏时标题由右栏画，ProfilePage 不再额外避让 HDS 标题栏。 */
-  @Prop embedded: boolean = false;
-  /** 右栏 Reels 背景下的其他页面：强制浅色。 */
-  vm: ProfileViewModel = new ProfileViewModel();
-  /** 打开一条帖子：交给隐藏网页（同「我的」页）。 */
-  onOpen: (post: ProfilePost) => void = (post: ProfilePost): void => {
-  };
-  /** 关注 / 取关这一页的用户（页面那一行按钮的动作，实现在 pages/Index.followUser）。 */
-  onFollowUser: (id: string, username: string, follow: boolean) => Promise<boolean> =
-    (id: string, username: string, follow: boolean): Promise<boolean> => Promise.resolve(false);
-  /** 简介里的 @账号 → 打开那个人的主页（实现在 pages/Index.openUserProfile）。 */
-  onOpenUserProfile: ((username: string) => void) | null = null;
-  /** 路由参数里的用户名（头部还没到时的兜底，见 build 里的关注回调）。 */
-  private userName: string = '';
-  /** 路由参数里的数字 id（关注接口的路径参数）。 */
-  private userId: string = '';
-  /** 点格子 → 帖子页（见 pages/Index.openPostStream）。 */
-  onOpenStream: (posts: Array<MediaPost>, index: number,
-                  loadMore: () => Promise<ProfileStreamPage>) => void =
-    (posts: Array<MediaPost>, index: number,
-     loadMore: () => Promise<ProfileStreamPage>): void => {
-    };
-  /** 点**视频那一段**的格子 → Reels 页（见 pages/Index.openProfileReels）。 */
-  onOpenReels: (posts: Array<MediaPost>, shortcode: string, hasMore: boolean,
-                loadMore: () => Promise<ProfileStreamPage>) => void =
-    (posts: Array<MediaPost>, shortcode: string, hasMore: boolean,
-     loadMore: () => Promise<ProfileStreamPage>): void => {
-    };
-  onFeedScroll: (deltaY: number, offsetY: number, scrollState: ScrollState) => void =
-    (deltaY: number, offsetY: number, scrollState: ScrollState): void => {
-    };
-  /**
-   * 点**精选快拍** → 快拍播放页（别人主页也要能看，和"我的"页面同一套）。
-   *
-   * 之前这里没有这个属性：内部 ProfilePage 虽然给每颗高光都挂好了 onClick，
-   * 但回调落在空实现上 —— 表现就是"高光画出来了，点下去没反应"。
-   */
-  onOpenHighlight: (items: Array<ProfileHighlight>, index: number, rect: StoryHeroRect,
-    rects: Map<string, StoryHeroRect>) => void =
-    (items: Array<ProfileHighlight>, index: number, rect: StoryHeroRect,
-      rects: Map<string, StoryHeroRect>): void => {
-    };
 
-  aboutToAppear(): void {
-    const parts: Array<string> = `${this.param}`.split('|');
-    const username: string = parts.length > 0 ? parts[0] : '';
-    const userId: string = parts.length > 1 ? parts[1] : '';
-    this.userName = username;
-    this.userId = userId;
-    this.vm.setTarget(userId, username);
-    // 三段：帖子 / 视频 / 被提及（没有收藏）。
-    this.vm.setOrder([PROFILE_TAB_POSTS, PROFILE_TAB_REELS, PROFILE_TAB_TAGGED]);
-    hilog.info(DOMAIN, TAG, 'user profile open @%{public}s id=%{public}s',
-      username, userId.length > 0 ? 'y' : 'n');
-  }
-
-  build() {
-    ProfilePage({
-      vm: this.vm,
-      layoutWidthVp: this.layoutWidthVp,
-      topOffsetVp: this.embedded ? 0 : 94,
-      segmentMode: SEGMENT_MODE_USER,
-      // 简介里的 @账号：开那个人的主页（需求："点击后进入该用户主页"）。
-      onOpenUser: (username: string): void => {
-        if (this.onOpenUserProfile !== null) {
-          this.onOpenUserProfile(username);
-        }
-      },
-      onOpen: (post: ProfilePost): void => {
-        this.onOpen(post);
-      },
-      // 关注 / 取关这一页的用户：id 来自路由参数，用户名以头部为准（拿不到就退回参数里的）。
-      onFollowUser: (follow: boolean): Promise<boolean> => {
-        const header: ProfileHeader | null = this.vm.headerNow();
-        const username: string = header === null ? this.userName : header.username;
-        return this.onFollowUser(this.userId, username, follow);
-      },
-      // 别人主页的格子同样进**帖子页**（需求：所有用户主页都接进去）。
-      onOpenStream: (posts: Array<MediaPost>, index: number,
-                     loadMore: () => Promise<ProfileStreamPage>): void => {
-        this.onOpenStream(posts, index, loadMore);
-      },
-      // 别人主页**视频那一段**的格子 → Reels 页（需求）。
-      onOpenReels: (posts: Array<MediaPost>, shortcode: string, hasMore: boolean,
-                    loadMore: () => Promise<ProfileStreamPage>): void => {
-        this.onOpenReels(posts, shortcode, hasMore, loadMore);
-      },
-      onFeedScroll: (deltaY: number, offsetY: number, scrollState: ScrollState): void => {
-        this.onFeedScroll(deltaY, offsetY, scrollState);
-      },
-      // 精选快拍：转发给外壳（见 onOpenHighlight 的说明）。别人主页也要能点开。
-      onOpenHighlight: (items: Array<ProfileHighlight>, index: number, rect: StoryHeroRect,
-        rects: Map<string, StoryHeroRect>): void => {
-        this.onOpenHighlight(items, index, rect, rects);
-      }
-    })
-  }
-}
 
 /**
  * 去掉「帖子的配文被当成评论收进来」的那一条。
@@ -12140,55 +12038,53 @@ struct Index {
         })
       }
         } else if (name === USER_PROFILE_PAGE) {
-      /*
-       * **用户主页**（从信息流的资料行点进来）。
-       *
-       * 内容和「我的」页**同一套模板**（ProfilePage + ProfileViewModel），差别只有三处：
-       *   1. 目标是别人（`setTarget` 把请求体里"目标用户"那几个键换成他的 id / 用户名）；
-       *   2. 没有"收藏"那一段（`setOrder([帖子, 视频, 被提及])`，需求）；
-       *   3. 这里自己 new 一个视图模型（一个人的主页一份数据，不和「我的」页共用）。
-       *
-       * 标题栏：左上角返回键（HdsNavDestination 自带，点击 pop 路由栈）、标题 = 用户 id（用户名）、
-       * 右上角「更多」按钮 —— 需求里那颗暂时不做功能，所以 action 是空的。
-       */
-      HdsNavDestination() {
+      PageDestination({
+        title: Index.userNameOf(`${param}`),
+        titleStyle: this.destinationTitleStyle(),
+        menu: {
+          value: [
+            {
+              content: {
+                icon: $r('sys.symbol.more'),
+                label: $r('app.string.action_more'),
+                action: (): void => {
+                }
+              }
+            }
+          ]
+        },
+        hideBackButton: false,
+        onShown: (): void => {
+          this.onPageShown(USER_PROFILE_PAGE);
+        },
+        onHidden: (): void => {
+          this.onPageHidden(USER_PROFILE_PAGE);
+        },
+        onBackPressed: (): boolean => this.handlePageBack()
+      }) {
         UserProfileRoute({
           param: `${param}`,
           vm: this.profileVmFor(`${param}`),
           layoutWidthVp: this.tabletHomeScoped()
             ? Math.max(0, this.profileStageWidth()) : 0,
           onOpen: (post: ProfilePost): void => {
-            // 点格子打开帖子页：**原生帖子页**（隐藏 WebView 只留给账号安全验证）。
             this.openLoosePost(post.shortcode, post.isVideo);
           },
-          // **这条不能漏**：别人主页的格子也要能进帖子页（用户报的"feeds 流进入用户主页后
-          // 点击帖子无法进入帖子页面"就是这里没接 —— 组件里的默认实现是空函数，点了什么都不发生）。
-          // `false` = 不是从**我自己的**主页进来的：别人的主页里，标题栏那颗关注照旧要有。
           onOpenStream: (posts: Array<MediaPost>, index: number,
                          loadMore: () => Promise<ProfileStreamPage>): void => {
             this.openPostStream(posts, index, loadMore, false);
           },
-          // 别人主页**视频那一段**的格子 → Reels 页（同 onOpenStream，这条也不能漏）。
           onOpenReels: (posts: Array<MediaPost>, shortcode: string, hasMore: boolean,
                         loadMore: () => Promise<ProfileStreamPage>): void => {
             this.openProfileReels(posts, shortcode, hasMore, loadMore);
           },
-          /*
-           * **别人主页的精选快拍也要能点开**（需求：和"我的"页面一样）。
-           *
-           * 这里不能漏：组件内部给每颗高光都挂好了 onClick，回调没接时它落在默认空实现上，
-           * 表现就是"高光画出来了、点下去没反应"。用的是和本人主页同一个入口
-           * （openProfileHighlight：同一套转场、高光之间可连续浏览）。
-           */
           onOpenHighlight: (items: Array<ProfileHighlight>, index: number, rect: StoryHeroRect,
                             rects: Map<string, StoryHeroRect>): void => {
             this.openProfileHighlight(items, index, rect, rects);
           },
-          // 别人主页那一行的「关注 / 已关注」（需求：显示状态 + 支持关注、取关）。
           onFollowUser: (id: string, username: string, follow: boolean): Promise<boolean> => {
             return this.followUser(id, username, follow);
           },
-          // 简介里的 @账号 → 再开一层主页（需求："点击后进入该用户主页"）。
           onOpenUserProfile: (username: string): void => {
             this.openUserProfile(username, '');
           },
@@ -12197,41 +12093,7 @@ struct Index {
           }
         })
       }
-      .titleBar({
-        content: {
-          title: { mainTitle: Index.userNameOf(`${param}`) },
-          menu: {
-            value: [
-              {
-                content: {
-                  icon: $r('sys.symbol.more'),
-                  label: $r('app.string.action_more'),
-                  action: (): void => {
-                    // 需求：这颗按钮暂时不做功能（先占位，避免菜单里少一项）。
-                  }
-                }
-              }
-            ]
-          }
-        },
-        style: this.destinationTitleStyle(),
-        avoidLayoutSafeArea: false,
-        enableComponentSafeArea: false
-      })
-      .hideBackButton(false)
-      .titleMode(HdsNavDestinationTitleMode.MINI)
-      .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
-      .clip(false)
-      // 压上来/被关掉：首页信息流据此停播（见 onPageShown / FeedList.active）。
-      .onShown((): void => {
-        this.onPageShown(USER_PROFILE_PAGE);
-      })
-      .onHidden((): void => {
-        this.onPageHidden(USER_PROFILE_PAGE);
-      })
-      // 返回键：**评论浮层开着就先收评论**（需求："返回优先收起面板"），不再 pop 页面。
-      .onBackPressed((): boolean => this.handlePageBack())
-    } else if (name === POST_PAGE) {
+        } else if (name === POST_PAGE) {
       PageDestination({
         title: $r('app.string.post_page_title'),
         titleStyle: this.destinationTitleStyle(),
