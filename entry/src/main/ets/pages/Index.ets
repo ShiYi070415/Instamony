@@ -16,6 +16,7 @@
 import { WindowLayoutService } from '../core/WindowLayoutService';
 import { SidebarHost } from '../shell/SidebarHost';
 import { SettingsDestination } from './settings/SettingsDestination';
+import { NotificationsDestination } from './notifications/NotificationsDestination';
 import { AppRoutes } from '../router/AppRoutes';
 import { AppRouter } from '../router/AppRouter';
 import { PageRegistry } from '../router/PageRegistry';
@@ -12021,51 +12022,29 @@ struct Index {
   @Builder
   destinationBuilder(name: string, param: object) {
     if (name === NOTIFICATIONS_PAGE) {
-      HdsNavDestination() {
-        NotificationsPanel({
-          items: this.notifications,
-          loading: this.notificationsLoading,
-          state: this.notificationsState,
-          diag: this.notificationsDiag,
-          // 下拉刷新：动画状态双向绑定，用户下拉时回调这里重新取数。
-          refreshing: $notificationsRefreshing,
-          onRefresh: (): void => {
-            this.refreshNotifications();
-          },
-          onFollow: (item: NotifyItem): void => {
-            this.toggleFollow(item);
-          }
-        })
-      }
-      .titleBar({
-        content: {
-          title: { mainTitle: $r('app.string.notifications') }
+      NotificationsDestination({
+        items: this.notifications,
+        loading: this.notificationsLoading,
+        state: this.notificationsState,
+        diag: this.notificationsDiag,
+        refreshing: $notificationsRefreshing,
+        titleStyle: this.destinationTitleStyle(),
+        onRefresh: (): void => {
+          this.refreshNotifications();
         },
-        // 标题栏样式统一由 style 助手生成：材质那段只在设备支持 HDS 系统材质时才有
-        // （API < 23 传下去就是 undefined，见 core/PlatformCap）。
-        style: this.destinationTitleStyle(),
-        avoidLayoutSafeArea: false,
-        enableComponentSafeArea: false
+        onFollow: (item: NotifyItem): void => {
+          this.toggleFollow(item);
+        },
+        onShown: (): void => {
+          this.onPageShown(NOTIFICATIONS_PAGE);
+        },
+        onHidden: (): void => {
+          this.closeNotificationsRightPane();
+          this.onPageHidden(NOTIFICATIONS_PAGE);
+        },
+        onBackPressed: (): boolean => this.handlePageBack()
       })
-      // 需求：标题里要放用户/群组头像 —— HDS 标题只支持两行文字，所以整条标题栏换成页面自绘。
-      .hideBackButton(false)
-      .titleMode(HdsNavDestinationTitleMode.MINI)
-      // 标题栏铺到系统栏下方，沉浸光感才有连续的底。
-      .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
-      // **别裁内容**：页面里的列表要能把行画到标题栏底下（和主页同一套"内容穿过标题栏"）；
-      // NavDestination 默认会裁掉超出内容区的部分，不放开的话列表行滚到标题栏下沿就没了。
-      .clip(false)
-      // 整屏页面压上来/被关掉：首页信息流据此停播（见 onPageShown / FeedList.active）。
-      .onShown((): void => {
-        this.onPageShown(NOTIFICATIONS_PAGE);
-      })
-      .onHidden((): void => {
-        this.closeNotificationsRightPane();
-        this.onPageHidden(NOTIFICATIONS_PAGE);
-      })
-      // 返回键：**评论浮层开着就先收评论**（需求："返回优先收起面板"），不再 pop 页面。
-      .onBackPressed((): boolean => this.handlePageBack())
-    } else if (name === SETTINGS_PAGE) {
+        } else if (name === SETTINGS_PAGE) {
       // 设定页：和通知页同一套承载（标题栏 + 返回键 + 沉浸光感），内容见 SettingsPanel。
       HdsNavDestination() {
         SettingsPanel({
