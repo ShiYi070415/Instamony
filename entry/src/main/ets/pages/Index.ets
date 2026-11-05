@@ -17,6 +17,7 @@ import { WindowLayoutService } from '../core/WindowLayoutService';
 import { SidebarHost } from '../shell/SidebarHost';
 import { SettingsDestination } from './settings/SettingsDestination';
 import { SettingsRootDestination } from './settings/SettingsRootDestination';
+import { SponsorDestination } from './settings/SponsorDestination';
 import { NotificationsDestination } from './notifications/NotificationsDestination';
 import { AppRoutes } from '../router/AppRoutes';
 import { AppRouter } from '../router/AppRouter';
@@ -12107,23 +12108,10 @@ struct Index {
         onBackPressed: (): boolean => this.handlePageBack()
       })
     } else if (name === SPONSOR_PAGE) {
-      // 赞助开发者：独立一页，标题栏/返回键由 HDS 提供。
-      HdsNavDestination() {
-        SponsorPage()
-      }
-      .titleBar({
-        content: {
-          title: { mainTitle: '赞助开发者' }
-        },
-        style: this.destinationTitleStyle(),
-        avoidLayoutSafeArea: false,
-        enableComponentSafeArea: false
+      SponsorDestination({
+        titleStyle: this.destinationTitleStyle()
       })
-      .hideBackButton(false)
-      .titleMode(HdsNavDestinationTitleMode.MINI)
-      .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
-      .clip(false)
-    } else if (name === ADD_ACCOUNT_PAGE) {
+        } else if (name === ADD_ACCOUNT_PAGE) {
       /*
        * **新增账号**（需求："新增账号时登录页作为新一页展开，应该是 navigation，左上角添加返回按钮"）。
        *
