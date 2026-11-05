@@ -35,6 +35,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { AppLifecycle, VisibilityHandler } from '../core/AppLifecycle';
 // 播放器生命周期也进滚动日志：reels 闪退时那是唯一能带出来的现场（见 core/ReelsCrashLog）
 import { ReelsCrashLog } from '../core/ReelsCrashLog';
+import { ReelsPlayerPool } from '../core/ReelsPlayerPool';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'VideoSurface';
@@ -188,48 +189,6 @@ export struct VideoSurface {
    * （表现就是"闪退"，且 JS 层没有任何异常可捕获）。这里把数量写进滚动日志，
    * 用户下次导出诊断时能直接看出是不是这个原因。
    */
-  private static alivePlayers: number = 0;
-  /**
-   * **同时活着的播放器上限（预加载玩家的闸门）**。
-   *
-   * 真机日志（2026-10-30 17:45，装了逐次打点的包）显示：崩溃前那一刻
-   * `player create ok alive=3`（当前 + 预加载 + 又一个预加载），并且三个都各自
-   * 绑了 surface / 走过 prepare，随后 `first frame play+33ms` 之后进程直接 ABORTED
-   * —— 没有任何 JS 异常、也没有系统 fault 记录，是**原生层**在多个解码器/表面之间崩的。
-   *
-   * 2026-10-31 再收紧：reels 的日志里 `alive=2` 之后仍然 ABORTED（切页时
-   * `release alive=1` 紧接着 `create alive=2`），而信息流只挂 1 个播放器不崩。
-   * 所以预加载预算改成 **1**：只要进程里已经有一个播放器，就不再建预加载的第二个。
-   * 播放本身不受影响（`playing` 那条仍然优先创建）。
-   */
-  private static readonly MAX_ALIVE_FOR_PRELOAD: number = 1;
-  /** 正在创建（createAVPlayer 还没回来）的数量 —— 也算进预算，见 createPlayer 的闸门。 */
-  private static pendingCreates: number = 0;
-  /** 全局串行：同一时刻只允许一个 createAVPlayer 在飞。 */
-  private static creatingAny: boolean = false;
-
-  /** 建好一个播放器时的计数与打点。 */
-  private static notePlayerCreated(url: string): void {
-    VideoSurface.alivePlayers++;
-    const alive: number = VideoSurface.alivePlayers;
-    if (alive >= 3) {
-      hilog.warn(DOMAIN, TAG, 'players alive=%{public}d url=%{public}s', alive, url);
-    }
-    ReelsCrashLog.note(`player create ok alive=${alive} (${url})`);
-  }
-
-  /** 释放一个播放器时的计数与打点。 */
-  private static notePlayerReleased(url: string): void {
-    if (VideoSurface.alivePlayers > 0) {
-      VideoSurface.alivePlayers--;
-    }
-    const alive: number = VideoSurface.alivePlayers;
-    if (alive >= 3) {
-      hilog.warn(DOMAIN, TAG, 'players still alive=%{public}d after release url=%{public}s',
-        alive, url);
-    }
-    ReelsCrashLog.note(`player release alive=${alive}`);
-  }
   private surfaceId: string = '';
   /** 已经交给播放器的地址（见 onPropChanged 里那道判据）。 */
   private appliedUrl: string = '';
@@ -331,13 +290,13 @@ export struct VideoSurface {
      *   · 全局同一时刻只允许一个 createAVPlayer 在飞（并发创建解码器本身就是崩因嫌疑）。
      */
     const preloadOnly: boolean = this.preload && !this.playing;
-    const budget: number = VideoSurface.alivePlayers + VideoSurface.pendingCreates;
-    if (preloadOnly && budget >= VideoSurface.MAX_ALIVE_FOR_PRELOAD) {
+    const budget: number = ReelsPlayerPool.aliveCount() + ReelsPlayerPool.pendingCount();
+    if (preloadOnly && budget >= ReelsPlayerPool.MAX_ALIVE_FOR_PRELOAD) {
       ReelsCrashLog.note(`skip preload player budget=${budget} `
-        + `(alive=${VideoSurface.alivePlayers} pending=${VideoSurface.pendingCreates})`);
+        + `(alive=${ReelsPlayerPool.aliveCount()} pending=${ReelsPlayerPool.pendingCount()})`);
       return;
     }
-    if (VideoSurface.creatingAny) {
+    if (ReelsPlayerPool.isCreating()) {
       // 另一个实例正在建：等它落定再来（150ms 后重试，仍然要走上面的闸门）。
       this.creating = false;
       setTimeout((): void => {
@@ -349,8 +308,7 @@ export struct VideoSurface {
     }
     const epoch: number = ++this.playerEpoch;
     this.creating = true;
-    VideoSurface.creatingAny = true;
-    VideoSurface.pendingCreates++;
+    ReelsPlayerPool.beginCreate();
     /*
      * **创建播放器这一发也要进滚动日志**（每次都记，不只 >=3 时记）。
      *
@@ -359,13 +317,12 @@ export struct VideoSurface {
      * 而日志里只有 >=3 个播放器时才打点，看不出"这一刻在创建/释放第几个"。
      * 把每一发都记下来，才能判断是不是"切条时播放器创建/释放交错"导致的硬崩。
      */
-    ReelsCrashLog.note(`player create begin alive=${VideoSurface.alivePlayers} `
-      + `pending=${VideoSurface.pendingCreates} `
+    ReelsCrashLog.note(`player create begin alive=${ReelsPlayerPool.aliveCount()} `
+      + `pending=${ReelsPlayerPool.pendingCount()} `
       + `seg=${this.segment}/${this.activeSegment} preload=${this.preload ? 'y' : 'n'}`);
     media.createAVPlayer().then((player: media.AVPlayer): void => {
       this.creating = false;
-      VideoSurface.creatingAny = false;
-      VideoSurface.pendingCreates--;
+      ReelsPlayerPool.endCreate();
       // 等播放器创出来的这段时间里，属性可能已经变了（用户滑走了）：那就当场释放，
       // 不要留下一个没人管的播放器（它会自己去缓冲，占带宽还占解码器）。
       if (this.destroyed || !this.wanted() || this.playerEpoch !== epoch) {
@@ -376,7 +333,7 @@ export struct VideoSurface {
         return;
       }
       this.player = player;
-      VideoSurface.notePlayerCreated(this.shortUrl());
+      ReelsPlayerPool.noteCreated(this.shortUrl());
       player.on('stateChange', (state: string): void => {
         if (this.player !== player || this.playerEpoch !== epoch) {
           return;
@@ -419,8 +376,7 @@ export struct VideoSurface {
       this.applyUrl();
     }).catch((error: BusinessError): void => {
       this.creating = false;
-      VideoSurface.creatingAny = false;
-      VideoSurface.pendingCreates--;
+      ReelsPlayerPool.endCreate();
       this.reportError(`createAVPlayer failed code=${error.code} msg=${error.message}`);
     });
   }
@@ -483,7 +439,7 @@ export struct VideoSurface {
       player.release();
     } catch (error) {
     }
-    VideoSurface.notePlayerReleased(player === null ? '' : this.shortUrl());
+    ReelsPlayerPool.noteReleased(player === null ? '' : this.shortUrl());
   }
 
   /** 状态机：initialized 挂表面（没表面就把 prepare 挂起）；prepared 校正缩放/循环并按需起播。 */
