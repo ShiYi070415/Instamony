@@ -37,7 +37,7 @@ Row
 | 请求调度/幂等 | 部分完成 | 只读请求合并已抽成 `RequestScheduler`，`MobileRequest` 接入；点赞/转发有合并意图，收藏飞去重；关注写请求按用户 `followBusy` 去重；StoryCache 预取窗口按网络自适应（Wi-Fi 8 页/3 条，蜂窝 3 页/1 条）；`PosterCache` 有高度上限与 6MB 总字节预算；仍无统一写请求取消/通用按钮 busy |
 | 主线程下沉 | 已验收 | Explore 1MB 级 JSON、Feed timeline、Profile JSON 解析均已进 taskpool（失败回退主线程）；`Inflate` 只用于实时通道小包，不构成主线程压力 |
 
-**结论：文档约完成 58%。** 已稳定的是路由返回语义、`AccountUiReset` + 账号缓存分区、账号/通知代次、Reels epoch + `ReelsPlayerPool` + `LazyForEach`、侧栏安全区/层级、滚动安全、只读 `RequestScheduler`、关注写请求 busy、Feed/Profile/Explore taskpool 解析；`SidebarHost`、`ContentArea`、`AppRoutes`、`AppRouter`、`PageRegistry`、`PageDestination` 已落地，页面基本迁出。
+**结论：文档约完成 60%。** 已稳定的是路由返回语义、`AccountUiReset` + 账号缓存分区、账号/通知代次、Reels epoch + `ReelsPlayerPool` + `LazyForEach`、侧栏安全区/层级、滚动安全、只读 `RequestScheduler`、关注写请求 busy、Feed/Profile/Explore taskpool 解析；`SidebarHost`、`ContentArea`、`AppRoutes`、`AppRouter`、`PageRegistry`、`PageDestination` 已落地，页面基本迁出。
 
 后续落地顺序调整为：
 
