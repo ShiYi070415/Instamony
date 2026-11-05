@@ -8830,7 +8830,8 @@ struct Index {
 
   /** 左栏 Reels：侧边栏浮在视频/黑底上，所有图标统一白色。 */
   private reelsSidebarWhite(): boolean {
-    return this.tabletWideShell() && this.currentTab() === AppTab.Reels
+    // 浅色模式跟其它页面统一：不用白图标/透明侧栏；只有深色 Reels 才反白。
+    return this.isDarkUi && this.tabletWideShell() && this.currentTab() === AppTab.Reels
       && !this.settingsOverReels();
   }
 
@@ -11686,7 +11687,7 @@ struct Index {
     .backgroundColor(this.reelsBackdropActive() && !this.settingsOverReels()
       ? Color.Transparent : $r('app.color.page_background'))
     .border({
-      width: { right: this.reelsBackdropActive() ? 0 : 0.5 },
+      width: { right: this.reelsBackdropActive() && this.isDarkUi ? 0 : 0.5 },
       color: $r('app.color.divider')
     })
   }
@@ -11707,7 +11708,7 @@ struct Index {
             SidebarHost({
               widthVp: this.tabletSidebarWidth(),
               heightVp: this.tabletSidebarHeightVp(),
-              transparent: this.reelsBackdropActive() && !this.settingsOverReels()
+              transparent: this.reelsBackdropActive() && this.isDarkUi && !this.settingsOverReels()
             }) {
               this.tabletSidebar()
             }
