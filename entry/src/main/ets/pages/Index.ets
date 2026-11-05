@@ -13692,6 +13692,7 @@ struct Index {
           reel: this.storyReel === null ? EMPTY_REEL : this.storyReel,
           username: this.storyName,
           avatarUrl: this.storyAvatar,
+          bottomSafeVp: this.bottomSafeVp,
           // 卡片背面提前渲染下一位（见 StoryViewer 的 flipAngle > 90 分支）。
           nextReel: this.storyNextReel,
           nextUsername: this.storyNextName,

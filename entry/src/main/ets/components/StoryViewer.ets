@@ -218,6 +218,8 @@ export struct StoryViewer {
   @Prop @Watch('onReelChanged') reel: StoryReel = EMPTY_REEL;
   /** 用户名（托盘里那份：reel 里没有就用它）。 */
   @Prop username: string = '';
+  /** 底部系统安全区：快拍底部回复条避开手势条。 */
+  @Prop bottomSafeVp: number = 0;
   /** 头像（同上；转场飞的就是这张图）。 */
   @Prop avatarUrl: string = '';
   /** 下一位用户已经预取好的 reel / 资料：只用于卡片背面**提前渲染**，不参与当前播放。 */
@@ -2399,7 +2401,7 @@ export struct StoryViewer {
           CommentInputBar({
             hint: $r('app.string.story_message_hint'),
             sideInset: 0,
-            bottomInset: 0,
+            bottomInset: this.bottomSafeVp,
             onSend: (text: string): void => {
               this.onSend(text);
             }
