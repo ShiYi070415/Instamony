@@ -16,10 +16,10 @@
 ```text
 Row
 ├─ Sidebar（固定窗口高度）
-└─ Content（HdsNavigation，参与页面 RESIZE）
+└─ ContentArea（侧栏右侧整块区域）
 ```
 
-提交：`38a6e10`。
+`contentAreaWidth()` 不再重复减侧栏宽度；左右栏和分割线按同一份内容区宽度计算。提交：`8f6f1b0`、`beb1f3e`。
 
 这份文档是**目标方案**，不是已经完成的清单。当前实际状态：
 
