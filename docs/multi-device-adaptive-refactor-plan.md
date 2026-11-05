@@ -19,7 +19,7 @@ Row
 └─ ContentArea（侧栏右侧整块区域）
 ```
 
-`contentAreaWidth()` 不再重复减侧栏宽度；ReelsPage 的 `leftInsetVp` 归零；SidebarHost 外层加 `zIndex(100)`；底部安全区只加在组件上（Reels 信息栏、会话输入条），ContentArea 背景保持全高。提交：`8f6f1b0`、`beb1f3e`、`4c116ef`、`ea1de3c`。
+`contentAreaWidth()` 不再重复减侧栏宽度；ReelsPage 的 `leftInsetVp` 归零；SidebarHost 外层加 `zIndex(100)`；底部安全区只加在组件上，Reels 正文/动作区按“实测 bottomSafeVp + 16”避让。提交：`8f6f1b0`、`beb1f3e`、`4c116ef`、`ea1de3c`、`a39130d`。
 
 这份文档是**目标方案**，不是已经完成的清单。当前实际状态：
 
