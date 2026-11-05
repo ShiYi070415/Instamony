@@ -35,10 +35,10 @@ Row
 | Index 拆分 | 部分完成 | `SidebarHost`、`ContentArea`、`AppRoutes`、`AppRouter`、`PageRegistry`、`PageDestination` 已落地；所有 destination 分支已改为组件调用（含会话页副标题/头像）；`destinationBuilder` 仍有名字 switch |
 | 布局/断点服务 | 部分完成 | `WindowLayoutService` 已抽出；`contentAreaWidth` 不再重复减侧栏；Reels 标题/正文左边线统一；页面内容顶部改为 `topSafeVp + 66`（不再硬编码 94）；其余安全区/侧栏宽度尚未统一 |
 | 加载/错误态 | 部分完成 | 通知页空态失败时提供“重试”按钮，复用 `onRefresh`；其余页面仍是各自文案 |
-| 请求调度/幂等 | 部分完成 | 只读请求合并已抽成 `RequestScheduler`，`MobileRequest` 接入；点赞/转发有合并意图，收藏飞去重；关注/收藏写请求统一用 `AsyncGuard` 去重；StoryCache 预取窗口按网络自适应（Wi-Fi 8 页/3 条，蜂窝 3 页/1 条）；`PosterCache` 有高度上限与 6MB 总字节预算；仍无统一写请求取消/通用按钮 busy |
+| 请求调度/幂等 | 部分完成 | 只读请求合并已抽成 `RequestScheduler`，`MobileRequest` 接入；点赞/转发有合并意图，收藏飞去重；关注/收藏写请求统一用 `AsyncGuard` 去重；StoryCache 预取窗口按网络自适应（Wi-Fi 8 页/3 条，蜂窝 3 页/1 条）；`PosterCache` 有高度上限与 6MB 总字节预算；`MobileRequest.cancelAll()` 换号主动取消在飞请求；仍无通用按钮 busy |
 | 主线程下沉 | 已验收 | Explore 1MB 级 JSON、Feed timeline、Profile JSON 解析均已进 taskpool（失败回退主线程）；`Inflate` 只用于实时通道小包，不构成主线程压力 |
 
-**结论：文档约完成 62%。** 已稳定的是路由返回语义、`AccountUiReset` + 账号缓存分区、账号/通知代次、Reels epoch + `ReelsPlayerPool` + `LazyForEach`、侧栏安全区/层级、滚动安全、只读 `RequestScheduler`、关注写请求 busy、Feed/Profile/Explore taskpool 解析；`SidebarHost`、`ContentArea`、`AppRoutes`、`AppRouter`、`PageRegistry`、`PageDestination` 已落地，页面基本迁出。
+**结论：文档约完成 64%。** 已稳定的是路由返回语义、`AccountUiReset` + 账号缓存分区、账号/通知代次、Reels epoch + `ReelsPlayerPool` + `LazyForEach`、侧栏安全区/层级、滚动安全、只读 `RequestScheduler`、关注写请求 busy、Feed/Profile/Explore taskpool 解析；`SidebarHost`、`ContentArea`、`AppRoutes`、`AppRouter`、`PageRegistry`、`PageDestination` 已落地，页面基本迁出。
 
 后续落地顺序调整为：
 
