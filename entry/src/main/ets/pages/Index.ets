@@ -11501,8 +11501,7 @@ struct Index {
    */
   private homeReelsInfoBottomVp(): number {
     if (this.tabletWideShell()) {
-      // 平板内容区已由 ContentArea 统一避让底部系统条，这里不再重复加。
-      return 0;
+      return this.bottomSafeVp;
     }
     return BAR_HEIGHT + BAR_REST_BOTTOM - 6 + this.bottomSafeVp;
   }
@@ -11720,8 +11719,7 @@ struct Index {
         ContentArea({
           // ContentArea 永远是侧栏右边的整块区域；左栏宽度只约束里面的 HdsNavigation。
           widthVp: 0,
-          fill: true,
-          bottomInset: this.bottomSafeVp
+          fill: true
         }) {
         // 传入页面栈：通知页是它的一个 NavDestination（见 destinationBuilder）。
         HdsNavigation(this.navStack) {
@@ -12200,6 +12198,7 @@ struct Index {
             ? Math.max(0, this.directStageWidth()) : 0,
           dualPane: this.tabletHomeScoped(),
           externalHeader: true,
+          bottomInsetVp: this.bottomSafeVp,
           onOpenWeb: (): void => {
             this.setLocalStatus('这条会话暂时打不开（接口或会话数据不可用）');
           },

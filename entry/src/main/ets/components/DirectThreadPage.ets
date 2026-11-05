@@ -237,6 +237,8 @@ export struct DirectThreadPage {
   @Prop layoutWidthVp: number = 0;
   /** 是否处于双栏右 pane：双栏时分享卡宽度档位更小。 */
   @Prop dualPane: boolean = false;
+  /** 底部系统避让区（手势条/三键导航）：只加在输入条上，不缩背景。 */
+  @Prop bottomInsetVp: number = 0;
   /** 分享封面解码后的真实比例（高 / 宽），修正元数据比例不准的卡片。 */
   @State private coverAspectById: Map<string, number> = new Map();
   /** 屏幕高度（vp）——只为诊断日志（对齐输入法坐标系用）。 */
@@ -2501,7 +2503,7 @@ export struct DirectThreadPage {
     }
     .width('100%')
     // 常规留白 + **输入法抬升**：键盘弹起时输入条抬到键盘上方（抬多少由自校正量出来）。
-    .padding({ bottom: COMMENT_INPUT_BOTTOM_VP })
+    .padding({ bottom: COMMENT_INPUT_BOTTOM_VP + this.bottomInsetVp })
   }
 }
 
