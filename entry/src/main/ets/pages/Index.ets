@@ -11671,12 +11671,17 @@ struct Index {
         })
       }
       .width('100%')
-      .padding({ left: this.tabletSidebarGutter(), bottom: Math.round(16 * this.tabletUiScale()) })
+      // 底部通知/设置按钮避让手势条/三键导航；SidebarHost 已扩到系统安全区。
+      .padding({
+        left: this.tabletSidebarGutter(),
+        bottom: this.bottomSafeVp + Math.round(16 * this.tabletUiScale())
+      })
       .alignItems(HorizontalAlign.Start)
     }
     .width(this.tabletSidebarWidth())
     .height('100%')
-    .padding({ top: 4 })
+    // 顶部展开按钮避让状态栏。
+    .padding({ top: this.topSafeVp + 4 })
     // Reels 时侧边栏透明，让外层 Reels 黑底直接铺到侧边栏区域，并去掉侧边栏分割线。
     .backgroundColor(this.reelsBackdropActive() && !this.settingsOverReels()
       ? Color.Transparent : $r('app.color.page_background'))
