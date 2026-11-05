@@ -154,11 +154,11 @@ export class ReelsSeen {
     if (store === null) {
       return;
     }
-    try {
-      store.putSync(ReelsSeen.keyOf(source), JSON.stringify(list));
-      store.flushSync();
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'save reels seen failed: %{public}s', (error as Error).message);
-    }
+    // 异步落盘：这条台账每铺一页就写一次，同步 put/flush 会卡主线程；顺序由 ArkData 串行化。
+    store.put(ReelsSeen.keyOf(source), JSON.stringify(list))
+      .then((): Promise<void> => store.flush())
+      .catch((error: Error): void => {
+        hilog.warn(DOMAIN, TAG, 'save reels seen failed: %{public}s', error.message);
+      });
   }
 }
