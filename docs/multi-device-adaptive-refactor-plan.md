@@ -15,7 +15,7 @@
 | HDS 标题栏 | 已回退 | 按实测改回系统原始 HDS API，不再手写 `maskExtraHeight=48`/`blurRadius=80`；文档 2.4 的旧参数作废 |
 | 滚动安全 | 部分完成 | `safeScrollY()` 已覆盖主要页面；尚未全量替换裸 `currentOffset().yOffset` |
 | Reels 崩溃 | 部分完成 | `VideoSurface` 已有 player/epoch 保护，冷启动缓存已移除，`ReelsSeen` 台账改异步落盘；仍无 `ReelsPlayerPool`、`LazyForEach`、`@Reusable` |
-| 键盘避让 | 未完成 | 已试过“只消费一次 keyboardVp / List layoutWeight / 把输入条移进 Column”，真机仍会出现列表空白或输入条被键盘盖住，全部回退；需要按新的 Column + 输入条结构重做 |
+| 键盘避让 | 已修复 | 按官方 `setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE)`：页面缩短，列表与输入条一起缩，最新消息停在输入条上方；不再自己监听键盘高度做双重避让 |
 | 布局/断点服务 | 部分完成 | `WindowLayoutService` 已抽出，`tabletWideShell`/`tabletSplitEnabled` 改为读断点；页面内容框架、安全区、侧栏宽度尚未统一 |
 | 请求调度/幂等 | 部分完成 | 点赞/转发本来就有合并意图；新增收藏在飞去重、只读请求并发去重；Feed 原生翻页 stuck 判据已改用关注流长度；仍无统一 `RequestScheduler`、取消、通用按钮 busy |
 | 主线程下沉 | 部分完成 | 探索流 1MB 级 JSON 已移入 taskpool（失败自动回退主线程）；Feed/Profile 的解析仍有主线程路径，inflate 与其余大包未全量下沉 |
@@ -598,4 +598,5 @@ scrollEffectStyle: { contentStyle }
 - [多设备适配实战](https://developer.huawei.com/consumer/cn/blog/topic/03210322288014042)
 - [应用性能优化实践](https://developer.huawei.com/consumer/cn/doc/architecture-guides/practice-common-app-performance-v1-0000001949813401)
 - [软键盘避让 FAQ](https://developer.huawei.com/consumer/cn/doc/harmonyOS-faqs/faqs-arkui-1073)
+- [拉起软键盘后遮挡页面内容](https://developer.huawei.com/consumer/cn/doc/doccenter-dev-faq/faqs-arkui-1118)
 - [HdsNavigation API](https://developer.huawei.com/consumer/cn/doc/doccenter-references/api/ui-design-hdsnavigation)
