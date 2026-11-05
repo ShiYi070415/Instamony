@@ -1806,6 +1806,8 @@ struct Index {
    * 但不同帖子互不影响。
    */
   private likingKeys: Set<string> = new Set<string>();
+  /** 收藏在飞的条目：同一条只允许一发，避免连点书签发出重复写请求。 */
+  private savingKeys: Set<string> = new Set<string>();
   /**
    * 连点时"用户**最后**想要的那个点赞状态"（key → 想要的值）。
    *
@@ -2257,6 +2259,25 @@ struct Index {
    */
   private async saveMedia(mediaId: string, shortcode: string, isVideo: boolean,
                           save: boolean): Promise<boolean> {
+    const key: string = mediaId.length > 0 ? mediaId : shortcode;
+    if (key.length === 0) {
+      this.toast($r('app.string.save_failed'));
+      return false;
+    }
+    if (this.savingKeys.has(key)) {
+      hilog.info(DOMAIN, TAG, 'save coalesced key=%{public}s save=%{public}s', key, `${save}`);
+      return false;
+    }
+    this.savingKeys.add(key);
+    try {
+      return await this.saveMediaOnce(mediaId, shortcode, isVideo, save);
+    } finally {
+      this.savingKeys.delete(key);
+    }
+  }
+
+  private async saveMediaOnce(mediaId: string, shortcode: string, isVideo: boolean,
+                              save: boolean): Promise<boolean> {
     const id: string = mediaId.trim();
     /*
      * **只有短码也照样收藏**（同 likeReel 的理由）：个人页那几个分页的条目经常没有媒体 id，
