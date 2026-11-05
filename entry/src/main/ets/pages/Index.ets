@@ -12351,7 +12351,7 @@ struct Index {
             hilog.info(DOMAIN, TAG, 'reels draft comment len=%{public}d (not sent)', text.length);
           },
           // 位置固定：**整页**避让由外层 padding 负责（见 onKeyboard 与根 Stack 的说明）。
-          bottomInset: 28,
+          bottomInset: Math.max(28, this.bottomSafeVp),
           onKeyboard: (vp: number): void => {
             if (Math.abs(vp - this.reelsKbVp) > 1) {
               this.reelsKbVp = vp;
