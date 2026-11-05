@@ -11610,6 +11610,18 @@ struct Index {
     return this.tabletButtonSize() / 56;
   }
 
+  /** 侧边栏固定占满窗口高度：内容页 RESIZE 时不能被压缩。 */
+  private tabletSidebarHeightVp(): number {
+    try {
+      const h: number = this.getUIContext().px2vp(display.getDefaultDisplaySync().height);
+      if (h > 0) {
+        return h;
+      }
+    } catch (error) {
+    }
+    return this.shellHeightVp > 0 ? this.shellHeightVp : 800;
+  }
+
   /** 平板左侧栏：展开按钮 → 垂直页签 → 底部通知/设置，全部竖排。 */
   @Builder
   tabletSidebar() {
@@ -11771,6 +11783,24 @@ struct Index {
       // 主体：侧边栏不再是 Row 的第一列，而是外面浮的一层；
       // 普通页面用 margin-left 让开它，Reels 全屏时 margin = 0，背景可铺到侧边栏下面。
       Row() {
+        if (this.tabletWideShell()) {
+          // 侧边栏是 Row 的第一列：页面 RESIZE 只压缩右侧内容，不再和侧栏挤同一份高度。
+          Stack() {
+            if (this.settingsOverReels()) {
+              Column()
+                .width('100%')
+                .height('100%')
+                .backgroundColor($r('app.color.page_background'))
+            }
+            this.tabletSidebar()
+          }
+          .width(this.tabletSidebarWidth())
+          .height(this.tabletSidebarHeightVp())
+          .backgroundColor(this.reelsBackdropActive() && !this.settingsOverReels()
+            ? Color.Transparent : $r('app.color.page_background'))
+          .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+          .zIndex(40)
+        }
         Column() {
         // 传入页面栈：通知页是它的一个 NavDestination（见 destinationBuilder）。
         HdsNavigation(this.navStack) {
@@ -11839,37 +11869,9 @@ struct Index {
         this.splitDragHandle()
       }
       }
-      .width(this.tabletWideShell() ? this.contentAreaWidth() : '100%')
+      .layoutWeight(1)
       .height('100%')
-      // 普通页面让开侧边栏；Reels 全屏时 margin 为 0，内容铺到侧边栏下面。
-      .margin({
-        left: this.tabletWideShell() && !this.reelsFullBleed()
-          ? this.tabletSidebarWidth() : 0
-      })
 
-      if (this.tabletWideShell()) {
-        // 侧边栏融入主体：永远作为左侧浮层，不参与主体宽度计算。
-        Stack() {
-          // 设置页压上来时先铺一层不透明底，避免切换瞬间上下的系统避让区透出黑/透明。
-          if (this.settingsOverReels()) {
-            Column()
-              .width('100%')
-              .height('100%')
-              .backgroundColor($r('app.color.page_background'))
-          }
-          this.tabletSidebar()
-        }
-        .width(this.tabletSidebarWidth())
-        .height('100%')
-        // 背景铺在**容器**上：expandSafeArea 扩展的是这个 Stack，只有它自己有底色，
-        // 状态栏/手势条那两块才不会是透明的（子节点的 height 100% 不会跟着扩）。
-        .backgroundColor(this.reelsBackdropActive() && !this.settingsOverReels()
-          ? Color.Transparent : $r('app.color.page_background'))
-        // 侧边栏背景直接铺进上下系统避让区（状态栏 / 手势条），不留下透明缝。
-        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
-        .position({ x: 0, y: 0 })
-        .zIndex(40)
-      }
     }
     .width('100%')
     .height('100%')
