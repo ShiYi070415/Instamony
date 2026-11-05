@@ -30,7 +30,7 @@ Row
 | 侧边栏安全区/误触 | 已修复 | 设置页安全区保持底色；chip 伪事件已加时间门控；`SidebarHost` 固定窗口高度；侧栏顶部/底部按钮分别避让 `topSafeVp` / `bottomSafeVp`；侧栏 `zIndex(100)`，设置页滑入不遮挡 |
 | HDS 标题栏 | 已回退 | 按实测改回系统原始 HDS API，不再手写 `maskExtraHeight=48`/`blurRadius=80`；文档 2.4 的旧参数作废 |
 | 滚动安全 | 已验收 | `safeScrollY()` / `ScrollerSafe` 已覆盖所有 `currentOffset().yOffset`；剩余只有它们的实现与注释 |
-| Reels 崩溃 | 部分完成 | `VideoSurface` 有 player/epoch 保护；播放器预算/串行创建已抽成 `ReelsPlayerPool`；`ReelsSeen` 异步落盘；仍无 `LazyForEach`、`@Reusable` |
+| Reels 崩溃 | 部分完成 | `VideoSurface` 有 player/epoch 保护；播放器预算/串行创建已抽成 `ReelsPlayerPool`；Swiper 已改 `LazyForEach` + `ReelsDataSource`；`ReelsSeen` 异步落盘；仍无 `@Reusable` |
 | 键盘避让 | 页面级 RESIZE | 按官方文档使用 `KeyboardAvoidMode.RESIZE`；会话输入条键盘弹起时贴页底（0vp），收起时只留 `bottomSafeVp` |
 | Index 拆分 | 部分完成 | `SidebarHost`、`ContentArea`、`AppRoutes`、`AppRouter`、`PageRegistry`、`PageDestination` 已落地；所有 destination 分支已改为组件调用（含会话页副标题/头像）；`destinationBuilder` 仍有名字 switch |
 | 布局/断点服务 | 部分完成 | `WindowLayoutService` 已抽出，`tabletWideShell`/`tabletSplitEnabled` 改为读断点；`contentAreaWidth` 不再重复减侧栏；Reels 标题/正文左边线统一；页面内容框架、安全区、侧栏宽度尚未统一 |
