@@ -16,6 +16,7 @@
 import { WindowLayoutService } from '../core/WindowLayoutService';
 import { SidebarHost } from '../shell/SidebarHost';
 import { SettingsDestination } from './settings/SettingsDestination';
+import { SettingsRootDestination } from './settings/SettingsRootDestination';
 import { NotificationsDestination } from './notifications/NotificationsDestination';
 import { AppRoutes } from '../router/AppRoutes';
 import { AppRouter } from '../router/AppRouter';
@@ -12045,74 +12046,42 @@ struct Index {
         onBackPressed: (): boolean => this.handlePageBack()
       })
         } else if (name === SETTINGS_PAGE) {
-      // 设定页：和通知页同一套承载（标题栏 + 返回键 + 沉浸光感），内容见 SettingsPanel。
-      HdsNavDestination() {
-        SettingsPanel({
-          /*
-           * **有没有登录**：未登录时"退出登录"那一项没有意义（点它只会把已经空掉的会话再清一遍），
-           * 所以设置页会把它藏起来，改显示"清除设备认证"（见 components/SettingsPanel 的 signedIn）。
-           * 从登录页标题栏那颗齿轮进来时就是这一档（需求："登录页 hds menu 新增设置页面入口
-           * （不显示退出登录按钮）"）。
-           */
-          signedIn: this.signedIn,
-          onSignOut: (): void => {
-            this.signOut();
-          },
-          /*
-           * 清晰度改完：**顺手把首屏那几段重新取一遍**（展示档的地址是解析那一刻定死的，
-           * 见 core/MediaQuality）。这里只刷首屏与探索流，不动其它页签的缓存。
-           */
-          onQualityChanged: (): void => {
-            hilog.info(DOMAIN, TAG, 'media quality changed → refresh feed');
-            this.viewModel.resetForQualityChange();
-            this.viewModel.refresh().catch((): void => {
-            });
-          },
-          // 设置首页点一项：新开一个 NavDestination（返回键回设置首页）。
-          onOpenSection: (section: string): void => {
-            // 二级页进右栏；右栏已经有页面时继续压栈，三级页覆盖在上面。
-            this.pushPage(SETTINGS_DETAIL_PAGE, section, true);
-          },
-          onOpenSponsor: (): void => {
-            this.pushPage(SPONSOR_PAGE, '', true);
-          }
-        })
-      }
-      .titleBar({
-        content: {
-          title: { mainTitle: $r('app.string.action_settings') }
+      SettingsRootDestination({
+        signedIn: this.signedIn,
+        titleStyle: this.destinationTitleStyle(),
+        onSignOut: (): void => {
+          this.signOut();
         },
-        style: this.destinationTitleStyle(),
-        avoidLayoutSafeArea: false,
-        enableComponentSafeArea: false
-      })
-      .hideBackButton(false)
-      .titleMode(HdsNavDestinationTitleMode.MINI)
-      .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
-      // 同通知页：放开裁剪，页面内容才能画到标题栏底下。
-      .clip(false)
-      // 整屏页面压上来/被关掉：首页信息流据此停播（见 onPageShown / FeedList.active）。
-      .onShown((): void => {
-        this.onPageShown(SETTINGS_PAGE);
-      })
-      .onHidden((): void => {
-        this.closeSettingsRightPane();
-        this.onPageHidden(SETTINGS_PAGE);
-      })
-      // 返回键：先收评论/模态；右栏还开着设置二级页就先收右栏，再返回。
-      .onBackPressed((): boolean => {
-        if (this.handleDestinationBack()) {
-          return true;
-        }
-        if (this.tabletRightName === SETTINGS_DETAIL_PAGE || this.tabletRightName === SETTINGS_PAGE) {
+        onQualityChanged: (): void => {
+          this.viewModel.resetForQualityChange();
+          this.viewModel.refresh().catch((): void => {
+          });
+        },
+        onOpenSection: (section: string): void => {
+          this.pushPage(SETTINGS_DETAIL_PAGE, section, true);
+        },
+        onOpenSponsor: (): void => {
+          this.pushPage(SPONSOR_PAGE, '', true);
+        },
+        onShown: (): void => {
+          this.onPageShown(SETTINGS_PAGE);
+        },
+        onHidden: (): void => {
           this.closeSettingsRightPane();
-          return true;
+          this.onPageHidden(SETTINGS_PAGE);
+        },
+        onBackPressed: (): boolean => {
+          if (this.handleDestinationBack()) {
+            return true;
+          }
+          if (this.tabletRightName === SETTINGS_DETAIL_PAGE || this.tabletRightName === SETTINGS_PAGE) {
+            this.closeSettingsRightPane();
+            return true;
+          }
+          return this.handlePageBack();
         }
-        // 不能 return false 让 HDS 只做视觉返回：NavPathStack 里会留下这一页，
-        // 侧边栏展开/收起或窗口变化重建时又把它拉出来。显式 pop。
-        return this.handlePageBack();
       })
-    } else if (name === SETTINGS_DETAIL_PAGE) {
+        } else if (name === SETTINGS_DETAIL_PAGE) {
       SettingsDestination({
         detailSection: `${param}`,
         title: this.settingsDetailTitle(`${param}`),
