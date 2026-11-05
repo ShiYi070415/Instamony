@@ -11610,18 +11610,6 @@ struct Index {
     return this.tabletButtonSize() / 56;
   }
 
-  /** 侧边栏固定占满窗口高度：页面 RESIZE 时不能被压缩，否则底部按钮会堆叠。 */
-  private tabletSidebarHeightVp(): number {
-    try {
-      const h: number = this.getUIContext().px2vp(display.getDefaultDisplaySync().height);
-      if (h > 0) {
-        return h;
-      }
-    } catch (error) {
-    }
-    return this.shellHeightVp > 0 ? this.shellHeightVp : 800;
-  }
-
   /** 平板左侧栏：展开按钮 → 垂直页签 → 底部通知/设置，全部竖排。 */
   @Builder
   tabletSidebar() {
@@ -11711,8 +11699,6 @@ struct Index {
         .backgroundColor(Color.Transparent)
         .selectedColor(Color.Transparent)
         .attributeModifier(new SurfaceModifier(Index.materialThicknessNow(), false, true))
-        .focusable(false)
-        .focusOnTouch(false)
       }
       .width('100%')
       .padding({ left: this.tabletSidebarGutter() })
@@ -11770,9 +11756,6 @@ struct Index {
     .width(this.tabletSidebarWidth())
     .height('100%')
     .padding({ top: 4 })
-    // 侧边栏不参与焦点/键盘链路：按钮被点击后不抢输入框焦点，也不触发页面避让。
-    .focusable(false)
-    .focusOnTouch(false)
     // Reels 时侧边栏透明，让外层 Reels 黑底直接铺到侧边栏区域，并去掉侧边栏分割线。
     .backgroundColor(this.reelsBackdropActive() && !this.settingsOverReels()
       ? Color.Transparent : $r('app.color.page_background'))
@@ -11877,8 +11860,7 @@ struct Index {
           this.tabletSidebar()
         }
         .width(this.tabletSidebarWidth())
-        // 固定窗口高度，不跟页面 RESIZE 缩短：按钮位置不堆叠。
-        .height(this.tabletSidebarHeightVp())
+        .height('100%')
         // 背景铺在**容器**上：expandSafeArea 扩展的是这个 Stack，只有它自己有底色，
         // 状态栏/手势条那两块才不会是透明的（子节点的 height 100% 不会跟着扩）。
         .backgroundColor(this.reelsBackdropActive() && !this.settingsOverReels()
