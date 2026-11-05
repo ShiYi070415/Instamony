@@ -18,7 +18,7 @@
 | 键盘避让 | 未完成 | 已试过“只消费一次 keyboardVp / List layoutWeight / 把输入条移进 Column”，真机仍会出现列表空白或输入条被键盘盖住，全部回退；需要按新的 Column + 输入条结构重做 |
 | 布局/断点服务 | 部分完成 | `WindowLayoutService` 已抽出，`tabletWideShell`/`tabletSplitEnabled` 改为读断点；页面内容框架、安全区、侧栏宽度尚未统一 |
 | 请求调度/幂等 | 部分完成 | 点赞/转发本来就有合并意图；新增收藏在飞去重、只读请求并发去重；Feed 原生翻页 stuck 判据已改用关注流长度；仍无统一 `RequestScheduler`、取消、通用按钮 busy |
-| 主线程下沉 | 未开始 | 大 JSON、inflate、部分解析仍在主线程 |
+| 主线程下沉 | 部分完成 | 探索流 1MB 级 JSON 已移入 taskpool（失败自动回退主线程）；Feed/Profile 的解析仍有主线程路径，inflate 与其余大包未全量下沉 |
 | Index 拆分 | 未开始 | 仍是 1.3 万行单体 Shell |
 
 **结论：文档约完成 25%–30%。** 已稳定的是路由返回语义、账号页面清理、账号代次丢弃过期回包、Reels epoch、侧栏安全区、收藏去重；结构性重构（单栈、布局服务、侧栏组件化、播放器池、请求调度）尚未开始。
