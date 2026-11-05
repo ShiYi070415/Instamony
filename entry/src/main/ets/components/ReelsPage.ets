@@ -387,6 +387,7 @@ const OVERLAY_GUARD_EXTRA_VP: number = 96;
  *   - `preload` 后两条：提前 prepare，首帧到了先压在封面上；
  *   - 其余页只画封面，省内存也让"滑到哪播哪"立刻生效。
  */
+@Reusable
 @Component
 struct ReelSlide {
   /** 这条视频（**@ObjectLink**：地址是后补的，见类头说明）。 */
