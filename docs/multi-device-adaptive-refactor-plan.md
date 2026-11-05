@@ -17,7 +17,7 @@
 | Reels 崩溃 | 部分完成 | `VideoSurface` 已有 player/epoch 保护，冷启动缓存已移除；仍无 `ReelsPlayerPool`、`LazyForEach`、`@Reusable` |
 | 键盘避让 | 未完成 | 试过“只消费一次 keyboardVp”，真机会出现列表区空白，已回退；仍需 `KeyboardAvoidingContainer` 结构改造 |
 | 布局/断点服务 | 未开始 | 仍用 `tabletWideShell()`/`tabletSplitEnabled()`，没有 `WindowLayoutService` |
-| 请求调度/幂等 | 部分完成 | 点赞/转发本来就有合并意图；新增收藏在飞去重；仍无统一 `RequestScheduler`、取消、通用按钮 busy |
+| 请求调度/幂等 | 部分完成 | 点赞/转发本来就有合并意图；新增收藏在飞去重、只读请求并发去重；仍无统一 `RequestScheduler`、取消、通用按钮 busy |
 | 主线程下沉 | 未开始 | 大 JSON、inflate、部分解析仍在主线程 |
 | Index 拆分 | 未开始 | 仍是 1.3 万行单体 Shell |
 
