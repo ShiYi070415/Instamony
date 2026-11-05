@@ -21,15 +21,27 @@ import { common } from '@kit.AbilityKit';
 import { AccountScope } from './AccountScope';
 import { NativeStories } from './NativeStories';
 import { ApiThrottle } from './ApiThrottle';
+import { NetworkState } from './NetworkState';
 import { MediaPrefetch } from './MediaPrefetch';
 import { StoryItem, StoryReel, StoryTrayItem } from '../model/Story';
 
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'StoryCache';
-/** 预取窗口：当前用户之后的 8 位，覆盖快速连续切换。 */
-const DEPTH: number = 8;
-/** 预下载每位用户前 3 条媒体：首屏更快，避免翻到该用户时现拉。 */
-const PREFETCH_ITEMS: number = 3;
+/** Wi-Fi 下的预取窗口与媒体条数；蜂窝/未知网络用下面更小的值。 */
+const DEPTH_WIFI: number = 8;
+const DEPTH_METERED: number = 3;
+const PREFETCH_WIFI: number = 3;
+const PREFETCH_METERED: number = 1;
+
+/** 预取窗口：当前用户之后几位，覆盖快速连续切换。 */
+function prefetchDepth(): number {
+  return NetworkState.allowPrefetch() ? DEPTH_WIFI : DEPTH_METERED;
+}
+
+/** 每位用户预下载前几条媒体。 */
+function prefetchItems(): number {
+  return NetworkState.allowPrefetch() ? PREFETCH_WIFI : PREFETCH_METERED;
+}
 /** 快拍数据落盘缓存：24 小时（用户要求"复用率高"）。 */
 const STORE: string = 'instarmony_story_reels';
 const KEY: string = 'reels_v1';
@@ -451,7 +463,7 @@ export class StoryCache {
 
   /** 把"还缺几页"补齐（火并忘，失败就跳过那一位，不阻塞任何人）。 */
   private static fill(): void {
-    while (StoryCache.pages.length + StoryCache.loading < DEPTH
+    while (StoryCache.pages.length + StoryCache.loading < prefetchDepth()
       && StoryCache.cursor < StoryCache.tray.length) {
       const item: StoryTrayItem = StoryCache.tray[StoryCache.cursor];
       StoryCache.cursor = StoryCache.cursor + 1;
@@ -516,7 +528,7 @@ export class StoryCache {
   /** 预下载这一页的头几条媒体（系统缓存下载，Image 组件会命中）。 */
   private static warmMedia(reel: StoryReel): void {
     const urls: Array<string> = [];
-    for (let index: number = 0; index < reel.items.length && index < PREFETCH_ITEMS; index++) {
+    for (let index: number = 0; index < reel.items.length && index < prefetchItems(); index++) {
       const item: StoryItem = reel.items[index];
       if (item.imageUrl.length > 0) {
         urls.push(item.imageUrl);
