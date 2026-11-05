@@ -25,7 +25,7 @@ Row
 
 | 模块 | 状态 | 说明 |
 |---|---|---|
-| 账号切换页面清理 | 已验收 | `AccountUiReset` 固定页面复位顺序；换号清 `RequestScheduler`、关注 busy/意图、通知代次；`AccountCaches.clearProcessCaches()` 清 `FollowState` / `SaveState` / `RepostState` / `ReelsSeen`；落盘缓存 key 均过 `AccountScope.slot` |
+| 账号切换页面清理 | 已验收 | `AccountUiReset` 固定页面复位顺序；换号清 `RequestScheduler`、关注 busy/意图、通知代次；`AccountCaches.clearProcessCaches()` 清 `FollowState` / `SaveState` / `RepostState` / `EngageState` / `ReelsSeen`；落盘缓存 key 均过 `AccountScope.slot` |
 | 设置/通知路由 | 已验收 | 左栏二级不堆叠、右栏三级可堆叠、二级返回回单栏；仍是 `navStack + tabletProfileStack` 两套栈，不是单栈 Split |
 | 侧边栏安全区/误触 | 已修复 | 设置页安全区保持底色；chip 伪事件已加时间门控；`SidebarHost` 固定窗口高度；侧栏顶部/底部按钮分别避让 `topSafeVp` / `bottomSafeVp`；侧栏 `zIndex(100)`，设置页滑入不遮挡 |
 | HDS 标题栏 | 已回退 | 按实测改回系统原始 HDS API，不再手写 `maskExtraHeight=48`/`blurRadius=80`；文档 2.4 的旧参数作废 |
