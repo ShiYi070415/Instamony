@@ -22,6 +22,7 @@
  */
 
 import { http } from '@kit.NetworkKit';
+import { RequestScheduler } from '../RequestScheduler';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { InstagramCookieJar, InstagramCookieSnapshot } from '../InstagramCookieJar';
 import { ApiThrottle, BACKOFF_MS, FEEDBACK_BACKOFF_MS } from '../ApiThrottle';
@@ -123,7 +124,6 @@ export class MobileResult {
 
 export class MobileRequest {
   /** 同账号、同端点的只读请求合并：页面重复进入时不再发第二发。 */
-  private static readonly inflight: Map<string, Promise<MobileResult>> = new Map();
 
   /** 上一条失败响应体样本（诊断用，同 NativeComments.detail 的角色）。 */
   private static lastDetail: string = '-';
@@ -265,20 +265,13 @@ export class MobileRequest {
     }
     const key: string = `${AccountScope.current()}|${AccountScope.generationNow()}`
       + `|${endpoint}|${params}`;
-    const running: Promise<MobileResult> | undefined = MobileRequest.inflight.get(key);
-    if (running !== undefined) {
+    if (RequestScheduler.has(key)) {
       hilog.info(DOMAIN, TAG, 'dedupe read %{public}s', endpoint);
-      return running;
     }
-    const task: Promise<MobileResult> = MobileRequest.sendOnce(endpoint, data, params,
-      withSignature, extraHeaders, options, jsonBody);
-    MobileRequest.inflight.set(key, task);
-    task.then((): void => {
-      MobileRequest.inflight.delete(key);
-    }).catch((): void => {
-      MobileRequest.inflight.delete(key);
+    return RequestScheduler.share(key, (): Promise<MobileResult> => {
+      return MobileRequest.sendOnce(endpoint, data, params,
+        withSignature, extraHeaders, options, jsonBody);
     });
-    return task;
   }
 
   private static async sendOnce(endpoint: string, data: string = '', params: string = '',
