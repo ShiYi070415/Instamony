@@ -2502,8 +2502,14 @@ export struct DirectThreadPage {
       .id(INPUT_BAR_ID)
     }
     .width('100%')
-    // 常规留白 + **输入法抬升**：键盘弹起时输入条抬到键盘上方（抬多少由自校正量出来）。
-    .padding({ bottom: COMMENT_INPUT_BOTTOM_VP + this.bottomInsetVp })
+    /*
+     * 键盘避让只留 5vp：
+     *   · 键盘弹起时系统 RESIZE 已经把页面缩短到键盘上方，这里再加键盘高度会双倍抬升；
+     *   · 键盘收起时只避让底部系统条 + 5vp。
+     */
+    .padding({
+      bottom: this.keyboardPx > 0 ? 5 : this.bottomInsetVp + 5
+    })
   }
 }
 
