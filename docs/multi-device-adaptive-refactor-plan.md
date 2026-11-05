@@ -9,19 +9,19 @@
 
 | 模块 | 状态 | 说明 |
 |---|---|---|
-| 账号切换页面清理 | 部分完成 | `resetAccountPageState()` 已清右栏/tab/用户页 VM/帖子页/评论预取；还没有 `AccountUiReset`、`accountGeneration`、缓存 key 账号分区 |
+| 账号切换页面清理 | 部分完成 | `resetAccountPageState()` 已清右栏/tab/用户页 VM/帖子页/评论预取；`AccountScope.generation` + `MobileRequest` 已能丢弃换号后晚到的响应；`AccountUiReset` 尚未抽出，缓存 key 账号分区未全量审计 |
 | 设置/通知路由 | 已验收 | 左栏二级不堆叠、右栏三级可堆叠、二级返回回单栏；仍是 `navStack + tabletProfileStack` 两套栈，不是单栈 Split |
 | 侧边栏安全区/误触 | 已修复 | 设置页安全区保持底色；chip 伪事件已加时间门控；侧边栏仍是 Index 内浮层，未组件化 |
 | HDS 标题栏 | 已回退 | 按实测改回系统原始 HDS API，不再手写 `maskExtraHeight=48`/`blurRadius=80`；文档 2.4 的旧参数作废 |
 | 滚动安全 | 部分完成 | `safeScrollY()` 已覆盖主要页面；尚未全量替换裸 `currentOffset().yOffset` |
 | Reels 崩溃 | 部分完成 | `VideoSurface` 已有 player/epoch 保护，冷启动缓存已移除；仍无 `ReelsPlayerPool`、`LazyForEach`、`@Reusable` |
-| 键盘避让 | 未完成 | `DirectThreadPage` 仍可能双抬 + 自校正 |
+| 键盘避让 | 未完成 | 试过“只消费一次 keyboardVp”，真机会出现列表区空白，已回退；仍需 `KeyboardAvoidingContainer` 结构改造 |
 | 布局/断点服务 | 未开始 | 仍用 `tabletWideShell()`/`tabletSplitEnabled()`，没有 `WindowLayoutService` |
-| 请求调度/幂等 | 未开始 | 仍靠 `ApiThrottle` 固定并发，无优先队列/取消/去重/统一 busy |
+| 请求调度/幂等 | 部分完成 | 点赞/转发本来就有合并意图；新增收藏在飞去重；仍无统一 `RequestScheduler`、取消、通用按钮 busy |
 | 主线程下沉 | 未开始 | 大 JSON、inflate、部分解析仍在主线程 |
 | Index 拆分 | 未开始 | 仍是 1.3 万行单体 Shell |
 
-**结论：文档约完成 20%–25%。** 已稳定的是路由返回语义、账号页面清理、Reels epoch、侧栏安全区；结构性重构（单栈、布局服务、侧栏组件化、播放器池、请求调度）尚未开始。
+**结论：文档约完成 25%–30%。** 已稳定的是路由返回语义、账号页面清理、账号代次丢弃过期回包、Reels epoch、侧栏安全区、收藏去重；结构性重构（单栈、布局服务、侧栏组件化、播放器池、请求调度）尚未开始。
 
 后续落地顺序调整为：
 
