@@ -355,7 +355,7 @@ scrollEffectStyle: { contentStyle }
 
 | # | 位置 | 问题 | 优化 |
 |---|---|---|---|
-| 1 | `pages/Index.ets` | `navStack` / `tabletProfileStack` / `directStageStack` 三套栈并存，页面迁移和手动 `removeByName` 造成返回后旧页复活 | 收敛为单一 `NavPathStack`，用 Navigation Split 代替右栏栈 |
+| 1 | `pages/Index.ets` | `navStack` / `tabletProfileStack` / `directStageStack` 三套栈并存，页面迁移和手动 `removeByName` 造成返回后旧页复活 | 已由 `AppRouter` 双栈收口（切主页面清右栏、详情统一 push/pop）；单栈 Split 经架构决策不实施 |
 | 2 | `pages/Index.ets` + `tabletSidebar` | 侧边栏展开改父级状态，触发 HDS/页面重建；overlay 命中测试与标题热区叠加 | 侧边栏独立组件/`SideBarContainer`，主内容不重排，热区按实际矩形 |
 | 3 | `components/VideoSurface.ets` | 慢网下 `setMediaSource` / `setPlaybackStrategy` 回调晚于释放/复用，旧 player 仍被 prepare | player + epoch 校验、释放后禁止 prepare、限制并发与重试 |
 | 4 | `components/DirectThreadPage.ets` | 列表和输入条各加一次键盘高度，再用 `getRectangleById` 自校正，导致闪到中间、最终仍被盖 | 单一 `KeyboardInsetService`，只做一次布局避让 |
