@@ -26,6 +26,7 @@ import { AppRoutes } from '../router/AppRoutes';
 import { AppRouter } from '../router/AppRouter';
 import { PageRegistry } from '../router/PageRegistry';
 import { RequestScheduler } from '../core/RequestScheduler';
+import { AccountUiReset } from '../core/AccountUiReset';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { SymbolGlyphModifier } from '@kit.ArkUI';
 import { common, Want } from '@kit.AbilityKit';
@@ -4093,6 +4094,15 @@ struct Index {
     this.notificationsSeq++;
     this.notificationsBusy = false;
     this.notificationsRefreshing = false;
+    AccountUiReset.run(
+      (): void => this.clearAccountNavigation(),
+      (): void => this.clearAccountFlags(),
+      (): void => this.resetAccountViewModels(),
+      (): void => this.clearAccountCaches()
+    );
+  }
+
+  private clearAccountNavigation(): void {
     this.navStack.clear();
     this.tabletProfileStack.clear();
     this.directStageStack.clear();
@@ -4107,16 +4117,9 @@ struct Index {
     this.shownPages = [];
     this.coveringPages = 0;
     this.navDepth = 0;
-    this.userProfileVms.forEach((vm: ProfileViewModel): void => {
-      vm.reset();
-    });
-    this.userProfileVms.clear();
-    this.profileReelsVm.reset();
-    this.searchReelsVm.reset();
-    this.postPagePosts = [];
-    this.searchReelsOrder = [];
-    this.mediaDetails.clear();
-    this.commentsPrefetch.clear();
+  }
+
+  private clearAccountFlags(): void {
     this.commentLiking = [];
     this.likeIntent.clear();
     this.repostIntent.clear();
@@ -4128,6 +4131,22 @@ struct Index {
     this.storyClosing = false;
     this.accountMenuOpen = false;
     this.commentsVisible = false;
+  }
+
+  private resetAccountViewModels(): void {
+    this.userProfileVms.forEach((vm: ProfileViewModel): void => {
+      vm.reset();
+    });
+    this.userProfileVms.clear();
+    this.profileReelsVm.reset();
+    this.searchReelsVm.reset();
+  }
+
+  private clearAccountCaches(): void {
+    this.postPagePosts = [];
+    this.searchReelsOrder = [];
+    this.mediaDetails.clear();
+    this.commentsPrefetch.clear();
   }
 
   private forgetAccountMemory(keepSessionFor: string = ''): void {
