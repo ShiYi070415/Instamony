@@ -12,6 +12,8 @@
 export struct ContentArea {
   @Prop widthVp: number = 0;
   @Prop fill: boolean = true;
+  /** 底部系统避让区（手势条/三键导航），所有页面统一从这里避让。 */
+  @Prop bottomInset: number = 0;
 
   @BuilderParam content: () => void;
 
@@ -22,5 +24,6 @@ export struct ContentArea {
     .width(this.widthVp > 0 ? this.widthVp : '100%')
     .layoutWeight(this.fill ? 1 : 0)
     .height('100%')
+    .padding({ bottom: this.bottomInset })
   }
 }
