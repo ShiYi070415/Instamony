@@ -14,6 +14,7 @@
  */
 
 import { WindowLayoutService } from '../core/WindowLayoutService';
+import { SidebarHost } from '../shell/SidebarHost';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { SymbolGlyphModifier } from '@kit.ArkUI';
 import { common, Want } from '@kit.AbilityKit';
@@ -11784,8 +11785,12 @@ struct Index {
       // 普通页面用 margin-left 让开它，Reels 全屏时 margin = 0，背景可铺到侧边栏下面。
       Row() {
         if (this.tabletWideShell()) {
-          // 侧边栏是 Row 的第一列：页面 RESIZE 只压缩右侧内容，不再和侧栏挤同一份高度。
-          Stack() {
+          // 侧边栏是 Row 的第一列：SidebarHost 固定窗口高度，内容页独立 RESIZE。
+          SidebarHost({
+            widthVp: this.tabletSidebarWidth(),
+            heightVp: this.tabletSidebarHeightVp(),
+            transparent: this.reelsBackdropActive() && !this.settingsOverReels()
+          }) {
             if (this.settingsOverReels()) {
               Column()
                 .width('100%')
@@ -11794,12 +11799,6 @@ struct Index {
             }
             this.tabletSidebar()
           }
-          .width(this.tabletSidebarWidth())
-          .height(this.tabletSidebarHeightVp())
-          .backgroundColor(this.reelsBackdropActive() && !this.settingsOverReels()
-            ? Color.Transparent : $r('app.color.page_background'))
-          .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
-          .zIndex(40)
         }
         Column() {
         // 传入页面栈：通知页是它的一个 NavDestination（见 destinationBuilder）。
