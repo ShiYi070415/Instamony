@@ -33,7 +33,7 @@
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { util } from '@kit.ArkTS';
+import { util, taskpool } from '@kit.ArkTS';
 import { ApiThrottle } from '../ApiThrottle';
 import { ExploreLanes, EXPLORE_LANE_SEARCH } from './ExploreLanes';
 import { MobileRequest, MobileResult, MobileOptions } from './MobileRequest';
@@ -79,6 +79,12 @@ export class MobileUserPage {
     this.hasMore = hasMore;
     this.ms = ms;
   }
+}
+
+/** 探索流大响应在 taskpool 里解析：主线程只接结果，不再一次 parse 1MB。 */
+@Concurrent
+function parseExploreJson(text: string): Record<string, Object> {
+  return JSON.parse(text) as Record<string, Object>;
 }
 
 export class MobileDiscover {
@@ -230,7 +236,7 @@ export class MobileDiscover {
       hilog.warn(DOMAIN, TAG, 'explore failed: %{public}s', result.summary());
       return null;
     }
-    const parsed: Record<string, Object> | null = MobileDiscover.parse(result.body);
+    const parsed: Record<string, Object> | null = await MobileDiscover.parseOffThread(result.body);
     if (parsed === null) {
       hilog.warn(DOMAIN, TAG, 'explore non-json bytes=%{public}d', result.bytes);
       return null;
@@ -560,6 +566,17 @@ export class MobileDiscover {
   }
 
   // ------------------------------------------------------------------ 小工具
+
+  /** 探索流专用：优先 taskpool，失败退回主线程（行为不变）。 */
+  private static async parseOffThread(text: string): Promise<Record<string, Object> | null> {
+    try {
+      const parsed: Record<string, Object> =
+        await taskpool.execute(parseExploreJson, text) as Record<string, Object>;
+      return parsed;
+    } catch (error) {
+      return MobileDiscover.parse(text);
+    }
+  }
 
   private static parse(text: string): Record<string, Object> | null {
     try {
