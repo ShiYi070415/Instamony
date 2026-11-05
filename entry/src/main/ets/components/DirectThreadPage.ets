@@ -13,7 +13,7 @@
  * 取回来之后把视口**锚回加载前那条消息**（`scrollToIndex` + 回退标题栏高度），所以位置不变、不闪。
  */
 
-import { curves, display, promptAction, window, componentUtils } from '@kit.ArkUI';
+import { curves, display, promptAction, window, componentUtils, KeyboardAvoidMode } from '@kit.ArkUI';
 import { MediaDownloader } from '../core/MediaDownloader';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -326,6 +326,15 @@ export struct DirectThreadPage {
   }
 
   aboutToAppear(): void {
+    /*
+     * 官方软键盘避让：默认 OFFSET 会把整页往上顶；会话页要的是 RESIZE ——
+     * 页面高度缩短，列表和输入条一起缩，最新消息自然停在输入条上方。
+     * 见 docs 里引用的“如何设置软键盘避让”和 KeyboardAvoidMode.RESIZE 说明。
+     */
+    try {
+      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
+    } catch (error) {
+    }
     try {
       const dsp: display.Display = display.getDefaultDisplaySync();
       this.screenWidthVp = this.getUIContext().px2vp(dsp.width);
@@ -361,22 +370,14 @@ export struct DirectThreadPage {
           } else {
             this.previewKeyboardVp = nextPreviewKeyboard;
           }
-          if (height <= 0) {
-            // 键盘收起：抬升清零，输入条回到底部常规位置。
-            this.keyboardVp = 0;
-            return;
-          }
           /*
-           * **从"不抬"开始**，让下面那次实测决定要抬多少。
-           *
-           * 为什么不直接按键盘高度抬：窗口层自己也可能已经避让（实测两种行为都见过），
-           * 直接抬就会叠成"输入条飘到屏幕中间"。从 0 起、只补实测差额，两种情况下都对。
+           * RESIZE 模式下页面自己已经缩短：这里不能再按键盘高度加 padding，
+           * 否则就是“系统缩一次 + 我们抬一次”的双重避让。
+           * 只保留 previewKeyboardVp 给图片预览用。
            */
           this.keyboardVp = 0;
           this.alignLiftPx = 0;
-          // 键盘顶起来以后可视区变了：贴底的那一屏要重新贴一次。
           this.scrollToNewest(false);
-          this.alignInputBarToKeyboard(0);
         };
         win.on('keyboardHeightChange', this.keyboardHandler);
       }).catch((): void => {
@@ -436,6 +437,10 @@ export struct DirectThreadPage {
   }
 
   aboutToDisappear(): void {
+    try {
+      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.OFFSET);
+    } catch (error) {
+    }
     if (this.previewOpenTimer >= 0) {
       clearTimeout(this.previewOpenTimer);
       this.previewOpenTimer = -1;
