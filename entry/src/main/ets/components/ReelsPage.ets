@@ -15,6 +15,7 @@
  */
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { ReelsDataSource } from './ReelsDataSource';
 import { curves, display } from '@kit.ArkUI';
 // 触摸探针（排查为什么手势收不到事件，见 core/TouchProbe）。
 import { TouchProbe } from '../core/TouchProbe';
@@ -2334,6 +2335,13 @@ export struct ReelsPage {
    */
   @Prop overlaySink: number = 0;
   @State private reels: Array<Reel> = [];
+  private readonly reelsSource: ReelsDataSource = new ReelsDataSource();
+  /** 同步 UI 数组与 LazyForEach 数据源。 */
+  private applyReels(items: Array<Reel>): void {
+    this.reels = items;
+    this.reelsSource.setAll(items);
+  }
+
   @State private activeIndex: number = 0;
   /**
    * **底栏点了「视频」那一项**（毫秒时间戳，由 pages/Index 写）。
@@ -2792,7 +2800,7 @@ export struct ReelsPage {
       if (coverArrived) {
         this.feedGen++;
       }
-      this.reels = reels;
+      this.applyReels(reels);
       if (coverArrived) {
         const keep: number = this.activeIndex;
         setTimeout((): void => {
@@ -2832,7 +2840,7 @@ export struct ReelsPage {
     // 只有空列表（首次进入 / 上次失败）才去拉。
     const cached: Array<Reel> = this.vm.list();
     if (cached.length > 0) {
-      this.reels = cached;
+      this.applyReels(cached);
       // 回填这条路径也要记一次（可能来自落盘缓存，见 core/ReelsCache）：见 core/ReelSeenTime。
       ReelSeenTime.note(cached.map((reel: Reel): string => reel.shortcode));
       // 连"看到第几条"一起恢复：切 tab 会重建这个组件，@State 会归零，
@@ -3034,7 +3042,7 @@ export struct ReelsPage {
   /** 从视图模型回读（不依赖回调时序，见 ProfilePage 里同一个坑）。 */
   private syncFromVm(): void {    const list: Array<Reel> = this.vm.list();
     if (list.length > 0) {
-      this.reels = list;
+      this.applyReels(list);
       // 回填的列表可能比记忆里的位置短：夹紧，别让 Swiper 停在越界索引上（闪退防线）。
       if (this.activeIndex >= this.reels.length) {
         this.activeIndex = this.reels.length > 0 ? this.reels.length - 1 : 0;
@@ -3419,9 +3427,10 @@ export struct ReelsPage {
          * 这里不再画全局背景，避免两层叠在一起、也让"背景跟着视频动"成立。
          */
         Swiper(this.swiperController) {
-          ForEach(this.reels, (reel: Reel, index: number): void => {
-            this.reelPage(reel, index)
-          }, (reel: Reel, index: number): string => ReelsPage.slideKey(this.feedGen, reel.shortcode))
+          LazyForEach(this.reelsSource, (item: Object, index: number): void => {
+            this.reelPage(item as Reel, index)
+          }, (item: Object, index: number): string =>
+            ReelsPage.slideKey(this.feedGen, (item as Reel).shortcode))
         }
         .width('100%')
         .height('100%')
