@@ -387,7 +387,8 @@ export struct DirectThreadPage {
           }
           this.keyboardScrollTimer = setTimeout((): void => {
             this.keyboardScrollTimer = 0;
-            if (this.keyboardVp > 0) {
+            // RESIZE 下 keyboardVp 恒为 0；用真实键盘高度判断，否则延迟贴底永远不跑。
+            if (this.keyboardPx > 0) {
               this.scrollToNewest(false);
             }
           }, 160);
