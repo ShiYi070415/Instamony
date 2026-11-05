@@ -15,6 +15,7 @@
 
 import { WindowLayoutService } from '../core/WindowLayoutService';
 import { SidebarHost } from '../shell/SidebarHost';
+import { PageDestination } from '../shell/PageDestination';
 import { SettingsDestination } from './settings/SettingsDestination';
 import { SettingsRootDestination } from './settings/SettingsRootDestination';
 import { SponsorDestination } from './settings/SponsorDestination';
@@ -12112,61 +12113,33 @@ struct Index {
         titleStyle: this.destinationTitleStyle()
       })
         } else if (name === ADD_ACCOUNT_PAGE) {
-      /*
-       * **新增账号**（需求："新增账号时登录页作为新一页展开，应该是 navigation，左上角添加返回按钮"）。
-       *
-       * 和"整页登录页"那条路的区别：这里**不动当前账号**（不 signOut、不换 signedIn），
-       * 只是在壳上面压一页登录页；左上角返回键是 HdsNavDestination 自带的，退了就原样回来。
-       * 登录成功后由 `addAccountLogin` 收尾（新会话进罐 → applySession 按新账号复位 → 这页自动被清掉）。
-       * 已登录过的账号**不在这一页显示**（需求），所以这里和整页登录页用的是同一个组件、同一套参数。
-       */
-      HdsNavDestination() {
+      PageDestination({
+        title: $r('app.string.account_add'),
+        titleStyle: this.destinationTitleStyle(),
+        menu: this.loginSettingsMenu(),
+        hideBackButton: false,
+        onHidden: (): void => {
+          this.finishAddAccount('page-left').catch((): void => {
+          });
+        },
+        onBackPressed: (): boolean => this.handlePageBack()
+      }) {
         LoginPage({
           onRegister: (): void => {
             this.openSignupWeb();
           },
           onSignedIn: (): void => {
-            // 兜底：真走到这里说明会话已经进罐了，按罐重读一次即可（applySession 会复位并清栈）。
             this.refreshSessionFromJar();
           },
-          // 登录本身和整页登录页走同一条 CAA 链路，只是前面多了"先清干净罐"这一步。
           onCaaLogin: (username: string, password: string): Promise<string> => {
             return this.addAccountCaaLogin(username, password);
           },
           onCaaVerify: (code: string): Promise<string> => {
             return this.caaVerify(code);
-          },
-          // 同整页登录页：「在另一台设备上同意」走不通，这里不做任何事（见 LoginPage 里那段对照表）。
-        // 「在另一台设备上同意」实测在第三方客户端走不通（见 LoginPage 里那段对照表），这里不做任何事。
+          }
         })
       }
-      .titleBar({
-        content: {
-          title: { mainTitle: $r('app.string.account_add') },
-          // 和整页登录页同一颗「设置」（需求："登录页 hds menu 新增设置页面入口"）：
-          // 这一页也是"还没登录"的状态，清设备认证 / 2FA 测试同样在这里做。
-          menu: this.loginSettingsMenu()
-        },
-        style: this.destinationTitleStyle(),
-        avoidLayoutSafeArea: false,
-        enableComponentSafeArea: false
-      })
-      // 需求：左上角要返回按钮。
-      .hideBackButton(false)
-      .titleMode(HdsNavDestinationTitleMode.MINI)
-      .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
-      .clip(false)
-      /*
-       * **离开这一页就收尾**（审计 P1/P0 的收尾口）：用户在 2FA 面板 / 网页验证半途按返回，
-       * 或者在网页里验完直接关网页，都要把"新增账号"这个事务结掉并回滚原会话 ——
-       * 否则旗子永远立着（之后所有"未登录"信号都被忽略），或者原账号被清掉回不来。
-       */
-      .onHidden((): void => {
-        this.finishAddAccount('page-left').catch((): void => {
-        });
-      })
-      .onBackPressed((): boolean => this.handlePageBack())
-    } else if (name === USER_PROFILE_PAGE) {
+        } else if (name === USER_PROFILE_PAGE) {
       /*
        * **用户主页**（从信息流的资料行点进来）。
        *
@@ -12259,46 +12232,22 @@ struct Index {
       // 返回键：**评论浮层开着就先收评论**（需求："返回优先收起面板"），不再 pop 页面。
       .onBackPressed((): boolean => this.handlePageBack())
     } else if (name === POST_PAGE) {
-      /*
-       * **帖子页**（点网格里的某个格子进来，需求）。
-       *
-       * 结构参考信息流主页：内容就是**同一个 FeedList**（同一套卡片、内联视频播放、点赞/评论/
-       * 转发都在），只是数据换成"当前分页的全部帖子"，并且一进来就**定位到点进去的那一条**
-       * （FeedList 的 initialKey，见它的 restoreAnchor）。
-       *
-       * 标题栏：
-       *   - 返回键用 **HDS 原生的那颗**（左上角，点击 pop 路由栈）——需求："返回按钮用
-       *     hdsnavigation 原生的显示在左边"；
-       *   - 右上角：**作者还没关注时**出现一颗「关注」（需求："只有未关注的用户才在
-       *     hdsnavigation 右上角显示关注按钮"）；已关注就不显示任何东西。
-       */
-      HdsNavDestination() {
+      PageDestination({
+        title: $r('app.string.post_page_title'),
+        titleStyle: this.destinationTitleStyle(),
+        menu: this.postPageMenu(),
+        hideBackButton: false,
+        onShown: (): void => {
+          this.onPageShown(POST_PAGE);
+        },
+        onHidden: (): void => {
+          this.onPageHidden(POST_PAGE);
+        },
+        onBackPressed: (): boolean => this.handlePageBack()
+      }) {
         this.postPageBody()
       }
-      .titleBar({
-        content: {
-          title: { mainTitle: $r('app.string.post_page_title') },
-          menu: this.postPageMenu()
-        },
-        style: this.destinationTitleStyle(),
-        avoidLayoutSafeArea: false,
-        enableComponentSafeArea: false
-      })
-      .hideBackButton(false)
-      .titleMode(HdsNavDestinationTitleMode.MINI)
-      .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
-      .clip(false)
-      // 帖子页自己也要知道"我是不是在最前面"：它被用户主页压住时同样要停播
-      // （见 onPageShown / postPageBody 的 FeedList.active）。
-      .onShown((): void => {
-        this.onPageShown(POST_PAGE);
-      })
-      .onHidden((): void => {
-        this.onPageHidden(POST_PAGE);
-      })
-      // 返回键：**评论浮层开着就先收评论**（需求："返回优先收起面板"），不再 pop 页面。
-      .onBackPressed((): boolean => this.handlePageBack())
-    } else if (name === PROFILE_REELS_PAGE) {
+        } else if (name === PROFILE_REELS_PAGE) {
       /*
        * **视频分页的 Reels 页**（点「我的」/别人主页视频那一段的格子进来，需求）。
        *
