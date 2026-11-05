@@ -15,6 +15,7 @@
 
 import { WindowLayoutService } from '../core/WindowLayoutService';
 import { SidebarHost } from '../shell/SidebarHost';
+import { SettingsDestination } from './settings/SettingsDestination';
 import { AppRoutes } from '../router/AppRoutes';
 import { AppRouter } from '../router/AppRouter';
 import { PageRegistry } from '../router/PageRegistry';
@@ -12133,45 +12134,30 @@ struct Index {
         return this.handlePageBack();
       })
     } else if (name === SETTINGS_DETAIL_PAGE) {
-      // 设置二级页：新开一页 NavDestination，标题栏/返回键由 HDS 提供。
-      HdsNavDestination() {
-        SettingsPanel({
-          detailSection: `${param}`,
-          standaloneDetail: true,
-          signedIn: this.signedIn,
-          onSignOut: (): void => {
-            this.signOut();
-          },
-          onQualityChanged: (): void => {
-            this.viewModel.resetForQualityChange();
-            this.viewModel.refresh().catch((): void => {
-            });
-          },
-          onOpenSponsor: (): void => {
-            this.pushPage(SPONSOR_PAGE, '', true);
-          },
-          onOpenSection: (section: string): void => {
-            this.openSettingsSection(section, false);
-          },
-          onOpenSubsection: (section: string): void => {
-            this.openSettingsSection(section, true);
-          }
-        })
-      }
-      .titleBar({
-        content: {
-          title: { mainTitle: this.settingsDetailTitle(`${param}`) }
+      SettingsDestination({
+        detailSection: `${param}`,
+        title: this.settingsDetailTitle(`${param}`),
+        signedIn: this.signedIn,
+        titleStyle: this.destinationTitleStyle(),
+        onSignOut: (): void => {
+          this.signOut();
         },
-        style: this.destinationTitleStyle(),
-        avoidLayoutSafeArea: false,
-        enableComponentSafeArea: false
+        onQualityChanged: (): void => {
+          this.viewModel.resetForQualityChange();
+          this.viewModel.refresh().catch((): void => {
+          });
+        },
+        onOpenSection: (section: string): void => {
+          this.openSettingsSection(section, false);
+        },
+        onOpenSubsection: (section: string): void => {
+          this.openSettingsSection(section, true);
+        },
+        onOpenSponsor: (): void => {
+          this.pushPage(SPONSOR_PAGE, '', true);
+        },
+        onBackPressed: (): boolean => this.handlePageBack()
       })
-      .hideBackButton(false)
-      .titleMode(HdsNavDestinationTitleMode.MINI)
-      .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
-      .clip(false)
-      // 二级/三级设置都走统一返回：三级回二级，二级收右栏回单栏。
-      .onBackPressed((): boolean => this.handlePageBack())
     } else if (name === SPONSOR_PAGE) {
       // 赞助开发者：独立一页，标题栏/返回键由 HDS 提供。
       HdsNavDestination() {
