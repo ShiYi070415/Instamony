@@ -260,6 +260,8 @@ export struct DirectThreadPage {
   /** 键盘动画结束后再贴一次底：第二次弹键盘时布局还没量完，立即 scrollEdge 会停在旧底。 */
   private keyboardScrollTimer: number = 0;
   private keyboardWindow: window.Window | null = null;
+  /** 键盘避让区变化回调：keyboardHeightChange 第二次偶尔不派发，用它兜底。 */
+  private avoidHandler: ((data: window.AvoidAreaOptions) => void) | null = null;
   /**
    * 图片预览：当前展开的消息 id / 地址 / 原图比例 / 发送人。
    *
@@ -392,6 +394,12 @@ export struct DirectThreadPage {
           }, 160);
         };
         win.on('keyboardHeightChange', this.keyboardHandler);
+        this.avoidHandler = (data: window.AvoidAreaOptions): void => {
+          if (data.type === window.AvoidAreaType.TYPE_KEYBOARD && this.keyboardHandler !== null) {
+            this.keyboardHandler(data.area.bottomRect.height);
+          }
+        };
+        win.on('avoidAreaChange', this.avoidHandler);
       }).catch((): void => {
       });
     } catch (error) {
@@ -473,6 +481,13 @@ export struct DirectThreadPage {
         this.keyboardWindow.off('keyboardHeightChange', this.keyboardHandler);
       } catch (error) {
       }
+      try {
+        if (this.avoidHandler !== null) {
+          this.keyboardWindow.off('avoidAreaChange', this.avoidHandler);
+        }
+      } catch (error) {
+      }
+      this.avoidHandler = null;
       this.keyboardHandler = null;
       this.keyboardWindow = null;
     }
