@@ -1561,10 +1561,13 @@ struct Index {
         && (this.topPage === PROFILE_REELS_PAGE || this.topPage === SEARCH_REELS_PAGE));
   }
 
-  /** Reels 内容左侧要额外避让的侧边栏宽度（仅左侧主 Reels 需要）。 */
+  /**
+   * Reels 内容左侧额外避让：**已不再需要**。
+   * 侧边栏现在是 Row 的第一列，Reels 内容天然从它右侧开始；
+   * 再减一次侧栏宽度就是左侧空出一小节的原因。
+   */
   private reelsSidebarInset(): number {
-    return this.reelsFullBleed() && !this.reelsInRightPane()
-      ? this.tabletSidebarWidth() : 0;
+    return 0;
   }
 
   /** 只有左侧主 Reels 才让整个壳铺黑；右栏 Reels 只黑右栏自己。 */
@@ -11704,12 +11707,6 @@ struct Index {
             heightVp: this.tabletSidebarHeightVp(),
             transparent: this.reelsBackdropActive() && !this.settingsOverReels()
           }) {
-            if (this.settingsOverReels()) {
-              Column()
-                .width('100%')
-                .height('100%')
-                .backgroundColor($r('app.color.page_background'))
-            }
             this.tabletSidebar()
           }
         }
