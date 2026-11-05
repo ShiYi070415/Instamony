@@ -2434,7 +2434,7 @@ struct Index {
      * 只有私信会话页自己按键盘高度让内容区避让（见 DirectThreadPage）。
      */
     try {
-      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.OFFSET);
+      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.NONE);
     } catch (error) {
     }
     // ---- 材质能力诊断（放在最前面：后面任何一步抛异常都不会把它挡掉）----

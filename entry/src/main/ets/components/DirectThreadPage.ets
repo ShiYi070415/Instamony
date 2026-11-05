@@ -329,11 +329,12 @@ export struct DirectThreadPage {
 
   aboutToAppear(): void {
     /*
-     * 依赖系统页面位移：OFFSET 会把整页按键盘高度上移，输入框自然停在键盘上方。
-     * 页面内部不再叠加 keyboardVp，避免第二次打开时双重避让。
+     * 侧边栏要求“不参与页面避让”：全局和本页都用 NONE，键盘不动整页。
+     * 会话页只给自己的根 Stack 加一份键盘高度 padding，列表和输入条在同一个
+     * 缩短后的容器里，第二次打开也走同一套布局。
      */
     try {
-      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.OFFSET);
+      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.NONE);
     } catch (error) {
     }
     try {
@@ -360,8 +361,6 @@ export struct DirectThreadPage {
         this.keyboardHandler = (height: number): void => {
           this.keyboardPx = height > 0 ? height : 0;
           const nextPreviewKeyboard: number = height > 0 ? this.getUIContext().px2vp(height) : 0;
-          // 侧边栏在系统 OFFSET 下也会被整页带走：把键盘高度共享给 Index，让它反向补偿。
-          AppStorage.setOrCreate('keyboardOffsetVp', nextPreviewKeyboard);
           if (this.previewCover) {
             // 先上抬 / 再压缩卡片高度；两者都用 180ms 过渡，不瞬间跳。
             this.getUIContext().animateTo({ duration: 180, curve: Curve.EaseOut }, (): void => {
@@ -378,8 +377,7 @@ export struct DirectThreadPage {
            * 否则就是“系统缩一次 + 我们抬一次”的双重避让。
            * 只保留 previewKeyboardVp 给图片预览用。
            */
-          // 系统 OFFSET 已经抬了整页；这里只补输入条被键盘压住的一小段（不跟整页抢）。
-          this.keyboardVp = height > 0 ? 64 : 0;
+          this.keyboardVp = nextPreviewKeyboard;
           this.alignLiftPx = 0;
           this.scrollToNewest(false);
           // 键盘动画/页面位移结束后再补一次：第二次弹出时立即贴底会按旧视口算。
@@ -2167,12 +2165,6 @@ export struct DirectThreadPage {
       }
       .width('100%')
       .height('100%')
-      /*
-       * **输入法避让（列表这一侧）**：键盘弹起时把整个内容区抬起来 `keyboardVp`，
-       * 这样列表的可视底边就是键盘顶边，最后几条消息不会被键盘压住。
-       * 输入条自己要再抬一次（它在下面那个 Stack 层里，见 inputOverlay）。
-       */
-      .padding({ bottom: this.keyboardVp })
 
       // 悬浮输入条（在 Stack 的 Bottom 对齐层里，自己再抬一次输入法高度）。
       this.inputOverlay()
@@ -2198,6 +2190,8 @@ export struct DirectThreadPage {
     }
     .width('100%')
     .height('100%')
+    // 只让会话页容器缩短键盘高度：侧边栏在 Index，不在这个容器里，保持不动。
+    .padding({ bottom: this.keyboardVp })
     .backgroundColor($r('app.color.page_background'))
     /*
      * 图片预览走系统 `bindContentCover`，而不是页内 Stack：
@@ -2495,7 +2489,7 @@ export struct DirectThreadPage {
     }
     .width('100%')
     // 常规留白 + **输入法抬升**：键盘弹起时输入条抬到键盘上方（抬多少由自校正量出来）。
-    .padding({ bottom: COMMENT_INPUT_BOTTOM_VP + this.keyboardVp })
+    .padding({ bottom: COMMENT_INPUT_BOTTOM_VP })
   }
 }
 
