@@ -1,4 +1,4 @@
-# Instamony 多设备自适应重构方案
+﻿# Instamony 多设备自适应重构方案
 
 > 目标：把当前“手机一套 / 平板一套”的条件分支，收敛为**一套 Shell + 一套路由 + 一套断点模型**。
 > 先保证导航、侧边栏、安全区、Reels 播放四条链路稳定，再谈视觉细节。
@@ -33,7 +33,7 @@ Row
 | Reels 崩溃 | 部分完成 | `VideoSurface` 有 player/epoch 保护；播放器预算/串行创建已抽成 `ReelsPlayerPool`；Swiper 已改 `LazyForEach` + `ReelsDataSource`；`ReelsSeen` 异步落盘；仍无 `@Reusable` |
 | 键盘避让 | 页面级 RESIZE | 按官方文档使用 `KeyboardAvoidMode.RESIZE`；会话输入条键盘弹起时贴页底（0vp），收起时只留 `bottomSafeVp` |
 | Index 拆分 | 部分完成 | `SidebarHost`、`ContentArea`、`AppRoutes`、`AppRouter`、`PageRegistry`、`PageDestination` 已落地；所有 destination 分支已改为组件调用（含会话页副标题/头像）；`destinationBuilder` 仍有名字 switch |
-| 布局/断点服务 | 部分完成 | `WindowLayoutService` 已抽出，`tabletWideShell`/`tabletSplitEnabled` 改为读断点；`contentAreaWidth` 不再重复减侧栏；Reels 标题/正文左边线统一；页面内容框架、安全区、侧栏宽度尚未统一 |
+| 布局/断点服务 | 部分完成 | `WindowLayoutService` 已抽出；`contentAreaWidth` 不再重复减侧栏；Reels 标题/正文左边线统一；页面内容顶部改为 `topSafeVp + 66`（不再硬编码 94）；其余安全区/侧栏宽度尚未统一 |
 | 请求调度/幂等 | 部分完成 | 只读请求合并已抽成 `RequestScheduler`，`MobileRequest` 接入；点赞/转发有合并意图，收藏飞去重；关注写请求按用户 `followBusy` 去重；StoryCache 预取窗口按网络自适应（Wi-Fi 8 页/3 条，蜂窝 3 页/1 条）；`PosterCache` 有高度上限与 6MB 总字节预算；仍无统一写请求取消/通用按钮 busy |
 | 主线程下沉 | 已验收 | Explore 1MB 级 JSON、Feed timeline、Profile JSON 解析均已进 taskpool（失败回退主线程）；`Inflate` 只用于实时通道小包，不构成主线程压力 |
 
