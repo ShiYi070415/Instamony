@@ -1,7 +1,7 @@
 ﻿# Instamony 2.0.0 —— 越南语/意大利语、平板 UI 与一轮稳定性修复
 
 > 版本：`versionName 2.0.0`（`versionCode 2000000`）
-> 包名：`com.yijin.instamony`　最低 API：6.0.0(20)　目标 API：26
+> 包名：侧载 HAP `com.yijin.instamony`；AGC 邀测 App Pack `com.oneleaf.instamony`　最低 API：6.0.0(20)　目标 API：26
 > 签名：DevEco Studio + debug 证书（可侧载；`.app` / `.hap` 均为已签名产物）
 
 2.0.0 是 1.6.0 之后的一次集中更新：**新增越南语和意大利语**、**平板专属 UI**、
@@ -70,10 +70,11 @@
 
 ## 7. 侧载/邀测共存
 
-- 2.0.0 使用独立包名 **`com.yijin.instamony`**，可与旧版
-  `com.oneleaf.instamony` 同时安装、互不覆盖。
-- 两个包各自持有自己的会话与缓存；侧载邀测时不会把正式版顶掉。
-- 首次安装 2.0.0 需要重新登录；旧包数据不会自动迁移。
+- 侧载 HAP 使用 **`com.yijin.instamony`**，AGC 邀测 App Pack 使用
+  **`com.oneleaf.instamony`**；两个包可同时安装、互不覆盖。
+- AGC 包与旧版 1.6 的 `com.oneleaf.instamony` 同包名，会作为升级覆盖正式版；
+  侧载 HAP 用独立包名，可与 AGC 包并存。
+- 两个包各自持有自己的会话与缓存；首次安装 2.0.0 需要重新登录，旧包数据不会自动迁移。
 
 ## 8. Reels 稳定性
 
@@ -108,7 +109,7 @@
 ## 11. 升级提示
 
 - 版本：`1.6.0` → `2.0.0`（`1006000` → `2000000`）。
-- 包名从 `com.oneleaf.instamony` 改为 `com.yijin.instamony`，**可与旧版共存**，
-  不是覆盖安装。
-- 2.0.0 首次启动需要重新登录；旧版数据不会迁移。
+- 侧载 HAP 2.0.0 使用 `com.yijin.instamony`；AGC 邀测包沿用
+  `com.oneleaf.instamony`，会覆盖 1.6 正式版。
+- 侧载 HAP 与 AGC 包可同时安装；2.0.0 首次启动需要重新登录，旧版数据不会迁移。
 - 建议首次进入后在设置里确认语言、网络与 DoH 状态。
