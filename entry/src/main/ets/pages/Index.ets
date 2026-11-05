@@ -4088,6 +4088,8 @@ struct Index {
   private resetAccountPageState(): void {
     // 换号时丢掉旧的只读请求合并表；旧 Promise 即使回来也会被账号代次丢弃。
     RequestScheduler.clear();
+    this.followingKeys.clear();
+    this.followBusy.clear();
     this.notificationsSeq++;
     this.notificationsBusy = false;
     this.notificationsRefreshing = false;
