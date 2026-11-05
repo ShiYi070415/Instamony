@@ -331,12 +331,11 @@ export struct DirectThreadPage {
 
   aboutToAppear(): void {
     /*
-     * 侧边栏要求“不参与页面避让”：全局和本页都用 NONE，键盘不动整页。
-     * 会话页只给自己的根 Stack 加一份键盘高度 padding，列表和输入条在同一个
-     * 缩短后的容器里，第二次打开也走同一套布局。
+     * 官方页面级避让：RESIZE。键盘出现时页面高度缩短，百分比/权重布局自己收缩，
+     * 不再由业务代码手动加 keyboardVp（手动和系统叠加正是第二次失效的来源）。
      */
     try {
-      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.NONE);
+      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
     } catch (error) {
     }
     try {
@@ -379,7 +378,7 @@ export struct DirectThreadPage {
            * 否则就是“系统缩一次 + 我们抬一次”的双重避让。
            * 只保留 previewKeyboardVp 给图片预览用。
            */
-          this.keyboardVp = nextPreviewKeyboard;
+          this.keyboardVp = 0;
           this.alignLiftPx = 0;
           this.scrollToNewest(false);
           // 键盘动画/页面位移结束后再补一次：第二次弹出时立即贴底会按旧视口算。
@@ -461,7 +460,6 @@ export struct DirectThreadPage {
       clearTimeout(this.keyboardScrollTimer);
       this.keyboardScrollTimer = 0;
     }
-    AppStorage.setOrCreate('keyboardOffsetVp', 0);
     try {
       this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.OFFSET);
     } catch (error) {
@@ -2105,7 +2103,7 @@ export struct DirectThreadPage {
          * 滚动时会跟着走 —— 这正是"停在最上面时第一条不被压住、滑动时消息从栏下穿过"的实现。
          */
         .contentStartOffset(this.topOffsetVp())
-        .contentEndOffset(BOTTOM_OFFSET + this.keyboardVp)
+        .contentEndOffset(BOTTOM_OFFSET)
         /*
          * **不要 `stackFromEnd`**（真机踩坑）：
          * 它虽然能把内容底部对齐，但和 `ForEach` 的正序索引、`scrollEdge` 混在一起时，
@@ -2180,7 +2178,6 @@ export struct DirectThreadPage {
       }
       .width('100%')
       .height('100%')
-      .padding({ bottom: this.keyboardVp })
 
       // 悬浮输入条（在 Stack 的 Bottom 对齐层里，自己再抬一次输入法高度）。
       this.inputOverlay()
@@ -2503,7 +2500,7 @@ export struct DirectThreadPage {
     }
     .width('100%')
     // 常规留白 + **输入法抬升**：键盘弹起时输入条抬到键盘上方（抬多少由自校正量出来）。
-    .padding({ bottom: COMMENT_INPUT_BOTTOM_VP + this.keyboardVp })
+    .padding({ bottom: COMMENT_INPUT_BOTTOM_VP })
   }
 }
 
