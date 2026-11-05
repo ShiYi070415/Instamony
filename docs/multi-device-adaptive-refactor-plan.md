@@ -19,7 +19,7 @@ Row
 └─ ContentArea（侧栏右侧整块区域）
 ```
 
-`contentAreaWidth()` 不再重复减侧栏宽度；左右栏和分割线按同一份内容区宽度计算。提交：`8f6f1b0`、`beb1f3e`。
+`contentAreaWidth()` 不再重复减侧栏宽度；`reelsSidebarInset()` 归零（Reels 从侧栏右侧开始，不再二次内缩）；设置页打开时不再插入临时遮罩层，避免侧边栏闪一下。提交：`8f6f1b0`、`beb1f3e`、`ca516b7`。
 
 这份文档是**目标方案**，不是已经完成的清单。当前实际状态：
 
