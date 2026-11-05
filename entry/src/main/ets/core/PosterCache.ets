@@ -39,6 +39,10 @@ const MAX_BYTES: number = 2 * 1024 * 1024;
 const TIMEOUT_MS: number = 6000;
 /** 缓存里最多留几张（超了就释放最旧的，别一直占着内存）。 */
 const MAX_KEPT: number = PRELOAD_COUNT;
+/** 单张预览高度上限：超长图不按比例无限拉高，避免一张就占几 MB。 */
+const MAX_POSTER_HEIGHT: number = 640;
+/** 全部预览图的内存预算：按 4 字节/像素估算。 */
+const MAX_TOTAL_BYTES: number = 6 * 1024 * 1024;
 
 export class PosterCache {
   /** 已解码的小图：key = **展示地址**（列表就是拿它来查的）。 */
@@ -47,6 +51,9 @@ export class PosterCache {
   private static warming: Set<string> = new Set<string>();
   /** 就绪顺序（超出 MAX_KEPT 时按它释放最旧的）。 */
   private static order: Array<string> = [];
+  /** 每张预览图的估算字节数（释放时扣回去）。 */
+  private static bytes: Map<string, number> = new Map();
+  private static totalBytes: number = 0;
   /** 一共解出来几张：发布给界面当"重绘计数"用（见 AppStorage 的 FEED_POSTER_READY）。 */
   private static readyCount: number = 0;
 
@@ -85,6 +92,8 @@ export class PosterCache {
     PosterCache.posters.clear();
     PosterCache.warming.clear();
     PosterCache.order = [];
+    PosterCache.bytes.clear();
+    PosterCache.totalBytes = 0;
     PosterCache.readyCount = 0;
   }
 
@@ -155,11 +164,13 @@ export class PosterCache {
     source.getImageInfo().then((info: image.ImageInfo): void => {
       const srcW: number = info.size.width > 0 ? info.size.width : POSTER_WIDTH;
       const srcH: number = info.size.height > 0 ? info.size.height : POSTER_WIDTH;
-      const height: number = Math.max(1, Math.round(POSTER_WIDTH * srcH / srcW));
+      const height: number = Math.max(1,
+        Math.min(MAX_POSTER_HEIGHT, Math.round(POSTER_WIDTH * srcH / srcW)));
       const options: image.DecodingOptions = {
         desiredSize: { width: POSTER_WIDTH, height: height }
       };
-      PosterCache.decodeTo(source, key, options, request);
+      PosterCache.decodeTo(source, key, options, request,
+        POSTER_WIDTH * height * 4);
     }).catch((error: Error): void => {
       hilog.info(DOMAIN, TAG, 'image info failed: %{public}s', error.message);
       PosterCache.warming.delete(key);
@@ -170,14 +181,15 @@ export class PosterCache {
 
   /** 真正解码一步（尺寸已经算好）。 */
   private static decodeTo(source: image.ImageSource | null, key: string,
-                          options: image.DecodingOptions, request: http.HttpRequest): void {
+                          options: image.DecodingOptions, request: http.HttpRequest,
+                          bytes: number): void {
     if (source === null) {
       PosterCache.warming.delete(key);
       PosterCache.closeQuietly(request);
       return;
     }
     source.createPixelMap(options).then((pixel: image.PixelMap): void => {
-      PosterCache.store(key, pixel);
+      PosterCache.store(key, pixel, bytes);
       PosterCache.closeQuietly(request);
       PosterCache.releaseSource(source);
     }).catch((error: Error): void => {
@@ -189,11 +201,13 @@ export class PosterCache {
   }
 
   /** 存下小图并发布新的重绘计数（超出上限就释放最旧的那张）。 */
-  private static store(key: string, pixel: image.PixelMap): void {
+  private static store(key: string, pixel: image.PixelMap, bytes: number): void {
     PosterCache.warming.delete(key);
     PosterCache.posters.set(key, pixel);
     PosterCache.order.push(key);
-    while (PosterCache.order.length > MAX_KEPT) {
+    PosterCache.bytes.set(key, bytes);
+    PosterCache.totalBytes += bytes;
+    while (PosterCache.order.length > MAX_KEPT || PosterCache.totalBytes > MAX_TOTAL_BYTES) {
       const oldest: string | undefined = PosterCache.order.shift();
       if (oldest === undefined) {
         break;
@@ -205,6 +219,11 @@ export class PosterCache {
         } catch (error) {
         }
         PosterCache.posters.delete(oldest);
+      }
+      const kept: number | undefined = PosterCache.bytes.get(oldest);
+      if (kept !== undefined) {
+        PosterCache.totalBytes -= kept;
+        PosterCache.bytes.delete(oldest);
       }
     }
     PosterCache.readyCount++;
