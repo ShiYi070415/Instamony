@@ -9,7 +9,7 @@
 
 | 模块 | 状态 | 说明 |
 |---|---|---|
-| 账号切换页面清理 | 部分完成 | `resetAccountPageState()` 已清右栏/tab/用户页 VM/帖子页/评论预取；`AccountScope.generation` + `MobileRequest` 已能丢弃换号后晚到的响应；`AccountUiReset` 尚未抽出，缓存 key 账号分区未全量审计 |
+| 账号切换页面清理 | 部分完成 | `resetAccountPageState()` 已清右栏/tab/用户页 VM/帖子页/评论预取；`AccountScope.generation` + `MobileRequest` 已能丢弃换号后晚到的响应；`ProfileViewModel` 延迟预取已可取消并校验代次；`AccountUiReset` 尚未抽出，缓存 key 账号分区未全量审计 |
 | 设置/通知路由 | 已验收 | 左栏二级不堆叠、右栏三级可堆叠、二级返回回单栏；仍是 `navStack + tabletProfileStack` 两套栈，不是单栈 Split |
 | 侧边栏安全区/误触 | 已修复 | 设置页安全区保持底色；chip 伪事件已加时间门控；侧边栏仍是 Index 内浮层，未组件化 |
 | HDS 标题栏 | 已回退 | 按实测改回系统原始 HDS API，不再手写 `maskExtraHeight=48`/`blurRadius=80`；文档 2.4 的旧参数作废 |
