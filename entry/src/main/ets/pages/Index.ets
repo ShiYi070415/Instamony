@@ -1519,6 +1519,8 @@ struct Index {
   @State notificationsRefreshing: boolean = false;
   /** 通知取数是否正在跑（挡住重入：并发导航隐藏网页会互相打断）。 */
   private notificationsBusy: boolean = false;
+  /** 通知请求代次：换账号/页面重置后，晚到的回包直接丢弃。 */
+  private notificationsSeq: number = 0;
   /** 评论面板：是否可见、是否还在等网页渲染、读回来的评论、以及读不到的原因。 */
   @State commentsVisible: boolean = false;
   /**
@@ -4072,6 +4074,9 @@ struct Index {
    * 或在切 tab 时恢复上一个人的页面。
    */
   private resetAccountPageState(): void {
+    this.notificationsSeq++;
+    this.notificationsBusy = false;
+    this.notificationsRefreshing = false;
     this.navStack.clear();
     this.tabletProfileStack.clear();
     this.directStageStack.clear();
@@ -5046,6 +5051,7 @@ struct Index {
       return;
     }
     this.notificationsBusy = true;
+    const seq: number = ++this.notificationsSeq;
     this.notificationsState = '';
     this.notificationsDiag = '';
     this.notificationsLoading = true;
@@ -5058,6 +5064,10 @@ struct Index {
        * 原来那条"空结果就导航隐藏网页去抓 ayml 模板再试"的兜底已随模板机制删除。
        */
       const fresh: NotifyItem[] = await this.readNotificationsFast();
+      if (seq !== this.notificationsSeq) {
+        // 换账号/页面已重置：这份是上一个账号的通知，丢弃。
+        return;
+      }
       if (fresh.length > 0) {
         // 整份替换：fresh 已经是"通知 + 关注状态 + 为你推荐"的完整集合。
         this.notifications = fresh;
