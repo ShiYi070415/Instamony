@@ -25,7 +25,7 @@ Row
 
 | 模块 | 状态 | 说明 |
 |---|---|---|
-| 账号切换页面清理 | 部分完成 | `resetAccountPageState()` 已清右栏/tab/用户页 VM/帖子页/评论预取；换号会清 `RequestScheduler`、关注 busy/意图集合、通知代次；`AccountScope.generation` + `MobileRequest` 丢弃旧响应；`AccountUiReset` 尚未抽出，缓存 key 账号分区未全量审计 |
+| 账号切换页面清理 | 部分完成 | `AccountUiReset` 已抽出，固定“导航→标志位→视图模型→缓存”顺序；换号会清 `RequestScheduler`、关注 busy/意图集合、通知代次；`AccountScope.generation` + `MobileRequest` 丢弃旧响应；缓存 key 账号分区未全量审计 |
 | 设置/通知路由 | 已验收 | 左栏二级不堆叠、右栏三级可堆叠、二级返回回单栏；仍是 `navStack + tabletProfileStack` 两套栈，不是单栈 Split |
 | 侧边栏安全区/误触 | 已修复 | 设置页安全区保持底色；chip 伪事件已加时间门控；`SidebarHost` 固定窗口高度；侧栏顶部/底部按钮分别避让 `topSafeVp` / `bottomSafeVp`；侧栏 `zIndex(100)`，设置页滑入不遮挡 |
 | HDS 标题栏 | 已回退 | 按实测改回系统原始 HDS API，不再手写 `maskExtraHeight=48`/`blurRadius=80`；文档 2.4 的旧参数作废 |
@@ -37,7 +37,7 @@ Row
 | 请求调度/幂等 | 部分完成 | 只读请求合并已抽成 `RequestScheduler`，`MobileRequest` 接入；点赞/转发有合并意图，收藏飞去重；关注写请求按用户 `followBusy` 去重；Feed 翻页 stuck 判据已改；仍无统一写请求取消/通用按钮 busy |
 | 主线程下沉 | 已验收 | Explore 1MB 级 JSON、Feed timeline、Profile JSON 解析均已进 taskpool（失败回退主线程）；`Inflate` 只用于实时通道小包，不构成主线程压力 |
 
-**结论：文档约完成 50%。** 已稳定的是路由返回语义、账号页面清理、账号代次/通知代次、Reels epoch、侧栏安全区/层级、滚动安全、只读 `RequestScheduler`、关注写请求 busy、Feed/Profile/Explore taskpool 解析；`SidebarHost`、`ContentArea`、`AppRoutes`、`AppRouter`、`PageRegistry`、`PageDestination` 已落地，页面基本迁出。
+**结论：文档约完成 55%。** 已稳定的是路由返回语义、`AccountUiReset`、账号/通知代次、Reels epoch + `ReelsPlayerPool` + `LazyForEach`、侧栏安全区/层级、滚动安全、只读 `RequestScheduler`、关注写请求 busy、Feed/Profile/Explore taskpool 解析；`SidebarHost`、`ContentArea`、`AppRoutes`、`AppRouter`、`PageRegistry`、`PageDestination` 已落地，页面基本迁出。
 
 后续落地顺序调整为：
 
