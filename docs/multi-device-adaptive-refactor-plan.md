@@ -79,6 +79,10 @@ Row
 
 ## 2. 目标架构
 
+> **架构决策（2026-11）**：最终保留 **双栈 `AppRouter`**（左栏 `leftStack` + 右栏 `rightStack`），不实施单栈 Navigation Split。
+> 原因：现有右栏比例/拖拽手柄、私信常驻舞台、Reels 右栏和页面视觉都依赖“左右两个独立 HdsNavigation”；
+> 单栈 Split 会改变 320–420vp navBar 语义并重排这些层。P0 #1 的“返回后旧页复活”已由 `AppRouter` 收口（切主页面清右栏、详情统一 push/pop），不再按单栈验收。
+
 ```text
 AppShell
 ├─ WindowLayoutService
