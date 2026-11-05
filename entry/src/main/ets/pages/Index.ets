@@ -11699,6 +11699,8 @@ struct Index {
         .backgroundColor(Color.Transparent)
         .selectedColor(Color.Transparent)
         .attributeModifier(new SurfaceModifier(Index.materialThicknessNow(), false, true))
+        .focusable(false)
+        .focusOnTouch(false)
       }
       .width('100%')
       .padding({ left: this.tabletSidebarGutter() })
@@ -11756,6 +11758,9 @@ struct Index {
     .width(this.tabletSidebarWidth())
     .height('100%')
     .padding({ top: 4 })
+    // 侧边栏不参与焦点/键盘链路：按钮被点击后不抢输入框焦点，也不触发页面避让。
+    .focusable(false)
+    .focusOnTouch(false)
     // Reels 时侧边栏透明，让外层 Reels 黑底直接铺到侧边栏区域，并去掉侧边栏分割线。
     .backgroundColor(this.reelsBackdropActive() && !this.settingsOverReels()
       ? Color.Transparent : $r('app.color.page_background'))
