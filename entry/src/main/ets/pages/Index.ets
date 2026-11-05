@@ -8553,10 +8553,8 @@ struct Index {
       if (topVp > 0) {
         this.topSafeVp = topVp;
       }
-      // 降级底栏才需要底部那一条（悬浮档由 HDS 自己让开）。
-      if (PlatformCap.hasHdsMaterial()) {
-        return;
-      }
+      // 底部组件（Reels 正文/动作区、侧栏按钮、会话输入条）统一读这一份；
+      // HDS 悬浮栏是否避让不影响这里的实际系统条高度。
       const navPx: number = win.getWindowAvoidArea(
         window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR).bottomRect.height;
       const sysPx: number = win.getWindowAvoidArea(
@@ -11502,7 +11500,8 @@ struct Index {
    */
   private homeReelsInfoBottomVp(): number {
     if (this.tabletWideShell()) {
-      return this.bottomSafeVp;
+      // 正文/动作区离手势条再留 16vp，避免底边贴住系统条。
+      return this.bottomSafeVp + 16;
     }
     return BAR_HEIGHT + BAR_REST_BOTTOM - 6 + this.bottomSafeVp;
   }
