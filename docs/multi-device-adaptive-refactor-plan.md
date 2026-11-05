@@ -31,7 +31,7 @@ Row
 | HDS 标题栏 | 已回退 | 按实测改回系统原始 HDS API，不再手写 `maskExtraHeight=48`/`blurRadius=80`；文档 2.4 的旧参数作废 |
 | 滚动安全 | 部分完成 | `safeScrollY()` 已覆盖主要页面；尚未全量替换裸 `currentOffset().yOffset` |
 | Reels 崩溃 | 部分完成 | `VideoSurface` 已有 player/epoch 保护，冷启动缓存已移除，`ReelsSeen` 台账改异步落盘；仍无 `ReelsPlayerPool`、`LazyForEach`、`@Reusable` |
-| 键盘避让 | 页面级 RESIZE | 按官方文档使用 `KeyboardAvoidMode.RESIZE`，删除手动 `keyboardVp`、额外监听、侧栏补偿和高度 hack；当前保留页面级缩短行为，后续如需解决侧栏/气泡细节再按官方方案重做 |
+| 键盘避让 | 页面级 RESIZE | 按官方文档使用 `KeyboardAvoidMode.RESIZE`；会话输入条只在键盘上方留 5vp（RESIZE 已缩页面，不能再加键盘高度），收起时 `bottomSafeVp + 5` |
 | Index 拆分 | 部分完成 | `SidebarHost`、`ContentArea`、`AppRoutes`、`AppRouter`、`PageRegistry`、`PageDestination` 已落地；所有 destination 分支已改为组件调用（含会话页副标题/头像）；`destinationBuilder` 仍有名字 switch，页面逻辑已基本迁出 |
 | 布局/断点服务 | 部分完成 | `WindowLayoutService` 已抽出，`tabletWideShell`/`tabletSplitEnabled` 改为读断点；页面内容框架、安全区、侧栏宽度尚未统一 |
 | 请求调度/幂等 | 部分完成 | 点赞/转发本来就有合并意图；新增收藏在飞去重、只读请求并发去重；Feed 原生翻页 stuck 判据已改用关注流长度；仍无统一 `RequestScheduler`、取消、通用按钮 busy |
