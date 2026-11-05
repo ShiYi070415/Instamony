@@ -12150,43 +12150,57 @@ struct Index {
         this.reelsBody(this.searchReelsVm, ReelsAction.SEARCH)
       }
         } else if (name === DIRECT_THREAD_PAGE) {
-      /*
-       * **私信会话页**（点收件箱里的一行进来）。
-       *
-       * 承载和其它整屏页面同一套：HdsNavDestination 给原生返回键 + 标题；内容 DirectThreadPage
-       * （消息列表 + 底部发送条）。数据与发送都走原生 HTTP（core/NativeDirect），不再需要把
-       * 隐藏网页导航到 /direct/t/{id}/。
-       *
-       * 标题用**对方的名字**（读消息之前先用收件箱那一行的标题，读到了再用真名覆盖）——
-       * 和 IG 一致：会话页标题就是对方，不是"私信"。
-       */
-      HdsNavDestination() {
+      PageDestination({
+        title: this.directThreadVm.titleNow().length > 0
+          ? this.directThreadVm.titleNow() : $r('app.string.direct_empty'),
+        subTitle: this.directThreadVm.subtitleNow(),
+        hasSubIcon: true,
+        subIcon: {
+          content: {
+            label: 'avatar',
+            icon: this.directThreadVm.avatarNow().length > 0
+              ? this.directThreadVm.avatarNow()
+              : (this.directThreadVm.isGroupNow() ? $r('sys.symbol.person_2_fill')
+                : $r('app.media.startIcon')),
+            isEnabled: true,
+            type: IconStyleMode.LARGE
+          }
+        },
+        titleStyle: this.destinationTitleStyle(),
+        menu: this.directThreadMenus(),
+        hideBackButton: false,
+        onShown: (): void => {
+          this.onPageShown(DIRECT_THREAD_PAGE);
+        },
+        onHidden: (): void => {
+          this.onPageHidden(DIRECT_THREAD_PAGE);
+        },
+        onBackPressed: (): boolean => {
+          if (this.directStageOpen) {
+            this.closeDirectStage();
+            return true;
+          }
+          return this.handleDestinationBack();
+        }
+      }) {
         DirectThreadPage({
           vm: this.directThreadVm,
           layoutWidthVp: this.directStageOpen
             ? Math.max(0, this.directStageWidth()) : 0,
           dualPane: this.tabletHomeScoped(),
-          // 标题栏交给 HDS（头像 + 名字 + 用户名 + 返回键 + 菜单），页面不再自绘
           externalHeader: true,
           onOpenWeb: (): void => {
-            /*
-             * 原生会话页用不了（会话数据或接口不可用）：**不再退回隐藏网页**。
-             * 隐藏 WebView 只留给"账号安全验证"，这里给一句提示。
-             */
-            hilog.info(DOMAIN, TAG, 'direct thread unavailable (web fallback removed)');
             this.setLocalStatus('这条会话暂时打不开（接口或会话数据不可用）');
           },
           onFeedScroll: (deltaY: number, offsetY: number, scrollState: ScrollState): void => {
             this.onFeedScroll(deltaY, offsetY, scrollState);
           },
-          /** 点开会话里"转发的帖子 / Reel / 链接卡片"（需求：现在只能看封面、点不进去）。 */
           onOpenShare: (message: DirectMessage): void => {
             this.openDirectShare(message);
           },
           onOpenUser: (username: string, userId: string): void => {
             this.openUserProfile(username, userId);
           },
-          // 自绘标题（头像 + 名字 + 用户名）替代 HDS 标题栏，返回键由页面自己画。
           onBack: (): void => {
             if (this.directStageOpen) {
               this.closeDirectStage();
@@ -12196,63 +12210,7 @@ struct Index {
           }
         })
       }
-      .titleBar({
-        content: {
-          /*
-           * **回到 HDS 原生标题栏**（与官方短信 App 同款：返回键 + 头像 + 标题 + 菜单）。
-           *
-           * 依据官方文档（UI Design Kit → HdsNavigation → TitleBarContentOptions）：
-           *   · `title`（HdsNavigationTitle）：mainTitle / subTitle —— 原生两行文字，排版交给 HDS；
-           *   · `subIcon`（HdsNavigationBadgeIconOptions）：标题栏**子图标**，渲染在标题左侧，
-           *     `content.icon` 的类型是 `ResourceStr | SymbolGlyphModifier | PixelMap`，
-           *     而 ResourceStr 允许字符串 —— 所以**头像的 URL 可以直接塞进去**；
-           *     配 `IconStyleMode.LARGE` 出来就是"头像 + 名字"的排布；
-           *   · `menu`：右侧电话 / 视频。
-           *
-           * 注意 `stackBuilder` **不是**这个用途：文档明确它是"标题栏**顶部**自定义区域"
-           * （标题栏上方再加一行，例如分段按钮），所以之前用它放头像才会一直在"左偏/右偏"之间跳。
-           */
-          title: {
-            mainTitle: this.directThreadVm.titleNow().length > 0
-              ? this.directThreadVm.titleNow() : $r('app.string.direct_empty'),
-            subTitle: this.directThreadVm.subtitleNow()
-          },
-          subIcon: {
-            content: {
-              label: 'avatar',
-              // 群聊没有群图时给中性群图标（别拿某个成员的头像顶替 —— 列表那行踩过这个坑）
-              icon: this.directThreadVm.avatarNow().length > 0
-                ? this.directThreadVm.avatarNow()
-                : (this.directThreadVm.isGroupNow() ? $r('sys.symbol.person_2_fill')
-                  : $r('app.media.startIcon')),
-              isEnabled: true,
-              type: IconStyleMode.LARGE
-            }
-          },
-          menu: this.directThreadMenus()
-        },
-        style: this.destinationTitleStyle(),
-        avoidLayoutSafeArea: false,
-        enableComponentSafeArea: false
-      })
-      .hideTitleBar(false)
-      .hideBackButton(false)
-      .titleMode(HdsNavDestinationTitleMode.MINI)
-      .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
-      .clip(false)
-      .onShown((): void => {
-        this.onPageShown(DIRECT_THREAD_PAGE);
-      })
-      .onHidden((): void => {
-        this.onPageHidden(DIRECT_THREAD_PAGE);
-      })
-      .onBackPressed((): boolean => {
-        if (this.directStageOpen) {
-          this.closeDirectStage();
-          return true;
-        }
-        return this.handleDestinationBack();
-      })
+
     }
   }
 

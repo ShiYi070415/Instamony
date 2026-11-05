@@ -6,13 +6,18 @@
 import {
   HdsNavDestination,
   HdsNavDestinationTitleMode,
+  HdsNavigationBadgeIconOptions,
   HdsNavigationMenuContentOptions,
+  TitleBarContentOptions,
   TitleBarStyleOptions
 } from '@kit.UIDesignKit';
 
 @Component
 export struct PageDestination {
   @Prop title: ResourceStr = '';
+  @Prop subTitle: string = '';
+  @Prop hasSubIcon: boolean = false;
+  @Prop subIcon: HdsNavigationBadgeIconOptions = {};
   @Prop titleStyle: TitleBarStyleOptions;
   @Prop hideTitleBar: boolean = false;
   @Prop hideBackButton: boolean = false;
@@ -31,10 +36,7 @@ export struct PageDestination {
       this.content()
     }
     .titleBar({
-      content: {
-        title: { mainTitle: this.title },
-        menu: this.menu
-      },
+      content: this.titleContent(),
       style: this.titleStyle,
       avoidLayoutSafeArea: false,
       enableComponentSafeArea: false
@@ -51,5 +53,16 @@ export struct PageDestination {
       this.onHidden();
     })
     .onBackPressed((): boolean => this.onBackPressed())
+  }
+
+  private titleContent(): TitleBarContentOptions {
+    const content: TitleBarContentOptions = {
+      title: { mainTitle: this.title, subTitle: this.subTitle },
+      menu: this.menu
+    };
+    if (this.hasSubIcon) {
+      content.subIcon = this.subIcon;
+    }
+    return content;
   }
 }
