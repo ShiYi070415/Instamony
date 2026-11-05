@@ -16,6 +16,8 @@
 import { WindowLayoutService } from '../core/WindowLayoutService';
 import { SidebarHost } from '../shell/SidebarHost';
 import { AppRoutes } from '../router/AppRoutes';
+import { AppRouter } from '../router/AppRouter';
+import { PageRegistry } from '../router/PageRegistry';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { SymbolGlyphModifier } from '@kit.ArkUI';
 import { common, Want } from '@kit.AbilityKit';
@@ -1164,7 +1166,8 @@ struct Index {
   /** 右栏当前路由名（空 = 收起；所有新页面都走这里）。 */
   @State private tabletRightName: string = '';
   /** 右栏自己的 HDS 导航栈（和主内容完全隔离）。 */
-  private tabletProfileStack: NavPathStack = new NavPathStack();
+  private router: AppRouter = new AppRouter();
+  private tabletProfileStack: NavPathStack = this.router.rightStack;
   /** 私信会话常驻详情舞台：宽度变化时只改布局，不重建 DirectThreadPage。 */
   @State private directStageOpen: boolean = false;
   /** 会话舞台是否可见（打开 Reels 等整页时暂时隐藏，返回后恢复）。 */
@@ -1893,7 +1896,7 @@ struct Index {
    * 模态（bindContentCover）的内容区到不了屏幕最底，底部会露出主页一条（实测绘过三种撑法
    * 都不行）。NavDestination 是页面级承载，安全区和底部由它负责。
    */
-  private navStack: NavPathStack = new NavPathStack();
+  private navStack: NavPathStack = this.router.leftStack;
   /**
    * 当前分页（标题栏的标题与菜单都按它取，见 pageTitle / menus）。
    *
@@ -11425,7 +11428,7 @@ struct Index {
 
   /** 这些是整屏轻页面，不参与“小窗详情迁到右栏”的迁移，否则布局一变会自己弹回来。 */
   private isOverlayPage(name: string): boolean {
-    return name === SETTINGS_PAGE || name === SETTINGS_DETAIL_PAGE || name === NOTIFICATIONS_PAGE;
+    return PageRegistry.isOverlay(name);
   }
 
   /** 清掉所有 tab 缓存里的设置/通知页，避免切 tab 或布局变化时恢复。 */
