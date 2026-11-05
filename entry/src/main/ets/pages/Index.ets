@@ -25,6 +25,7 @@ import { NotificationsDestination } from './notifications/NotificationsDestinati
 import { AppRoutes } from '../router/AppRoutes';
 import { AppRouter } from '../router/AppRouter';
 import { PageRegistry } from '../router/PageRegistry';
+import { RequestScheduler } from '../core/RequestScheduler';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { SymbolGlyphModifier } from '@kit.ArkUI';
 import { common, Want } from '@kit.AbilityKit';
@@ -4085,6 +4086,8 @@ struct Index {
    * 或在切 tab 时恢复上一个人的页面。
    */
   private resetAccountPageState(): void {
+    // 换号时丢掉旧的只读请求合并表；旧 Promise 即使回来也会被账号代次丢弃。
+    RequestScheduler.clear();
     this.notificationsSeq++;
     this.notificationsBusy = false;
     this.notificationsRefreshing = false;
