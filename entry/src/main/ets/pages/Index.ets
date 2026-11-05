@@ -12248,94 +12248,44 @@ struct Index {
         this.postPageBody()
       }
         } else if (name === PROFILE_REELS_PAGE) {
-      /*
-       * **视频分页的 Reels 页**（点「我的」/别人主页视频那一段的格子进来，需求）。
-       *
-       * 需求原文："用户和我的页面的视频分页点进去是新的页面，采用 reels 模板，使用 hdsnavigation，
-       * 左上角返回按钮，title「Reels」，底部是一个沉静光感输入框，用于添加评论。"
-       * 所以：
-       *   - 内容 = 首页那个 **ReelsPage**（竖向翻页、只播当前那条），数据换成这一分页的视频
-       *     （见 ProfileReelsViewModel）；
-       *   - 承载 = **HdsNavDestination**（原生返回键在左上角、标题在 titleBar 里）；
-       *   - 底部 = **CommentInputBar**（沉浸光感的评论输入框，压在视频上）。
-       */
-      HdsNavDestination() {
+      PageDestination({
+        title: $r('app.string.reels_page_title'),
+        titleStyle: this.rightReelsTitleStyle(),
+        menu: this.reelsMenu(ReelsAction.PROFILE),
+        hideBackButton: false,
+        hideTitleBar: this.reelsChromeHidesShell(),
+        onShown: (): void => {
+          this.onPageShown(PROFILE_REELS_PAGE);
+          this.startReelsKeyboard();
+        },
+        onHidden: (): void => {
+          this.onPageHidden(PROFILE_REELS_PAGE);
+          this.stopReelsKeyboard();
+        },
+        onBackPressed: (): boolean => this.handlePageBack()
+      }) {
         this.reelsBody(this.profileReelsVm, ReelsAction.PROFILE)
       }
-      .titleBar({
-        content: {
-          title: { mainTitle: $r('app.string.reels_page_title') },
-          // 需求："除了底栏 reels，其他 reels 页面右上角没有静音和下载按钮，添加一下"。
-          menu: this.reelsMenu(ReelsAction.PROFILE)
+        } else if (name === SEARCH_REELS_PAGE) {
+      PageDestination({
+        title: $r('app.string.reels_page_title'),
+        titleStyle: this.rightReelsTitleStyle(),
+        menu: this.reelsMenu(ReelsAction.SEARCH),
+        hideBackButton: false,
+        hideTitleBar: this.reelsChromeHidesShell(),
+        onShown: (): void => {
+          this.onPageShown(SEARCH_REELS_PAGE);
+          this.startReelsKeyboard();
         },
-        style: this.rightReelsTitleStyle(),
-        avoidLayoutSafeArea: false,
-        enableComponentSafeArea: false
-      })
-      // 左上角那颗**原生**返回键（点击 pop 路由栈）—— 需求明确要它。
-      .hideBackButton(false)
-      .titleMode(HdsNavDestinationTitleMode.MINI)
-      /*
-       * 视频页"隐藏全局控件"（需求第 4 条）：整屏的 reels 页也一样要把标题栏（连同返回键）收起来。
-       * 收起来之后点不到返回了，但**再点一下画面**就会恢复（见 ReelsPage.toggleChrome）。
-       * 第二个参数 true = 走 HDS 自带的显隐动画（淡出而不是瞬移）。
-       */
-      .hideTitleBar(this.reelsChromeHidesShell(), true)
-      .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
-      // 视频要铺到标题栏底下（沉浸式），所以不裁内容。
-      .clip(false)
-      // 压上来/被关掉：首页信息流据此停播（和其它整屏页面同一条路，见 onPageShown）。
-      .onShown((): void => {
-        this.onPageShown(PROFILE_REELS_PAGE);
-        this.startReelsKeyboard();
-      })
-      .onHidden((): void => {
-        this.onPageHidden(PROFILE_REELS_PAGE);
-      this.stopReelsKeyboard();
-        this.stopReelsKeyboard();
-      })
-      // 返回键：**评论浮层开着就先收评论**（需求："返回优先收起面板"），不再 pop 页面。
-      .onBackPressed((): boolean => this.handlePageBack())
-    } else if (name === SEARCH_REELS_PAGE) {
-      /*
-       * **搜索页推荐流的 Reels 页**（需求："把搜索页推荐流实现点击帖子进入带返回的 reels 页面，
-       * 底部是评论，点击的帖子显示在第一条，上滑按照浏览 reels 的逻辑运行"）。
-       *
-       * 和视频分页那一页**同一个界面**（见 reelsBody）：HdsNavDestination 的原生返回键 +
-       * 标题「Reels」、内容 ReelsPage、底部 CommentInputBar 评论输入框。
-       * 差别只有数据来源与顺序（点的那条排第一，见 openSearchReels）。
-       */
-      HdsNavDestination() {
+        onHidden: (): void => {
+          this.onPageHidden(SEARCH_REELS_PAGE);
+          this.stopReelsKeyboard();
+        },
+        onBackPressed: (): boolean => this.handlePageBack()
+      }) {
         this.reelsBody(this.searchReelsVm, ReelsAction.SEARCH)
       }
-      .titleBar({
-        content: {
-          title: { mainTitle: $r('app.string.reels_page_title') },
-          // 同视频分页那一页：右上角补上静音 / 下载（需求）。
-          menu: this.reelsMenu(ReelsAction.SEARCH)
-        },
-        style: this.rightReelsTitleStyle(),
-        avoidLayoutSafeArea: false,
-        enableComponentSafeArea: false
-      })
-      .hideBackButton(false)
-      .titleMode(HdsNavDestinationTitleMode.MINI)
-      // 同视频分页那一页：隐藏全局控件时标题栏一起收（见 reelsChromeHidesShell）。
-      .hideTitleBar(this.reelsChromeHidesShell(), true)
-      .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
-      .clip(false)
-      .onShown((): void => {
-        this.onPageShown(SEARCH_REELS_PAGE);
-        this.startReelsKeyboard();
-      })
-      .onHidden((): void => {
-        this.onPageHidden(SEARCH_REELS_PAGE);
-      this.stopReelsKeyboard();
-        this.stopReelsKeyboard();
-      })
-      // 返回键：**评论浮层开着就先收评论**（需求："返回优先收起面板"），不再 pop 页面。
-      .onBackPressed((): boolean => this.handlePageBack())
-    } else if (name === DIRECT_THREAD_PAGE) {
+        } else if (name === DIRECT_THREAD_PAGE) {
       /*
        * **私信会话页**（点收件箱里的一行进来）。
        *
