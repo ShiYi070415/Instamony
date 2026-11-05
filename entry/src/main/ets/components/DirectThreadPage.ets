@@ -2503,12 +2503,11 @@ export struct DirectThreadPage {
     }
     .width('100%')
     /*
-     * 键盘避让只留 5vp：
-     *   · 键盘弹起时系统 RESIZE 已经把页面缩短到键盘上方，这里再加键盘高度会双倍抬升；
-     *   · 键盘收起时只避让底部系统条 + 5vp。
+     * 键盘弹起时系统 RESIZE 已经把页面缩短到键盘上方，输入条贴住页底即可；
+     * 键盘收起时只避让底部系统条，不再额外加间距。
      */
     .padding({
-      bottom: this.keyboardPx > 0 ? 5 : this.bottomInsetVp + 5
+      bottom: this.keyboardPx > 0 ? 0 : this.bottomInsetVp
     })
   }
 }
