@@ -122,6 +122,9 @@ export class MobileResult {
 }
 
 export class MobileRequest {
+  /** 同账号、同端点的只读请求合并：页面重复进入时不再发第二发。 */
+  private static readonly inflight: Map<string, Promise<MobileResult>> = new Map();
+
   /** 上一条失败响应体样本（诊断用，同 NativeComments.detail 的角色）。 */
   private static lastDetail: string = '-';
   private static lastError: string = '-';
@@ -255,6 +258,34 @@ export class MobileRequest {
                     extraHeaders: Record<string, string> | null = null,
                     options: MobileOptions | null = null,
                     jsonBody: boolean = false): Promise<MobileResult> {
+    // 只合并只读请求（GET / 无 body）；写操作绝不能复用另一发的 Promise。
+    if (data.length > 0 || jsonBody) {
+      return MobileRequest.sendOnce(endpoint, data, params, withSignature,
+        extraHeaders, options, jsonBody);
+    }
+    const key: string = `${AccountScope.current()}|${AccountScope.generationNow()}`
+      + `|${endpoint}|${params}`;
+    const running: Promise<MobileResult> | undefined = MobileRequest.inflight.get(key);
+    if (running !== undefined) {
+      hilog.info(DOMAIN, TAG, 'dedupe read %{public}s', endpoint);
+      return running;
+    }
+    const task: Promise<MobileResult> = MobileRequest.sendOnce(endpoint, data, params,
+      withSignature, extraHeaders, options, jsonBody);
+    MobileRequest.inflight.set(key, task);
+    task.then((): void => {
+      MobileRequest.inflight.delete(key);
+    }).catch((): void => {
+      MobileRequest.inflight.delete(key);
+    });
+    return task;
+  }
+
+  private static async sendOnce(endpoint: string, data: string = '', params: string = '',
+                                withSignature: boolean = true,
+                                extraHeaders: Record<string, string> | null = null,
+                                options: MobileOptions | null = null,
+                                jsonBody: boolean = false): Promise<MobileResult> {
     const opts: MobileOptions = options === null ? new MobileOptions() : options;
     const started: number = Date.now();
     MobileRequest.sends = MobileRequest.sends + 1;
