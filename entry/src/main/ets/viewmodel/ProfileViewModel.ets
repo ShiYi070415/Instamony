@@ -193,6 +193,12 @@ export class ProfileViewModel {
    */
   reset(): void {
     this.generation++;
+    if (this.prefetchTimer !== 0) {
+      clearTimeout(this.prefetchTimer);
+      this.prefetchTimer = 0;
+    }
+    this.prefetchScheduled = false;
+    this.prefetchingOthers = false;
     for (let tab: number = 0; tab < this.tabs.length; tab++) {
       const state: ProfileTabState = this.tabs[tab];
       state.posts = [];
@@ -310,6 +316,8 @@ export class ProfileViewModel {
   private prefetchingOthers: boolean = false;
   /** 已经排过一次"延迟预取另外三段"（见 schedulePrefetchOthers）。 */
   private prefetchScheduled: boolean = false;
+  /** 延迟预取的定时器句柄：reset/换号时必须取消，回调也要校验 generation。 */
+  private prefetchTimer: number = 0;
   /** 已经为哪些媒体 id 试过补封面了（见 backfillVideoCovers：同一个 id 只试一次）。 */
   private coverTried: Array<string> = [];
   /** 这一轮是不是靠"真的打开一次网页"换来的数据（状态行据此措辞）。 */
@@ -1044,9 +1052,11 @@ export class ProfileViewModel {
       return;
     }
     this.prefetchScheduled = true;
-    setTimeout((): void => {
+    const gen: number = this.generation;
+    this.prefetchTimer = setTimeout((): void => {
+      this.prefetchTimer = 0;
       this.prefetchScheduled = false;
-      if (this.prefetchingOthers) {
+      if (gen !== this.generation || this.prefetchingOthers) {
         return;
       }
       this.prefetchingOthers = true;
@@ -1059,7 +1069,11 @@ export class ProfileViewModel {
 
   private async prefetchOthersSequential(): Promise<void> {
     const tabs: Array<number> = this.order.slice(0);
+    const gen: number = this.generation;
     for (let index: number = 0; index < tabs.length; index++) {
+      if (gen !== this.generation) {
+        return;
+      }
       const tab: number = tabs[index];
       if (tab === this.tab) {
         continue;
