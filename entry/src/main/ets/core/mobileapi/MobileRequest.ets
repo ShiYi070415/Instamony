@@ -274,6 +274,25 @@ export class MobileRequest {
     });
   }
 
+  /** 在飞请求句柄：换账号时可以主动 destroy，不等超时。 */
+  private static active: Set<http.HttpRequest> = new Set();
+
+  /** 换账号/退出时主动取消全部在飞请求。 */
+  static cancelAll(): void {
+    const list: Array<http.HttpRequest> = [];
+    MobileRequest.active.forEach((request: http.HttpRequest): void => {
+      list.push(request);
+    });
+    MobileRequest.active.clear();
+    for (let index: number = 0; index < list.length; index++) {
+      try {
+        list[index].destroy();
+      } catch (error) {
+      }
+    }
+    hilog.info(DOMAIN, TAG, 'cancelled %{public}d in-flight request(s)', list.length);
+  }
+
   private static async sendOnce(endpoint: string, data: string = '', params: string = '',
                                 withSignature: boolean = true,
                                 extraHeaders: Record<string, string> | null = null,
@@ -357,6 +376,7 @@ export class MobileRequest {
       endpoint, MobileRequest.shortUrl(url), isPost ? 'POST' : 'GET', payload.length,
       identity.authorization.length > 0 ? 'y' : 'n');
     const request: http.HttpRequest = http.createHttp();
+    MobileRequest.active.add(request);
     /*
      * **闸门**（主动限速，见 ApiThrottle.acquire 的说明）：排队 → 拿到名额才发。
      * 拿到之后**必须** release，所以整段用 try/finally 包住 —— 任何一支抛异常都要放闸，
@@ -439,6 +459,7 @@ export class MobileRequest {
       return new MobileResult(false, MOBILE_THREW, 0, Date.now() - started, 0, '',
         MobileRequest.lastDetail);
     } finally {
+      MobileRequest.active.delete(request);
       try {
         request.destroy();
       } catch (error) {
