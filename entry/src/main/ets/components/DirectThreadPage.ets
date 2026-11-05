@@ -2090,7 +2090,7 @@ export struct DirectThreadPage {
          * 滚动时会跟着走 —— 这正是"停在最上面时第一条不被压住、滑动时消息从栏下穿过"的实现。
          */
         .contentStartOffset(this.topOffsetVp())
-        .contentEndOffset(BOTTOM_OFFSET)
+        .contentEndOffset(BOTTOM_OFFSET + this.keyboardVp)
         /*
          * **不要 `stackFromEnd`**（真机踩坑）：
          * 它虽然能把内容底部对齐，但和 `ForEach` 的正序索引、`scrollEdge` 混在一起时，
@@ -2165,6 +2165,7 @@ export struct DirectThreadPage {
       }
       .width('100%')
       .height('100%')
+      .padding({ bottom: this.keyboardVp })
 
       // 悬浮输入条（在 Stack 的 Bottom 对齐层里，自己再抬一次输入法高度）。
       this.inputOverlay()
@@ -2190,8 +2191,6 @@ export struct DirectThreadPage {
     }
     .width('100%')
     .height('100%')
-    // 只让会话页容器缩短键盘高度：侧边栏在 Index，不在这个容器里，保持不动。
-    .padding({ bottom: this.keyboardVp })
     .backgroundColor($r('app.color.page_background'))
     /*
      * 图片预览走系统 `bindContentCover`，而不是页内 Stack：
@@ -2489,7 +2488,7 @@ export struct DirectThreadPage {
     }
     .width('100%')
     // 常规留白 + **输入法抬升**：键盘弹起时输入条抬到键盘上方（抬多少由自校正量出来）。
-    .padding({ bottom: COMMENT_INPUT_BOTTOM_VP })
+    .padding({ bottom: COMMENT_INPUT_BOTTOM_VP + this.keyboardVp })
   }
 }
 
