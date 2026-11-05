@@ -11709,8 +11709,9 @@ struct Index {
           }
         }
         ContentArea({
-          widthVp: this.tabletHomeScoped() ? this.tabletLeftWidth() : 0,
-          fill: !this.tabletHomeScoped()
+          // ContentArea 永远是侧栏右边的整块区域；左栏宽度只约束里面的 HdsNavigation。
+          widthVp: 0,
+          fill: true
         }) {
         // 传入页面栈：通知页是它的一个 NavDestination（见 destinationBuilder）。
         HdsNavigation(this.navStack) {
