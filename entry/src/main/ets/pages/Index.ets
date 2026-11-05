@@ -1486,6 +1486,11 @@ struct Index {
    * （见 commentsMaxVp）。取不到时按 28vp 的常见量级兜底。
    */
   @State private topSafeVp: number = 28;
+
+  /** 内容顶部起始：状态栏 + HDS 标题栏高度；替换原来的硬编码 94。 */
+  private contentTopVp(): number {
+    return Math.round(this.topSafeVp + 66);
+  }
   /** 视频静音（全局；标题栏那颗 reels 喇叭键改它）。 */
   @StorageProp(SETTING_VIDEO_MUTED) videoMuted: boolean = false;
   /**
@@ -7776,7 +7781,7 @@ struct Index {
       }
       .width('100%')
       .height('100%')
-      .padding({ top: 94 })
+      .padding({ top: this.contentTopVp() })
     }
     .titleBar({
       content: {
@@ -8120,7 +8125,7 @@ struct Index {
         FeedList({
           posts: this.posts,
           // 内容要滚到 HDS 标题栏下面，渐变模糊才有东西可采样。
-          topOffset: 94,
+          topOffset: this.contentTopVp(),
           // 宽屏上整列收窄居中；手机为 0，保持原来的满宽。
           maxWidthVp: this.feedMaxWidth(),
           // 提示卡片位置：关注流 → 卡片 → 探索流（-1 = 不画，见 feedHintAt）。
@@ -9315,7 +9320,7 @@ struct Index {
     ProfilePage({
       vm: this.profileVm,
       pageScroller: this.profileScroller,
-      topOffsetVp: 94,
+      topOffsetVp: this.contentTopVp(),
       // 滚动 → 底栏下沉/隐藏（和首页同一条路，见 onFeedScroll）。
       onFeedScroll: (deltaY: number, offsetY: number, scrollState: ScrollState): void => {
         this.onFeedScroll(deltaY, offsetY, scrollState);
