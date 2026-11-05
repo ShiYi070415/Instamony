@@ -1623,7 +1623,8 @@ export class FeedViewModel {
         hilog.info(DOMAIN, TAG, 'native page live n=%{public}d ms=%{public}d added=%{public}d',
           live.items.length, live.ms, this.following.length - before);
         this.prefetchNativePage();
-        if (this.posts.length > before) {
+        // 和上面缓存分支同口径：`before` 记的是关注流长度，不能拿合并列表总数来比。
+        if (this.following.length > before) {
           this.pagingStuck = false;
           return;
         }
