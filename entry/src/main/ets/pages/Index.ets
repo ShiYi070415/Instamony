@@ -21,7 +21,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 // curves：下沉收缩的补间用系统那套弹簧（springMotion，带过冲，比 EaseOut 更"弹"）。
 // uiMaterial：只用来读应用级沉浸光感开关的状态（见 aboutToAppear 的日志）。
 // display：量屏宽，底栏胶囊的左右留白按它反算。
-import { curves, display, ImmersiveMode, LengthMetrics, uiMaterial, window } from '@kit.ArkUI';
+import { curves, display, ImmersiveMode, KeyboardAvoidMode, LengthMetrics, uiMaterial, window } from '@kit.ArkUI';
 import {
   HdsAnimationMode,
   HdsNavDestination,
@@ -2427,6 +2427,14 @@ struct Index {
   }
 
   aboutToAppear(): void {
+    /*
+     * 侧边栏/整页壳不参与软键盘避让：键盘弹出时不让页面整体上移或缩短。
+     * 只有私信会话页自己按键盘高度让内容区避让（见 DirectThreadPage）。
+     */
+    try {
+      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.NONE);
+    } catch (error) {
+    }
     // ---- 材质能力诊断（放在最前面：后面任何一步抛异常都不会把它挡掉）----
     // 标题栏背板一直是一块偏黑的板子、看不到"渐变模糊"：官方 FAQ 说材质的**模糊/折射**
     // （materialFilter）只在**高/中算力**设备上渲染，低算力设备只保留背景色/边框/阴影。
@@ -2844,6 +2852,10 @@ struct Index {
    * 这里清掉句柄并把两个过程标志复位（`commentsVisible`/数据不动：回来时面板该是什么样还是什么样）。
    */
   aboutToDisappear(): void {
+    try {
+      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.OFFSET);
+    } catch (error) {
+    }
     // 验证弹窗跟着页面走：页面销毁时关掉它，别留一个悬着的 modal。
     this.closeChallengeDialog();
     if (this.commentsExitTimer >= 0) {

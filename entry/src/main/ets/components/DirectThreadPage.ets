@@ -327,12 +327,11 @@ export struct DirectThreadPage {
 
   aboutToAppear(): void {
     /*
-     * 官方软键盘避让：默认 OFFSET 会把整页往上顶；会话页要的是 RESIZE ——
-     * 页面高度缩短，列表和输入条一起缩，最新消息自然停在输入条上方。
-     * 见 docs 里引用的“如何设置软键盘避让”和 KeyboardAvoidMode.RESIZE 说明。
+     * 会话页自己显式设 NONE：HDS 子页面可能有独立 UIContext，只靠 Index 的全局设置
+     * 不一定会继承。NONE 下键盘不动整页（侧边栏/标题栏保持原位），由本页按高度避让。
      */
     try {
-      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
+      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.NONE);
     } catch (error) {
     }
     try {
@@ -375,7 +374,7 @@ export struct DirectThreadPage {
            * 否则就是“系统缩一次 + 我们抬一次”的双重避让。
            * 只保留 previewKeyboardVp 给图片预览用。
            */
-          this.keyboardVp = 0;
+          this.keyboardVp = nextPreviewKeyboard;
           this.alignLiftPx = 0;
           this.scrollToNewest(false);
         };
@@ -2143,6 +2142,8 @@ export struct DirectThreadPage {
           this.reachArmed = false;
           this.loadOlderKeepPosition();
         })
+        .width('100%')
+        .layoutWeight(1)
       }
       .width('100%')
       .height('100%')
