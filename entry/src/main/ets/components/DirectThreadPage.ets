@@ -257,6 +257,8 @@ export struct DirectThreadPage {
   @State private keyboardVp: number = 0;
   /** 输入法高度回调（销毁时要注销，否则组件没了还在写 @State）。 */
   private keyboardHandler: ((height: number) => void) | null = null;
+  /** 键盘动画结束后再贴一次底：第二次弹键盘时布局还没量完，立即 scrollEdge 会停在旧底。 */
+  private keyboardScrollTimer: number = 0;
   private keyboardWindow: window.Window | null = null;
   /**
    * 图片预览：当前展开的消息 id / 地址 / 原图比例 / 发送人。
@@ -327,11 +329,11 @@ export struct DirectThreadPage {
 
   aboutToAppear(): void {
     /*
-     * 会话页自己显式设 NONE：HDS 子页面可能有独立 UIContext，只靠 Index 的全局设置
-     * 不一定会继承。NONE 下键盘不动整页（侧边栏/标题栏保持原位），由本页按高度避让。
+     * 依赖系统页面位移：OFFSET 会把整页按键盘高度上移，输入框自然停在键盘上方。
+     * 页面内部不再叠加 keyboardVp，避免第二次打开时双重避让。
      */
     try {
-      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.NONE);
+      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.OFFSET);
     } catch (error) {
     }
     try {
@@ -358,6 +360,8 @@ export struct DirectThreadPage {
         this.keyboardHandler = (height: number): void => {
           this.keyboardPx = height > 0 ? height : 0;
           const nextPreviewKeyboard: number = height > 0 ? this.getUIContext().px2vp(height) : 0;
+          // 侧边栏在系统 OFFSET 下也会被整页带走：把键盘高度共享给 Index，让它反向补偿。
+          AppStorage.setOrCreate('keyboardOffsetVp', nextPreviewKeyboard);
           if (this.previewCover) {
             // 先上抬 / 再压缩卡片高度；两者都用 180ms 过渡，不瞬间跳。
             this.getUIContext().animateTo({ duration: 180, curve: Curve.EaseOut }, (): void => {
@@ -374,9 +378,20 @@ export struct DirectThreadPage {
            * 否则就是“系统缩一次 + 我们抬一次”的双重避让。
            * 只保留 previewKeyboardVp 给图片预览用。
            */
-          this.keyboardVp = nextPreviewKeyboard;
+          // 系统 OFFSET 已经抬了整页；这里只补输入条被键盘压住的一小段（不跟整页抢）。
+          this.keyboardVp = height > 0 ? 64 : 0;
           this.alignLiftPx = 0;
           this.scrollToNewest(false);
+          // 键盘动画/页面位移结束后再补一次：第二次弹出时立即贴底会按旧视口算。
+          if (this.keyboardScrollTimer !== 0) {
+            clearTimeout(this.keyboardScrollTimer);
+          }
+          this.keyboardScrollTimer = setTimeout((): void => {
+            this.keyboardScrollTimer = 0;
+            if (this.keyboardVp > 0) {
+              this.scrollToNewest(false);
+            }
+          }, 160);
         };
         win.on('keyboardHeightChange', this.keyboardHandler);
       }).catch((): void => {
@@ -436,6 +451,11 @@ export struct DirectThreadPage {
   }
 
   aboutToDisappear(): void {
+    if (this.keyboardScrollTimer !== 0) {
+      clearTimeout(this.keyboardScrollTimer);
+      this.keyboardScrollTimer = 0;
+    }
+    AppStorage.setOrCreate('keyboardOffsetVp', 0);
     try {
       this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.OFFSET);
     } catch (error) {

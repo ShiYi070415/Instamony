@@ -1155,6 +1155,8 @@ struct Index {
   @State private tabletSidebarProgress: number = 0;
   /** 壳子的实际窗口宽度（vp），窗口缩放时更新；侧栏按钮按它等比缩放。 */
   @State private shellWidthVp: number = 0;
+  /** 私信页共享的键盘高度（vp）：系统 OFFSET 会带走整页，侧边栏反向补偿。 */
+  @StorageLink('keyboardOffsetVp') private keyboardOffsetVp: number = 0;
   /** 壳子的实际窗口高度（vp）：快拍/信息流按 9:16 收口时要用。 */
   @State private shellHeightVp: number = 0;
   /** 首页右侧挤入的用户主页（`用户名|id`，空 = 收起）。 */
@@ -2432,7 +2434,7 @@ struct Index {
      * 只有私信会话页自己按键盘高度让内容区避让（见 DirectThreadPage）。
      */
     try {
-      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.NONE);
+      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.OFFSET);
     } catch (error) {
     }
     // ---- 材质能力诊断（放在最前面：后面任何一步抛异常都不会把它挡掉）----
@@ -11868,6 +11870,7 @@ struct Index {
         // 侧边栏背景直接铺进上下系统避让区（状态栏 / 手势条），不留下透明缝。
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
         .position({ x: 0, y: 0 })
+        .translate({ y: this.keyboardOffsetVp })
         .zIndex(40)
       }
     }
