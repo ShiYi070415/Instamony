@@ -248,7 +248,6 @@ export struct DirectThreadPage {
   /** 当前键盘高度（px，0 = 收起）——自校正用（避让区/回调给的都是 px）。 */
   private keyboardPx: number = 0;
   /** 自校正当前施加的抬升（px）。 */
-  private alignLiftPx: number = 0;
   /**
    * 输入法高度（vp，0 = 没弹起）。
    *
@@ -256,7 +255,6 @@ export struct DirectThreadPage {
    * **窗口那一层的避让没有作用到它**（真机实测：输入条被键盘整条盖住，见修复前的截图）。
    * 所以这里自己听 `keyboardHeightChange`，把**输入条**和**列表**一起抬起来（见 build 里那两处）。
    */
-  @State private keyboardVp: number = 0;
   /** 输入法高度回调（销毁时要注销，否则组件没了还在写 @State）。 */
   private keyboardHandler: ((height: number) => void) | null = null;
   /** 键盘动画结束后再贴一次底：第二次弹键盘时布局还没量完，立即 scrollEdge 会停在旧底。 */
@@ -380,8 +378,6 @@ export struct DirectThreadPage {
            * 否则就是“系统缩一次 + 我们抬一次”的双重避让。
            * 只保留 previewKeyboardVp 给图片预览用。
            */
-          this.keyboardVp = 0;
-          this.alignLiftPx = 0;
           this.scrollToNewest(false);
           // 键盘动画/页面位移结束后再补一次：第二次弹出时立即贴底会按旧视口算。
           if (this.keyboardScrollTimer !== 0) {
@@ -506,61 +502,6 @@ export struct DirectThreadPage {
       this.rankClearTimer = -1;
     }
 
-  }
-
-  /**
-   * 把输入条校正到"键盘顶边上方 `KEYBOARD_GAP_VP`"的位置（反馈式自校正，最多 `ALIGN_MAX_ATTEMPTS` 次）。
-   *
-   * ## 为什么不是"按键盘高度一次算准"
-   * 实测（本机 1280×2832px / 365.7×809.1vp）：输入条被键盘盖住 1043px 时按 1:1 补 1043px，
-   * 它会**跑到键盘上方 903px** —— "我补多少"和"它实际抬多少"在**大偏移**下约 1:1.87
-   * （窗口那层自己也避让，两者叠加），但在**目标附近是 1:1**（试过：559px→399px 这一段，
-   * 每减 160px 过冲就少 161px）。
-   *
-   * 所以这里用最简单的反馈：`抬升 += 还差多少`，量一次补一次。近目标处一步到位，
-   * 第一发的大过冲（130ms）用户看不见。**不用两点解直线**：那条线在大偏移处并不直
-   * （实测按它解出来的 559px 反而把过冲留在 -419px）。
-   */
-  private alignInputBarToKeyboard(attempt: number): void {
-    if (this.keyboardPx <= 0 || attempt > ALIGN_MAX_ATTEMPTS) {
-      return;
-    }
-    const need: number = this.measureAlignNeedPx();
-    if (Number.isNaN(need)) {
-      // 量不到（还没布局出来）：等下一次事件。
-      return;
-    }
-    hilog.info(DOMAIN, TAG, 'input bar align try=%{public}d need=%{public}dpx lift=%{public}dpx',
-      attempt, Math.round(need), Math.round(this.alignLiftPx));
-    if (Math.abs(need) <= ALIGN_TOLERANCE_PX) {
-      return;
-    }
-    const next: number = this.alignLiftPx + need;
-    this.alignLiftPx = next > 0 ? next : 0;
-    this.keyboardVp = this.getUIContext().px2vp(this.alignLiftPx);
-    const again: number = attempt + 1;
-    this.scrollTimers.push(setTimeout((): void => {
-      this.alignInputBarToKeyboard(again);
-    }, 130));
-  }
-
-  /**
-   * 还差多少 px 才到位（>0 = 被键盘盖住、要往上抬；<0 = 抬过头了）。
-   *
-   * 量不到（节点还没布局）给 NaN。单位统一成 **px**（`getRectangleById` 的窗口坐标就是 px）。
-   */
-  private measureAlignNeedPx(): number {
-    try {
-      const info: componentUtils.ComponentInfo =
-        this.getUIContext().getComponentUtils().getRectangleById(INPUT_BAR_ID);
-      const barBottomPx: number = info.windowOffset.y + info.size.height;
-      const keyboardTopPx: number = this.screenHeightPx - this.keyboardPx;
-      const density: number =
-        this.windowHeightVp > 0 ? this.screenHeightPx / this.windowHeightVp : 3.5;
-      return KEYBOARD_GAP_VP * density - (keyboardTopPx - barBottomPx);
-    } catch (error) {
-      return Number.NaN;
-    }
   }
 
   private syncFromVm(): void {
