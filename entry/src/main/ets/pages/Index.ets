@@ -15,6 +15,7 @@
 
 import { WindowLayoutService } from '../core/WindowLayoutService';
 import { SidebarHost } from '../shell/SidebarHost';
+import { ContentArea } from '../shell/ContentArea';
 import { PageDestination } from '../shell/PageDestination';
 import { UserProfileRoute } from '../components/UserProfileRoute';
 import { SettingsDestination } from './settings/SettingsDestination';
@@ -11707,7 +11708,10 @@ struct Index {
             this.tabletSidebar()
           }
         }
-        Column() {
+        ContentArea({
+          widthVp: this.tabletHomeScoped() ? this.tabletLeftWidth() : 0,
+          fill: !this.tabletHomeScoped()
+        }) {
         // 传入页面栈：通知页是它的一个 NavDestination（见 destinationBuilder）。
         HdsNavigation(this.navStack) {
           this.nativeShellContent()
@@ -11759,9 +11763,7 @@ struct Index {
     // 通知等整屏页面作为 NavDestination 压在这一层之上（见 destinationBuilder）。
     .navDestination(this.destinationBuilder)
       }
-      .width(this.tabletHomeScoped() ? this.tabletLeftWidth() : '100%')
-      .layoutWeight(this.tabletHomeScoped() ? 0 : 1)
-      .height('100%')
+
 
       // 右栏在 HDS Navigation 之外：HDS 只覆盖帖子流那一列。
       if (this.tabletHomeScoped() && !this.directStageOpen) {
