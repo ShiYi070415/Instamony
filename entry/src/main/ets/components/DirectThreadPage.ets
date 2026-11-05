@@ -378,7 +378,7 @@ export struct DirectThreadPage {
            * 否则就是“系统缩一次 + 我们抬一次”的双重避让。
            * 只保留 previewKeyboardVp 给图片预览用。
            */
-          this.keyboardVp = 0;
+          this.keyboardVp = nextPreviewKeyboard;
           this.alignLiftPx = 0;
           this.scrollToNewest(false);
           // 键盘动画/页面位移结束后再补一次：第二次弹出时立即贴底会按旧视口算。
@@ -2178,6 +2178,7 @@ export struct DirectThreadPage {
       }
       .width('100%')
       .height('100%')
+      .padding({ bottom: this.keyboardVp })
 
       // 悬浮输入条（在 Stack 的 Bottom 对齐层里，自己再抬一次输入法高度）。
       this.inputOverlay()
