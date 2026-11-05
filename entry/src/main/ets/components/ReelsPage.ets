@@ -567,6 +567,21 @@ struct ReelSlide {
     return width > 0 ? width : FALLBACK_WIDTH_VP;
   }
 
+  /**
+   * 复用成新的一条：清掉上一条的暂停/拖动进度，避免新页带着旧页的交互状态。
+   * 播放器由 VideoSurface 自己的 url/playing 变化重建，这里只复位 UI 状态。
+   */
+  aboutToReuse(_params: Record<string, Object>): void {
+    this.userPaused = false;
+    this.holdPaused = false;
+    this.dragging = false;
+    this.dragProgress = 0;
+    this.progress = 0;
+    this.ready = false;
+    this.measuredWidthVp = 0;
+    this.measuredAspect = 0;
+  }
+
   aboutToAppear(): void {
     // 只量一次：屏幕宽高在翻页过程中不会变，量到就够用了（见 screenW 的说明）。
     try {
