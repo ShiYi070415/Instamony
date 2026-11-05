@@ -7445,11 +7445,11 @@ struct Index {
 
   /** 侧边栏之外的可用宽度。 */
   private contentAreaWidth(): number {
-    const total: number = this.shellWidthVp > 0 ? this.shellWidthVp : this.screenWidthVp;
-    // Reels 全屏时侧边栏浮在内容之上，内容宽度按整窗算，背景才能铺到侧边栏。
-    const sidebar: number = this.tabletWideShell() && !this.reelsFullBleed()
-      ? this.tabletSidebarWidth() : 0;
-    return Math.max(0, total - sidebar);
+    /*
+     * ContentArea 已经是侧栏右侧的独立区域：这里不能再减一次侧栏宽度，
+     * 否则右栏宽度会少一个侧栏，右侧空出一节。
+     */
+    return this.shellWidthVp > 0 ? this.shellWidthVp : this.screenWidthVp;
   }
 
   /** 用户页挤入时，信息流从居中位置向左平移到贴侧边栏的距离。 */
