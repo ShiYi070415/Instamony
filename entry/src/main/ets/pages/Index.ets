@@ -15,6 +15,7 @@
 
 import { WindowLayoutService } from '../core/WindowLayoutService';
 import { SidebarHost } from '../shell/SidebarHost';
+import { AppRoutes } from '../router/AppRoutes';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { SymbolGlyphModifier } from '@kit.ArkUI';
 import { common, Want } from '@kit.AbilityKit';
@@ -211,15 +212,15 @@ import { FeedRecommendedPage, FeedViewModel } from '../viewmodel/FeedViewModel';
 const TAG: string = 'InstamonyHome';
 const DOMAIN: number = 0xFF00;
 /** 通知页在 NavPathStack 里的名字（见 destinationBuilder）。 */
-const NOTIFICATIONS_PAGE: string = 'notifications';
+const NOTIFICATIONS_PAGE: string = AppRoutes.NOTIFICATIONS;
 /** 设定页在 NavPathStack 里的名字（见 destinationBuilder）。 */
-const SETTINGS_PAGE: string = 'settings';
+const SETTINGS_PAGE: string = AppRoutes.SETTINGS;
 /** 发布新帖子页（平板首页也走右栏）。 */
 const CREATE_POST_PAGE: string = 'createPost';
 /** 设置二级页（参数 = 分类 key，见 SettingsPanel 的 detailSection）。 */
-const SETTINGS_DETAIL_PAGE: string = 'settingsDetail';
+const SETTINGS_DETAIL_PAGE: string = AppRoutes.SETTINGS_DETAIL;
 /** 赞助开发者页。 */
-const SPONSOR_PAGE: string = 'sponsor';
+const SPONSOR_PAGE: string = AppRoutes.SPONSOR;
 /**
  * **新增账号页**在 NavPathStack 里的名字（见 destinationBuilder）。
  *
@@ -227,16 +228,16 @@ const SPONSOR_PAGE: string = 'sponsor';
  * 所以它是一页 NavDestination（左上角自带返回键），压在当前账号的壳之上 ——
  * 点返回就原样退回，当前账号一点不受影响。
  */
-const ADD_ACCOUNT_PAGE: string = 'addAccount';
+const ADD_ACCOUNT_PAGE: string = AppRoutes.ADD_ACCOUNT;
 /** **用户主页**在 NavPathStack 里的名字（从信息流的资料行点进去，见 destinationBuilder）。 */
-const USER_PROFILE_PAGE: string = 'userProfile';
+const USER_PROFILE_PAGE: string = AppRoutes.USER_PROFILE;
 /**
  * **帖子页**在 NavPathStack 里的名字（点某个网格格子进去，见 destinationBuilder）。
  *
  * 这一页把"当前分页的全部帖子"铺成信息流（需求），并**定位到点进去的那一条**
  * —— 数据由 ProfilePage 整份转好放在 core/PostStream 里（见那里的说明）。
  */
-const POST_PAGE: string = 'postPage';
+const POST_PAGE: string = AppRoutes.POST;
 /**
  * **视频分页的 Reels 页**在 NavPathStack 里的名字（点「我的」/别人主页**视频那一段**的格子进去）。
  *
@@ -245,7 +246,7 @@ const POST_PAGE: string = 'postPage';
  * 标题栏由 HdsNavDestination 给（左上角原生返回键 + 标题 Reels），底部压一层评论输入框
  * （见 CommentInputBar）。
  */
-const PROFILE_REELS_PAGE: string = 'profileReels';
+const PROFILE_REELS_PAGE: string = AppRoutes.PROFILE_REELS;
 /**
  * **搜索页推荐流的 Reels 页**在 NavPathStack 里的名字（需求："把搜索页推荐流实现点击帖子进入
  * 带返回的 reels 页面，底部是评论，点击的帖子显示在第一条，上滑按照浏览 reels 的逻辑运行"）。
@@ -254,7 +255,7 @@ const PROFILE_REELS_PAGE: string = 'profileReels';
  * 只是数据来源不同：一个来自某个人的视频分页，一个来自搜索页的推荐流
  * （见 openSearchReels）。分成两个路由名是为了"返回"与 onShown/onHidden 的记账各自独立。
  */
-const SEARCH_REELS_PAGE: string = 'searchReels';
+const SEARCH_REELS_PAGE: string = AppRoutes.SEARCH_REELS;
 /**
  * **私信会话页**在 NavPathStack 里的名字（点收件箱里的一行进来，见 destinationBuilder）。
  *
