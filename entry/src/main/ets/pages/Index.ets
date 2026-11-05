@@ -13,6 +13,7 @@
  *   具体界面      components/*.ets
  */
 
+import { WindowLayoutService } from '../core/WindowLayoutService';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { SymbolGlyphModifier } from '@kit.ArkUI';
 import { common, Want } from '@kit.AbilityKit';
@@ -7725,7 +7726,7 @@ struct Index {
    */
   private tabletSplitEnabled(): boolean {
     const width: number = this.shellWidthVp > 0 ? this.shellWidthVp : this.screenWidthVp;
-    return width >= 840;
+    return WindowLayoutService.isExpanded(width);
   }
 
   private tabletHomeScoped(): boolean {
@@ -11540,7 +11541,7 @@ struct Index {
     // 必须用“当前窗口宽度”，不能用整块屏幕的显示宽度：
     // 桌面/小窗模式下把窗口拖窄后，屏幕宽度不变，侧边栏会一直留着。
     const width: number = this.shellWidthVp > 0 ? this.shellWidthVp : this.screenWidthVp;
-    return width >= 600;
+    return WindowLayoutService.isWide(width);
   }
 
   /** 侧边栏 tab 是否锁住：只有登录页。 */
