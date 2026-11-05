@@ -23,6 +23,10 @@ import { PosterCache } from './PosterCache';
 import { StoryCache } from './StoryCache';
 import { Translator } from './Translator';
 
+import { FollowState } from './FollowState';
+import { SaveState } from './SaveState';
+import { RepostState } from './RepostState';
+import { ReelsSeen } from './ReelsSeen';
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'AccountCaches';
 
@@ -48,6 +52,11 @@ export class AccountCaches {
     // 页面级短缓存（按游标存、不带账号）：不清就会把上一个人的帖子/推荐页当成"刚拿到的"。
     NativeFeed.clearCache();
     MobileDiscover.clearCache();
+    // 按人记的互动覆盖表：关注/收藏/转发都是"点过就以本地为准"，不换号会串到新账号。
+    FollowState.clear();
+    SaveState.clear();
+    RepostState.clear();
+    ReelsSeen.clear();
     hilog.info(DOMAIN, TAG, 'process caches cleared');
   }
 }
