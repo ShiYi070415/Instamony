@@ -26,6 +26,7 @@ import { Translator } from './Translator';
 import { FollowState } from './FollowState';
 import { SaveState } from './SaveState';
 import { RepostState } from './RepostState';
+import { EngageState } from './NativeEngage';
 import { ReelsSeen } from './ReelsSeen';
 const DOMAIN: number = 0xFF00;
 const TAG: string = 'AccountCaches';
@@ -56,6 +57,7 @@ export class AccountCaches {
     FollowState.clear();
     SaveState.clear();
     RepostState.clear();
+    EngageState.clear();
     ReelsSeen.clear();
     hilog.info(DOMAIN, TAG, 'process caches cleared');
   }
