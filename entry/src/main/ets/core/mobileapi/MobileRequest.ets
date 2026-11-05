@@ -28,6 +28,7 @@ import { ApiThrottle, BACKOFF_MS, FEEDBACK_BACKOFF_MS } from '../ApiThrottle';
 import { DoHResolver } from '../net/DoHResolver';
 import { MobileSession, MobileIdentity } from './MobileSession';
 import { MobileChallenge } from './MobileChallenge';
+import { AccountScope } from '../AccountScope';
 import { signedBody } from './MobileSign';
 import {
   API_DOMAIN,
@@ -338,6 +339,7 @@ export class MobileRequest {
      * 否则后面的请求全被卡死（`ApiThrottle` 那边还有 30 秒防呆兜底）。
      */
     const queued: number = Date.now();
+    const accountGen: number = AccountScope.generationNow();
     await ApiThrottle.acquire(opts.priority);
     if (Date.now() - queued > 50) {
       hilog.info(DOMAIN, TAG, 'paced %{public}s waited=%{public}dms %{public}s',
@@ -354,6 +356,15 @@ export class MobileRequest {
       }));
       const text: string = typeof response.result === 'string'
         ? response.result as string : JSON.stringify(response.result);
+      /*
+       * 账号在飞行途中换了：这份响应属于上一个人，连响应头里的 claim 都不能吸收
+       * （否则会把 A 的 claim 写进 B 的会话）。直接按失败返回，调用方不会落任何数据。
+       */
+      if (accountGen !== AccountScope.generationNow()) {
+        hilog.info(DOMAIN, TAG, 'drop stale %{public}s (account changed)', endpoint);
+        return new MobileResult(false, 'account-changed', 0, Date.now() - started,
+          0, '', '账号已切换');
+      }
       // 服务端下发的会话材料（claim / mid / rur / authorization）先捡起来，再判成败 ——
       // 420 / 挑战响应里也可能带着新的 claim，捡到就赚一发。
       try {

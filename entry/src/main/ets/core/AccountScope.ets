@@ -66,6 +66,11 @@ export class AccountScope {
   private static store: preferences.Preferences | null = null;
   /** 当前账号槽位（'' = 还不知道 / 未登录）。 */
   private static account: string = '';
+  /**
+   * 账号代次：每次账号槽位真正变化 +1。异步请求发起时记下它，回包时对不上就丢弃，
+   * 防止 A 账号的响应写进 B 账号的页面。
+   */
+  private static generation: number = 0;
   /** 注册进来的分区缓存（各 cache 在自己 init 时登记）。 */
   private static scoped: Array<ScopedStore> = [];
 
@@ -87,6 +92,16 @@ export class AccountScope {
   /** 当前账号槽位（'' = 未知）。 */
   static current(): string {
     return AccountScope.account;
+  }
+
+  /** 当前账号代次（异步请求发起/回包时比对）。 */
+  static generationNow(): number {
+    return AccountScope.generation;
+  }
+
+  /** 作废所有在飞请求的写回资格（账号切换/退出登录时调）。 */
+  static bumpGeneration(): void {
+    AccountScope.generation++;
   }
 
   /**
@@ -139,6 +154,7 @@ export class AccountScope {
       return false;
     }
     AccountScope.account = next;
+    AccountScope.generation++;
     const store: preferences.Preferences | null = AccountScope.store;
     if (store !== null) {
       try {
