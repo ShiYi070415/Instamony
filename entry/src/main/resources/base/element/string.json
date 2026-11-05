@@ -1311,6 +1311,10 @@
     {
       "name": "settings_item_app_details",
       "value": "应用详情"
+    },
+    {
+      "name": "action_retry",
+      "value": "重试"
     }
   ]
 }

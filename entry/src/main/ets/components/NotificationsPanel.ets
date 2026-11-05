@@ -193,6 +193,16 @@ export struct NotificationsPanel {
             Text($r('app.string.notify_empty'))
               .fontSize(15)
               .fontColor($r('app.color.secondary_text'))
+            if (this.state === 'failed') {
+              Button($r('app.string.action_retry'))
+                .fontSize(14)
+                .height(36)
+                .backgroundColor($r('app.color.field_background'))
+                .fontColor($r('app.color.primary_text'))
+                .onClick((): void => {
+                  this.onRefresh();
+                })
+            }
             if (this.diag.length > 0) {
               Text(this.diag)
                 .fontSize(11)
