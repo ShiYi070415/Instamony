@@ -867,6 +867,8 @@ export struct LoginPage {
       }
       .width('100%')
       .height('100%')
+      // 三折叠/平板：登录表单限宽并居中，不把输入框拉满整屏。
+      .constraintSize({ maxWidth: 560 })
       .padding({ left: SIDE_VP, right: SIDE_VP })
 
       // 只在打开时挂载；不要用 .overlay(空 builder)：空 overlay 会铺满整页吃掉触摸。
