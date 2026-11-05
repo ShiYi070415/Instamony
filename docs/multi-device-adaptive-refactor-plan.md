@@ -19,7 +19,7 @@ Row
 └─ ContentArea（侧栏右侧整块区域）
 ```
 
-`contentAreaWidth()` 不再重复减侧栏宽度；ReelsPage 的 `leftInsetVp` 归零（Reels 从侧栏右侧开始，不再二次内缩）；SidebarHost 外层加 `zIndex(100)`，设置/详情页从右侧滑入时不会先盖住侧边栏。提交：`8f6f1b0`、`beb1f3e`、`4c116ef`。
+`contentAreaWidth()` 不再重复减侧栏宽度；ReelsPage 的 `leftInsetVp` 归零；SidebarHost 外层加 `zIndex(100)`；`ContentArea` 统一加 `bottomInset = bottomSafeVp`，所有页面底部组件避让手势条/三键导航。提交：`8f6f1b0`、`beb1f3e`、`4c116ef`、`f2e084c`。
 
 这份文档是**目标方案**，不是已经完成的清单。当前实际状态：
 
