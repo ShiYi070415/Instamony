@@ -72,6 +72,71 @@ export class MediaDownloader {
     }
   }
 
+  /**
+   * 一次保存多张图片：先全部下到沙盒，再用**一次**授权窗拿到全部目标 URI，逐张复制。
+   * 返回成功保存的张数。
+   */
+  static async saveMany(context: common.UIAbilityContext, urls: Array<string>, ext: string,
+                        title: string, isVideo: boolean): Promise<number> {
+    const valid: Array<string> = urls.filter((url: string): boolean => url.length > 0);
+    if (valid.length === 0) {
+      return 0;
+    }
+    const safeTitle: string = MediaDownloader.safeName(title);
+    const paths: Array<string> = [];
+    const configs: Array<photoAccessHelper.PhotoCreationConfig> = [];
+    for (let index: number = 0; index < valid.length; index++) {
+      const path: string = `${context.filesDir}/dl_${safeTitle}_${Date.now()}_${index}.${ext}`;
+      try {
+        await MediaDownloader.download(context, valid[index], path);
+        paths.push(path);
+        configs.push({
+          title: `${safeTitle}_${index + 1}`,
+          fileNameExtension: ext,
+          photoType: isVideo ? photoAccessHelper.PhotoType.VIDEO : photoAccessHelper.PhotoType.IMAGE,
+          subtype: photoAccessHelper.PhotoSubtype.DEFAULT
+        });
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'multi download failed index=%{public}d: %{public}s',
+          index, (error as Error).message);
+      }
+    }
+    if (paths.length === 0) {
+      return 0;
+    }
+    let saved: number = 0;
+    try {
+      const helper: photoAccessHelper.PhotoAccessHelper = photoAccessHelper.getPhotoAccessHelper(context);
+      const destUris: Array<string> = await helper.showAssetsCreationDialog(paths, configs);
+      for (let index: number = 0; index < destUris.length && index < paths.length; index++) {
+        try {
+          const dest: fileIo.File = await fileIo.open(destUris[index], fileIo.OpenMode.WRITE_ONLY);
+          const src: fileIo.File = await fileIo.open(paths[index], fileIo.OpenMode.READ_ONLY);
+          try {
+            await fileIo.copyFile(src.fd, dest.fd);
+            saved++;
+          } finally {
+            fileIo.closeSync(src);
+            fileIo.closeSync(dest);
+          }
+        } catch (error) {
+          hilog.warn(DOMAIN, TAG, 'multi copy failed index=%{public}d: %{public}s',
+            index, (error as Error).message);
+        }
+      }
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'multi gallery dialog failed: %{public}s', (error as Error).message);
+    } finally {
+      for (let index: number = 0; index < paths.length; index++) {
+        try {
+          fileIo.unlinkSync(paths[index]);
+        } catch (error) {
+        }
+      }
+    }
+    return saved;
+  }
+
   /** 下载到沙盒（覆盖同名文件）。 */
   private static async download(context: common.UIAbilityContext, url: string,
                                 path: string): Promise<void> {

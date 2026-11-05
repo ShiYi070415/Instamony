@@ -2835,6 +2835,8 @@ export struct FeedList {
           // 地址**点按那一刻**才解析：多图轮播当前页会变，写成 @Prop 会一直停在构建时那一页
           // （需求："下载按钮没有绑定当前显示图片"）。
           resolveUrl: (): string => this.downloadUrl(post),
+          // 多图帖：一次保存全部原图，而不是只存当前/第一张。
+          resolveUrls: (): Array<string> => this.downloadUrls(post),
           ext: post.isVideo() ? 'mp4' : 'jpg',
           title: post.shortcode.length > 0 ? post.shortcode : post.id,
           isVideo: post.isVideo()
@@ -2908,6 +2910,19 @@ export struct FeedList {
    * 多图轮播下**当前显示的那一张**（carousel 的页号记在 carouselPages 里）——
    * 这个方法由下载按钮在**点按那一刻**调用（见 MediaDownloadButton.resolveUrl）。
    */
+  /** 多图帖要保存的全部原图（视频/单图只有一张）。 */
+  private downloadUrls(post: MediaPost): Array<string> {
+    if (post.isVideo()) {
+      return [this.downloadUrl(post)];
+    }
+    const originals: Array<string> = post.originalImageUrls;
+    const source: Array<string> = originals.length > 1 ? originals : post.imageUrls;
+    if (source.length > 0) {
+      return source;
+    }
+    return [post.displayUrl];
+  }
+
   private downloadUrl(post: MediaPost): string {
     if (post.isVideo()) {
       return post.originalVideoUrl.length > 0 ? post.originalVideoUrl : post.videoUrl;

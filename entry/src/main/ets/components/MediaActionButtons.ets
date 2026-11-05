@@ -44,6 +44,11 @@ export struct MediaDownloadButton {
    * 改成回调后，每次点按都重新问一遍"现在显示的是哪张"（见 FeedList.downloadUrl）。
    */
   resolveUrl: () => string = (): string => '';
+  /**
+   * 多图帖：点一次下载**全部原图**。为 null 时退回 resolveUrl 的单张路径
+   * （快拍/单图仍然只用 resolveUrl）。
+   */
+  resolveUrls: (() => Array<string>) | null = null;
   @Prop ext: string = 'jpg';
   @Prop title: string = '';
   @Prop isVideo: boolean = false;
@@ -62,11 +67,29 @@ export struct MediaDownloadButton {
       autoInvert: this.tint.length === 0,
       onTap: (): void => {
         const host: common.Context | undefined = this.getUIContext().getHostContext();
-        const url: string = this.resolveUrl();
-        if (host === undefined || url.length === 0) {
+        if (host === undefined) {
           return;
         }
-        downloadMedia(host as common.UIAbilityContext, url, this.ext, this.title, this.isVideo);
+        const urls: Array<string> = this.resolveUrls === null
+          ? [this.resolveUrl()] : this.resolveUrls();
+        const valid: Array<string> = urls.filter((url: string): boolean => url.length > 0);
+        if (valid.length === 0) {
+          return;
+        }
+        if (valid.length === 1) {
+          downloadMedia(host as common.UIAbilityContext, valid[0], this.ext, this.title, this.isVideo);
+          return;
+        }
+        MediaDownloader.saveMany(host as common.UIAbilityContext, valid, this.ext,
+          this.title, this.isVideo).then((saved: number): void => {
+          try {
+            promptAction.showToast({
+              message: saved > 0 ? `已保存 ${saved} 张` : $r('app.string.media_save_failed'),
+              duration: 1600
+            });
+          } catch (error) {
+          }
+        });
       }
     })
   }
