@@ -5,6 +5,22 @@
 
 ## 0. 实施状态（2026-11 修订）
 
+### 0.1 键盘避让排查结论（2026-11-06）
+
+**侧边栏结构问题**：`nativeShell` 是根 `Stack`，主体 `Row` 通过 `margin-left` 让位，侧边栏是另一个 `position: absolute`、`zIndex: 40` 的 `Stack` 兄弟节点，不在左栏 `Row` 里。页面级 `RESIZE` 缩短的是整个根 `Stack`，所以侧边栏和主体一起缩；这不是“侧边栏在左栏里”的正常结构。
+
+**会话第二次不跟随**：`keyboardHeightChange` 里延迟贴底的判断写成了 `if (this.keyboardVp > 0)`，但 `RESIZE` 路径下 `keyboardVp` 恒为 0，导致第二次打开键盘时延迟 `scrollToNewest` 永远不执行。已改为 `if (this.keyboardPx > 0)`。
+
+正确结构（待重构）：
+
+```text
+Row
+├─ Sidebar（固定窗口高度）
+└─ Content（HdsNavigation，参与页面 RESIZE）
+```
+
+或侧边栏作为窗口级 overlay，高度固定，不受内容页 RESIZE 影响。
+
 这份文档是**目标方案**，不是已经完成的清单。当前实际状态：
 
 | 模块 | 状态 | 说明 |
