@@ -15,7 +15,7 @@
 | HDS 标题栏 | 已回退 | 按实测改回系统原始 HDS API，不再手写 `maskExtraHeight=48`/`blurRadius=80`；文档 2.4 的旧参数作废 |
 | 滚动安全 | 部分完成 | `safeScrollY()` 已覆盖主要页面；尚未全量替换裸 `currentOffset().yOffset` |
 | Reels 崩溃 | 部分完成 | `VideoSurface` 已有 player/epoch 保护，冷启动缓存已移除，`ReelsSeen` 台账改异步落盘；仍无 `ReelsPlayerPool`、`LazyForEach`、`@Reusable` |
-| 键盘避让 | 已修复 | 页面级 `KeyboardAvoidMode.RESIZE`；侧边栏固定窗口高度、页签 `focusable(false)`，页面缩短时按钮不堆叠；会话页列表与输入条随页面一起缩短 |
+| 键盘避让 | 页面级 RESIZE | 按官方文档使用 `KeyboardAvoidMode.RESIZE`，删除手动 `keyboardVp`、额外监听、侧栏补偿和高度 hack；当前保留页面级缩短行为，后续如需解决侧栏/气泡细节再按官方方案重做 |
 | 布局/断点服务 | 部分完成 | `WindowLayoutService` 已抽出，`tabletWideShell`/`tabletSplitEnabled` 改为读断点；页面内容框架、安全区、侧栏宽度尚未统一 |
 | 请求调度/幂等 | 部分完成 | 点赞/转发本来就有合并意图；新增收藏在飞去重、只读请求并发去重；Feed 原生翻页 stuck 判据已改用关注流长度；仍无统一 `RequestScheduler`、取消、通用按钮 busy |
 | 主线程下沉 | 部分完成 | 探索流 1MB 级 JSON 已移入 taskpool（失败自动回退主线程）；Feed/Profile 的解析仍有主线程路径，inflate 与其余大包未全量下沉 |
