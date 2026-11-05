@@ -29,15 +29,15 @@ Row
 | 设置/通知路由 | 已验收 | 左栏二级不堆叠、右栏三级可堆叠、二级返回回单栏；仍是 `navStack + tabletProfileStack` 两套栈，不是单栈 Split |
 | 侧边栏安全区/误触 | 已修复 | 设置页安全区保持底色；chip 伪事件已加时间门控；`SidebarHost` 固定窗口高度；侧栏顶部/底部按钮分别避让 `topSafeVp` / `bottomSafeVp`；侧栏 `zIndex(100)`，设置页滑入不遮挡 |
 | HDS 标题栏 | 已回退 | 按实测改回系统原始 HDS API，不再手写 `maskExtraHeight=48`/`blurRadius=80`；文档 2.4 的旧参数作废 |
-| 滚动安全 | 部分完成 | `safeScrollY()` 已覆盖主要页面；尚未全量替换裸 `currentOffset().yOffset` |
+| 滚动安全 | 已验收 | `safeScrollY()` / `ScrollerSafe` 已覆盖所有 `currentOffset().yOffset`；剩余只有它们的实现与注释 |
 | Reels 崩溃 | 部分完成 | `VideoSurface` 已有 player/epoch 保护，冷启动缓存已移除，`ReelsSeen` 台账改异步落盘；仍无 `ReelsPlayerPool`、`LazyForEach`、`@Reusable` |
 | 键盘避让 | 页面级 RESIZE | 按官方文档使用 `KeyboardAvoidMode.RESIZE`；会话输入条键盘弹起时贴页底（0vp），收起时只留 `bottomSafeVp` |
 | Index 拆分 | 部分完成 | `SidebarHost`、`ContentArea`、`AppRoutes`、`AppRouter`、`PageRegistry`、`PageDestination` 已落地；所有 destination 分支已改为组件调用（含会话页副标题/头像）；`destinationBuilder` 仍有名字 switch |
 | 布局/断点服务 | 部分完成 | `WindowLayoutService` 已抽出，`tabletWideShell`/`tabletSplitEnabled` 改为读断点；`contentAreaWidth` 不再重复减侧栏；Reels 标题/正文左边线统一；页面内容框架、安全区、侧栏宽度尚未统一 |
-| 请求调度/幂等 | 部分完成 | 点赞/转发本来就有合并意图；新增收藏在飞去重、只读请求并发去重；Feed 原生翻页 stuck 判据已改用关注流长度；仍无统一 `RequestScheduler`、取消、通用按钮 busy |
+| 请求调度/幂等 | 部分完成 | 只读请求合并已抽成 `RequestScheduler`，`MobileRequest` 接入；点赞/转发有合并意图，收藏飞去重，Feed 翻页 stuck 判据已改；仍无统一写请求 busy/取消 |
 | 主线程下沉 | 部分完成 | 探索流 1MB 级 JSON 已移入 taskpool（失败自动回退主线程）；Feed/Profile 的解析仍有主线程路径，inflate 与其余大包未全量下沉 |
 
-**结论：文档约完成 45%。** 已稳定的是路由返回语义、账号页面清理、账号代次丢弃过期回包、通知代次、Reels epoch、侧栏安全区/层级、收藏/只读去重、探索流 taskpool 解析；`SidebarHost`、`ContentArea`、`AppRoutes`、`AppRouter`、`PageRegistry`、`PageDestination` 已落地，页面基本迁出。
+**结论：文档约完成 48%。** 已稳定的是路由返回语义、账号页面清理、账号代次丢弃过期回包、通知代次、Reels epoch、侧栏安全区/层级、滚动安全、收藏/只读去重、`RequestScheduler`、探索流 taskpool 解析；`SidebarHost`、`ContentArea`、`AppRoutes`、`AppRouter`、`PageRegistry`、`PageDestination` 已落地，页面基本迁出。
 
 后续落地顺序调整为：
 
