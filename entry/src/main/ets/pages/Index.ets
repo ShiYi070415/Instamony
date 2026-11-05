@@ -9982,7 +9982,7 @@ struct Index {
       // 标题栏那两颗按钮按**来源**取用（见 core/ReelsAction）：这是底栏那一页。
       source: ReelsAction.HOME,
       // 左侧主 Reels 始终避让侧边栏；右栏 Reels 由另一个实例单独处理。
-      leftInsetVp: this.reelsFullBleed() ? this.tabletSidebarWidth() : 0,
+      leftInsetVp: 0,
       infoBottomVp: this.homeReelsInfoBottomVp(),
       // 分段滑动时冻结所有视频播放（见 ReelsPage.freeze 与 reelsTab 的 Tabs 回调）。
       // 刷到自己的视频时不画关注按钮（同其它两页）。
@@ -11256,7 +11256,7 @@ struct Index {
   searchPage() {
     SearchPage({
       vm: this.searchVm,
-      leftInsetVp: this.reelsFullBleed() ? this.tabletSidebarWidth() : 0,
+      leftInsetVp: 0,
       // 探索流那条瀑布流的控制器交给标题栏（见 searchFlowScroller 的说明）。
       flowScroller: this.searchFlowScroller,
       onFeedScroll: (deltaY: number, offsetY: number, scrollState: ScrollState): void => {
@@ -11701,14 +11701,23 @@ struct Index {
       // 普通页面用 margin-left 让开它，Reels 全屏时 margin = 0，背景可铺到侧边栏下面。
       Row() {
         if (this.tabletWideShell()) {
-          // 侧边栏是 Row 的第一列：SidebarHost 固定窗口高度，内容页独立 RESIZE。
-          SidebarHost({
-            widthVp: this.tabletSidebarWidth(),
-            heightVp: this.tabletSidebarHeightVp(),
-            transparent: this.reelsBackdropActive() && !this.settingsOverReels()
-          }) {
-            this.tabletSidebar()
+          /*
+           * 侧边栏是 Row 第一列，但仍然要压在最顶层：
+           * 设置页/详情页的 HdsNavigation 过渡时会从右侧滑入，如果没有 zIndex，
+           * 会先盖住侧边栏再退回，看起来就是“侧边栏消失一下”。
+           */
+          Stack() {
+            SidebarHost({
+              widthVp: this.tabletSidebarWidth(),
+              heightVp: this.tabletSidebarHeightVp(),
+              transparent: this.reelsBackdropActive() && !this.settingsOverReels()
+            }) {
+              this.tabletSidebar()
+            }
           }
+          .width(this.tabletSidebarWidth())
+          .height(this.tabletSidebarHeightVp())
+          .zIndex(100)
         }
         ContentArea({
           // ContentArea 永远是侧栏右边的整块区域；左栏宽度只约束里面的 HdsNavigation。
