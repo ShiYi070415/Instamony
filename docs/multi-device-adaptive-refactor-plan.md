@@ -27,7 +27,7 @@ Row
 |---|---|---|
 | 账号切换页面清理 | 部分完成 | `resetAccountPageState()` 已清右栏/tab/用户页 VM/帖子页/评论预取；`AccountScope.generation` + `MobileRequest` 已能丢弃换号后晚到的响应；`ProfileViewModel` 延迟预取已可取消并校验代次；`AccountUiReset` 尚未抽出，缓存 key 账号分区未全量审计 |
 | 设置/通知路由 | 已验收 | 左栏二级不堆叠、右栏三级可堆叠、二级返回回单栏；仍是 `navStack + tabletProfileStack` 两套栈，不是单栈 Split |
-| 侧边栏安全区/误触 | 已修复 | 设置页安全区保持底色；chip 伪事件已加时间门控；已抽出 `SidebarHost`，作为 Row 第一列、固定窗口高度 |
+| 侧边栏安全区/误触 | 已修复 | 设置页安全区保持底色；chip 伪事件已加时间门控；`SidebarHost` 固定窗口高度；侧栏顶部/底部按钮分别避让 `topSafeVp` / `bottomSafeVp` |
 | HDS 标题栏 | 已回退 | 按实测改回系统原始 HDS API，不再手写 `maskExtraHeight=48`/`blurRadius=80`；文档 2.4 的旧参数作废 |
 | 滚动安全 | 部分完成 | `safeScrollY()` 已覆盖主要页面；尚未全量替换裸 `currentOffset().yOffset` |
 | Reels 崩溃 | 部分完成 | `VideoSurface` 已有 player/epoch 保护，冷启动缓存已移除，`ReelsSeen` 台账改异步落盘；仍无 `ReelsPlayerPool`、`LazyForEach`、`@Reusable` |
