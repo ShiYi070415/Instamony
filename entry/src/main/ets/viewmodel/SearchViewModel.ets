@@ -61,6 +61,8 @@ const RESTART_MAX: number = 2;
 export class SearchViewModel {
   private users: Array<SearchUser> = [];
   private posts: Array<SearchPost> = [];
+  /** 关键词搜索到的帖子/Reels（与推荐流分开，见 search）。 */
+  private resultPosts: Array<SearchPost> = [];
   private busy: boolean = false;
   /** 当前关键词（空串 = 推荐态）。 */
   private query: string = '';
@@ -125,6 +127,9 @@ export class SearchViewModel {
   };
   onPosts: (posts: Array<SearchPost>) => void = (posts: Array<SearchPost>): void => {
   };
+  /** 关键词搜索出的帖子/Reels（供结果页 “为你推荐/账户” 两个 tab 用）。 */
+  onResultPosts: (posts: Array<SearchPost>) => void = (posts: Array<SearchPost>): void => {
+  };
   onBusy: (busy: boolean) => void = (busy: boolean): void => {
   };
   onStatus: (text: string) => void = (text: string): void => {
@@ -145,6 +150,10 @@ export class SearchViewModel {
 
   postList(): Array<SearchPost> {
     return this.posts;
+  }
+
+  resultPostList(): Array<SearchPost> {
+    return this.resultPosts;
   }
 
   isBusy(): boolean {
@@ -716,18 +725,28 @@ export class SearchViewModel {
     this.busy = true;
     this.onBusy(true);
     this.setUsers([]);
+    this.resultPosts = [];
+    this.onResultPosts([]);
     this.onStatus('正在搜索…');
     try {
-      // 账号搜索只有一条链路：移动端 `fbsearch/account_serp/` → REST 兜底（见 NativeSearch.searchUsers）。
-      const page: Array<SearchUser> | null = await NativeSearch.searchUsers(text);
-      if (page === null) {
+      // 账号与帖子/Reels 并行取；任一失败就显示另一份已有的结果。
+      const usersTask: Promise<Array<SearchUser> | null> = NativeSearch.searchUsers(text);
+      const postsTask: Promise<SearchPostPage | null> = NativeSearch.searchPosts(text);
+      const users: Array<SearchUser> | null = await usersTask;
+      const postPage: SearchPostPage | null = await postsTask;
+      const found: Array<SearchUser> = users === null ? [] : users;
+      const posts: Array<SearchPost> = postPage === null ? [] : postPage.posts;
+      this.setUsers(found);
+      this.resultPosts = posts;
+      this.onResultPosts(posts);
+      if (users === null && postPage === null) {
         this.diag = NativeSearch.lastDiag();
         hilog.info(DOMAIN, TAG, 'search failed on both paths (%{public}s)', this.diag);
         this.onStatus('搜索失败：' + this.diag);
         return;
       }
-      this.setUsers(page);
-      this.onStatus(page.length === 0 ? '没有找到结果' : `找到 ${page.length} 个账号`);
+      this.onStatus(found.length === 0 && posts.length === 0
+        ? '没有找到结果' : `找到 ${found.length} 个账号、${posts.length} 条帖子`);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'search threw: %{public}s', (error as Error).message);
       this.onStatus('搜索出错');
@@ -770,6 +789,8 @@ export class SearchViewModel {
     this.query = '';
     this.onQuery('');
     this.setUsers([]);
+    this.resultPosts = [];
+    this.onResultPosts([]);
     this.onStatus('');
     if (!this.recommendLoaded && NativeSearch.hasRecommendedSource()) {
       this.loadRecommended();
@@ -794,6 +815,8 @@ export class SearchViewModel {
     this.onUsers([]);
     this.posts = [];
     this.onPosts([]);
+    this.resultPosts = [];
+    this.onResultPosts([]);
     this.onStatus('');
     this.busy = false;
     this.onBusy(false);

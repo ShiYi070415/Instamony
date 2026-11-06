@@ -91,6 +91,8 @@ import {
   MATERIAL_THICKNESS_REGULAR,
   SEARCH_BOX_COLLAPSED,
   SEARCH_BOX_FOCUS_REQUEST,
+  SEARCH_QUERY_TEXT,
+  SEARCH_SUBMIT_SEQ,
   SETTING_BAR_HIDE,
   SETTING_DARK_UI,
   SETTING_MATERIAL_LEVEL,
@@ -1468,6 +1470,8 @@ struct Index {
    * 页面据此把搜索框放出来并要焦点（输入法随之起来）。
    */
   @StorageProp(SEARCH_BOX_COLLAPSED) searchBoxCollapsed: boolean = false;
+  /** 搜索框文本：标题栏输入框与 SearchPage 共用。 */
+  @StorageLink(SEARCH_QUERY_TEXT) searchQueryText: string = '';
 
   /** 系统明暗变了：全局本来就跟随系统，这里只清一次历史强制配置。 */
   private onThemeChanged(): void {
@@ -1912,29 +1916,8 @@ struct Index {
       return this.reelsMenu(ReelsAction.HOME);
     }
     if (tab === AppTab.Search) {
-      // 「搜索」页：搜索框收起来之后，右上角这颗放大镜就是"把它叫回来"的按钮
-      // （需求："收缩成按钮到右上角，点击……才展开"）。展开着的时候标题栏里已经有完整的
-      // 搜索框，这里不摆多余的按钮。
-      if (!this.searchBoxCollapsed) {
-        return { value: [] };
-      }
-      return {
-        value: [
-          {
-            content: {
-              icon: $r('sys.symbol.magnifyingglass'),
-              label: $r('app.string.search_action'),
-              action: (): void => {
-                // 展开**并进入输入模式**（需求）：页面收到这个请求就把搜索框放出来、要焦点，
-                // 输入法随之起来（见 SearchPage.onFocusRequested）。
-                // 写一个**变化的值**而不是布尔：连点两次也要各弹一次。
-                AppStorage.setOrCreate(SEARCH_BOX_COLLAPSED, false);
-                AppStorage.setOrCreate(SEARCH_BOX_FOCUS_REQUEST, Date.now());
-              }
-            }
-          }
-        ]
-      };
+      // 搜索框常驻标题栏，不再需要右上角那颗“叫回搜索框”的放大镜。
+      return { value: [] };
     }
     return { value: [] };
   }
@@ -9406,8 +9389,14 @@ struct Index {
       };
     }
     if (this.currentTab() === AppTab.Search) {
-      // 搜索页标题也交给 HDS mainTitle，左边距由 titleBar.padding 避让侧边栏。
-      return { title: { mainTitle: this.pageTitle() }, menu: this.menus() };
+      // 标题与搜索框同一行：stackBuilder 会顶掉 HDS 自己的 mainTitle，所以标题自己画。
+      return {
+        title: { mainTitle: '' },
+        menu: this.menus(),
+        stackBuilder: (): void => {
+          this.searchTitleSegment();
+        }
+      };
     }
     if (this.currentTab() === AppTab.Profile) {
       // 「我的」标题交给 HDS mainTitle；账号入口仍在 menus 里。
@@ -9897,21 +9886,43 @@ struct Index {
   /** 搜索页标题：侧边栏宽度 + 原标题留白。 */
   @Builder
   searchTitleSegment() {
-    Row() {
+    Row({ space: 10 }) {
       Text(this.pageTitle())
         .fontSize(REELS_TITLE_SIZE)
         .fontWeight(FontWeight.Bold)
         .fontColor($r('app.color.primary_text'))
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
+      // 搜索输入框和 HDS 标题同一行：标题在左，输入框占剩余宽度。
+      Search({ value: this.searchQueryText, placeholder: $r('app.string.search_hint') })
+        .layoutWeight(1)
+        .height(36)
+        .borderRadius(18)
+        .backgroundColor($r('app.color.field_background'))
+        .placeholderColor($r('app.color.secondary_text'))
+        .placeholderFont({ size: 14 })
+        .textFont({ size: 14 })
+        .fontColor($r('app.color.primary_text'))
+        .caretStyle({ color: $r('app.color.primary_text') })
+        .searchButton($r('app.string.search_action'), { fontSize: 14,
+          fontColor: $r('app.color.primary_text') })
+        .onChange((value: string): void => {
+          this.searchQueryText = value;
+          if (value.length === 0) {
+            this.searchVm.clear();
+          }
+        })
+        .onSubmit((value: string): void => {
+          this.searchQueryText = value;
+          AppStorage.setOrCreate(SEARCH_SUBMIT_SEQ, Date.now());
+        })
     }
     .width('100%')
     .height('100%')
-    .alignItems(VerticalAlign.Top)
+    .alignItems(VerticalAlign.Center)
     .padding({
       left: REELS_TITLE_LEFT_PAD_VP + this.reelsSidebarInset(),
-      right: 12,
-      top: 8
+      right: 12
     })
   }
 

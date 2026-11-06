@@ -160,6 +160,24 @@ export class NativeSearch {
   }
 
   /**
+   * 按关键词搜**帖子 / Reels**（`fbsearch/top_serp/` 的 media_grid，见 MobileDiscover.mediaSearch）。
+   *
+   * 返回 null = 这一条没拿到；空数组 = 拿到了但没有帖子。
+   */
+  static async searchPosts(query: string, nextMaxId: string = ''): Promise<SearchPostPage | null> {
+    const page: MobileMediaPage | null = await MobileDiscover.mediaSearch(query, nextMaxId, '',
+      ApiThrottle.interactive());
+    if (page === null) {
+      return null;
+    }
+    const posts: Array<SearchPost> = NativeSearch.postsFromMedias(page.medias);
+    NativeSearch.source = 'mobile:top_serp';
+    hilog.info(DOMAIN, TAG, 'search posts q=%{public}s posts=%{public}d more=%{public}s',
+      query, posts.length, `${page.hasMore}`);
+    return new SearchPostPage(posts, page.nextCursor, page.hasMore, NativeSearch.source);
+  }
+
+  /**
    * 搜账号：**只走移动端**（`fbsearch/account_serp/`，见 core/mobileapi/MobileDiscover）。
    *
    * 原先那条 `/web/search/topsearch/` 的 REST 兜底要借网页会话头（RestSession 的模板头），

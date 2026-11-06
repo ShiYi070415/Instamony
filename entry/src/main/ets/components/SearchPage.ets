@@ -36,6 +36,7 @@ import { SearchPost, SearchUser } from '../model/Search';
 import { SearchViewModel } from '../viewmodel/SearchViewModel';
 import { ScrollDelta } from '../core/ScrollReport';
 import { MATERIAL_THICKNESS_ULTRA_THIN, SEARCH_BOX_COLLAPSED, SEARCH_BOX_FOCUS_REQUEST,
+  SEARCH_QUERY_TEXT, SEARCH_SUBMIT_SEQ,
   SETTING_MATERIAL_THICKNESS, TAB_TAP_SEARCH, TAB_TAP_TOP_EPSILON_VP,
   TAB_TAP_TOP_SCROLL_MS } from '../core/AppSettings';
 import { PlatformCap } from '../core/PlatformCap';
@@ -162,8 +163,16 @@ class SearchPostSource implements IDataSource {
 export struct SearchPage {
   /** 视图模型：普通属性（页面自己用 @State 存显示用的数据）。 */
   vm: SearchViewModel = new SearchViewModel();
-  /** 当前关键词（搜索框在本页，见 searchText）：空 = 推荐态。 */
-  @State private searchText: string = '';
+  /** 当前关键词：标题栏输入框与 SearcPage 共用这份 AppStorage。 */
+  @StorageLink(SEARCH_QUERY_TEXT) @Watch('onSharedQuery') searchText: string = '';
+  /** 标题栏提交信号：每次提交变一次，SearchPage 收到就执行搜索。 */
+  @StorageLink(SEARCH_SUBMIT_SEQ) @Watch('onSharedSubmit') submitSeq: number = 0;
+  /** 关键词搜索出的帖子/Reels（与推荐流分开）。 */
+  @State private resultPosts: Array<SearchPost> = [];
+  /** 结果页当前分段：0 = 为你推荐，1 = 账户。 */
+  @State private resultTab: number = 0;
+  /** 结果两列网格的实际宽度（vp）。 */
+  @State private resultWidthVp: number = 0;
   /** 点一个账号：交给页面用网页打开主页。 */
   onOpen: (user: SearchUser) => void = (user: SearchUser): void => {
   };
@@ -212,6 +221,8 @@ export struct SearchPage {
   @State private flowWidthVp: number = FALLBACK_WIDTH_VP;
   /** 推荐流的数据源（LazyForEach 要它，见 SearchPostSource）。 */
   private readonly postSource: SearchPostSource = new SearchPostSource();
+  /** 关键词结果帖子的数据源（两列网格）。 */
+  private readonly resultSource: SearchPostSource = new SearchPostSource();
   /**
    * 搜索框收起来了没有（需求："上滑搜索框收缩成按钮到右上角，点击或者回到顶部时才展开"）。
    *
@@ -296,6 +307,10 @@ export struct SearchPage {
       // 数据源也要换：LazyForEach 只认数据源，不认这个 @State（@State 只用来判断"空不空"）。
       this.postSource.apply(posts);
     };
+    this.vm.onResultPosts = (posts: Array<SearchPost>): void => {
+      this.resultPosts = posts;
+      this.resultSource.apply(posts);
+    };
     this.vm.onMore = (hasMore: boolean): void => {
       this.hasMore = hasMore;
     };
@@ -330,6 +345,29 @@ export struct SearchPage {
     this.loadingMore = this.vm.isLoadingMore();
     // 关键词也回填：切走再切回来时，搜索框里还是上次那个词，下面也还是那批账号结果。
     this.searchText = this.vm.lastQuery();
+    this.resultPosts = this.vm.resultPostList();
+    this.resultSource.apply(this.resultPosts);
+  }
+
+  /** 标题栏输入框变化：清空就回到推荐态；有关键词等提交再搜。 */
+  private onSharedQuery(): void {
+    if (this.searchText.trim().length === 0) {
+      this.vm.clear();
+      this.users = [];
+      this.resultPosts = [];
+      this.resultSource.apply([]);
+      this.resultTab = 0;
+    }
+  }
+
+  /** 标题栏点搜索/回车：执行一次账号 + 帖子搜索。 */
+  private onSharedSubmit(): void {
+    const text: string = this.searchText.trim();
+    if (text.length === 0) {
+      return;
+    }
+    this.resultTab = 0;
+    this.submitSearch(text);
   }
 
   // ==========================================================================
@@ -843,6 +881,198 @@ export struct SearchPage {
     .justifyContent(FlexAlign.Center)
   }
 
+  /** 结果页分段按钮：贴合全 app 的胶囊样式。 */
+  @Builder
+  tabChip(index: number, label: ResourceStr) {
+    Row() {
+      Text(label)
+        .fontSize(14)
+        .fontWeight(this.resultTab === index ? FontWeight.Medium : FontWeight.Regular)
+        .fontColor(this.resultTab === index
+          ? $r('app.color.primary_text') : $r('app.color.secondary_text'))
+    }
+    .height(36)
+    .padding({ left: 18, right: 18 })
+    .borderRadius(18)
+    .backgroundColor(this.resultTab === index
+      ? $r('app.color.field_background') : Color.Transparent)
+    .justifyContent(FlexAlign.Center)
+  }
+
+  /** 两列结果网格的列宽/格子高度。 */
+  private resultColumnWidth(): number {
+    const width: number = this.resultWidthVp > 0 ? this.resultWidthVp : this.flowWidthVp;
+    return Math.max(1, (width - GRID_GAP) / 2);
+  }
+
+  private resultTileHeight(post: SearchPost): number {
+    return this.resultColumnWidth() / post.tileAspect();
+  }
+
+  /** 关键词结果的一条帖子（两列网格；点开走 Reels）。 */
+  @Builder
+  resultTile(post: SearchPost) {
+    Stack({ alignContent: Alignment.TopEnd }) {
+      Image(post.coverUrl)
+        .draggable(false)
+        .width('100%')
+        .height('100%')
+        .objectFit(post.letterboxed() ? ImageFit.Contain : ImageFit.Cover)
+      if (post.isVideo) {
+        SymbolGlyph($r('sys.symbol.play_fill'))
+          .fontSize(14)
+          .fontColor([$r('app.color.on_accent')])
+          .margin({ top: 6, right: 6 })
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor(post.letterboxed()
+      ? $r('app.color.grid_letterbox') : $r('app.color.field_background'))
+    .onClick((): void => {
+      const at: number = this.indexOfResult(post);
+      if (at >= 0) {
+        this.onOpenReels(this.resultPosts, at);
+        return;
+      }
+      this.onOpenPost(post);
+    })
+  }
+
+  private indexOfResult(post: SearchPost): number {
+    for (let index: number = 0; index < this.resultPosts.length; index++) {
+      if (this.resultPosts[index].code === post.code) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  /** 你为你推荐：账户标题+最多5个账户，随后帖子标题+两列网格。 */
+  @Builder
+  resultRecommend() {
+    Column() {
+      Scroll() {
+        Column({ space: 10 }) {
+          if (this.users.length > 0) {
+            Text($r('app.string.search_accounts'))
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.primary_text'))
+              .width('100%')
+              .padding({ left: SIDE_PADDING, right: SIDE_PADDING, top: 8 })
+            ForEach(this.users.slice(0, 5), (user: SearchUser): void => {
+              this.userRow(user)
+            }, (user: SearchUser, index: number): string => `rec-${index}-${user.username}`)
+          }
+          if (this.resultPosts.length > 0) {
+            Text($r('app.string.search_posts'))
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.primary_text'))
+              .width('100%')
+              .padding({ left: SIDE_PADDING, right: SIDE_PADDING, top: 6 })
+          }
+        }
+        .width('100%')
+      }
+      .width('100%')
+      .layoutWeight(0)
+      .scrollBar(BarState.Off)
+
+      if (this.resultPosts.length > 0) {
+        WaterFlow({
+          scroller: this.listScroller,
+          layoutMode: WaterFlowLayoutMode.SLIDING_WINDOW
+        }) {
+          LazyForEach(this.resultSource, (post: SearchPost): void => {
+            FlowItem() {
+              this.resultTile(post)
+            }
+            .width('100%')
+            .height(this.resultTileHeight(post))
+          }, (post: SearchPost): string => post.code)
+        }
+        .columnsTemplate('1fr 1fr')
+        .columnsGap(GRID_GAP)
+        .rowsGap(GRID_GAP)
+        .width('100%')
+        .layoutWeight(1)
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
+        .contentEndOffset(SEARCH_BOTTOM_OFFSET)
+        .onAreaChange((oldArea: Area, newArea: Area): void => {
+          const width: number = typeof newArea.width === 'number'
+            ? newArea.width : parseFloat(`${newArea.width}`);
+          if (width > 0 && Math.abs(width - this.resultWidthVp) > 0.5) {
+            this.resultWidthVp = width;
+          }
+        })
+        .onDidScroll((scrollOffset: number, scrollState: ScrollState): void => {
+          this.scrollDelta.report(safeScrollY(this.listScroller), scrollState,
+            this.scrollSink);
+        })
+      } else {
+        this.emptyHint()
+      }
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  /** 你账户 tab：所有返回结果，一行一个。 */
+  @Builder
+  resultAccounts() {
+    if (this.users.length === 0) {
+      this.emptyHint()
+    } else {
+      List({ space: 0, scroller: this.listScroller }) {
+        ForEach(this.users, (user: SearchUser): void => {
+          ListItem() {
+            this.userRow(user)
+          }
+        }, (user: SearchUser, index: number): string => `acc-${index}-${user.username}`)
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .scrollBar(BarState.Off)
+      .edgeEffect(EdgeEffect.Spring)
+      .contentEndOffset(SEARCH_BOTTOM_OFFSET)
+      .onDidScroll((scrollOffset: number, scrollState: ScrollState): void => {
+        this.scrollDelta.report(safeScrollY(this.listScroller), scrollState,
+          this.scrollSink);
+      })
+      .clip(false)
+    }
+  }
+
+  /** 关键词搜索结果：为你推荐 / 账户 两页。 */
+  @Builder
+  searchResults() {
+    Column() {
+      Tabs({ barPosition: BarPosition.Start, index: this.resultTab }) {
+        TabContent() {
+          this.resultRecommend()
+        }
+        .tabBar(this.tabChip(0, $r('app.string.search_tab_recommend')))
+        TabContent() {
+          this.resultAccounts()
+        }
+        .tabBar(this.tabChip(1, $r('app.string.search_tab_accounts')))
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .barHeight(44)
+      .barMode(BarMode.Fixed)
+      .scrollable(true)
+      .onChange((index: number): void => {
+        this.resultTab = index;
+      })
+    }
+    .width('100%')
+    .layoutWeight(1)
+  }
+
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       Column() {
@@ -861,8 +1091,7 @@ export struct SearchPage {
          */
         Stack()
           .width('100%')
-          .height(this.searchBoxCollapsed ? SEARCH_BAR_TOP_OFFSET : SEARCH_TOP_OFFSET)
-          .animation({ duration: SEARCH_BOX_ANIM_MS, curve: Curve.EaseOut })
+          .height(SEARCH_BAR_TOP_OFFSET)
 
         if (this.status.length > 0 && !(this.searchText.length === 0 && this.posts.length > 0)) {
           // 状态行：进度 / 结果条数 / 失败原因（同时是排查通道）。
@@ -877,11 +1106,7 @@ export struct SearchPage {
         }
 
         if (this.searchText.length > 0) {
-          if (this.users.length === 0 && !this.busy) {
-            this.emptyHint()
-          } else {
-            this.resultList()
-          }
+          this.searchResults()
         } else {
           if (this.posts.length === 0) {
             this.emptyHint()
@@ -912,14 +1137,7 @@ export struct SearchPage {
       .height('100%')
       .margin({ left: this.leftInsetVp })
 
-      // 搜索框：**本页的浮层**，画在内容之上、标题栏之下（见 searchBoxOverlay）。
-      if (!this.searchBoxCollapsed) {
-        Stack() {
-          this.searchBoxOverlay()
-        }
-        .width('calc(100% - ' + this.leftInsetVp + 'vp)')
-        .margin({ left: this.leftInsetVp })
-      }
+
     }
     .width('100%')
     .height('100%')

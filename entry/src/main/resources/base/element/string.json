@@ -1315,6 +1315,22 @@
     {
       "name": "action_retry",
       "value": "重试"
+    },
+    {
+      "name": "search_accounts",
+      "value": "账户"
+    },
+    {
+      "name": "search_posts",
+      "value": "帖子"
+    },
+    {
+      "name": "search_tab_recommend",
+      "value": "为你推荐"
+    },
+    {
+      "name": "search_tab_accounts",
+      "value": "账户"
     }
   ]
 }

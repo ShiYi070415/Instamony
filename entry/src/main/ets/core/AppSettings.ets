@@ -140,6 +140,10 @@ export const PROFILE_TAB: string = 'profileTab';
  * 和 PROFILE_BAR_PINNED 一样：**不是用户设置**，不落盘、不参与 AppSettings.init。
  */
 export const SEARCH_BOX_COLLAPSED: string = 'searchBoxCollapsed';
+/** 搜索框文本（标题栏输入框 ↔ SearchPage 共用）。 */
+export const SEARCH_QUERY_TEXT: string = 'searchQueryText';
+/** 搜索提交信号：每次提交 +1（SearchPage 监听它执行搜索）。 */
+export const SEARCH_SUBMIT_SEQ: string = 'searchSubmitSeq';
 /**
  * AppStorage 键：**"请把搜索框叫出来并进入输入模式"的请求**（毫秒时间戳，由 pages/Index 那颗
  * 放大镜写，SearchPage 读）。

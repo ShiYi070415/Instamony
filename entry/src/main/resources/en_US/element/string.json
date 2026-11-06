@@ -1307,6 +1307,22 @@
     {
       "name": "settings_item_app_details",
       "value": "App details"
+    },
+    {
+      "name": "search_accounts",
+      "value": "Accounts"
+    },
+    {
+      "name": "search_posts",
+      "value": "Posts"
+    },
+    {
+      "name": "search_tab_recommend",
+      "value": "For You"
+    },
+    {
+      "name": "search_tab_accounts",
+      "value": "Accounts"
     }
   ]
 }
